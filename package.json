@@ -1,0 +1,49 @@
+{
+  "name": "pmos",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- next dev",
+    "build": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- sh -c \"prisma generate && next build\"",
+    "start": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- next start",
+    "lint": "next lint",
+    "db:push": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- prisma db push",
+    "db:studio": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- prisma studio",
+    "orgs:migrate": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- node scripts/migrate-to-orgs.mjs",
+    "orgs:seed": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- node scripts/seed-orgs.mjs",
+    "env:diff": "node scripts/diff-apphosting-env.mjs",
+    "env:migrate": "node scripts/env-to-apphosting.mjs .env dev-apphosting.yaml",
+    "google-oauth:verify": "node scripts/verify-google-oauth-client.mjs",
+    "google-oauth:configure": "node scripts/configure-google-oauth.mjs",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@anthropic-ai/vertex-sdk": "^0.19.0",
+    "@google-cloud/cloud-sql-connector": "^1.11.2",
+    "@google/genai": "^2.10.0",
+    "@prisma/adapter-pg": "^6.19.3",
+    "@prisma/client": "^6.8.2",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.40.0",
+    "lucide-react": "^0.511.0",
+    "next": "^15.3.3",
+    "pg": "^8.22.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "tailwind-merge": "^3.3.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/node": "^22.15.29",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "@types/uuid": "^10.0.0",
+    "prisma": "^6.8.2",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3",
+    "yaml": "^2.9.0"
+  }
+}

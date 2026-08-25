@@ -1,0 +1,378 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id         String   @id @default(uuid())
+  name       String
+  slug       String   @unique
+  inviteCode String   @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  users     User[]
+  workspace Workspace?
+}
+
+model User {
+  id             String        @id @default(uuid())
+  email          String        @unique
+  passwordHash   String?
+  name           String
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  sessions     Session[]
+  accounts     OAuthAccount[]
+  chatSessions ChatSession[]
+
+  @@index([organizationId])
+}
+
+model OAuthAccount {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider       String
+  providerUserId String
+  createdAt      DateTime @default(now())
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Workspace {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String       @default("My Workspace")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  jiraConnection        JiraConnection?
+  googleDriveConnection GoogleDriveConnection?
+  releases              Release[]
+  documents             Document[]
+  chatSessions          ChatSession[]
+  qaLogs                QALog[]
+  zendeskTickets        ZendeskTicketRaw[]
+  ledgerEntries         LedgerEntry[]
+  ideaBatches           IdeaBatch[]
+  ideas                 Idea[]
+  jiraIdeaSnapshots     JiraIdeaSnapshot[]
+  reviewEvents          ReviewEvent[]
+  productLines          ProductLine[]
+  platforms             Platform[]
+}
+
+/// Workspace-scoped product-line catalog, managed in Settings → Ideas.
+/// Idea.products stays plain strings; this is the reference list.
+model ProductLine {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+/// Workspace-scoped platform catalog (iOS, Web, …), managed in Settings → Ideas.
+model Platform {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model JiraConnection {
+  id           String    @id @default(uuid())
+  workspaceId  String    @unique
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  cloudId      String
+  siteUrl      String
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  projectKeys  String    @default("[]")
+  prdSource    String    @default("epic_description")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model GoogleDriveConnection {
+  id           String    @id @default(uuid())
+  workspaceId  String    @unique
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  accessToken  String
+  refreshToken String
+  expiresAt    DateTime
+  email        String?
+  folderIds    String    @default("[]")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Release {
+  id              String    @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name            String
+  jiraProjectKey  String
+  jiraVersionId   String?
+  jiraVersionName String?
+  status          String    @default("draft")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  documents Document[]
+
+  @@index([workspaceId])
+}
+
+model Document {
+  id           String    @id @default(uuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  releaseId    String?
+  release      Release?  @relation(fields: [releaseId], references: [id], onDelete: SetNull)
+  type         String
+  title        String
+  body         String    @default("")
+  audience     String    @default("external")
+  status       String    @default("draft")
+  jiraKeys     String    @default("[]")
+  driveFileIds String    @default("[]")
+  version      Int       @default(1)
+  publishedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([workspaceId])
+  @@index([releaseId])
+}
+
+model ChatSession {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  title       String    @default("New chat")
+  context     String    @default("{}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  messages ChatMessage[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, userId])
+}
+
+model ChatMessage {
+  id        String      @id @default(uuid())
+  sessionId String
+  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String
+  content   String
+  metadata  String      @default("{}")
+  createdAt DateTime    @default(now())
+
+  @@index([sessionId])
+}
+
+model QALog {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issueKey    String?
+  question    String
+  answer      String
+  citations   String    @default("[]")
+  confidence  String    @default("medium")
+  helpful     Boolean?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
+}
+
+
+model CrmUser {
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String
+  name         String       @default("CRM Admin")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  sessions     CrmSession[]
+}
+
+model CrmSession {
+  id        String   @id @default(uuid())
+  userId    String
+  user      CrmUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ————— Ideas pipeline (Kela POC) —————
+
+/// Raw Zendesk store — tickets exactly as received (PRD). The scrub gate
+/// operates on `raw` before anything leaves this store.
+model ZendeskTicketRaw {
+  id              String     @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  externalId      String
+  subject         String
+  body            String
+  requester       String?
+  tags            Json       @default("[]")
+  productLine     String?
+  sourceCreatedAt String?
+  raw             Json
+  batchId         String?
+  batch           IdeaBatch? @relation(fields: [batchId], references: [id])
+  importedAt      DateTime   @default(now())
+  catalogKind     String?
+  catalogReason   String?
+
+  sources IdeaSource[]
+
+  @@unique([workspaceId, externalId])
+  @@index([workspaceId])
+}
+
+/// Verdict ledger — every LLM judgment ever made, content-keyed. Replay of
+/// these rows (not model behavior) is what makes the pipeline deterministic.
+model LedgerEntry {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key           String
+  stage         String
+  promptVersion String
+  model         String
+  input         Json
+  verdict       Json
+  createdAt     DateTime  @default(now())
+
+  // Append-only: the same key may appear once per run — comparing rows that
+  // share a key is how determinism gets measured, so no unique constraint.
+  @@index([workspaceId, key])
+  @@index([workspaceId, stage])
+}
+
+/// One import run — audit trail plus the notify step later.
+model IdeaBatch {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  stats       Json?
+
+  tickets ZendeskTicketRaw[]
+
+  @@index([workspaceId])
+}
+
+model Idea {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title         String
+  details       String
+  products      Json      @default("[]")
+  platforms     Json      @default("[]")
+  batchStatus   String
+  decision      String
+  origin        String
+  pmScore       Int?
+  manualScore   Int?
+  existingVotes Int       @default(0)
+  newVotes      Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sources IdeaSource[]
+  events  ReviewEvent[]
+
+  @@index([workspaceId])
+}
+
+/// Idea ⇄ source links. Zendesk sources are FKs into the raw store; Jira
+/// sources are plain issue keys because Jira is live-state, not ours.
+model IdeaSource {
+  id       String            @id @default(uuid())
+  ideaId   String
+  idea     Idea              @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  kind     String
+  ticketId String?
+  ticket   ZendeskTicketRaw? @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  jiraKey  String?
+
+  @@index([ideaId])
+  @@index([ticketId])
+}
+
+/// Jira live-state snapshot, replaced wholesale on every import — a render
+/// cache, not a system of record.
+model JiraIdeaSnapshot {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key         String
+  title       String
+  body        String
+  status      String?
+  url         String?
+  components  Json      @default("[]")
+  syncedAt    DateTime  @default(now())
+
+  @@unique([workspaceId, key])
+}
+
+/// Append-only training signal: every manual decision and edit (PRD, day one).
+model ReviewEvent {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ideaId      String
+  idea        Idea      @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  action      String
+  payload     Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, ideaId])
+}

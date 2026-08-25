@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.turbo/
+.tools/
+.DS_Store
+*.tsbuildinfo
+
+# databases
+*.db
+*.db-journal
+
+# local env (never commit)
+.env
+.env.*
+dev-apphosting.yaml
+
+

@@ -1,0 +1,163 @@
+# Firebase App Hosting configuration (PROD).
+# https://firebase.google.com/docs/app-hosting/configure
+#
+# Local dev uses dev-apphosting.yaml with the same variable names/order.
+# Compare: npm run env:diff
+
+runConfig:
+  minInstances: 0
+
+env:
+  # --- Auth gates ---
+  - variable: DISABLE_LOGIN
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: ALLOW_SIGNUP
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: DISABLE_GOOGLE_LOGIN
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: IDEAS_ENABLED
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: NEXT_PUBLIC_APP_URL
+    value: "https://app.pm-os.io"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: SESSION_SECRET
+    secret: pmos-session-secret
+    availability:
+      - RUNTIME
+
+  # --- AI (Vertex default in prod; ADC — no key file) ---
+  - variable: AI_PROVIDER
+    value: vertex
+    availability:
+      - RUNTIME
+
+  - variable: VERTEX_PROJECT_ID
+    value: pm-os-9d992
+    availability:
+      - RUNTIME
+
+  - variable: VERTEX_LOCATION
+    value: global
+    availability:
+      - RUNTIME
+
+  - variable: VERTEX_MODEL
+    value: claude-opus-4-8@default
+    availability:
+      - RUNTIME
+
+  # Dev only: path to a service-account key. Prod uses App Hosting runtime ADC.
+  - variable: GOOGLE_APPLICATION_CREDENTIALS
+    value: ""
+    availability:
+      - RUNTIME
+
+  # --- Database ---
+  # Dev uses DATABASE_URL (local Postgres). Prod uses Cloud SQL connector vars below.
+  - variable: DATABASE_URL
+    value: ""
+    availability:
+      - RUNTIME
+
+  - variable: INSTANCE_CONNECTION_NAME
+    value: pm-os-9d992:us-east4:pmos-db
+    availability:
+      - RUNTIME
+
+  - variable: DB_USER
+    value: pmos_app
+    availability:
+      - RUNTIME
+
+  - variable: DB_NAME
+    value: pmos
+    availability:
+      - RUNTIME
+
+  - variable: DB_PASSWORD
+    secret: pmos-db-password
+    availability:
+      - RUNTIME
+
+  # --- OAuth (Sign in + integrations) ---
+  - variable: GOOGLE_CLIENT_ID
+    secret: pmos-google-client-id
+    availability:
+      - RUNTIME
+
+  - variable: GOOGLE_CLIENT_SECRET
+    secret: pmos-google-client-secret
+    availability:
+      - RUNTIME
+
+  - variable: MICROSOFT_CLIENT_ID
+    value: ""
+    availability:
+      - RUNTIME
+
+  - variable: MICROSOFT_CLIENT_SECRET
+    secret: pmos-microsoft-client-secret
+    availability:
+      - RUNTIME
+
+  - variable: MICROSOFT_TENANT_ID
+    value: common
+    availability:
+      - RUNTIME
+
+  - variable: ATLASSIAN_CLIENT_ID
+    secret: pmos-atlassian-client-id
+    availability:
+      - RUNTIME
+
+  - variable: ATLASSIAN_CLIENT_SECRET
+    secret: pmos-atlassian-client-secret
+    availability:
+      - RUNTIME
+
+  # --- Email / CRM notifications ---
+  # --- AI tuning ---
+  - variable: AI_CACHE_TTL_MS
+    value: "600000"
+    availability:
+      - RUNTIME
+
+  - variable: AI_MAX_RETRIES
+    value: "1"
+    availability:
+      - RUNTIME
+
+  - variable: AI_MIN_REQUEST_GAP_MS
+    value: "2500"
+    availability:
+      - RUNTIME
+
+  - variable: AI_RETRY_BASE_MS
+    value: "2000"
+    availability:
+      - RUNTIME
+
+  - variable: AI_USE_TEMPLATE_ON_QUOTA
+    value: "true"
+    availability:
+      - RUNTIME
+
