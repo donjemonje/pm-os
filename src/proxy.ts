@@ -20,7 +20,7 @@ function isCrmPath(pathname: string): boolean {
   return pathname === "/crm" || pathname.startsWith("/crm/") || pathname.startsWith("/api/crm");
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (
