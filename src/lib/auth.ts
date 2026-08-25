@@ -13,6 +13,8 @@ export type AuthUser = {
   workspaceId: string | null;
   organizationId: string | null;
   organizationName: string | null;
+  /** Organization.features JSON — per-org flag overrides ({} when none). */
+  organizationFeatures: unknown;
 };
 
 /** Shape included on user queries so we can resolve org + workspace. */
@@ -122,7 +124,12 @@ function toAuthUser(user: {
   email: string;
   name: string;
   organization:
-    | { id: string; name: string; workspace: { id: string } | null }
+    | {
+        id: string;
+        name: string;
+        features?: unknown;
+        workspace: { id: string } | null;
+      }
     | null;
 }): AuthUser {
   return {
@@ -132,6 +139,7 @@ function toAuthUser(user: {
     workspaceId: user.organization?.workspace?.id ?? null,
     organizationId: user.organization?.id ?? null,
     organizationName: user.organization?.name ?? null,
+    organizationFeatures: user.organization?.features ?? {},
   };
 }
 
@@ -173,6 +181,12 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     if (session) {
       await db.session.delete({ where: { id: session.id } });
     }
+    return null;
+  }
+
+  // Soft-deactivated users lose access immediately, existing sessions included.
+  if (session.user.deactivatedAt) {
+    await db.session.delete({ where: { id: session.id } });
     return null;
   }
 
@@ -233,6 +247,7 @@ export async function authenticateUser(
   if (!user?.passwordHash || !verifyPassword(password, user.passwordHash)) {
     return null;
   }
+  if (user.deactivatedAt) return null;
   return toAuthUser(user);
 }
 
@@ -254,6 +269,7 @@ export async function signInWithOAuth(input: {
     include: { user: { include: userWithOrgInclude } },
   });
   if (linked) {
+    if (linked.user.deactivatedAt) throw new Error("account_deactivated");
     return toAuthUser(linked.user);
   }
 
@@ -263,6 +279,7 @@ export async function signInWithOAuth(input: {
   });
 
   if (existing) {
+    if (existing.deactivatedAt) throw new Error("account_deactivated");
     await db.oAuthAccount.create({
       data: {
         userId: existing.id,
@@ -302,7 +319,7 @@ export async function signInWithOAuth(input: {
 }
 
 /**
- * Backoffice/CRM helper: provision a user inside an organization without
+ * PM-OS Admin helper: provision a user inside an organization without
  * creating a login session. The target organization can either be an existing
  * one (by id) or a brand-new organization created on the fly (by name).
  * A password is optional — omit it to create an SSO-only / invite-pending user.
@@ -361,6 +378,7 @@ export type OrganizationMember = {
   email: string;
   name: string;
   hasPassword: boolean;
+  deactivatedAt: string | null;
   createdAt: string;
 };
 
@@ -369,12 +387,25 @@ export type OrganizationWithMembers = {
   name: string;
   slug: string;
   inviteCode: string;
+  features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
   members: OrganizationMember[];
 };
 
-/** Backoffice/CRM helper: list every organization with its member users. */
+/** Narrow an Organization.features JSON value to the boolean overrides we store. */
+export function toFeatureOverrides(features: unknown): Record<string, boolean> {
+  if (!features || typeof features !== "object" || Array.isArray(features)) {
+    return {};
+  }
+  const out: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(features as Record<string, unknown>)) {
+    if (typeof value === "boolean") out[key] = value;
+  }
+  return out;
+}
+
+/** PM-OS Admin helper: list every organization with its member users. */
 export async function listOrganizationsWithMembers(): Promise<
   OrganizationWithMembers[]
 > {
@@ -390,6 +421,7 @@ export async function listOrganizationsWithMembers(): Promise<
     name: org.name,
     slug: org.slug,
     inviteCode: org.inviteCode,
+    features: toFeatureOverrides(org.features),
     createdAt: org.createdAt.toISOString(),
     memberCount: org.users.length,
     members: org.users.map((u) => ({
@@ -397,6 +429,7 @@ export async function listOrganizationsWithMembers(): Promise<
       email: u.email,
       name: u.name,
       hasPassword: Boolean(u.passwordHash),
+      deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
       createdAt: u.createdAt.toISOString(),
     })),
   }));

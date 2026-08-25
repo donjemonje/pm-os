@@ -117,4 +117,5 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_profile_failed: "Could not read your profile from the provider.",
   oauth_signin_failed: "Sign-in failed. Please try again.",
   signup_disabled: "Sign-up is disabled. Ask an admin to invite you, then sign in.",
+  account_deactivated: "This account has been deactivated. Contact your admin.",
 };

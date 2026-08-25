@@ -7,8 +7,9 @@ import {
   Copy,
   Loader2,
   Plus,
-  Trash2,
+  RotateCcw,
   UserPlus,
+  UserX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ type Member = {
   email: string;
   name: string;
   hasPassword: boolean;
+  deactivatedAt: string | null;
   createdAt: string;
 };
 
@@ -25,6 +27,7 @@ type Organization = {
   name: string;
   slug: string;
   inviteCode: string;
+  features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
   members: Member[];
@@ -52,25 +55,28 @@ export function UserManagement({
   );
 
   async function refresh() {
-    const res = await fetch("/api/crm/organizations");
+    const res = await fetch("/api/admin/organizations");
     if (res.ok) {
       const data = await res.json();
       setOrganizations(data.organizations ?? []);
     }
   }
 
-  async function deleteUser(orgName: string, member: Member) {
+  async function setDeactivated(orgName: string, member: Member, deactivated: boolean) {
     if (
+      deactivated &&
       !window.confirm(
-        `Remove ${member.name || member.email} from ${orgName}? This cannot be undone.`
+        `Deactivate ${member.name || member.email} (${orgName})? They will be signed out and unable to log in until reactivated.`
       )
     ) {
       return;
     }
     setBusyUserId(member.id);
     try {
-      const res = await fetch(`/api/crm/users/${member.id}`, {
-        method: "DELETE",
+      const res = await fetch(`/api/admin/users/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deactivated }),
       });
       if (res.ok) await refresh();
     } finally {
@@ -186,31 +192,53 @@ export function UserManagement({
                           <span
                             className={cn(
                               "rounded-full px-2 py-0.5 text-xs font-medium",
-                              member.hasPassword
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-amber-50 text-amber-700"
+                              member.deactivatedAt
+                                ? "bg-slate-100 text-slate-500"
+                                : member.hasPassword
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-amber-50 text-amber-700"
                             )}
                           >
-                            {member.hasPassword ? "Password set" : "Invite pending"}
+                            {member.deactivatedAt
+                              ? "Deactivated"
+                              : member.hasPassword
+                                ? "Password set"
+                                : "Invite pending"}
                           </span>
                         </td>
                         <td className="px-5 py-3 text-slate-500 whitespace-nowrap">
                           {new Date(member.createdAt).toLocaleDateString()}
                         </td>
                         <td className="px-5 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => deleteUser(org.name, member)}
-                            disabled={busyUserId === member.id}
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
-                          >
-                            {busyUserId === member.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                            Remove
-                          </button>
+                          {member.deactivatedAt ? (
+                            <button
+                              type="button"
+                              onClick={() => setDeactivated(org.name, member, false)}
+                              disabled={busyUserId === member.id}
+                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                            >
+                              {busyUserId === member.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              )}
+                              Reactivate
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setDeactivated(org.name, member, true)}
+                              disabled={busyUserId === member.id}
+                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              {busyUserId === member.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <UserX className="h-3.5 w-3.5" />
+                              )}
+                              Deactivate
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -260,7 +288,7 @@ function AddUserForm({
     setError("");
     setLoading(true);
     try {
-      const res = await fetch("/api/crm/users", {
+      const res = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -287,6 +315,9 @@ function AddUserForm({
   return (
     <form
       onSubmit={onSubmit}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onClose();
+      }}
       className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
     >
       <div className="mb-4 flex items-center gap-2">

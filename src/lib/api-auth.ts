@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
-import { isIdeasEnabled } from "./feature-flags";
+import { ideasEnabledForCurrentUser } from "./org-features";
 import { getWorkspaceId, requireUser, UnauthorizedError } from "./workspace";
 
-/** 404 for Ideas API routes when the feature flag is off; null when enabled. */
-export function ideasDisabledResponse(): NextResponse | null {
-  if (isIdeasEnabled()) return null;
+/**
+ * 404 for Ideas API routes when the flag is off for the caller's org
+ * (org override first, IDEAS_ENABLED env default otherwise); null when
+ * enabled.
+ */
+export async function ideasDisabledResponse(): Promise<NextResponse | null> {
+  if (await ideasEnabledForCurrentUser()) return null;
   return NextResponse.json({ error: "Not found" }, { status: 404 });
 }
 

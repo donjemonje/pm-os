@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const SESSION_COOKIE = "pmos_session";
-const CRM_SESSION_COOKIE = "pmos_crm_session";
 
 const PUBLIC_PATHS = ["/", "/login", "/register"];
 
@@ -16,8 +15,13 @@ function isPublicPath(pathname: string): boolean {
   return false;
 }
 
-function isCrmPath(pathname: string): boolean {
-  return pathname === "/crm" || pathname.startsWith("/crm/") || pathname.startsWith("/api/crm");
+function isAdminPath(pathname: string): boolean {
+  return (
+    pathname === "/admin" ||
+    pathname.startsWith("/admin/") ||
+    pathname === "/api/admin" ||
+    pathname.startsWith("/api/admin/")
+  );
 }
 
 export function middleware(request: NextRequest) {
@@ -31,26 +35,24 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (isCrmPath(pathname)) {
-    const isCrmPublic =
-      pathname === "/crm/login" || pathname.startsWith("/api/crm/auth/login");
-    const hasCrmSession = Boolean(request.cookies.get(CRM_SESSION_COOKIE)?.value);
+  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
-    if (!hasCrmSession && !isCrmPublic) {
+  // PM-OS Admin rides the main app session. This is defense-in-depth only —
+  // it can't validate the token or the ADMIN_EMAILS allowlist (no DB on the
+  // edge), so every admin page and /api/admin route re-checks server-side
+  // via requireAdmin()/apiAdmin().
+  if (isAdminPath(pathname)) {
+    if (!hasSession) {
       if (pathname.startsWith("/api/")) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
-      return NextResponse.redirect(new URL("/crm/login", request.url));
+      const login = new URL("/login", request.url);
+      login.searchParams.set("from", pathname);
+      return NextResponse.redirect(login);
     }
-
-    if (hasCrmSession && pathname === "/crm/login") {
-      return NextResponse.redirect(new URL("/crm", request.url));
-    }
-
     return NextResponse.next();
   }
 
-  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
   const isApi = pathname.startsWith("/api/");
 
   if (!hasSession && !isPublicPath(pathname) && !isApi) {

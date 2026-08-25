@@ -1,22 +1,20 @@
-import { redirect } from "next/navigation";
+import { requireAdminPage } from "@/lib/admin-auth";
 import { listOrganizationsWithMembers } from "@/lib/auth";
-import { getCurrentCrmUser } from "@/lib/crm-auth";
-import { CrmShell } from "../CrmShell";
+import { AdminShell } from "../AdminShell";
 import { UserManagement } from "./UserManagement";
 
-export default async function CrmUsersPage() {
-  const user = await getCurrentCrmUser();
-  if (!user) redirect("/crm/login");
+export default async function AdminUsersPage() {
+  const admin = await requireAdminPage("/admin/users");
 
   const organizations = await listOrganizationsWithMembers();
 
   return (
-    <CrmShell
-      user={user}
+    <AdminShell
+      user={admin}
       title="User Management"
       description="Add and manage users across organizations."
     >
       <UserManagement initialOrganizations={organizations} />
-    </CrmShell>
+    </AdminShell>
   );
 }

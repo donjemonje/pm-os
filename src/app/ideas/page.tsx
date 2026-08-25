@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { IdeasView } from "@/components/ideas/IdeasView";
 import { db } from "@/lib/db";
-import { isIdeasEnabled } from "@/lib/feature-flags";
+import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace } from "@/lib/workspace";
 
 export const metadata: Metadata = {
@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 };
 
 export default async function IdeasPage() {
-  if (!isIdeasEnabled()) notFound();
+  if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
   const listArgs = {
     where: { workspaceId: workspace.id },

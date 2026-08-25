@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { Building2, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CrmLogoutButton } from "./CrmLogoutButton";
+import { AdminLogoutButton } from "./AdminLogoutButton";
 
-type CrmShellUser = {
+type AdminShellUser = {
   email: string;
   name: string;
 };
@@ -16,7 +16,6 @@ type NavItem = {
   label: string;
   href: string;
   icon: typeof Users;
-  disabled?: boolean;
 };
 
 type NavSection = {
@@ -27,29 +26,29 @@ type NavSection = {
 const NAV_SECTIONS: NavSection[] = [
   {
     title: "Organizations",
-    items: [{ label: "User Management", href: "/crm/users", icon: Users }],
+    items: [{ label: "User Management", href: "/admin/users", icon: Users }],
   },
   {
     title: "Platform",
     items: [
-      { label: "Configurations", href: "/crm/configurations", icon: Settings, disabled: true },
+      { label: "Configurations", href: "/admin/configurations", icon: Settings },
     ],
   },
 ];
 
 function isActive(pathname: string, href: string): boolean {
-  if (href === "/crm") return pathname === "/crm";
+  if (href === "/admin") return pathname === "/admin";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function CrmShell({
+export function AdminShell({
   user,
   title,
   description,
   actions,
   children,
 }: {
-  user: CrmShellUser;
+  user: AdminShellUser;
   title: string;
   description?: string;
   actions?: ReactNode;
@@ -66,7 +65,7 @@ export function CrmShell({
               PM
             </div>
             <div>
-              <p className="text-sm font-bold leading-tight">PM-OS Backoffice</p>
+              <p className="text-sm font-bold leading-tight">PM-OS Admin</p>
               <p className="text-xs text-slate-500">Operations</p>
             </div>
           </div>
@@ -81,19 +80,6 @@ export function CrmShell({
                   {section.items.map((item) => {
                     const Icon = item.icon;
                     const active = isActive(pathname, item.href);
-                    if (item.disabled) {
-                      return (
-                        <li key={item.href}>
-                          <span className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-400">
-                            <Icon className="h-4 w-4" />
-                            <span className="flex-1">{item.label}</span>
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-400">
-                              Soon
-                            </span>
-                          </span>
-                        </li>
-                      );
-                    }
                     return (
                       <li key={item.href}>
                         <Link
@@ -118,10 +104,10 @@ export function CrmShell({
 
           <div className="border-t border-slate-200 px-5 py-4">
             <Link
-              href="/"
+              href="/dashboard"
               className="text-xs text-slate-500 hover:text-slate-800"
             >
-              ← Marketing site
+              ← Back to app
             </Link>
           </div>
         </aside>
@@ -133,7 +119,7 @@ export function CrmShell({
                 <div className="flex items-center gap-2 lg:hidden">
                   <Building2 className="h-4 w-4 text-slate-400" />
                   <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    PM-OS Backoffice
+                    PM-OS Admin
                   </span>
                 </div>
                 <h1 className="truncate text-lg font-bold">{title}</h1>
@@ -146,23 +132,13 @@ export function CrmShell({
                   <p className="text-sm font-medium leading-tight">{user.name}</p>
                   <p className="text-xs text-slate-500">{user.email}</p>
                 </div>
-                <CrmLogoutButton />
+                <AdminLogoutButton />
               </div>
             </div>
 
             <nav className="flex gap-1 overflow-x-auto border-t border-slate-100 px-4 py-2 lg:hidden">
               {NAV_SECTIONS.flatMap((section) => section.items).map((item) => {
                 const active = isActive(pathname, item.href);
-                if (item.disabled) {
-                  return (
-                    <span
-                      key={item.href}
-                      className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm text-slate-300"
-                    >
-                      {item.label}
-                    </span>
-                  );
-                }
                 return (
                   <Link
                     key={item.href}

@@ -33,6 +33,13 @@ env:
       - BUILD
       - RUNTIME
 
+  # PM-OS Admin allowlist (comma-separated, case-insensitive).
+  # Empty or unset = nobody has admin access (deny-by-default).
+  - variable: ADMIN_EMAILS
+    value: "d3east@gmail.com,daniel@pm-os.io"
+    availability:
+      - RUNTIME
+
   - variable: NEXT_PUBLIC_APP_URL
     value: "https://app.pm-os.io"
     availability:
@@ -109,7 +116,6 @@ env:
     availability:
       - RUNTIME
 
-  # --- Email / CRM notifications ---
   # --- AI tuning ---
   - variable: AI_CACHE_TTL_MS
     value: "600000"

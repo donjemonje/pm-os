@@ -29,11 +29,38 @@ export function isGoogleLoginDisabled(): boolean {
   return value === "true" || value === "1";
 }
 
-/** Ideas feature gate. Off by default; set IDEAS_ENABLED=true to show the Ideas page and its settings. */
+/** Ideas feature gate — env default. Off by default; set IDEAS_ENABLED=true to enable globally. */
 export function isIdeasEnabled(): boolean {
   const raw = process.env.IDEAS_ENABLED;
   if (!raw?.trim()) return false;
   const value = raw.trim().toLowerCase();
   return value === "true" || value === "1";
+}
+
+// ————— Per-organization feature overrides —————
+//
+// Organization.features is a JSON object like {"ideas": true}. Resolution
+// rule: an org value wins when the key is present (boolean); otherwise the
+// env default applies. Keys outside ORG_FEATURE_KEYS are rejected by the
+// admin API and ignored here.
+
+export const ORG_FEATURE_KEYS = ["ideas"] as const;
+export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
+
+export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
+  return (ORG_FEATURE_KEYS as readonly string[]).includes(key);
+}
+
+/** Pure resolver: org override if present, else the env default. */
+export function resolveFeature(
+  features: unknown,
+  key: OrgFeatureKey,
+  envDefault: boolean
+): boolean {
+  if (features && typeof features === "object" && !Array.isArray(features)) {
+    const value = (features as Record<string, unknown>)[key];
+    if (typeof value === "boolean") return value;
+  }
+  return envDefault;
 }
 

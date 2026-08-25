@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Chakra_Petch, Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import { brand } from "@/lib/brand";
-import { isIdeasEnabled } from "@/lib/feature-flags";
+import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { Shell } from "@/components/layout/Shell";
 
 const chakraPetch = Chakra_Petch({
@@ -34,18 +34,19 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const ideasEnabled = await ideasEnabledForCurrentUser();
   return (
     <html
       lang="en"
       className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable}`}
     >
       <body className="font-body antialiased">
-        <Shell ideasEnabled={isIdeasEnabled()}>{children}</Shell>
+        <Shell ideasEnabled={ideasEnabled}>{children}</Shell>
       </body>
     </html>
   );
