@@ -22,7 +22,11 @@ function parseEnvFile(path) {
 export function loadAppHostingEnv(yamlPath) {
   const abs = resolve(yamlPath);
   if (!existsSync(abs)) {
-    throw new Error(`App Hosting env file not found: ${abs}`);
+    // In the App Hosting build/runtime the dev yaml is (correctly) absent —
+    // env is injected from apphosting.yaml by the platform. Only local dev
+    // needs the file, so skip with a notice instead of failing.
+    console.warn(`[apphosting-env] ${abs} not found — using existing process env`);
+    return {};
   }
 
   const env = {};
