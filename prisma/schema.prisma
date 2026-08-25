@@ -234,31 +234,22 @@ model QALog {
 
 
 model CrmUser {
-  id              String       @id @default(uuid())
-  email           String       @unique
-  passwordHash    String
-  name            String       @default("CRM Admin")
-  /// AES-256-GCM encrypted TOTP secret; null until 2FA enrollment starts.
-  totpSecretEnc   String?
-  /// Set when the user confirms their first TOTP code; null = 2FA off.
-  totpEnabledAt   DateTime?
-  /// Scrypt-hashed one-time backup codes; entries are removed when redeemed.
-  totpBackupCodes String[]     @default([])
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
-  sessions        CrmSession[]
+  id           String       @id @default(uuid())
+  email        String       @unique
+  passwordHash String
+  name         String       @default("CRM Admin")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  sessions     CrmSession[]
 }
 
 model CrmSession {
-  id                String   @id @default(uuid())
-  userId            String
-  user              CrmUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash         String   @unique
-  expiresAt         DateTime
-  /// False until the TOTP challenge passes; only checked when the user has
-  /// 2FA enabled, so pre-2FA sessions stay valid.
-  twoFactorVerified Boolean  @default(false)
-  createdAt         DateTime @default(now())
+  id        String   @id @default(uuid())
+  userId    String
+  user      CrmUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 
   @@index([userId])
 }

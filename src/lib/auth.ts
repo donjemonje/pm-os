@@ -160,6 +160,20 @@ export async function getSessionToken(): Promise<string | undefined> {
   return cookieStore.get(SESSION_COOKIE)?.value;
 }
 
+/**
+ * Marks the session behind the current request as having passed the TOTP
+ * challenge. Called on successful enrollment (the user just proved they hold
+ * the authenticator) and on successful /login/2fa verification.
+ */
+export async function markCurrentSessionTwoFactorVerified(): Promise<void> {
+  const token = await getSessionToken();
+  if (!token) return;
+  await db.session.updateMany({
+    where: { tokenHash: hashToken(token) },
+    data: { twoFactorVerified: true },
+  });
+}
+
 export async function getCurrentUser(): Promise<AuthUser | null> {
   const token = await getSessionToken();
   if (!token) return null;

@@ -1,6 +1,19 @@
 import { NextResponse } from "next/server";
+import type { AuthUser } from "./auth";
 import { isIdeasEnabled } from "./feature-flags";
 import { getWorkspaceId, requireUser, UnauthorizedError } from "./workspace";
+
+/** Auth without the workspace requirement — for account-level routes (2FA). */
+export async function apiUser(): Promise<AuthUser | NextResponse> {
+  try {
+    return await requireUser();
+  } catch (e) {
+    if (e instanceof UnauthorizedError) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    throw e;
+  }
+}
 
 /** 404 for Ideas API routes when the feature flag is off; null when enabled. */
 export function ideasDisabledResponse(): NextResponse | null {

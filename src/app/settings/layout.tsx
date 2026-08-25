@@ -6,6 +6,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const sections = [
     { href: "/settings/jira", label: "Integrations" },
     ...(isIdeasEnabled() ? [{ href: "/settings/ideas", label: "Ideas" }] : []),
+    { href: "/settings/security", label: "Security" },
   ];
 
   return (
