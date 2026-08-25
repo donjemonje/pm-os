@@ -66,18 +66,8 @@ env:
       - RUNTIME
 
   # Dev only: path to a service-account key. Prod uses App Hosting runtime ADC.
-  - variable: GOOGLE_APPLICATION_CREDENTIALS
-    value: ""
-    availability:
-      - RUNTIME
-
   # --- Database ---
   # Dev uses DATABASE_URL (local Postgres). Prod uses Cloud SQL connector vars below.
-  - variable: DATABASE_URL
-    value: ""
-    availability:
-      - RUNTIME
-
   - variable: INSTANCE_CONNECTION_NAME
     value: pm-os-9d992:us-east4:pmos-db
     availability:
@@ -106,21 +96,6 @@ env:
 
   - variable: GOOGLE_CLIENT_SECRET
     secret: pmos-google-client-secret
-    availability:
-      - RUNTIME
-
-  - variable: MICROSOFT_CLIENT_ID
-    value: ""
-    availability:
-      - RUNTIME
-
-  - variable: MICROSOFT_CLIENT_SECRET
-    secret: pmos-microsoft-client-secret
-    availability:
-      - RUNTIME
-
-  - variable: MICROSOFT_TENANT_ID
-    value: common
     availability:
       - RUNTIME
 
