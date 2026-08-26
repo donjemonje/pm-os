@@ -29,6 +29,12 @@ export async function POST(request: Request) {
   if (result.status === "no_session") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (result.status === "no_setup") {
+    return NextResponse.json(
+      { error: "Setup incomplete — reload the page and scan the QR code again" },
+      { status: 400 }
+    );
+  }
   if (result.status === "invalid") {
     return NextResponse.json(
       { error: "That code didn't match or was already used — wait for the next code and try again" },
@@ -36,7 +42,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // "ok" and "not_pending" (2FA got disabled meanwhile) both mean: proceed.
   const response = NextResponse.json({ ok: true });
   const opts = twoFactorPendingCookieOptions(false);
   response.cookies.set(opts.name, opts.value, opts);

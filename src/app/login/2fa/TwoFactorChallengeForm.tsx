@@ -9,7 +9,9 @@ import { brand } from "@/lib/brand";
 const inputClassName =
   "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-center text-lg tracking-[0.3em] font-body text-brand-text outline-none transition-colors placeholder:tracking-normal placeholder:text-brand-muted/60 focus:border-brand-accent/50 focus:ring-1 focus:ring-brand-accent/30";
 
-function ChallengeFormInner() {
+type Enrollment = { qrDataUrl: string; secret: string };
+
+function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const from = searchParams.get("from") || "/dashboard";
@@ -58,9 +60,35 @@ function ChallengeFormInner() {
         <div className="mb-6 flex items-center justify-center gap-4">
           <BrandLogo height={84} className="shrink-0" priority />
           <h1 className="font-title text-2xl font-bold leading-tight tracking-tight text-brand-text">
-            Two-factor check
+            {enrollment ? "Set up two-factor" : "Two-factor check"}
           </h1>
         </div>
+
+        {enrollment && (
+          <div className="mb-6 space-y-3">
+            <p className="font-subtitle text-sm text-brand-muted">
+              PM-OS requires two-factor authentication. Scan this QR code with
+              an authenticator app (Google Authenticator, 1Password, …), then
+              enter the code it shows.
+            </p>
+            <div className="flex justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element -- data URL, not an optimizable asset */}
+              <img
+                src={enrollment.qrDataUrl}
+                alt="QR code for authenticator app"
+                className="rounded-lg bg-white p-1"
+                width={180}
+                height={180}
+              />
+            </div>
+            <p className="font-subtitle text-xs text-brand-muted">
+              Can&apos;t scan? Enter this key manually:{" "}
+              <span className="select-all break-all font-mono text-brand-text">
+                {enrollment.secret}
+              </span>
+            </p>
+          </div>
+        )}
 
         <form onSubmit={onSubmit} className="space-y-4">
           {error && (
@@ -94,11 +122,15 @@ function ChallengeFormInner() {
           </div>
           <button
             type="submit"
-            disabled={loading || !code.trim()}
+            disabled={loading || code.length !== 6}
             className="font-title w-full rounded-lg py-2.5 text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90 disabled:opacity-60"
             style={{ background: brand.accent }}
           >
-            {loading ? "Verifying…" : "Verify"}
+            {loading
+              ? "Verifying…"
+              : enrollment
+                ? "Verify & finish setup"
+                : "Verify"}
           </button>
         </form>
 
@@ -110,17 +142,19 @@ function ChallengeFormInner() {
           >
             Back to sign in
           </button>
-          <p className="font-subtitle text-xs text-brand-muted">
-            Lost your authenticator? Ask your admin to reset two-factor for
-            your account.
-          </p>
+          {!enrollment && (
+            <p className="font-subtitle text-xs text-brand-muted">
+              Lost your authenticator? Ask your admin to reset two-factor for
+              your account.
+            </p>
+          )}
         </div>
       </div>
     </AuthNeuralBackground>
   );
 }
 
-export function TwoFactorChallengeForm() {
+export function TwoFactorChallengeForm({ enrollment }: { enrollment?: Enrollment }) {
   return (
     <Suspense
       fallback={
@@ -129,7 +163,7 @@ export function TwoFactorChallengeForm() {
         </AuthNeuralBackground>
       }
     >
-      <ChallengeFormInner />
+      <ChallengeFormInner enrollment={enrollment} />
     </Suspense>
   );
 }

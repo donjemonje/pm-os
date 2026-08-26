@@ -98,7 +98,8 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
         setError(data.error || "Registration failed");
         return;
       }
-      router.push("/dashboard");
+      // 2FA is mandatory — new accounts go straight to enrollment.
+      router.push("/login/2fa?from=%2Fdashboard");
       router.refresh();
     } catch {
       setError("Something went wrong. Try again.");

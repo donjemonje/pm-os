@@ -15,7 +15,6 @@ import {
   sessionCookieOptions,
   signInWithOAuth,
   twoFactorPendingCookieOptions,
-  userHasTwoFactor,
 } from "./auth";
 import { isGoogleLoginDisabled, isLoginDisabled } from "./feature-flags";
 
@@ -138,17 +137,12 @@ export async function completeOAuth(provider: string, code: string | null, state
       email: profile.email,
       name: profile.name,
     });
+    // 2FA is mandatory: every OAuth login lands on the TOTP step.
     const token = await createSession(user.id);
-    const twoFactorRequired = await userHasTwoFactor(user.id);
     const redirectTo = from?.startsWith("/") ? from : "/";
     const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const target = twoFactorRequired
-      ? (() => {
-          const url = new URL("/login/2fa", base);
-          url.searchParams.set("from", redirectTo);
-          return url;
-        })()
-      : new URL(redirectTo, base);
+    const target = new URL("/login/2fa", base);
+    target.searchParams.set("from", redirectTo);
     const response = NextResponse.redirect(target);
     clearOAuthCookies(response);
     const opts = sessionCookieOptions(token);
@@ -159,7 +153,7 @@ export async function completeOAuth(provider: string, code: string | null, state
       secure: opts.secure,
       maxAge: opts.maxAge,
     });
-    const pending = twoFactorPendingCookieOptions(twoFactorRequired);
+    const pending = twoFactorPendingCookieOptions(true);
     response.cookies.set(pending.name, pending.value, pending);
     return response;
   } catch (e) {
