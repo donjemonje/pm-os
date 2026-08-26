@@ -1,0 +1,48 @@
+# Test environment (e2e suite). Copy to test-apphosting.yaml (gitignored)
+# and adjust DATABASE_URL for your local Postgres user.
+#
+# Same format as dev-apphosting.yaml; loaded by scripts/with-apphosting-env.mjs
+# via the test:* npm scripts. Points at the pmos_test database — NEVER at the
+# dev database `pmos` and NEVER at production.
+
+env:
+  - variable: DATABASE_URL
+    value: postgresql://YOUR_LOCAL_PG_USER@127.0.0.1:5432/pmos_test?schema=public
+    availability:
+      - RUNTIME
+
+  - variable: SESSION_SECRET
+    value: local-e2e-not-a-secret
+    availability:
+      - RUNTIME
+
+  - variable: NEXT_PUBLIC_APP_URL
+    value: "http://localhost:3100"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # --- Auth gates (mirror prod: login on, signup off, Google off) ---
+  - variable: DISABLE_LOGIN
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: ALLOW_SIGNUP
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: DISABLE_GOOGLE_LOGIN
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: IDEAS_ENABLED
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME

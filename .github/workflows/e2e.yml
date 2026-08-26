@@ -1,0 +1,126 @@
+# Scheduled e2e runs: Sun / Tue / Thu at 02:00 UTC (~05:00 Israel in summer,
+# ~04:00 in winter — cron is UTC and does not follow DST).
+#
+# Job 1 (e2e-local): full suite against an ephemeral Postgres + local app boot.
+#   Needs NO GitHub secrets — everything is synthetic test data.
+#
+# Job 2 (prod-smoke): only @smoke-tagged tests against production, read-only-
+#   safe, RoomLens QA org only. Skips itself cleanly until these GitHub
+#   secrets exist:
+#     PMOS_PROD_BASE_URL       e.g. https://app.pm-os.io
+#     PMOS_QA_USER_EMAIL       e.g. qa+roomlens@pm-os.io
+#     PMOS_QA_USER_PASSWORD    the password used when seeding RoomLens in prod
+#   (Prod must first be seeded deliberately: scripts/seed-roomlens.mjs.)
+
+name: e2e
+
+on:
+  schedule:
+    - cron: "0 2 * * 0,2,4"
+  workflow_dispatch:
+
+jobs:
+  e2e-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pmos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pmos_test?schema=public
+      SESSION_SECRET: ci-e2e-not-a-secret
+      NEXT_PUBLIC_APP_URL: http://localhost:3100
+      DISABLE_LOGIN: "false"
+      ALLOW_SIGNUP: "false"
+      DISABLE_GOOGLE_LOGIN: "true"
+      IDEAS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Push schema to test database
+        run: npx prisma db push --skip-generate
+
+      - name: Seed RoomLens QA org
+        run: node scripts/seed-roomlens.mjs
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts webServer runs `next build && next start` in CI.
+      - name: Run e2e suite
+        run: npx playwright test --project=local
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-local
+          path: playwright-report/
+          retention-days: 14
+
+  prod-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PROD_BASE_URL: ${{ secrets.PMOS_PROD_BASE_URL }}
+      QA_USER_EMAIL: ${{ secrets.PMOS_QA_USER_EMAIL }}
+      QA_USER_PASSWORD: ${{ secrets.PMOS_QA_USER_PASSWORD }}
+      PW_PROD_SMOKE: "1"
+    steps:
+      # secrets aren't readable in a job-level `if`, so gate per-step instead.
+      - name: Check prod secrets
+        id: gate
+        run: |
+          if [ -n "$PROD_BASE_URL" ] && [ -n "$QA_USER_PASSWORD" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Prod smoke skipped: PMOS_PROD_BASE_URL / PMOS_QA_USER_* secrets not set."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
+        run: npm ci
+
+      - name: Install Playwright browsers
+        if: steps.gate.outputs.run == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run @smoke tests against production
+        if: steps.gate.outputs.run == 'true'
+        run: npx playwright test --project=prod-smoke
+
+      - name: Upload report on failure
+        if: failure() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-prod-smoke
+          path: playwright-report/
+          retention-days: 14
