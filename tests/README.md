@@ -32,6 +32,29 @@ feature session.
 Schema changed in your branch? Re-run `npm run test:db:setup` (db push is
 idempotent).
 
+## The env guard
+
+The suite refuses to start on a wrong environment instead of letting the
+app boot misconfigured. `tests/e2e/global-setup.ts` validates the resolved
+env (shell env + test-apphosting.yaml, yaml wins — the exact env the app
+gets) before any test runs, and fails with one line per problem:
+
+- `DISABLE_LOGIN` resolves to `false` (login enabled — it is disabled by
+  default when unset).
+- `DATABASE_URL` is set and its database name is exactly `pmos_test` —
+  hard fail otherwise, so tests can never touch the dev database.
+- `SESSION_SECRET` is set (login would 500 without it).
+- The port is not 3000/3100 and `NEXT_PUBLIC_APP_URL` matches where
+  Playwright boots the app (default `http://localhost:3200`).
+- Feature flags match what the specs assert (currently: `IDEAS_ENABLED`
+  off, because all-pages.spec.ts asserts the ideas routes 404). If your
+  spec assumes another flag value, add the check to global-setup.ts in the
+  same branch.
+
+In CI there is no yaml — the guard validates the workflow job env the same
+way. Most failures mean: copy `test-apphosting.example.yaml` to
+`test-apphosting.yaml`.
+
 ## Scheduled runs
 
 `.github/workflows/e2e.yml` runs the full suite on Sun, Tue, Thu at

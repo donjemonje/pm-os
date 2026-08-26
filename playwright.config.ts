@@ -1,6 +1,5 @@
-import { resolve } from "path";
 import { defineConfig, devices } from "@playwright/test";
-import { loadAppHostingEnv } from "./scripts/apphosting-env.mjs";
+import { LOCAL_BASE_URL, PORT, TEST_ENV } from "./tests/e2e/test-env";
 
 /**
  * Two ways to run:
@@ -20,22 +19,16 @@ import { loadAppHostingEnv } from "./scripts/apphosting-env.mjs";
  *    refuses to run.
  */
 
-// Test env for the webServer, loaded HERE (not only in the npm script) so
-// `npx playwright test`, `--headed`, and `--ui` behave identically to
-// `npm run test:e2e`. Without this, a bare playwright invocation boots the
-// app with no DISABLE_LOGIN=false (login is disabled by default) and no
-// DATABASE_URL. In CI the yaml is absent — loadAppHostingEnv returns {}
-// and the job-level env applies instead. Yaml values win over inherited
-// shell env, same as the with-apphosting-env wrapper (override: true), so
-// a stray DATABASE_URL in someone's shell can never point tests at the
-// dev database.
-const TEST_ENV = loadAppHostingEnv(
-  resolve(__dirname, "test-apphosting.yaml")
-);
-
-// 3000 = dev server, 3100 = pmos website — tests get their own port.
-const PORT = Number(process.env.PW_PORT ?? 3200);
-const LOCAL_BASE_URL = `http://localhost:${PORT}`;
+// Test env for the webServer comes from tests/e2e/test-env.ts, loaded HERE
+// (not only in the npm script) so `npx playwright test`, `--headed`, and
+// `--ui` behave identically to `npm run test:e2e`. Without this, a bare
+// playwright invocation boots the app with no DISABLE_LOGIN=false (login is
+// disabled by default) and no DATABASE_URL. In CI the yaml is absent —
+// TEST_ENV is {} and the job-level env applies instead. Yaml values win
+// over inherited shell env, same as the with-apphosting-env wrapper
+// (override: true), so a stray DATABASE_URL in someone's shell can never
+// point tests at the dev database. tests/e2e/global-setup.ts validates the
+// resolved env and refuses to start the suite when it is wrong.
 const IS_PROD_SMOKE = process.env.PW_PROD_SMOKE === "1";
 const PROD_BASE_URL = process.env.PROD_BASE_URL?.trim();
 
@@ -47,6 +40,10 @@ if (IS_PROD_SMOKE && !PROD_BASE_URL) {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // Env guard: fails loudly before any test when the resolved env is wrong
+  // (wrong DB, login disabled, port clash, flag mismatch). Not used for
+  // prod smoke — that mode has no webServer and no DB.
+  globalSetup: IS_PROD_SMOKE ? undefined : "./tests/e2e/global-setup.ts",
   // Small suite sharing one seeded DB — serial keeps it deterministic.
   // Revisit workers when the suite grows past ~20 tests.
   fullyParallel: false,
