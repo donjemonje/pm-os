@@ -18,3 +18,7 @@ dev-apphosting.yaml
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+# Playwright
+test-results/
+tests/e2e/artifacts/
