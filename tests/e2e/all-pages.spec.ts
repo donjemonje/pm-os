@@ -17,17 +17,15 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  *                           a redirect to /crm/login instead.
  * - /crm/login              covered via the CRM redirect test.
  * - /docs/[id]              skipped: the RoomLens seed creates no documents,
- *                           and creating one here would write data (not
- *                           @smoke-safe). Revisit if seed-roomlens.mjs ever
- *                           seeds a document.
- * - /ideas, /settings/ideas IDEAS_ENABLED=false in the test env (mirrors
- *                           prod) — asserted as 404 below, untagged because
- *                           the prod flag may flip independently.
+ *                           and this suite stays read-only. Revisit if
+ *                           seed-test-db.mjs ever seeds a document.
+ * - /ideas, /settings/ideas IDEAS_ENABLED=false in the test env — asserted
+ *                           as 404 below (the env guard pins the flag).
  * - /settings/google-drive  covered: legacy route, must redirect to
  *                           /settings/jira.
  */
 
-test("logged-in user can open every app page @smoke", async ({ page }) => {
+test("logged-in user can open every app page", async ({ page }) => {
   await loginAsRoomLens(page);
 
   await expectAppPageRenders(page, "/dashboard", (p) =>
@@ -60,7 +58,7 @@ test("logged-in user can open every app page @smoke", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 });
 
-test("root and auth routes send a logged-in user to the dashboard @smoke", async ({
+test("root and auth routes send a logged-in user to the dashboard", async ({
   page,
 }) => {
   await loginAsRoomLens(page);
@@ -74,7 +72,7 @@ test("root and auth routes send a logged-in user to the dashboard @smoke", async
   }
 });
 
-test("app session does not grant CRM access @smoke", async ({ page }) => {
+test("app session does not grant CRM access", async ({ page }) => {
   await loginAsRoomLens(page);
 
   for (const path of ["/crm", "/crm/users"]) {
@@ -86,8 +84,9 @@ test("app session does not grant CRM access @smoke", async ({ page }) => {
   }
 });
 
-// Untagged (local only): the test env pins IDEAS_ENABLED=false to mirror
-// today's prod, but the prod flag may flip independently of this suite.
+// The env guard (global-setup.ts) pins IDEAS_ENABLED off, so this is
+// deterministic. If the ideas feature ships enabled, update the guard and
+// this test together.
 test("ideas routes 404 while IDEAS_ENABLED is off", async ({ page }) => {
   await loginAsRoomLens(page);
 

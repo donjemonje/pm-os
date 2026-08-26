@@ -17,4 +17,4 @@ This repo is the PM-OS product (Next.js 15 + Prisma + Postgres on Firebase App H
 - Run locally with `npm run test:e2e` (test DB setup: `npm run test:db:setup`); suite must be green before review.
 - If your feature breaks or subsumes an existing test, update or delete it in the same branch.
 - Every feature branch appends its row to `tests/QA-LOG.md` (branch, date, tests added/updated, QA'd by) before review.
-- Tag tests `@smoke` only if read-only-safe against production (login, navigate, assert render). Prod smoke runs are deferred for now.
+- Production testing is out of scope for now — see git history when we revisit.

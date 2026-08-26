@@ -2,19 +2,18 @@ import { test, expect } from "@playwright/test";
 import { loginAsRoomLens } from "./helpers";
 
 /**
- * Sanity suite. Tests tagged @smoke also run against production
- * (prod-smoke project) and therefore must stay read-only-safe:
- * login, navigate, assert render. No creates, edits, or deletes.
+ * Sanity suite: the login page renders and the seeded RoomLens user can
+ * sign in and see the app shell.
  */
 
-test("login page renders @smoke", async ({ page }) => {
+test("login page renders", async ({ page }) => {
   await page.goto("/login");
   await expect(page.locator("#email")).toBeVisible();
   await expect(page.locator("#password")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
 });
 
-test("RoomLens user logs in and sees the app shell @smoke", async ({
+test("RoomLens user logs in and sees the app shell", async ({
   page,
 }) => {
   await loginAsRoomLens(page);

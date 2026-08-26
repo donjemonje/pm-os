@@ -61,15 +61,8 @@ way. Most failures mean: copy `test-apphosting.example.yaml` to
 02:00 UTC, and on manual dispatch (Actions tab → e2e → Run workflow). It
 needs no GitHub secrets.
 
-## Prod smoke testing (DEFERRED)
-
-On hold until the local suite has proven itself — nothing prod-related is
-scheduled or required right now. The pieces already exist for when Daniel
-turns it on: the `prod-smoke` Playwright project (`npm run test:e2e:prod`,
-refuses to run without `PROD_BASE_URL`; only `@smoke`-tagged tests),
-`scripts/seed-roomlens.mjs` for deliberately seeding the RoomLens QA org in
-prod, and a CI job sketch in the workflow header comment. Until then, keep
-tagging read-only-safe tests `@smoke` so the suite is ready.
+Production testing is out of scope for now — see git history when we
+revisit.
 
 ## Adding tests in a feature session
 
@@ -89,11 +82,8 @@ Ground rules:
 - No QA-LOG.md row, no review.
 - Put them in `tests/e2e/<feature>.spec.ts`. Use `loginAsRoomLens` from
   `helpers.ts` instead of re-implementing login.
-- Need fixture data? Extend `scripts/seed-roomlens.mjs` (keep it idempotent,
+- Need fixture data? Extend `scripts/seed-test-db.mjs` (keep it idempotent,
   RoomLens-scoped, obviously synthetic).
-- Tag a test `@smoke` ONLY if it is read-only-safe in production: login,
-  navigate, assert pages render. No creates, edits, deletes, or AI calls.
-  Everything else stays untagged (local project only).
 
 ## The subsume rule
 

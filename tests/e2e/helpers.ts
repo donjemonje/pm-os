@@ -1,13 +1,12 @@
 import { Locator, Page, expect } from "@playwright/test";
 
 /**
- * RoomLens QA credentials. Local + CI use the seeded defaults (see
- * scripts/seed-roomlens.mjs). Prod smoke runs override both via GitHub
- * secrets — there is no default prod password anywhere in the repo.
+ * RoomLens QA credentials, as seeded by scripts/seed-test-db.mjs into the
+ * local/CI test database (pmos_test). Synthetic only — never real data.
  */
 export const QA_USER = {
-  email: process.env.QA_USER_EMAIL || "qa+roomlens@pm-os.io",
-  password: process.env.QA_USER_PASSWORD || "roomlens-qa-pass1",
+  email: "qa+roomlens@pm-os.io",
+  password: "roomlens-qa-pass1",
 };
 
 /** Log in through the real login form and wait for the dashboard. */

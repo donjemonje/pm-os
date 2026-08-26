@@ -4,10 +4,8 @@
 # Runs the full suite against an ephemeral Postgres + local app boot.
 # Needs NO GitHub secrets — everything is synthetic test data.
 #
-# Prod smoke testing is deferred until the local suite has proven itself.
-# When it's time: seed prod deliberately with scripts/seed-roomlens.mjs and
-# add a prod-smoke job that runs `npx playwright test --project=prod-smoke`
-# with PW_PROD_SMOKE=1 and PROD_BASE_URL / QA_USER_* from secrets.
+# Production testing is out of scope for now — see git history when we
+# revisit.
 
 name: e2e
 
@@ -56,7 +54,7 @@ jobs:
         run: npx prisma db push --skip-generate
 
       - name: Seed RoomLens QA org
-        run: node scripts/seed-roomlens.mjs
+        run: node scripts/seed-test-db.mjs
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

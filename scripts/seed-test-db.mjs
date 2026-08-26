@@ -1,22 +1,14 @@
 /**
- * Seed the RoomLens QA organization + synthetic test users.
+ * Seed the RoomLens QA organization + synthetic test users into the test
+ * database (pmos_test). Local + CI only — refuses to run when
+ * NODE_ENV=production; production testing is out of scope.
  *
  * Idempotent: safe to re-run. Only ever touches the org with slug "roomlens"
  * and users under qa+roomlens*@pm-os.io — never any real/customer data.
  *
- * Local / CI:
- *   npm run test:db:setup           (creates pmos_test, pushes schema, seeds)
- *
- * Production (Daniel only, deliberate, via Cloud SQL Auth Proxy):
- *   QA_USER_PASSWORD=<strong password> DATABASE_URL=... node scripts/seed-roomlens.mjs
- *   The script refuses to run with the default password unless
- *   SEED_ALLOW_DEFAULT_PASSWORD=1 is set, so a prod run can't silently
- *   create a QA user with a publicly known password.
- *
- * Env overrides:
- *   QA_USER_EMAIL     (default qa+roomlens@pm-os.io)
- *   QA_USER_PASSWORD  (default roomlens-qa-pass1 — local/CI only)
- *   QA_USER2_EMAIL    (default qa+roomlens-2@pm-os.io)
+ * Runs as part of `npm run test:db:setup` (creates pmos_test, pushes the
+ * schema, then seeds). Credentials are fixed and mirrored in
+ * tests/e2e/helpers.ts.
  */
 import { PrismaClient } from "@prisma/client";
 import { randomBytes, scryptSync } from "crypto";
@@ -25,15 +17,11 @@ const prisma = new PrismaClient();
 
 const ORG_SLUG = "roomlens";
 const ORG_NAME = "RoomLens";
-const DEFAULT_PASSWORD = "roomlens-qa-pass1";
 
-const email = (process.env.QA_USER_EMAIL || "qa+roomlens@pm-os.io")
-  .trim()
-  .toLowerCase();
-const email2 = (process.env.QA_USER2_EMAIL || "qa+roomlens-2@pm-os.io")
-  .trim()
-  .toLowerCase();
-const password = process.env.QA_USER_PASSWORD || DEFAULT_PASSWORD;
+// Fixed local/CI credentials — must match QA_USER in tests/e2e/helpers.ts.
+const EMAIL = "qa+roomlens@pm-os.io";
+const EMAIL2 = "qa+roomlens-2@pm-os.io";
+const PASSWORD = "roomlens-qa-pass1";
 
 // Same salt:hash scrypt format as src/lib/auth.ts.
 function hashPassword(pw) {
@@ -73,7 +61,7 @@ async function getOrCreateOrg() {
 }
 
 async function upsertQaUser(orgId, userEmail, name) {
-  const passwordHash = hashPassword(password);
+  const passwordHash = hashPassword(PASSWORD);
   const existing = await prisma.user.findUnique({ where: { email: userEmail } });
   if (existing) {
     await prisma.user.update({
@@ -90,25 +78,17 @@ async function upsertQaUser(orgId, userEmail, name) {
 }
 
 async function main() {
-  if (
-    password === DEFAULT_PASSWORD &&
-    process.env.NODE_ENV === "production" &&
-    process.env.SEED_ALLOW_DEFAULT_PASSWORD !== "1"
-  ) {
+  if (process.env.NODE_ENV === "production") {
     console.error(
-      "Refusing: NODE_ENV=production with the default QA password. " +
-        "Set QA_USER_PASSWORD to a strong value (and store it as the " +
-        "PMOS_QA_USER_PASSWORD GitHub secret)."
+      "Refusing: NODE_ENV=production. This seed is for the local/CI test " +
+        "database only — production testing is out of scope."
     );
     process.exit(1);
   }
-  if (password === DEFAULT_PASSWORD) {
-    console.log("(using the default local/CI QA password)");
-  }
 
   const org = await getOrCreateOrg();
-  await upsertQaUser(org.id, email, "QA RoomLens");
-  await upsertQaUser(org.id, email2, "QA RoomLens 2");
+  await upsertQaUser(org.id, EMAIL, "QA RoomLens");
+  await upsertQaUser(org.id, EMAIL2, "QA RoomLens 2");
   console.log("Done.");
 }
 
