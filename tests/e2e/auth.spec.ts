@@ -23,12 +23,6 @@ test("RoomLens user logs in and sees the app shell @smoke", async ({
   await expect(page.getByRole("link", { name: /Releases/ })).toBeVisible();
 });
 
-test("logged-in user can navigate to Docs and Releases", async ({ page }) => {
-  await loginAsRoomLens(page);
-
-  await page.goto("/docs");
-  await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
-
-  await page.goto("/releases");
-  await expect(page.getByRole("heading", { name: "Releases" })).toBeVisible();
-});
+// Docs/Releases navigation moved to all-pages.spec.ts (strict superset:
+// per-page element + no login bounce + no 404/error boundary). Subsumed
+// test deleted 2026-08-26 per the subsume rule in tests/README.md.
