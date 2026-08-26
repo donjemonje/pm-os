@@ -4,11 +4,11 @@ import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   decryptTotpSecret,
-  redeemBackupCode,
+  isFreshTotpStep,
   verifyTotpCode,
 } from "@/lib/two-factor";
 
-/** Turns 2FA off. Requires a current TOTP code or an unused backup code. */
+/** Turns 2FA off. Requires a current, unused TOTP code. */
 export async function POST(request: Request) {
   const user = await apiUser();
   if (user instanceof NextResponse) return user;
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
 
   const dbUser = await db.user.findUnique({
     where: { id: user.id },
-    select: { totpSecretEnc: true, totpEnabledAt: true, totpBackupCodes: true },
+    select: { totpSecretEnc: true, totpEnabledAt: true, totpLastUsedStep: true },
   });
   if (!dbUser?.totpEnabledAt || !dbUser.totpSecretEnc) {
     return NextResponse.json(
@@ -36,12 +36,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const valid =
-    verifyTotpCode(decryptTotpSecret(dbUser.totpSecretEnc), code) ||
-    redeemBackupCode(code, dbUser.totpBackupCodes) !== null;
-  if (!valid) {
+  const step = verifyTotpCode(decryptTotpSecret(dbUser.totpSecretEnc), code);
+  if (step === null || !isFreshTotpStep(step, dbUser.totpLastUsedStep)) {
     return NextResponse.json(
-      { error: "That code didn't match — enter a current code or a backup code" },
+      { error: "That code didn't match — enter the current code from your app" },
       { status: 400 }
     );
   }
@@ -51,7 +49,7 @@ export async function POST(request: Request) {
     data: {
       totpSecretEnc: null,
       totpEnabledAt: null,
-      totpBackupCodes: [],
+      totpLastUsedStep: null,
     },
   });
 

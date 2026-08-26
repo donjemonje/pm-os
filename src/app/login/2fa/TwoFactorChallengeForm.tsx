@@ -15,7 +15,6 @@ function ChallengeFormInner() {
   const from = searchParams.get("from") || "/dashboard";
 
   const [code, setCode] = useState("");
-  const [useBackup, setUseBackup] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -50,12 +49,6 @@ function ChallengeFormInner() {
     router.refresh();
   }
 
-  function switchMode() {
-    setUseBackup((v) => !v);
-    setCode("");
-    setError("");
-  }
-
   return (
     <AuthNeuralBackground>
       <div
@@ -80,30 +73,22 @@ function ChallengeFormInner() {
               htmlFor="code"
               className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
             >
-              {useBackup
-                ? "Enter one of your backup codes"
-                : "Enter the 6-digit code from your authenticator app"}
+              Enter the 6-digit code from your authenticator app
             </label>
             <input
               id="code"
               type="text"
-              inputMode={useBackup ? "text" : "numeric"}
+              inputMode="numeric"
               autoComplete="one-time-code"
-              maxLength={useBackup ? 9 : 6}
+              maxLength={6}
               required
               autoFocus
               value={code}
-              onChange={(e) =>
-                setCode(
-                  useBackup
-                    ? e.target.value.toUpperCase()
-                    : e.target.value.replace(/\D/g, "")
-                )
-              }
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
               onKeyDown={(e) => {
                 if (e.key === "Escape") void onBackToSignIn();
               }}
-              placeholder={useBackup ? "XXXX-XXXX" : "000000"}
+              placeholder="000000"
               className={inputClassName}
             />
           </div>
@@ -120,18 +105,15 @@ function ChallengeFormInner() {
         <div className="mt-6 space-y-2 text-center">
           <button
             type="button"
-            onClick={switchMode}
-            className="font-subtitle block w-full text-sm text-brand-accent hover:opacity-80"
-          >
-            {useBackup ? "Use my authenticator app instead" : "Use a backup code"}
-          </button>
-          <button
-            type="button"
             onClick={onBackToSignIn}
             className="font-subtitle block w-full text-sm text-brand-muted hover:text-brand-text"
           >
             Back to sign in
           </button>
+          <p className="font-subtitle text-xs text-brand-muted">
+            Lost your authenticator? Ask your admin to reset two-factor for
+            your account.
+          </p>
         </div>
       </div>
     </AuthNeuralBackground>

@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   }
   if (result.status === "invalid") {
     return NextResponse.json(
-      { error: "That code didn't match — try again or use a backup code" },
+      { error: "That code didn't match or was already used — wait for the next code and try again" },
       { status: 400 }
     );
   }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, Loader2, ShieldCheck, ShieldOff } from "lucide-react";
+import { Loader2, ShieldCheck, ShieldOff } from "lucide-react";
 
 const INPUT_CLASS =
   "w-40 rounded-lg border border-border bg-white px-3 py-2 text-sm tracking-widest outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]";
@@ -10,21 +10,17 @@ type Enrollment = { qrDataUrl: string; secret: string };
 
 export function TwoFactorPanel({
   enabledAt,
-  backupCodesLeft,
 }: {
   /** ISO date when 2FA was enabled, or null when it's off. */
   enabledAt: string | null;
-  backupCodesLeft: number;
 }) {
   const [enabled, setEnabled] = useState(Boolean(enabledAt));
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
-  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [code, setCode] = useState("");
   const [disableCode, setDisableCode] = useState("");
   const [showDisable, setShowDisable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   async function call(path: string, body?: unknown): Promise<Record<string, unknown> | null> {
     setBusy(true);
@@ -55,10 +51,8 @@ export function TwoFactorPanel({
   }
 
   async function onVerify() {
-    if (!code.trim() || busy) return;
-    const data = await call("verify", { code });
-    if (data) {
-      setBackupCodes(data.backupCodes as string[]);
+    if (code.length !== 6 || busy) return;
+    if (await call("verify", { code })) {
       setEnrollment(null);
       setEnabled(true);
       setCode("");
@@ -71,7 +65,6 @@ export function TwoFactorPanel({
       setEnabled(false);
       setShowDisable(false);
       setDisableCode("");
-      setBackupCodes(null);
     }
   }
 
@@ -85,13 +78,6 @@ export function TwoFactorPanel({
         cancel();
       }
     };
-  }
-
-  async function onCopyCodes() {
-    if (!backupCodes) return;
-    await navigator.clipboard.writeText(backupCodes.join("\n"));
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
   }
 
   return (
@@ -113,31 +99,6 @@ export function TwoFactorPanel({
       </div>
 
       <div className="px-5 py-4">
-        {/* Backup codes — shown exactly once, right after enrollment. */}
-        {backupCodes && (
-          <div className="mb-4 rounded-lg border border-border bg-background p-4">
-            <div className="text-sm font-medium text-foreground">
-              Save your backup codes
-            </div>
-            <p className="mt-1 text-sm text-muted">
-              Each works once if you lose access to your authenticator. This is
-              the only time they&apos;ll be shown.
-            </p>
-            <div className="mt-3 grid grid-cols-2 gap-x-8 gap-y-1 font-mono text-sm text-foreground sm:grid-cols-4">
-              {backupCodes.map((c) => (
-                <span key={c}>{c}</span>
-              ))}
-            </div>
-            <button
-              onClick={onCopyCodes}
-              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground hover:bg-background"
-            >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? "Copied" : "Copy all"}
-            </button>
-          </div>
-        )}
-
         {!enabled && !enrollment && (
           <button
             onClick={onStartSetup}
@@ -214,15 +175,11 @@ export function TwoFactorPanel({
           </div>
         )}
 
-        {enabled && !backupCodes && (
+        {enabled && (
           <div className="text-sm text-muted">
-            {enabledAt && (
-              <span>
-                On since {new Date(enabledAt).toLocaleDateString()} ·{" "}
-              </span>
-            )}
-            {backupCodesLeft} backup code{backupCodesLeft === 1 ? "" : "s"}{" "}
-            remaining
+            {enabledAt && <span>On since {new Date(enabledAt).toLocaleDateString()}. </span>}
+            If you lose access to your authenticator app, ask your admin to
+            reset two-factor for your account.
           </div>
         )}
 
@@ -232,21 +189,23 @@ export function TwoFactorPanel({
               <div className="flex items-center gap-2">
                 <input
                   type="text"
+                  inputMode="numeric"
+                  maxLength={6}
                   value={disableCode}
-                  onChange={(e) => setDisableCode(e.target.value)}
+                  onChange={(e) => setDisableCode(e.target.value.replace(/\D/g, ""))}
                   onKeyDown={onCodeKeyDown(onDisable, () => {
                     setShowDisable(false);
                     setDisableCode("");
                     setError(null);
                   })}
-                  placeholder="Code or backup code"
-                  className="w-52 rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                  placeholder="6-digit code"
+                  className={INPUT_CLASS}
                   disabled={busy}
                   autoFocus
                 />
                 <button
                   onClick={onDisable}
-                  disabled={busy || !disableCode.trim()}
+                  disabled={busy || disableCode.length !== 6}
                   className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3.5 text-[13px] font-medium text-red-600 hover:bg-background disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {busy && <Loader2 size={14} className="animate-spin" />}

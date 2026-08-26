@@ -14,7 +14,9 @@ export function Shell({
 }) {
   const pathname = usePathname();
   const isAuthPage =
-    NO_SHELL_PATHS.includes(pathname) || pathname.startsWith("/crm");
+    NO_SHELL_PATHS.includes(pathname) ||
+    pathname.startsWith("/login/") ||
+    pathname.startsWith("/crm");
 
   if (isAuthPage) {
     return <>{children}</>;

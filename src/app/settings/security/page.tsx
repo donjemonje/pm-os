@@ -11,7 +11,7 @@ export default async function SecuritySettingsPage() {
   const user = await requireUser();
   const dbUser = await db.user.findUnique({
     where: { id: user.id },
-    select: { totpEnabledAt: true, totpBackupCodes: true },
+    select: { totpEnabledAt: true },
   });
 
   return (
@@ -19,10 +19,7 @@ export default async function SecuritySettingsPage() {
       <p className="mb-6 text-sm text-muted">
         Protect your account with an extra sign-in step.
       </p>
-      <TwoFactorPanel
-        enabledAt={dbUser?.totpEnabledAt?.toISOString() ?? null}
-        backupCodesLeft={dbUser?.totpBackupCodes.length ?? 0}
-      />
+      <TwoFactorPanel enabledAt={dbUser?.totpEnabledAt?.toISOString() ?? null} />
     </div>
   );
 }

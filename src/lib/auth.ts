@@ -4,7 +4,7 @@ import { db } from "./db";
 import { isSignupAllowed } from "./feature-flags";
 import {
   decryptTotpSecret,
-  redeemBackupCode,
+  isFreshTotpStep,
   verifyTotpCode,
 } from "./two-factor";
 
@@ -265,15 +265,15 @@ export async function verifyTwoFactorChallenge(
   }
 
   const secret = decryptTotpSecret(session.user.totpSecretEnc);
-  if (!verifyTotpCode(secret, code)) {
-    const remaining = redeemBackupCode(code, session.user.totpBackupCodes);
-    if (remaining === null) return { status: "invalid" };
-    await db.user.update({
-      where: { id: session.user.id },
-      data: { totpBackupCodes: remaining },
-    });
+  const step = verifyTotpCode(secret, code);
+  if (step === null || !isFreshTotpStep(step, session.user.totpLastUsedStep)) {
+    return { status: "invalid" };
   }
 
+  await db.user.update({
+    where: { id: session.user.id },
+    data: { totpLastUsedStep: step },
+  });
   await db.session.update({
     where: { id: session.id },
     data: { twoFactorVerified: true },

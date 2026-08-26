@@ -5,13 +5,13 @@ import { db } from "@/lib/db";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   decryptTotpSecret,
-  generateBackupCodes,
+  isFreshTotpStep,
   verifyTotpCode,
 } from "@/lib/two-factor";
 
 /**
  * Completes enrollment: the user proves the authenticator works by submitting
- * one code. Only then does 2FA turn on; backup codes are returned exactly once.
+ * one code. Only then does 2FA turn on.
  */
 export async function POST(request: Request) {
   const user = await apiUser();
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 
   const dbUser = await db.user.findUnique({
     where: { id: user.id },
-    select: { totpSecretEnc: true, totpEnabledAt: true },
+    select: { totpSecretEnc: true, totpEnabledAt: true, totpLastUsedStep: true },
   });
   if (dbUser?.totpEnabledAt) {
     return NextResponse.json(
@@ -46,22 +46,22 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!verifyTotpCode(decryptTotpSecret(dbUser.totpSecretEnc), code)) {
+  const step = verifyTotpCode(decryptTotpSecret(dbUser.totpSecretEnc), code);
+  if (step === null || !isFreshTotpStep(step, dbUser.totpLastUsedStep)) {
     return NextResponse.json(
       { error: "That code didn't match — check your authenticator app and try again" },
       { status: 400 }
     );
   }
 
-  const backupCodes = generateBackupCodes();
   await db.user.update({
     where: { id: user.id },
     data: {
       totpEnabledAt: new Date(),
-      totpBackupCodes: backupCodes.hashed,
+      totpLastUsedStep: step,
     },
   });
   await markCurrentSessionTwoFactorVerified();
 
-  return NextResponse.json({ backupCodes: backupCodes.plaintext });
+  return NextResponse.json({ ok: true });
 }
