@@ -10,7 +10,13 @@ import {
   isOAuthProvider,
   type OAuthProvider,
 } from "./oauth-providers";
-import { createSession, sessionCookieOptions, signInWithOAuth } from "./auth";
+import {
+  createSession,
+  sessionCookieOptions,
+  signInWithOAuth,
+  twoFactorPendingCookieOptions,
+  userHasTwoFactor,
+} from "./auth";
 import { isGoogleLoginDisabled, isLoginDisabled } from "./feature-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
@@ -133,10 +139,17 @@ export async function completeOAuth(provider: string, code: string | null, state
       name: profile.name,
     });
     const token = await createSession(user.id);
+    const twoFactorRequired = await userHasTwoFactor(user.id);
     const redirectTo = from?.startsWith("/") ? from : "/";
-    const response = NextResponse.redirect(
-      new URL(redirectTo, process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000")
-    );
+    const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const target = twoFactorRequired
+      ? (() => {
+          const url = new URL("/login/2fa", base);
+          url.searchParams.set("from", redirectTo);
+          return url;
+        })()
+      : new URL(redirectTo, base);
+    const response = NextResponse.redirect(target);
     clearOAuthCookies(response);
     const opts = sessionCookieOptions(token);
     response.cookies.set(opts.name, opts.value, {
@@ -146,6 +159,8 @@ export async function completeOAuth(provider: string, code: string | null, state
       secure: opts.secure,
       maxAge: opts.maxAge,
     });
+    const pending = twoFactorPendingCookieOptions(twoFactorRequired);
+    response.cookies.set(pending.name, pending.value, pending);
     return response;
   } catch (e) {
     const message = e instanceof Error ? e.message : "oauth_signin_failed";

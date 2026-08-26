@@ -1,0 +1,44 @@
+import { NextResponse } from "next/server";
+import {
+  getSessionToken,
+  twoFactorPendingCookieOptions,
+  verifyTwoFactorChallenge,
+} from "@/lib/auth";
+import { rateLimit } from "@/lib/rate-limit";
+
+/** Login-time 2FA challenge: TOTP code or backup code for the pending session. */
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null);
+  const code = typeof body?.code === "string" ? body.code.trim() : "";
+  if (!code) {
+    return NextResponse.json({ error: "Code is required" }, { status: 400 });
+  }
+
+  const token = await getSessionToken();
+  if (!token) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!rateLimit(`2fa-challenge:${token}`, 5, 60_000)) {
+    return NextResponse.json(
+      { error: "Too many attempts — wait a minute and try again" },
+      { status: 429 }
+    );
+  }
+
+  const result = await verifyTwoFactorChallenge(code);
+  if (result.status === "no_session") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (result.status === "invalid") {
+    return NextResponse.json(
+      { error: "That code didn't match — try again or use a backup code" },
+      { status: 400 }
+    );
+  }
+
+  // "ok" and "not_pending" (2FA got disabled meanwhile) both mean: proceed.
+  const response = NextResponse.json({ ok: true });
+  const opts = twoFactorPendingCookieOptions(false);
+  response.cookies.set(opts.name, opts.value, opts);
+  return response;
+}

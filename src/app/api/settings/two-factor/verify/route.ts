@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { apiUser } from "@/lib/api-auth";
 import { markCurrentSessionTwoFactorVerified } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { rateLimit } from "@/lib/rate-limit";
 import {
   decryptTotpSecret,
   generateBackupCodes,
@@ -20,6 +21,12 @@ export async function POST(request: Request) {
   const code = typeof body?.code === "string" ? body.code : "";
   if (!code) {
     return NextResponse.json({ error: "Code is required" }, { status: 400 });
+  }
+  if (!rateLimit(`2fa-enroll:${user.id}`, 5, 60_000)) {
+    return NextResponse.json(
+      { error: "Too many attempts — wait a minute and try again" },
+      { status: 429 }
+    );
   }
 
   const dbUser = await db.user.findUnique({

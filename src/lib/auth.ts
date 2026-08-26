@@ -2,8 +2,20 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { db } from "./db";
 import { isSignupAllowed } from "./feature-flags";
+import {
+  decryptTotpSecret,
+  redeemBackupCode,
+  verifyTotpCode,
+} from "./two-factor";
 
 export const SESSION_COOKIE = "pmos_session";
+/**
+ * UX marker only — set alongside the session cookie when login still needs the
+ * TOTP challenge, so middleware (which can't reach the DB) can route pages to
+ * /login/2fa. Security never depends on it: getCurrentUser rejects unverified
+ * sessions regardless.
+ */
+export const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 const SESSION_DAYS = 30;
 
 export type AuthUser = {
@@ -190,7 +202,83 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     return null;
   }
 
+  // The 2FA gate for every page and API route: a session that hasn't passed
+  // the TOTP challenge is treated as unauthenticated.
+  if (session.user.totpEnabledAt && !session.twoFactorVerified) {
+    return null;
+  }
+
   return toAuthUser(session.user);
+}
+
+export async function userHasTwoFactor(userId: string): Promise<boolean> {
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { totpEnabledAt: true },
+  });
+  return Boolean(user?.totpEnabledAt);
+}
+
+export function twoFactorPendingCookieOptions(pending: boolean) {
+  return {
+    name: TWO_FACTOR_PENDING_COOKIE,
+    value: pending ? "1" : "",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: "/",
+    secure: process.env.NODE_ENV === "production",
+    // Lives as long as the session: an abandoned challenge keeps routing to
+    // /login/2fa instead of stranding a half-authenticated session.
+    maxAge: pending ? SESSION_DAYS * 24 * 60 * 60 : 0,
+  };
+}
+
+export type TwoFactorChallengeResult =
+  | { status: "ok" }
+  | { status: "no_session" }
+  | { status: "not_pending" }
+  | { status: "invalid" };
+
+/**
+ * Verifies the login-time TOTP challenge for the current request's session,
+ * accepting a live code or an unused backup code. Marks the session verified
+ * on success.
+ */
+export async function verifyTwoFactorChallenge(
+  code: string
+): Promise<TwoFactorChallengeResult> {
+  const token = await getSessionToken();
+  if (!token) return { status: "no_session" };
+
+  const session = await db.session.findUnique({
+    where: { tokenHash: hashToken(token) },
+    include: { user: true },
+  });
+  if (!session || session.expiresAt < new Date()) {
+    return { status: "no_session" };
+  }
+  if (!session.user.totpEnabledAt || !session.user.totpSecretEnc) {
+    return { status: "not_pending" };
+  }
+  if (session.twoFactorVerified) {
+    return { status: "ok" };
+  }
+
+  const secret = decryptTotpSecret(session.user.totpSecretEnc);
+  if (!verifyTotpCode(secret, code)) {
+    const remaining = redeemBackupCode(code, session.user.totpBackupCodes);
+    if (remaining === null) return { status: "invalid" };
+    await db.user.update({
+      where: { id: session.user.id },
+      data: { totpBackupCodes: remaining },
+    });
+  }
+
+  await db.session.update({
+    where: { id: session.id },
+    data: { twoFactorVerified: true },
+  });
+  return { status: "ok" };
 }
 
 export async function registerUser(input: {
