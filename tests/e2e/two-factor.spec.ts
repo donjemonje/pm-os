@@ -11,7 +11,7 @@ import {
   USER_A,
   USER_A_SECRET,
   USER_B,
-} from "./helpers";
+} from "./two-factor-helpers";
 
 // Requires the seed: node scripts/with-apphosting-env.mjs dev-apphosting.yaml --
 //   node --experimental-strip-types tests/e2e/seed-2fa.ts
