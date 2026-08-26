@@ -5,54 +5,34 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-type MeUser = {
-  id: string;
+// Data arrives server-rendered via the root layout — the menu never renders
+// without it, so there is no fetch and no loading state here.
+export type MenuUser = {
   email: string;
   name: string;
   initials: string;
   organizationName?: string | null;
 };
 
-type MeOrganization = {
+export type MenuOrganization = {
   id: string;
   name: string;
   inviteCode: string;
   memberCount: number;
 };
 
-export function UserMenu() {
+export function UserMenu({
+  user,
+  organization,
+}: {
+  user: MenuUser;
+  organization: MenuOrganization | null;
+}) {
   const router = useRouter();
-  const [user, setUser] = useState<MeUser | null>(null);
-  const [organization, setOrganization] = useState<MeOrganization | null>(null);
   const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // Retries with backoff: a single failed mount-time request (e.g. racing
-    // the post-2FA redirect) used to leave the menu as an empty skeleton
-    // until a full page refresh.
-    async function load(attempt: number) {
-      try {
-        const r = await fetch("/api/auth/me", { cache: "no-store" });
-        if (!r.ok) throw new Error(`me: ${r.status}`);
-        const data = await r.json();
-        if (cancelled) return;
-        if (data?.user) setUser(data.user);
-        if (data?.organization) setOrganization(data.organization);
-      } catch {
-        if (!cancelled && attempt < 3) {
-          setTimeout(() => load(attempt + 1), 1000 * (attempt + 1));
-        }
-      }
-    }
-    load(0);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   async function copyInvite() {
     if (!organization) return;
@@ -85,14 +65,6 @@ export function UserMenu() {
       setLoggingOut(false);
       setOpen(false);
     }
-  }
-
-  if (!user) {
-    return (
-      <div className="border-t border-white/10 p-3">
-        <div className="h-10 animate-pulse rounded-lg bg-white/5" />
-      </div>
-    );
   }
 
   return (

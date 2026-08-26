@@ -1,5 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { db } from "./db";
 import { isSignupAllowed } from "./feature-flags";
 import {
@@ -219,7 +220,9 @@ export async function getTwoFactorState(): Promise<TwoFactorState> {
   return { status: "enroll", secret, email: session.user.email };
 }
 
-export async function getCurrentUser(): Promise<AuthUser | null> {
+// cache(): one session lookup per request even though both the root layout
+// and the page (or API helper) resolve the current user.
+export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   const token = await getSessionToken();
   if (!token) return null;
 
@@ -242,7 +245,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   }
 
   return toAuthUser(session.user);
-}
+});
 
 export function twoFactorPendingCookieOptions(pending: boolean) {
   return {
