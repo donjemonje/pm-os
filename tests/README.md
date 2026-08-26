@@ -46,10 +46,20 @@ tagging read-only-safe tests `@smoke` so the suite is ready.
 
 ## Adding tests in a feature session
 
+QA is agent-run (roster: `pmos-office/office/team-roster.md`). Before
+Daniel's review, every feature session runs:
+
+1. **Omri** (`qa-engineer`) — writes the feature's e2e tests and runs the
+   full suite.
+2. **Dana** (`qa-manager`) — handles dedup/subsume, gives QA sign-off, and
+   appends the feature's row to `tests/QA-LOG.md` (feature branch, date,
+   tests added/updated, QA'd by).
+
+Ground rules:
+
 - 2–4 e2e tests per feature, critical paths only. Part of the definition of
   done — write them on the feature branch, not after.
-- Record it: append your row to `tests/QA-LOG.md` (feature branch, date,
-  tests added/updated, QA'd by) before the branch goes to review.
+- No QA-LOG.md row, no review.
 - Put them in `tests/e2e/<feature>.spec.ts`. Use `loginAsRoomLens` from
   `helpers.ts` instead of re-implementing login.
 - Need fixture data? Extend `scripts/seed-roomlens.mjs` (keep it idempotent,
@@ -63,9 +73,9 @@ tagging read-only-safe tests `@smoke` so the suite is ready.
 If your feature breaks or replaces an existing test, update or delete that
 test in the same branch — the suite must be green before review. Example: a
 2FA login flow supersedes a plain-login test; the plain test gets updated or
-removed in the 2FA branch, not left red for someone else. There is no
-separate QA owner; the feature session that changed the behavior owns the
-test change.
+removed in the 2FA branch, not left red for someone else. The feature
+session that changed the behavior owns the test change — Dana verifies the
+dedup/subsume call at sign-off.
 
 ## Review feedback → tests
 

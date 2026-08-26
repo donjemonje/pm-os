@@ -1,7 +1,7 @@
 # QA log
 
-Append-only. Every feature branch adds its row BEFORE review — no row, no
-review. Newest entries at the bottom.
+Append-only, kept by Dana (`qa-manager`). Every feature branch adds its row
+BEFORE review — no row, no review. Newest entries at the bottom.
 
 | Feature branch | Date | Tests added/updated | QA'd by |
 | --- | --- | --- | --- |
