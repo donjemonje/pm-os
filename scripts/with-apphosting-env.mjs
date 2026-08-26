@@ -7,7 +7,12 @@
  */
 import { spawn } from "child_process";
 import { resolve } from "path";
-import { applyAppHostingEnv, DEFAULT_DEV_APPHOSTING } from "./apphosting-env.mjs";
+import { applyAppHostingEnv } from "./apphosting-env.mjs";
+
+// Computed here rather than in apphosting-env.mjs: that module must stay
+// free of `import.meta` so playwright.config.ts can import it (Playwright
+// transpiles the config graph to CJS).
+const DEFAULT_DEV_APPHOSTING = resolve(import.meta.dirname, "..", "dev-apphosting.yaml");
 
 const argv = process.argv.slice(2);
 let yamlPath = process.env.PMOS_APPHOSTING_ENV?.trim() || DEFAULT_DEV_APPHOSTING;
