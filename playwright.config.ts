@@ -8,13 +8,16 @@ import { defineConfig, devices } from "@playwright/test";
  *    3000) against the pmos_test database. Env comes from test-apphosting.yaml
  *    via the npm script; the webServer child process inherits it.
  *
- * 2. Prod smoke — `npm run test:e2e:prod`
+ * 2. Prod smoke (DEFERRED — not scheduled anywhere yet; Daniel wants to see
+ *    local behavior first) — `npm run test:e2e:prod`
  *    Runs only tests tagged @smoke against PROD_BASE_URL. No webServer, no DB
  *    access — smoke tests must be read-only-safe (login, navigate, assert
- *    render) and scoped to the RoomLens QA org.
+ *    render) and scoped to the RoomLens QA org. Without PROD_BASE_URL it
+ *    refuses to run.
  */
 
-const PORT = Number(process.env.PW_PORT ?? 3100);
+// 3000 = dev server, 3100 = pmos website — tests get their own port.
+const PORT = Number(process.env.PW_PORT ?? 3200);
 const LOCAL_BASE_URL = `http://localhost:${PORT}`;
 const IS_PROD_SMOKE = process.env.PW_PROD_SMOKE === "1";
 const PROD_BASE_URL = process.env.PROD_BASE_URL?.trim();

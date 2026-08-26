@@ -20,25 +20,36 @@ feature session.
 
 ## Running
 
-- `npm run test:e2e` — full suite. Boots the app on port 3100 (not 3000, so
-  your dev server keeps running) against `pmos_test`.
+- `npm run test:e2e` — full suite. Boots the app on port 3200 (3000 is the
+  dev server, 3100 is the pmos website — both keep running) against
+  `pmos_test`.
 - `npm run test:e2e:ui` — same, with the Playwright UI for debugging.
-- `npm run test:e2e:prod` — only tests tagged `@smoke`, against production.
-  Requires `PROD_BASE_URL`, `QA_USER_EMAIL`, `QA_USER_PASSWORD` in env.
-  Normally this runs from CI, not your machine.
 
 Schema changed in your branch? Re-run `npm run test:db:setup` (db push is
 idempotent).
 
 ## Scheduled runs
 
-`.github/workflows/e2e.yml` runs the full suite plus prod smoke on Sun, Tue,
-Thu at 02:00 UTC, and on manual dispatch (Actions tab → e2e → Run workflow).
+`.github/workflows/e2e.yml` runs the full suite on Sun, Tue, Thu at
+02:00 UTC, and on manual dispatch (Actions tab → e2e → Run workflow). It
+needs no GitHub secrets.
+
+## Prod smoke testing (DEFERRED)
+
+On hold until the local suite has proven itself — nothing prod-related is
+scheduled or required right now. The pieces already exist for when Daniel
+turns it on: the `prod-smoke` Playwright project (`npm run test:e2e:prod`,
+refuses to run without `PROD_BASE_URL`; only `@smoke`-tagged tests),
+`scripts/seed-roomlens.mjs` for deliberately seeding the RoomLens QA org in
+prod, and a CI job sketch in the workflow header comment. Until then, keep
+tagging read-only-safe tests `@smoke` so the suite is ready.
 
 ## Adding tests in a feature session
 
 - 2–4 e2e tests per feature, critical paths only. Part of the definition of
   done — write them on the feature branch, not after.
+- Record it: append your row to `tests/QA-LOG.md` (feature branch, date,
+  tests added/updated, QA'd by) before the branch goes to review.
 - Put them in `tests/e2e/<feature>.spec.ts`. Use `loginAsRoomLens` from
   `helpers.ts` instead of re-implementing login.
 - Need fixture data? Extend `scripts/seed-roomlens.mjs` (keep it idempotent,
