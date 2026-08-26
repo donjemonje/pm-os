@@ -46,3 +46,12 @@ env:
     availability:
       - BUILD
       - RUNTIME
+
+  # --- 2FA (mandatory) ---
+  # Fixed synthetic key for encrypting the seeded test TOTP secret. Keep this
+  # EXACT value: it must match the CI job env (.github/workflows/e2e.yml) and
+  # the seed encrypts with it. Test-only, not a secret.
+  - variable: TOTP_ENC_KEY
+    value: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"
+    availability:
+      - RUNTIME

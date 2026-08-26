@@ -1,13 +1,28 @@
 import { expect, Page } from "@playwright/test";
 import * as OTPAuth from "otpauth";
 
-export const USER_A = "qa-2fa-a@pm-os.test";
-export const USER_B = "qa-2fa-b@pm-os.test";
-export const PASSWORD = "qa-2fa-Passw0rd!";
-// Must match tests/e2e/seed-2fa.ts.
-export const USER_A_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+/**
+ * TOTP utilities for the mandatory-2FA login flow, shared by helpers.ts
+ * (loginAsRoomLens) and two-factor.spec.ts. Codes are generated for real
+ * from the enrolled secret — never mocked.
+ */
+
+/** Seeded users in pmos_test — see scripts/seed-test-db.mjs. */
+export const USER_A = "qa+roomlens@pm-os.io"; // enrolled in TOTP (= QA_USER.email)
+export const USER_B = "qa+roomlens-2@pm-os.io"; // un-enrolled (enrollment flow)
+
+/**
+ * Fixed synthetic TOTP secret for USER_A. Single source of truth for the
+ * tests; scripts/seed-test-db.mjs mirrors it and stores it encrypted with
+ * the fixed test TOTP_ENC_KEY (test-apphosting.yaml / CI job env).
+ * Test-only credential — never use outside pmos_test.
+ */
+export const TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
 
 export const TOTP_PERIOD_MS = 30_000;
+
+/** Server error for a wrong OR replayed code (same message by design). */
+export const INVALID_CODE_ERROR = /didn't match or was already used/;
 
 export function totpFor(secretBase32: string): OTPAuth.TOTP {
   // Same params as src/lib/two-factor.ts.
@@ -29,7 +44,8 @@ export function msLeftInWindow(): number {
 }
 
 /** If fewer than `minMs` remain in the current 30s TOTP window, wait for the
- * next window so a code generated now stays valid while we type/submit it. */
+ * next window so a code generated now stays valid while we type/submit it.
+ * These waits are by design (TOTP timing), not flakiness — see tests/README.md. */
 export async function ensureWindowHeadroom(minMs: number): Promise<void> {
   const left = msLeftInWindow();
   if (left < minMs) {
@@ -60,6 +76,48 @@ export async function submitTwoFactorCode(
   await page
     .getByRole("button", { name: /verify( & finish setup)?$/i })
     .click();
+}
+
+// Codes are single-use per 30s step (User.totpLastUsedStep). Consecutive
+// logins of the same user inside one window would replay the same code, so
+// we track the last step we consumed and skip past it. The tracker is
+// per-process; a worker restart between spec files loses it, so
+// passTwoFactorChallenge also retries once per window on an "already used"
+// rejection (the code itself is definitionally valid — we just generated it
+// from the enrolled secret with headroom to spare).
+let lastConsumedStep = -1;
+
+/**
+ * Complete the /login/2fa challenge for the enrolled RoomLens user
+ * (TEST_TOTP_SECRET) and wait for the dashboard. Used by loginAsRoomLens —
+ * specs should not call this directly unless they need a bare challenge.
+ */
+export async function passTwoFactorChallenge(page: Page): Promise<void> {
+  const error = page.locator("form p", { hasText: INVALID_CODE_ERROR });
+  const dashboardHeading = page.getByRole("heading", { name: "Dashboard" });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Skip any window a previous login in this process already consumed.
+    while (currentStep() <= lastConsumedStep) {
+      await new Promise((r) => setTimeout(r, msLeftInWindow() + 250));
+    }
+    await ensureWindowHeadroom(8_000);
+    const step = currentStep();
+    await submitTwoFactorCode(page, totpFor(TEST_TOTP_SECRET).generate());
+
+    await expect(error.or(dashboardHeading).first()).toBeVisible({
+      timeout: 15_000,
+    });
+    lastConsumedStep = Math.max(lastConsumedStep, step);
+    if (await dashboardHeading.isVisible()) return;
+    // Rejected: this window's step was consumed outside our tracker (e.g. an
+    // earlier spec file before a worker restart). Retry in the next window.
+  }
+  throw new Error(
+    "2FA challenge: freshly generated current-window codes were rejected 3 " +
+      "times in a row — suspect the product (replay guard) or a seed/secret " +
+      "mismatch, not timing."
+  );
 }
 
 /** GET a JSON API from within the page's cookie context; returns the status. */

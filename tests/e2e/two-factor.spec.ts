@@ -1,28 +1,63 @@
 import { expect, test } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { QA_USER } from "./helpers";
+import { RESOLVED_ENV } from "./test-env";
 import {
   apiStatus,
   currentStep,
   ensureWindowHeadroom,
+  INVALID_CODE_ERROR,
   loginExpecting2fa,
   logout,
-  PASSWORD,
   submitTwoFactorCode,
+  TEST_TOTP_SECRET,
   totpFor,
   USER_A,
-  USER_A_SECRET,
   USER_B,
 } from "./two-factor-helpers";
 
-// Requires the seed: node scripts/with-apphosting-env.mjs dev-apphosting.yaml --
-//   node --experimental-strip-types tests/e2e/seed-2fa.ts
-// Re-run the seed before each suite run — T6 enrolls user B, and the seed
-// resets that. All tests write data (sessions, totp state): none are @smoke.
+/**
+ * Mandatory-2FA login flow, against the pmos_test harness (port 3200,
+ * `npm run test:db:setup` seeds the users):
+ *   USER_A qa+roomlens@pm-os.io    enrolled (fixed TEST_TOTP_SECRET)
+ *   USER_B qa+roomlens-2@pm-os.io  un-enrolled — T6 walks the QR enrollment
+ *
+ * The beforeAll below resets both users' totp state + sessions directly in
+ * the test DB, so T6 is rerunnable and T2-T4 are immune to a leftover
+ * totpLastUsedStep from a previous run — no re-seed needed between runs.
+ * All tests write data (sessions, totp state): none are @smoke.
+ */
 
-const VIEWPORT_CENTER_X = 1440 / 2;
-const INVALID_CODE_ERROR =
-  /didn't match or was already used/;
+const PASSWORD = QA_USER.password; // same seed convention for both users
 
 test.describe("2FA login", () => {
+  test.beforeAll(async () => {
+    // Same resolved env as the app (yaml wins over shell); the env guard has
+    // already pinned the database to pmos_test before this runs.
+    process.env.DATABASE_URL = RESOLVED_ENV.DATABASE_URL;
+    const db = new PrismaClient();
+    try {
+      await db.user.update({
+        where: { email: USER_A },
+        data: { totpLastUsedStep: null },
+      });
+      await db.user.update({
+        where: { email: USER_B },
+        data: { totpSecretEnc: null, totpEnabledAt: null, totpLastUsedStep: null },
+      });
+      await db.session.deleteMany({
+        where: { user: { email: { in: [USER_A, USER_B] } } },
+      });
+    } catch (e) {
+      throw new Error(
+        `2FA spec beforeAll could not reset ${USER_A} / ${USER_B} — did you ` +
+          `run \`npm run test:db:setup\`? (${e instanceof Error ? e.message : e})`
+      );
+    } finally {
+      await db.$disconnect();
+    }
+  });
+
   test("T1 challenge page is centered with no app shell", async ({ page }) => {
     await loginExpecting2fa(page, USER_A, PASSWORD);
 
@@ -37,10 +72,11 @@ test.describe("2FA login", () => {
     await expect(card).toHaveCount(1);
     const box = await card.boundingBox();
     expect(box).not.toBeNull();
+    const viewportCenterX = page.viewportSize()!.width / 2;
     const centerX = box!.x + box!.width / 2;
-    const offset = Math.abs(centerX - VIEWPORT_CENTER_X);
+    const offset = Math.abs(centerX - viewportCenterX);
     console.log(
-      `[T1] card center x=${centerX.toFixed(1)}, viewport center=${VIEWPORT_CENTER_X}, offset=${offset.toFixed(1)}px`
+      `[T1] card center x=${centerX.toFixed(1)}, viewport center=${viewportCenterX}, offset=${offset.toFixed(1)}px`
     );
     expect(offset).toBeLessThanOrEqual(25);
 
@@ -56,7 +92,7 @@ test.describe("2FA login", () => {
     // Keep enough headroom that the "previous window" stays previous while
     // we type and submit.
     await ensureWindowHeadroom(8_000);
-    const totp = totpFor(USER_A_SECRET);
+    const totp = totpFor(TEST_TOTP_SECRET);
     let previous = totp.generate({ timestamp: Date.now() - 30_000 });
     if (previous === totp.generate()) {
       // Freak collision across the boundary — wait a window and regenerate.
@@ -85,7 +121,7 @@ test.describe("2FA login", () => {
     // One code must survive: submit, logout, re-login, replay — start at a
     // fresh window so it all fits inside 30s.
     await ensureWindowHeadroom(25_000);
-    const totp = totpFor(USER_A_SECRET);
+    const totp = totpFor(TEST_TOTP_SECRET);
     const code = totp.generate();
     const stepAtGenerate = currentStep();
 

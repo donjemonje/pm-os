@@ -1,20 +1,24 @@
 import { Locator, Page, expect } from "@playwright/test";
+import { loginExpecting2fa, passTwoFactorChallenge } from "./two-factor-helpers";
 
 /**
  * RoomLens QA credentials, as seeded by scripts/seed-test-db.mjs into the
  * local/CI test database (pmos_test). Synthetic only — never real data.
+ * QA_USER is enrolled in TOTP (fixed secret, see two-factor-helpers.ts).
  */
 export const QA_USER = {
   email: "qa+roomlens@pm-os.io",
   password: "roomlens-qa-pass1",
 };
 
-/** Log in through the real login form and wait for the dashboard. */
+/**
+ * Log in through the real login form, pass the mandatory /login/2fa TOTP
+ * challenge with a real code, and wait for the dashboard. This is the ONLY
+ * login helper — specs never re-implement login.
+ */
 export async function loginAsRoomLens(page: Page): Promise<void> {
-  await page.goto("/login");
-  await page.locator("#email").fill(QA_USER.email);
-  await page.locator("#password").fill(QA_USER.password);
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await loginExpecting2fa(page, QA_USER.email, QA_USER.password);
+  await passTwoFactorChallenge(page);
   await page.waitForURL("**/dashboard");
   await expect(
     page.getByRole("heading", { name: "Dashboard" })

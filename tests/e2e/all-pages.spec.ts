@@ -16,6 +16,10 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  *                           session must NOT grant access. Asserted below as
  *                           a redirect to /crm/login instead.
  * - /crm/login              covered via the CRM redirect test.
+ * - /login/2fa              covered in two-factor.spec.ts (challenge +
+ *                           enrollment). Not swept here: middleware does not
+ *                           redirect a fully verified user off /login/2fa —
+ *                           documented behavior, deliberately untested.
  * - /docs/[id]              skipped: the RoomLens seed creates no documents,
  *                           and this suite stays read-only. Revisit if
  *                           seed-test-db.mjs ever seeds a document.

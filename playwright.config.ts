@@ -35,7 +35,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
-  timeout: 30_000,
+  // 2FA tests wait for 30s TOTP window boundaries by design (up to ~30s per
+  // login on top of navigation) — 30s was not enough headroom.
+  timeout: 60_000,
   reporter: process.env.CI
     ? [["list"], ["html", { open: "never" }]]
     : [["list"]],
