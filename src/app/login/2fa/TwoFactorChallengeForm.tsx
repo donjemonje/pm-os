@@ -134,7 +134,7 @@ function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
           </button>
         </form>
 
-        <div className="mt-6 space-y-2 text-center">
+        <div className="mt-6 text-center">
           <button
             type="button"
             onClick={onBackToSignIn}
@@ -142,12 +142,6 @@ function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
           >
             Back to sign in
           </button>
-          {!enrollment && (
-            <p className="font-subtitle text-xs text-brand-muted">
-              Lost your authenticator? Ask your admin to reset two-factor for
-              your account.
-            </p>
-          )}
         </div>
       </div>
     </AuthNeuralBackground>

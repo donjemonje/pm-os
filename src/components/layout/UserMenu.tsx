@@ -30,13 +30,28 @@ export function UserMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
+    let cancelled = false;
+    // Retries with backoff: a single failed mount-time request (e.g. racing
+    // the post-2FA redirect) used to leave the menu as an empty skeleton
+    // until a full page refresh.
+    async function load(attempt: number) {
+      try {
+        const r = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!r.ok) throw new Error(`me: ${r.status}`);
+        const data = await r.json();
+        if (cancelled) return;
         if (data?.user) setUser(data.user);
         if (data?.organization) setOrganization(data.organization);
-      })
-      .catch(() => {});
+      } catch {
+        if (!cancelled && attempt < 3) {
+          setTimeout(() => load(attempt + 1), 1000 * (attempt + 1));
+        }
+      }
+    }
+    load(0);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function copyInvite() {
