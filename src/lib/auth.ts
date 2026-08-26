@@ -10,6 +10,8 @@ export type AuthUser = {
   id: string;
   email: string;
   name: string;
+  /** Minimized IAM: "USER" (default) or "PMOS_ADMIN" (PM-OS Admin access). */
+  role: "USER" | "PMOS_ADMIN";
   workspaceId: string | null;
   organizationId: string | null;
   organizationName: string | null;
@@ -123,6 +125,7 @@ function toAuthUser(user: {
   id: string;
   email: string;
   name: string;
+  role: "USER" | "PMOS_ADMIN";
   organization:
     | {
         id: string;
@@ -136,6 +139,7 @@ function toAuthUser(user: {
     id: user.id,
     email: user.email,
     name: user.name,
+    role: user.role,
     workspaceId: user.organization?.workspace?.id ?? null,
     organizationId: user.organization?.id ?? null,
     organizationName: user.organization?.name ?? null,
@@ -377,6 +381,7 @@ export type OrganizationMember = {
   id: string;
   email: string;
   name: string;
+  role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
   deactivatedAt: string | null;
   createdAt: string;
@@ -428,6 +433,7 @@ export async function listOrganizationsWithMembers(): Promise<
       id: u.id,
       email: u.email,
       name: u.name,
+      role: u.role,
       hasPassword: Boolean(u.passwordHash),
       deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
       createdAt: u.createdAt.toISOString(),

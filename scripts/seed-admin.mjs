@@ -1,18 +1,21 @@
 /**
- * Bootstrap (or reset) an admin login for PM-OS Admin.
+ * Bootstrap (or reset) a pmos-admin login for PM-OS Admin.
  *
- * Admin access = a normal app User whose email is on the ADMIN_EMAILS
- * allowlist. This script makes sure that User exists and has a password:
- *   - user exists  -> password is set/reset
- *   - user missing -> user is created inside an organization (default
- *     "PM-OS", created with its workspace if needed)
+ * Admin access = a normal app User with role PMOS_ADMIN (minimized IAM;
+ * role defaults to USER, so nobody is an admin until promoted). This script
+ * makes sure the User exists, has a password, and holds the PMOS_ADMIN role:
+ *   - user exists  -> password is set/reset, role promoted to PMOS_ADMIN,
+ *     any deactivation cleared
+ *   - user missing -> user is created as PMOS_ADMIN inside an organization
+ *     (default "PM-OS", created with its workspace if needed)
  *
  * The password comes from the environment — it is never stored or printed.
  *
  * Run with the DB reachable (local dev env, or Cloud SQL Auth Proxy):
- *   ADMIN_EMAIL=d3east@gmail.com ADMIN_PASSWORD='...' node scripts/seed-admin.mjs
+ *   ADMIN_EMAIL=daniel@pm-os.io ADMIN_PASSWORD='...' node scripts/seed-admin.mjs
  * Optional: ADMIN_NAME="Daniel East" ADMIN_ORG_NAME="PM-OS"
  *
+ * Further admins are promoted from /admin/users, not seeded.
  * Hashing matches src/lib/auth.ts (scrypt, "salt:hash").
  */
 import { PrismaClient } from "@prisma/client";
@@ -65,10 +68,14 @@ const existing = await prisma.user.findUnique({
 if (existing) {
   await prisma.user.update({
     where: { id: existing.id },
-    data: { passwordHash: hashPassword(password), deactivatedAt: null },
+    data: {
+      passwordHash: hashPassword(password),
+      role: "PMOS_ADMIN",
+      deactivatedAt: null,
+    },
   });
   console.log(
-    `Password set for existing user ${email} (org: ${existing.organization?.name ?? "none"}).`
+    `Password set and role PMOS_ADMIN granted for existing user ${email} (org: ${existing.organization?.name ?? "none"}).`
   );
 } else {
   let org = await prisma.organization.findFirst({ where: { name: orgName } });
@@ -89,13 +96,13 @@ if (existing) {
       email,
       name,
       passwordHash: hashPassword(password),
+      role: "PMOS_ADMIN",
       organizationId: org.id,
     },
   });
-  console.log(`Created user ${email} in organization "${org.name}".`);
+  console.log(
+    `Created pmos-admin user ${email} in organization "${org.name}".`
+  );
 }
 
-console.log(
-  "Reminder: the email must also be listed in ADMIN_EMAILS for /admin access."
-);
 await prisma.$disconnect();

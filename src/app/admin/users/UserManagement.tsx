@@ -8,6 +8,8 @@ import {
   Loader2,
   Plus,
   RotateCcw,
+  Shield,
+  ShieldOff,
   UserPlus,
   UserX,
 } from "lucide-react";
@@ -17,6 +19,7 @@ type Member = {
   id: string;
   email: string;
   name: string;
+  role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
   deactivatedAt: string | null;
   createdAt: string;
@@ -48,6 +51,7 @@ export function UserManagement({
   const [showAddUser, setShowAddUser] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
 
   const totalUsers = useMemo(
     () => organizations.reduce((sum, org) => sum + org.members.length, 0),
@@ -62,6 +66,29 @@ export function UserManagement({
     }
   }
 
+  async function patchMember(
+    member: Member,
+    change: { deactivated?: boolean; role?: "USER" | "PMOS_ADMIN" }
+  ) {
+    setBusyUserId(member.id);
+    setActionError("");
+    try {
+      const res = await fetch(`/api/admin/users/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(change),
+      });
+      if (res.ok) {
+        await refresh();
+      } else {
+        const data = await res.json().catch(() => null);
+        setActionError(data?.error || "Update failed");
+      }
+    } finally {
+      setBusyUserId(null);
+    }
+  }
+
   async function setDeactivated(orgName: string, member: Member, deactivated: boolean) {
     if (
       deactivated &&
@@ -71,17 +98,16 @@ export function UserManagement({
     ) {
       return;
     }
-    setBusyUserId(member.id);
-    try {
-      const res = await fetch(`/api/admin/users/${member.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deactivated }),
-      });
-      if (res.ok) await refresh();
-    } finally {
-      setBusyUserId(null);
-    }
+    await patchMember(member, { deactivated });
+  }
+
+  async function setRole(member: Member, role: "USER" | "PMOS_ADMIN") {
+    const message =
+      role === "PMOS_ADMIN"
+        ? `Make ${member.name || member.email} a pmos-admin? They will get full access to PM-OS Admin.`
+        : `Remove pmos-admin from ${member.name || member.email}? They will lose access to PM-OS Admin.`;
+    if (!window.confirm(message)) return;
+    await patchMember(member, { role });
   }
 
   async function copyInvite(code: string) {
@@ -120,6 +146,12 @@ export function UserManagement({
             await refresh();
           }}
         />
+      )}
+
+      {actionError && (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          {actionError}
+        </p>
       )}
 
       {organizations.length === 0 ? (
@@ -172,6 +204,7 @@ export function UserManagement({
                     <tr>
                       <th className="px-5 py-2.5 font-medium">Name</th>
                       <th className="px-5 py-2.5 font-medium">Email</th>
+                      <th className="px-5 py-2.5 font-medium">Role</th>
                       <th className="px-5 py-2.5 font-medium">Access</th>
                       <th className="px-5 py-2.5 font-medium">Added</th>
                       <th className="px-5 py-2.5 font-medium text-right">
@@ -187,6 +220,18 @@ export function UserManagement({
                         </td>
                         <td className="px-5 py-3 text-slate-600">
                           {member.email}
+                        </td>
+                        <td className="px-5 py-3">
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-xs font-medium",
+                              member.role === "PMOS_ADMIN"
+                                ? "bg-violet-50 text-violet-700"
+                                : "bg-slate-100 text-slate-600"
+                            )}
+                          >
+                            {member.role === "PMOS_ADMIN" ? "pmos-admin" : "user"}
+                          </span>
                         </td>
                         <td className="px-5 py-3">
                           <span
@@ -210,6 +255,28 @@ export function UserManagement({
                           {new Date(member.createdAt).toLocaleDateString()}
                         </td>
                         <td className="px-5 py-3 text-right">
+                          {!member.deactivatedAt &&
+                            (member.role === "PMOS_ADMIN" ? (
+                              <button
+                                type="button"
+                                onClick={() => setRole(member, "USER")}
+                                disabled={busyUserId === member.id}
+                                className="mr-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                              >
+                                <ShieldOff className="h-3.5 w-3.5" />
+                                Remove admin
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setRole(member, "PMOS_ADMIN")}
+                                disabled={busyUserId === member.id}
+                                className="mr-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                              >
+                                <Shield className="h-3.5 w-3.5" />
+                                Make admin
+                              </button>
+                            ))}
                           {member.deactivatedAt ? (
                             <button
                               type="button"

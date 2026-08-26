@@ -23,11 +23,20 @@ model Organization {
   workspace Workspace?
 }
 
+/// Minimized IAM. PMOS_ADMIN (not plain "admin" — that name is reserved for a
+/// future customer-admin role) grants access to PM-OS Admin. Default USER =
+/// deny-by-default.
+enum UserRole {
+  USER
+  PMOS_ADMIN
+}
+
 model User {
   id             String        @id @default(uuid())
   email          String        @unique
   passwordHash   String?
   name           String
+  role           UserRole      @default(USER)
   /// Soft-deactivation: set = user cannot log in and active sessions are
   /// rejected. Cleared to reactivate. No hard delete from Admin.
   deactivatedAt  DateTime?

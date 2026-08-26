@@ -38,9 +38,9 @@ export function middleware(request: NextRequest) {
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
 
   // PM-OS Admin rides the main app session. This is defense-in-depth only —
-  // it can't validate the token or the ADMIN_EMAILS allowlist (no DB on the
-  // edge), so every admin page and /api/admin route re-checks server-side
-  // via requireAdmin()/apiAdmin().
+  // it can't validate the token or the PMOS_ADMIN role (no DB on the edge),
+  // so every admin page and /api/admin route re-checks server-side via
+  // requireAdminPage()/apiAdmin().
   if (isAdminPath(pathname)) {
     if (!hasSession) {
       if (pathname.startsWith("/api/")) {
