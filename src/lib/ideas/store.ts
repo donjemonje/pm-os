@@ -170,11 +170,13 @@ export async function importBatch(
           : input.productLine
             ? [input.productLine]
             : ["Other"];
+      // Ideas read in product voice; the customer's original wording stays
+      // intact on ZendeskTicketRaw. Fallbacks guard empty model output.
       await db.idea.create({
         data: {
           workspaceId,
-          title: input.subject,
-          details: input.body,
+          title: verdict.productTitle || input.subject,
+          details: verdict.productSummary || input.body,
           products: products as Prisma.InputJsonValue,
           platforms: verdict.platforms as Prisma.InputJsonValue,
           batchStatus: "new",
