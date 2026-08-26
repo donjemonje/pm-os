@@ -40,7 +40,11 @@ jobs:
       DISABLE_GOOGLE_LOGIN: "true"
       IDEAS_ENABLED: "false"
     steps:
+      # Scheduled workflows only fire from the default branch (main), so this
+      # file must exist on main — but the suite always tests development.
       - uses: actions/checkout@v4
+        with:
+          ref: development
 
       - uses: actions/setup-node@v4
         with:
