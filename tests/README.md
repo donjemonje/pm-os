@@ -24,6 +24,10 @@ feature session.
   dev server, 3100 is the pmos website — both keep running) against
   `pmos_test`.
 - `npm run test:e2e:ui` — same, with the Playwright UI for debugging.
+- Bare `npx playwright test` (plus `--headed`, `--ui`, `-g <name>`) works
+  too: playwright.config.ts loads test-apphosting.yaml itself and passes it
+  to the webServer, so every entry point gets identical env. The npm scripts
+  are thin aliases.
 
 Schema changed in your branch? Re-run `npm run test:db:setup` (db push is
 idempotent).

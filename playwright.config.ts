@@ -1,12 +1,16 @@
+import { resolve } from "path";
 import { defineConfig, devices } from "@playwright/test";
+import { loadAppHostingEnv } from "./scripts/apphosting-env.mjs";
 
 /**
  * Two ways to run:
  *
- * 1. Local suite (default) — `npm run test:e2e`
- *    Boots the app on port 3100 (so it never collides with the dev server on
- *    3000) against the pmos_test database. Env comes from test-apphosting.yaml
- *    via the npm script; the webServer child process inherits it.
+ * 1. Local suite (default) — `npm run test:e2e`, or equivalently a bare
+ *    `npx playwright test` / `--headed` / `--ui`.
+ *    Boots the app on port 3200 (so it never collides with the dev server on
+ *    3000 or the pmos website on 3100) against the pmos_test database. Env
+ *    comes from test-apphosting.yaml, loaded by this config and passed to
+ *    the webServer — no wrapper script required.
  *
  * 2. Prod smoke (DEFERRED — not scheduled anywhere yet; Daniel wants to see
  *    local behavior first) — `npm run test:e2e:prod`
@@ -15,6 +19,19 @@ import { defineConfig, devices } from "@playwright/test";
  *    render) and scoped to the RoomLens QA org. Without PROD_BASE_URL it
  *    refuses to run.
  */
+
+// Test env for the webServer, loaded HERE (not only in the npm script) so
+// `npx playwright test`, `--headed`, and `--ui` behave identically to
+// `npm run test:e2e`. Without this, a bare playwright invocation boots the
+// app with no DISABLE_LOGIN=false (login is disabled by default) and no
+// DATABASE_URL. In CI the yaml is absent — loadAppHostingEnv returns {}
+// and the job-level env applies instead. Yaml values win over inherited
+// shell env, same as the with-apphosting-env wrapper (override: true), so
+// a stray DATABASE_URL in someone's shell can never point tests at the
+// dev database.
+const TEST_ENV = loadAppHostingEnv(
+  resolve(__dirname, "test-apphosting.yaml")
+);
 
 // 3000 = dev server, 3100 = pmos website — tests get their own port.
 const PORT = Number(process.env.PW_PORT ?? 3200);
@@ -66,6 +83,10 @@ export default defineConfig({
         command: process.env.CI
           ? `npx next build && npx next start -p ${PORT}`
           : `npx next dev -p ${PORT}`,
+        // Playwright merges this over the inherited process env, so all
+        // entry points (npm script, bare npx, --ui, --headed) get the same
+        // test env. Empty object in CI (no yaml) — job env passes through.
+        env: TEST_ENV,
         url: LOCAL_BASE_URL,
         // Never silently reuse a server that might be pointed at the dev DB.
         reuseExistingServer: false,
