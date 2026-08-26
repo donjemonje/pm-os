@@ -1,5 +1,8 @@
-# Scheduled e2e runs: Sun / Tue / Thu at 02:00 UTC (~05:00 Israel in summer,
-# ~04:00 in winter — cron is UTC and does not follow DST).
+# E2e runs: on every push to development, plus scheduled Sun / Tue / Thu at
+# 02:00 UTC (~05:00 Israel in summer, ~04:00 in winter — cron is UTC and does
+# not follow DST). Push runs work from development directly; scheduled runs
+# only fire once this file also exists on main (GitHub cron uses the default
+# branch), and always test development via the pinned checkout ref below.
 #
 # Runs the full suite against an ephemeral Postgres + local app boot.
 # Needs NO GitHub secrets — everything is synthetic test data.
@@ -10,9 +13,16 @@
 name: e2e
 
 on:
+  push:
+    branches: [development]
   schedule:
     - cron: "0 2 * * 0,2,4"
   workflow_dispatch:
+
+# A newer push to development supersedes an in-flight run of the same suite.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   e2e-local:
