@@ -49,6 +49,9 @@ jobs:
       ALLOW_SIGNUP: "false"
       DISABLE_GOOGLE_LOGIN: "true"
       IDEAS_ENABLED: "false"
+      # 2FA secret-encryption key; production-mode boot refuses to start
+      # without it. Synthetic — the test DB holds only synthetic accounts.
+      TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"
     steps:
       # Scheduled workflows only fire from the default branch (main), so this
       # file must exist on main — but the suite always tests development.
@@ -67,8 +70,10 @@ jobs:
       - name: Push schema to test database
         run: npx prisma db push --skip-generate
 
+      # --experimental-strip-types: the seed imports encryptTotpSecret from
+      # src/lib/two-factor.ts (TypeScript) to store the fixed test TOTP secret.
       - name: Seed RoomLens QA org
-        run: node scripts/seed-test-db.mjs
+        run: node --experimental-strip-types scripts/seed-test-db.mjs
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium

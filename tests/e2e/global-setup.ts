@@ -78,6 +78,23 @@ export default function validateTestEnv(): void {
     );
   }
 
+  // 2FA is mandatory: every login goes through /login/2fa, and the seed
+  // encrypts the fixed test TOTP secret with this key. A missing/malformed
+  // key would make every code verification fail with a confusing error.
+  const totpKey = env.TOTP_ENC_KEY?.trim();
+  if (!totpKey) {
+    problems.push(
+      `TOTP_ENC_KEY is not set — 2FA secrets cannot be decrypted and every ` +
+        `login fails at the TOTP challenge; ${FIX_YAML}`
+    );
+  } else if (!/^[0-9a-fA-F]{64}$/.test(totpKey)) {
+    problems.push(
+      `TOTP_ENC_KEY must be exactly 64 hex characters (32 bytes), got ` +
+        `${totpKey.length} chars — use the fixed test key from ` +
+        `test-apphosting.example.yaml; ${FIX_YAML}`
+    );
+  }
+
   // all-pages.spec.ts asserts /ideas and /settings/ideas return 404.
   if (isTrueLike(env.IDEAS_ENABLED)) {
     problems.push(
@@ -96,6 +113,6 @@ export default function validateTestEnv(): void {
   }
 
   console.log(
-    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off`
+    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, TOTP key set`
   );
 }

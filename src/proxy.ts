@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 const SESSION_COOKIE = "pmos_session";
 const CRM_SESSION_COOKIE = "pmos_crm_session";
+// UX hint set at login when the TOTP challenge is still owed; the real gate is
+// server-side in getCurrentUser, which rejects unverified sessions.
+const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 
 const PUBLIC_PATHS = ["/", "/login", "/register"];
 
@@ -52,6 +55,17 @@ export function proxy(request: NextRequest) {
 
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
   const isApi = pathname.startsWith("/api/");
+
+  const twoFactorPending = Boolean(
+    request.cookies.get(TWO_FACTOR_PENDING_COOKIE)?.value
+  );
+  if (hasSession && twoFactorPending && !isApi && pathname !== "/login/2fa") {
+    const challenge = new URL("/login/2fa", request.url);
+    if (!isPublicPath(pathname)) {
+      challenge.searchParams.set("from", pathname);
+    }
+    return NextResponse.redirect(challenge);
+  }
 
   if (!hasSession && !isPublicPath(pathname) && !isApi) {
     const login = new URL("/login", request.url);

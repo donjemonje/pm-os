@@ -9,9 +9,24 @@
  * Runs as part of `npm run test:db:setup` (creates pmos_test, pushes the
  * schema, then seeds). Credentials are fixed and mirrored in
  * tests/e2e/helpers.ts.
+ *
+ * 2FA is mandatory, so the seed also sets each user's TOTP state:
+ *   qa+roomlens@pm-os.io    enrolled — TEST_TOTP_SECRET encrypted via the
+ *                           app's own encryptTotpSecret (needs TOTP_ENC_KEY),
+ *                           totpLastUsedStep reset to null
+ *   qa+roomlens-2@pm-os.io  un-enrolled — all totp fields null (the
+ *                           enrollment-flow user; two-factor.spec T6 enrolls
+ *                           it, this seed resets it)
+ * Both users' sessions are deleted every run (stale sessions would skip the
+ * challenge), and any qa+signup* users from the signup spec are removed.
+ *
+ * Importing src/lib/two-factor.ts (TypeScript) from this .mjs requires
+ * `node --experimental-strip-types` — the npm script and CI workflow both
+ * pass it. Do NOT reimplement the AES-GCM format here.
  */
 import { PrismaClient } from "@prisma/client";
 import { randomBytes, scryptSync } from "crypto";
+import { encryptTotpSecret } from "../src/lib/two-factor.ts";
 
 const prisma = new PrismaClient();
 
@@ -22,6 +37,10 @@ const ORG_NAME = "RoomLens";
 const EMAIL = "qa+roomlens@pm-os.io";
 const EMAIL2 = "qa+roomlens-2@pm-os.io";
 const PASSWORD = "roomlens-qa-pass1";
+
+// Fixed synthetic TOTP secret for EMAIL — must match TEST_TOTP_SECRET in
+// tests/e2e/two-factor-helpers.ts. Test-only credential.
+const TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
 
 // Same salt:hash scrypt format as src/lib/auth.ts.
 function hashPassword(pw) {
@@ -60,20 +79,16 @@ async function getOrCreateOrg() {
   return org;
 }
 
-async function upsertQaUser(orgId, userEmail, name) {
+async function upsertQaUser(orgId, userEmail, name, totpFields) {
   const passwordHash = hashPassword(PASSWORD);
+  const data = { passwordHash, organizationId: orgId, ...totpFields };
   const existing = await prisma.user.findUnique({ where: { email: userEmail } });
   if (existing) {
-    await prisma.user.update({
-      where: { email: userEmail },
-      data: { passwordHash, organizationId: orgId },
-    });
-    console.log(`• User ${userEmail} exists — password + org refreshed.`);
+    await prisma.user.update({ where: { email: userEmail }, data });
+    console.log(`• User ${userEmail} exists — password + org + totp refreshed.`);
     return;
   }
-  await prisma.user.create({
-    data: { email: userEmail, name, passwordHash, organizationId: orgId },
-  });
+  await prisma.user.create({ data: { email: userEmail, name, ...data } });
   console.log(`✓ User ${userEmail} created.`);
 }
 
@@ -87,8 +102,33 @@ async function main() {
   }
 
   const org = await getOrCreateOrg();
-  await upsertQaUser(org.id, EMAIL, "QA RoomLens");
-  await upsertQaUser(org.id, EMAIL2, "QA RoomLens 2");
+  // Enrolled user: encrypted with the app's own helper so the login path
+  // decrypts it for real. totpLastUsedStep reset so a prior run's consumed
+  // code windows never leak into this run.
+  await upsertQaUser(org.id, EMAIL, "QA RoomLens", {
+    totpSecretEnc: encryptTotpSecret(TEST_TOTP_SECRET),
+    totpEnabledAt: new Date(),
+    totpLastUsedStep: null,
+  });
+  // Un-enrolled user: the 2FA enrollment spec (T6) enrolls it; reset here.
+  await upsertQaUser(org.id, EMAIL2, "QA RoomLens 2", {
+    totpSecretEnc: null,
+    totpEnabledAt: null,
+    totpLastUsedStep: null,
+  });
+
+  // Stale sessions would skip the /login/2fa challenge.
+  const { count: sessions } = await prisma.session.deleteMany({
+    where: { user: { email: { in: [EMAIL, EMAIL2] } } },
+  });
+  console.log(`• Deleted ${sessions} stale QA session(s).`);
+
+  // Signup-spec leftovers (sessions cascade via the schema).
+  const { count: signups } = await prisma.user.deleteMany({
+    where: { email: { startsWith: "qa+signup" } },
+  });
+  if (signups > 0) console.log(`• Deleted ${signups} qa+signup* user(s).`);
+
   console.log("Done.");
 }
 

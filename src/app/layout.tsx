@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import { Chakra_Petch, Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import {
+  getCurrentUser,
+  getOrganizationSummary,
+  userInitials,
+} from "@/lib/auth";
 import { brand } from "@/lib/brand";
 import { isIdeasEnabled } from "@/lib/feature-flags";
 import { Shell } from "@/components/layout/Shell";
@@ -34,18 +39,39 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The shell renders with the user's details already in place — pages never
+  // show a sidebar that is still "loading" its identity.
+  const user = await getCurrentUser();
+  const organization = user?.organizationId
+    ? await getOrganizationSummary(user.organizationId)
+    : null;
+  const menuUser = user
+    ? {
+        email: user.email,
+        name: user.name,
+        initials: userInitials(user.name, user.email),
+        organizationName: user.organizationName,
+      }
+    : null;
+
   return (
     <html
       lang="en"
       className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable}`}
     >
       <body className="font-body antialiased">
-        <Shell ideasEnabled={isIdeasEnabled()}>{children}</Shell>
+        <Shell
+          ideasEnabled={isIdeasEnabled()}
+          user={menuUser}
+          organization={organization}
+        >
+          {children}
+        </Shell>
       </body>
     </html>
   );

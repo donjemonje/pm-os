@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BrandLockup } from "@/components/brand/BrandLockup";
 import { neuralBackgrounds } from "@/lib/neural-backgrounds";
-import { UserMenu } from "./UserMenu";
+import { UserMenu, type MenuOrganization, type MenuUser } from "./UserMenu";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -24,7 +24,15 @@ const nav = [
 
 const SIDEBAR_LOGO_HEIGHT = 38;
 
-export function Sidebar({ ideasEnabled }: { ideasEnabled: boolean }) {
+export function Sidebar({
+  ideasEnabled,
+  user,
+  organization,
+}: {
+  ideasEnabled: boolean;
+  user: MenuUser | null;
+  organization: MenuOrganization | null;
+}) {
   const pathname = usePathname();
   const items = ideasEnabled ? nav : nav.filter((item) => item.href !== "/ideas");
 
@@ -64,7 +72,7 @@ export function Sidebar({ ideasEnabled }: { ideasEnabled: boolean }) {
           );
         })}
       </nav>
-      <UserMenu />
+      {user && <UserMenu user={user} organization={organization} />}
     </aside>
   );
 }

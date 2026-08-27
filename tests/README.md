@@ -32,6 +32,35 @@ feature session.
 Schema changed in your branch? Re-run `npm run test:db:setup` (db push is
 idempotent).
 
+## Mandatory 2FA
+
+2FA is mandatory for every account: every login lands on `/login/2fa`
+(enrolled user → 6-digit TOTP challenge; un-enrolled user → inline QR
+enrollment, first confirmed code enrolls). What this means for tests:
+
+- `loginAsRoomLens` (helpers.ts) handles the whole flow — credentials, the
+  TOTP challenge with a real generated code, and the single-use guard.
+  **Never re-implement login in a spec.** The lower-level TOTP utilities
+  live in `tests/e2e/two-factor-helpers.ts`.
+- Seeded 2FA states: `qa+roomlens@pm-os.io` is **enrolled** with the fixed
+  synthetic secret `TEST_TOTP_SECRET` (two-factor-helpers.ts, mirrored in
+  scripts/seed-test-db.mjs); `qa+roomlens-2@pm-os.io` is **un-enrolled** and
+  reserved for the enrollment flow (two-factor.spec.ts T6). The secret is
+  stored encrypted with the fixed test `TOTP_ENC_KEY` from
+  test-apphosting(.example).yaml / the CI job env — the seed calls the
+  app's own `encryptTotpSecret`, which is why it runs under
+  `node --experimental-strip-types`. Secret and key are synthetic,
+  test-only values; the env guard checks the key is present and 64 hex
+  chars.
+- Timing: TOTP codes are only valid in their 30-second window and are
+  single-use per window. Helpers wait for window headroom (and for a fresh
+  window between back-to-back logins of the same user) — those waits are
+  **by design**, not flakiness. Don't "fix" them with shorter sleeps.
+- The seed resets totp state on every run (re-encrypts the fixed secret,
+  clears `totpLastUsedStep`, un-enrolls the second user, deletes both
+  users' sessions), and two-factor.spec.ts does the same reset in its
+  `beforeAll` — so the suite is rerunnable without re-seeding.
+
 ## The env guard
 
 The suite refuses to start on a wrong environment instead of letting the
@@ -46,6 +75,8 @@ gets) before any test runs, and fails with one line per problem:
 - `SESSION_SECRET` is set (login would 500 without it).
 - The port is not 3000/3100 and `NEXT_PUBLIC_APP_URL` matches where
   Playwright boots the app (default `http://localhost:3200`).
+- `TOTP_ENC_KEY` is set and exactly 64 hex chars (2FA is mandatory — a
+  missing/malformed key fails every login at the TOTP challenge).
 - Feature flags match what the specs assert (currently: `IDEAS_ENABLED`
   off, because all-pages.spec.ts asserts the ideas routes 404). If your
   spec assumes another flag value, add the check to global-setup.ts in the
