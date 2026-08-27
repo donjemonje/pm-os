@@ -34,6 +34,7 @@ interface ServerState {
 interface ImportSummary {
   imported: number;
   frs: number;
+  matched: number;
   bugs: number;
   needsDetails: number;
   duplicates: number;
@@ -281,6 +282,8 @@ export function IdeasView({
         `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}`,
       ];
       if (s.imported > 0) parts.push(`${s.frs} FR${s.frs === 1 ? "" : "s"} → ideas`);
+      if (s.matched > 0)
+        parts.push(`${s.matched} matched to existing Jira idea${s.matched === 1 ? "" : "s"}`);
       if (s.bugs > 0) parts.push(`${s.bugs} bug${s.bugs === 1 ? "" : "s"} parked`);
       if (s.needsDetails > 0)
         parts.push(`${s.needsDetails} need${s.needsDetails === 1 ? "s" : ""} more details`);
