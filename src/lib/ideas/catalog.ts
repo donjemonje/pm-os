@@ -13,7 +13,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v4";
+export const CATALOG_PROMPT_VERSION = "catalog-v5";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -33,7 +33,7 @@ First, classify the ticket into exactly one kind:
 Second, ONLY if the ticket is a feature request, assign it within the product:
 - product_lines: which product line(s) the requested capability belongs to. Choose from the catalog provided in the message. Usually one; use several only when the request genuinely spans lines. If the ticket is a feature request but no catalog line fits, assign exactly ["Other"].
 - platforms: which platform(s) the request concerns, chosen from the platform catalog. Assign a platform only when the ticket states or clearly implies it (e.g. "on my phone", "in the browser"); otherwise leave the list empty rather than guessing.
-- affected_customers: which customer(s) the ticket says are affected by or asking for this, chosen from the customer catalog. Assign a customer only when the ticket content names or clearly references them; an empty list is the correct answer when no cataloged customer is mentioned. The requester is whoever filed the ticket — often a support or staff member filing on a customer's behalf — so never treat the requester as an affected customer unless the ticket content itself says they are one.
+- affected_customers: every customer the ticket content says is affected by or asking for this. When a mentioned customer matches an entry in the customer catalog, return the catalog's exact name; when the ticket clearly names a customer that is not in the catalog, return the name as written — it is surfaced to the product team as a suggestion. Only list customers the ticket itself names or clearly references; an empty list is the correct answer when none are mentioned. The requester is whoever filed the ticket — often a support or staff member filing on a customer's behalf — so never treat the requester as an affected customer unless the ticket content itself says they are one.
 
 Third, ONLY if the ticket is a feature request, rewrite it in product voice:
 - product_title: a short title naming the requested capability, written the way a product manager would put it in a backlog. Name the capability, not the customer's complaint or question.
@@ -68,7 +68,7 @@ const CATALOG_TOOL = {
         type: "array",
         items: { type: "string" },
         description:
-          "For feature requests: customer names from the customer catalog that the ticket content says are affected or asking. Empty when no cataloged customer is mentioned, and for bugs and needs_details.",
+          "For feature requests: customers the ticket content says are affected or asking — the catalog's exact name when matched, otherwise the name as written in the ticket. Empty when no customer is mentioned, and for bugs and needs_details.",
       },
       product_title: {
         type: "string",

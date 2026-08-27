@@ -29,6 +29,7 @@ interface ServerState {
   tickets: ZendeskTicket[];
   jiraSources: JiraSource[];
   ideas: Idea[];
+  customerCatalog?: string[];
 }
 
 interface ImportSummary {
@@ -164,6 +165,9 @@ export function IdeasView({
   const [tickets, setTickets] = useState<ZendeskTicket[]>([]);
   const [jiraSources, setJiraSources] = useState<JiraSource[]>([]);
   const [ideas, setIdeas] = useState<Idea[]>([]);
+  // Server state carries the live customer catalog so approving a suggested
+  // customer flips its chips without a reload; the prop is only the first paint.
+  const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [hydrated, setHydrated] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -197,6 +201,7 @@ export function IdeasView({
     setTickets(state.tickets);
     setJiraSources(state.jiraSources);
     setIdeas(state.ideas);
+    if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
   };
 
   useEffect(() => {
@@ -251,12 +256,12 @@ export function IdeasView({
   }, [catalogProducts, ideas]);
   const allCustomers = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const name of [...catalogCustomers, ...ideas.flatMap((i) => i.customers ?? [])]) {
+    for (const name of [...customerCatalog, ...ideas.flatMap((i) => i.customers ?? [])]) {
       const key = name.toLowerCase();
       if (!seen.has(key)) seen.set(key, name);
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
-  }, [catalogCustomers, ideas]);
+  }, [customerCatalog, ideas]);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -567,7 +572,7 @@ export function IdeasView({
           </button>
           <div className="mt-5 font-mono text-[10.5px] text-[#9aa8be]">
             Expected columns: external_id, subject, description · optional: requester_name, tags,
-            created_at, product_line
+            created_at, product_line, affected_customers
           </div>
         </div>
       ) : (
@@ -818,16 +823,15 @@ export function IdeasView({
                           </span>
                         ))}
                         {(idea.customers ?? []).map((c) => {
-                          // Same off-catalog flag as product lines: the model is
-                          // told to use the customer catalog only, so anything
-                          // else is surfaced, not hidden.
-                          const offCatalog = !catalogCustomers.some(
+                          // Off-catalog names are suggestions awaiting PM
+                          // review in the drawer — flagged, never hidden.
+                          const offCatalog = !customerCatalog.some(
                             (k) => k.toLowerCase() === c.toLowerCase()
                           );
                           return (
                             <span
                               key={`customer-${c}`}
-                              title={offCatalog ? "Not in the customer catalog" : undefined}
+                              title={offCatalog ? "Suggested customer — review in the idea" : undefined}
                               className={
                                 offCatalog
                                   ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
@@ -970,6 +974,17 @@ export function IdeasView({
           initialSource={drawerSrc}
           ticketsByKey={ticketsByKey}
           jiraByKey={jiraByKey}
+          customerCatalog={customerCatalog}
+          onCustomerAction={
+            drawerIdea
+              ? (action, name) =>
+                  void callMutate({
+                    type: action === "approve" ? "approveCustomer" : "dismissCustomer",
+                    ideaId: drawerIdea.id,
+                    name,
+                  })
+              : undefined
+          }
           onClose={() => {
             setDrawerId(null);
             setDrawerSrc(null);

@@ -14,6 +14,10 @@ interface IdeaDrawerProps {
   initialSource?: SourceSel | null;
   ticketsByKey: Map<string, ZendeskTicket>;
   jiraByKey: Map<string, JiraSource>;
+  /** Customer catalog names — chips for names outside it render as suggestions. */
+  customerCatalog?: string[];
+  /** Approve adds the suggested customer to the catalog; dismiss drops it from this idea's tickets. */
+  onCustomerAction?: (action: "approve" | "dismiss", name: string) => void;
   onClose: () => void;
   onToggleApprove?: () => void;
   onSave?: (patch: { title: string; details: string; manual: number | null }) => void;
@@ -31,6 +35,8 @@ export function IdeaDrawer({
   initialSource,
   ticketsByKey,
   jiraByKey,
+  customerCatalog = [],
+  onCustomerAction,
   onClose,
   onToggleApprove,
   onSave,
@@ -215,15 +221,50 @@ export function IdeaDrawer({
                     {p}
                   </span>
                 ))}
-                {/* Affected customers from the supporting tickets; teal per the design. */}
-                {(idea.customers ?? []).map((c) => (
-                  <span
-                    key={`customer-${c}`}
-                    className="rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
-                  >
-                    {c}
-                  </span>
-                ))}
+                {/* Affected customers from the supporting tickets; teal when
+                    cataloged, amber suggestion with approve/dismiss when not. */}
+                {(idea.customers ?? []).map((c) => {
+                  const suggested = !customerCatalog.some(
+                    (k) => k.toLowerCase() === c.toLowerCase()
+                  );
+                  if (!suggested) {
+                    return (
+                      <span
+                        key={`customer-${c}`}
+                        className="rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                      >
+                        {c}
+                      </span>
+                    );
+                  }
+                  return (
+                    <span
+                      key={`customer-${c}`}
+                      title="Suggested customer — not in the catalog yet"
+                      className="inline-flex items-center gap-1 rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                    >
+                      {c}
+                      {onCustomerAction && (
+                        <>
+                          <button
+                            title="Add to the Customers catalog"
+                            onClick={() => onCustomerAction("approve", c)}
+                            className="flex rounded-sm p-px text-amber-700 hover:bg-[#daf0e2] hover:text-[#1f8a53]"
+                          >
+                            <Check size={11} strokeWidth={3} />
+                          </button>
+                          <button
+                            title="Dismiss this suggestion"
+                            onClick={() => onCustomerAction("dismiss", c)}
+                            className="flex rounded-sm p-px text-amber-700 hover:bg-[#fdeef2] hover:text-[#c94266]"
+                          >
+                            <X size={11} strokeWidth={3} />
+                          </button>
+                        </>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
             )}
 
@@ -266,7 +307,27 @@ export function IdeaDrawer({
                 )}
                 {ticket.requester && <span>Requester: {ticket.requester}</span>}
                 {(ticket.affectedCustomers ?? []).length > 0 && (
-                  <span>Affected customers: {(ticket.affectedCustomers ?? []).join(", ")}</span>
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    Affected customers:
+                    {(ticket.affectedCustomers ?? []).map((c) => {
+                      const suggested = !customerCatalog.some(
+                        (k) => k.toLowerCase() === c.toLowerCase()
+                      );
+                      return (
+                        <span
+                          key={`ticket-customer-${c}`}
+                          title={suggested ? "Suggested customer — review on the idea" : undefined}
+                          className={
+                            suggested
+                              ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                              : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                          }
+                        >
+                          {c}
+                        </span>
+                      );
+                    })}
+                  </span>
                 )}
                 {ticket.createdAt && <span>Created: {ticket.createdAt}</span>}
                 {ticket.tags.length > 0 && <span>Tags: {ticket.tags.join(", ")}</span>}

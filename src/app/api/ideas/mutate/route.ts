@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
 import { mutateIdeas, type IdeasMutation } from "@/lib/ideas/store";
 
-const MUTATION_TYPES = ["decision", "edit", "approveAll", "inject", "reassign"];
+const MUTATION_TYPES = [
+  "decision",
+  "edit",
+  "approveAll",
+  "inject",
+  "reassign",
+  "approveCustomer",
+  "dismissCustomer",
+];
 
 export async function POST(request: NextRequest) {
   const disabled = await ideasDisabledResponse();

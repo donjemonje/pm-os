@@ -14,6 +14,8 @@ export interface IdeasState {
   tickets: ZendeskTicket[];
   jiraSources: JiraSource[];
   ideas: Idea[];
+  /** Customer catalog names — the client tells confirmed from suggested with this. */
+  customerCatalog: string[];
 }
 
 /** A parsed CSV row plus the original record verbatim (the raw store). */
@@ -23,6 +25,8 @@ export interface ImportTicketInput {
   body: string;
   requester?: string;
   tags: string[];
+  /** From the dedicated Zendesk field when the export carries it — one signal, not the source of truth. */
+  affectedCustomers?: string[];
   createdAt?: string;
   productLine?: string;
   raw: Record<string, string>;
@@ -105,7 +109,7 @@ function toClientIdea(row: IdeaRow): Idea {
 }
 
 export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
-  const [ticketRows, snapshotRows, ideaRows] = await Promise.all([
+  const [ticketRows, snapshotRows, ideaRows, customerRows] = await Promise.all([
     db.zendeskTicketRaw.findMany({
       where: { workspaceId },
       orderBy: [{ importedAt: "asc" }, { id: "asc" }],
@@ -116,6 +120,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       include: IDEA_INCLUDE,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
+    db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: { name: true } }),
   ]);
 
   return {
@@ -130,6 +135,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       products: (s.components as string[]) ?? [],
     })),
     ideas: ideaRows.map(toClientIdea),
+    customerCatalog: customerRows.map((c) => c.name),
   };
 }
 
@@ -158,6 +164,15 @@ export async function importBatch(
   );
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
 
+  // Catalog casing wins wherever a name (from the model or the CSV's
+  // dedicated field) matches a cataloged customer; unmatched names stay
+  // verbatim and surface as suggestions.
+  const customerNames = (
+    await db.customer.findMany({ where: { workspaceId }, select: { name: true } })
+  ).map((c) => c.name);
+  const canonicalCustomer = (name: string): string =>
+    customerNames.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
+
   const batch = await db.ideaBatch.create({ data: { workspaceId } });
 
   let frs = 0;
@@ -172,7 +187,11 @@ export async function importBatch(
         subject: input.subject,
         body: input.body,
         requester: input.requester ?? null,
-        affectedCustomers: (verdict?.affectedCustomers ?? []) as Prisma.InputJsonValue,
+        affectedCustomers: distinct(
+          [...(verdict?.affectedCustomers ?? []), ...(input.affectedCustomers ?? [])].map(
+            canonicalCustomer
+          )
+        ) as Prisma.InputJsonValue,
         tags: input.tags as Prisma.InputJsonValue,
         productLine: input.productLine ?? null,
         sourceCreatedAt: input.createdAt ?? null,
@@ -268,7 +287,9 @@ export type IdeasMutation =
   | { type: "edit"; ideaId: string; title: string; details: string; manual: number | null }
   | { type: "approveAll" }
   | { type: "inject" }
-  | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] };
+  | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
+  | { type: "approveCustomer"; ideaId: string; name: string }
+  | { type: "dismissCustomer"; ideaId: string; name: string };
 
 async function logEvents(
   workspaceId: string,
@@ -416,6 +437,53 @@ export async function mutateIdeas(
         if (next !== i.batchStatus) {
           await db.idea.update({ where: { id: i.id }, data: { batchStatus: next } });
         }
+      }
+      break;
+    }
+    // A suggested customer (extracted from ticket text, not yet in the
+    // catalog) is approved into Settings → Ideas → Customers…
+    case "approveCustomer": {
+      const idea = await db.idea.findFirst({ where: { id: mutation.ideaId, workspaceId } });
+      const name = mutation.name.trim();
+      if (idea && name) {
+        const exists = await db.customer.findFirst({
+          where: { workspaceId, name: { equals: name, mode: "insensitive" } },
+          select: { id: true },
+        });
+        if (!exists) {
+          await db.customer.create({ data: { workspaceId, name, description: "" } });
+        }
+        await logEvents(workspaceId, [
+          { ideaId: idea.id, action: "approve_customer", payload: { name } },
+        ]);
+      }
+      break;
+    }
+    // …or dismissed: removed from this idea's tickets only. A future ticket
+    // naming the same customer is new evidence and suggests again.
+    case "dismissCustomer": {
+      const idea = await db.idea.findFirst({
+        where: { id: mutation.ideaId, workspaceId },
+        include: {
+          sources: { include: { ticket: { select: { id: true, affectedCustomers: true } } } },
+        },
+      });
+      const wanted = mutation.name.trim().toLowerCase();
+      if (idea && wanted) {
+        for (const s of idea.sources) {
+          if (s.kind !== "zendesk" || !s.ticket) continue;
+          const current = (s.ticket.affectedCustomers as string[]) ?? [];
+          const next = current.filter((c) => c.toLowerCase() !== wanted);
+          if (next.length !== current.length) {
+            await db.zendeskTicketRaw.update({
+              where: { id: s.ticket.id },
+              data: { affectedCustomers: next as Prisma.InputJsonValue },
+            });
+          }
+        }
+        await logEvents(workspaceId, [
+          { ideaId: idea.id, action: "dismiss_customer", payload: { name: mutation.name } },
+        ]);
       }
       break;
     }

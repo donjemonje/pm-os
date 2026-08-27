@@ -52,7 +52,7 @@ export default async function IdeasSettingsPage() {
         />
         <SettingsListPanel
           title="Customers"
-          blurb="The customers tickets can affect. PMOS AI tags ideas only with customers from this list when tickets name them — it never invents names."
+          blurb="The customers tickets can affect. PMOS AI tags ideas with customers from this list and suggests new names it finds in tickets — approving a suggestion adds it here."
           endpoint="/api/ideas/lists/customers"
           namePlaceholder="Customer name"
           descriptionPlaceholder="Anything that helps recognize them in tickets, e.g. aliases or tier (optional)"
