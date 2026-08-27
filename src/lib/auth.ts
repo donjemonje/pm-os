@@ -236,6 +236,25 @@ export async function getTwoFactorState(): Promise<TwoFactorState> {
   return { status: "enroll", secret, email: session.user.email };
 }
 
+export type LiveSessionState = "none" | "dead" | "pending" | "verified";
+
+/**
+ * Raw session-cookie truth for the current request, independent of the 2FA
+ * gate in getCurrentUser:
+ * - "none"     no session cookie at all
+ * - "dead"     cookie present but no valid session behind it (revoked by
+ *              deactivation, expired, or deleted) — safe to clear
+ * - "pending"  valid session still owing the TOTP challenge — must NOT clear
+ * - "verified" fully authenticated session
+ */
+export async function getLiveSessionState(): Promise<LiveSessionState> {
+  const token = await getSessionToken();
+  if (!token) return "none";
+  const session = await findCurrentSessionWithUser();
+  if (!session) return "dead";
+  return session.twoFactorVerified ? "verified" : "pending";
+}
+
 // cache(): one session lookup per request even though both the root layout
 // and the page (or API helper) resolve the current user.
 export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {

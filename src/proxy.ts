@@ -76,9 +76,9 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(login);
   }
 
-  if (hasSession && (pathname === "/login" || pathname === "/register")) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
-  }
+  // No blind cookie-holder redirect off /login: the cookie may be stale
+  // (revoked session). The login page validates the session server-side and
+  // redirects genuinely signed-in users to /dashboard itself.
 
   return NextResponse.next();
 }

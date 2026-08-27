@@ -179,24 +179,19 @@ test.describe("PM-OS Admin", () => {
     await row.getByRole("button", { name: "Deactivate" }).click();
     await expect(row.getByText("Deactivated", { exact: true })).toBeVisible();
 
-    // The live session was revoked server-side: the API rejects it and no
-    // app page renders the user's data anymore.
+    // The live session was revoked server-side: the API rejects it, and a
+    // page visit with the now-stale cookie bounces to /login (dead-cookie
+    // exit ramp clears the cookie — no 500, no redirect trap; gap closed
+    // 2026-08-27).
     expect((await victimPage.request.get("/api/auth/me")).status()).toBe(401);
     await victimPage.goto("/dashboard");
+    await victimPage.waitForURL(/\/login/);
     await expect(
-      victimPage.getByRole("heading", { name: "Dashboard" })
-    ).toHaveCount(0);
-    // KNOWN GAP (flagged at QA, 2026-08-27): with the revoked session's
-    // cookie still in the browser, that navigation renders an unhandled
-    // UnauthorizedError (500) instead of bouncing to /login — the edge proxy
-    // only checks cookie presence, and it also redirects /login →
-    // /dashboard for any cookie-holder, so a deactivated user is stuck on
-    // the error page until they clear cookies. When engineering adds the
-    // dead-cookie redirect, tighten this to `waitForURL(/\/login/)`.
+      victimPage.getByRole("button", { name: "Sign In" })
+    ).toBeVisible();
 
     // Password login is refused while deactivated (same generic error as
-    // wrong credentials — deactivation is not advertised). Fresh context,
-    // because the stale cookie above cannot even reach /login (see gap).
+    // wrong credentials — deactivation is not advertised).
     const freshContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
     const freshPage = await freshContext.newPage();
     await freshPage.goto("/login");
@@ -208,10 +203,11 @@ test.describe("PM-OS Admin", () => {
     ).toBeVisible();
     expect(new URL(freshPage.url()).pathname).toBe("/login");
 
-    // Reactivate → a fresh login works again, all the way to the dashboard.
+    // Reactivate → login works again, asserted on the browser context that
+    // held the stale cookie: zero manual cookie clearing required.
     await row.getByRole("button", { name: "Reactivate" }).click();
     await expect(row.getByRole("button", { name: "Deactivate" })).toBeVisible();
-    await loginAsRoomLens(freshPage);
+    await loginAsRoomLens(victimPage);
 
     await victimContext.close();
     await freshContext.close();

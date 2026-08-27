@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { ArrowRight, FileText, MessageSquare, Package, Plug } from "lucide-react";
-import { getOrCreateWorkspace } from "@/lib/workspace";
+import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { getJiraConnectionStatus } from "@/lib/jira";
 import { AppShell } from "@/components/layout/AppShell";
 
 export default async function DashboardPage() {
+  await requireUserPage("/dashboard");
   const workspace = await getOrCreateWorkspace();
   const jira = await getJiraConnectionStatus(workspace.id);
 

@@ -39,7 +39,11 @@ export async function requireAdmin(): Promise<AuthUser> {
  */
 export async function requireAdminPage(fromPath: string): Promise<AuthUser> {
   const user = await getCurrentUser();
-  if (!user) redirect(`/login?from=${encodeURIComponent(fromPath)}`);
+  // The proxy already bounces cookie-less visitors, so a null user here means
+  // a stale/unverified cookie — exit through the ramp that clears it.
+  if (!user) {
+    redirect(`/api/auth/session-expired?from=${encodeURIComponent(fromPath)}`);
+  }
   if (!isPmosAdmin(user)) notFound();
   return user;
 }

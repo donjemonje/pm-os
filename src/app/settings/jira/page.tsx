@@ -1,4 +1,4 @@
-import { getOrCreateWorkspace } from "@/lib/workspace";
+import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { getJiraConnectionStatus } from "@/lib/jira";
 import { getGoogleDriveConnectionStatus } from "@/lib/google-drive";
 import { getJiraOAuthSetupStatus } from "@/lib/jira-oauth-config";
@@ -15,6 +15,7 @@ export default async function IntegrationsSettingsPage({
     drive_error?: string;
   }>;
 }) {
+  await requireUserPage("/settings/jira");
   const workspace = await getOrCreateWorkspace();
   const [jiraStatus, driveStatus] = await Promise.all([
     getJiraConnectionStatus(workspace.id),

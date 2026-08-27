@@ -4,13 +4,14 @@ import { AppShell } from "@/components/layout/AppShell";
 import { IdeasView } from "@/components/ideas/IdeasView";
 import { db } from "@/lib/db";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
-import { getOrCreateWorkspace } from "@/lib/workspace";
+import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 
 export const metadata: Metadata = {
   title: "Ideas — PM-OS",
 };
 
 export default async function IdeasPage() {
+  await requireUserPage("/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
   const listArgs = {
