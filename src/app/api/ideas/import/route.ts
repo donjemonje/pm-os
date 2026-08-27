@@ -5,7 +5,7 @@ import { importBatch, type ImportTicketInput } from "@/lib/ideas/store";
 const MAX_BATCH = 200;
 
 export async function POST(request: NextRequest) {
-  const disabled = ideasDisabledResponse();
+  const disabled = await ideasDisabledResponse();
   if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;

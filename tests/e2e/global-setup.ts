@@ -10,6 +10,11 @@ import { LOCAL_BASE_URL, PORT, RESOLVED_ENV } from "./test-env";
  * Feature-flag expectations are derived from what the specs assert:
  *   - DISABLE_LOGIN=false  — every spec logs in (auth.spec, all-pages.spec)
  *   - IDEAS_ENABLED off    — all-pages.spec asserts /ideas 404s
+ *   - DOCS_ENABLED on      — all-pages.spec asserts /docs renders
+ *   - CHAT_ENABLED on      — all-pages.spec asserts /chat renders; admin
+ *                            A2 asserts the "On (default)" badge
+ *   (docs/chat are on when UNSET — reversed polarity vs IDEAS_ENABLED —
+ *   so the usual "no flag env in the yaml" state passes.)
  * If a new spec assumes another flag value, add the check here in the same
  * branch.
  */
@@ -104,6 +109,20 @@ export default function validateTestEnv(): void {
     );
   }
 
+  // all-pages.spec.ts asserts /docs and /chat render, and admin.spec A2
+  // asserts chat's env default is on. Both flags are on when unset
+  // (src/lib/feature-flags.ts), so only an explicit false-like value here
+  // is a misconfiguration.
+  for (const flag of ["DOCS_ENABLED", "CHAT_ENABLED"] as const) {
+    if (isFalseLike(env[flag])) {
+      problems.push(
+        `${flag} resolves to ${show(env[flag])} but the suite asserts that ` +
+          `surface renders (all-pages.spec.ts, admin.spec.ts A2) — unset it ` +
+          `or set it to "true", or update those specs together with this check`
+      );
+    }
+  }
+
   if (problems.length > 0) {
     throw new Error(
       `Refusing to start: the test environment is misconfigured ` +
@@ -113,6 +132,6 @@ export default function validateTestEnv(): void {
   }
 
   console.log(
-    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, TOTP key set`
+    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, TOTP key set`
   );
 }

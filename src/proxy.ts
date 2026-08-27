@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const SESSION_COOKIE = "pmos_session";
-const CRM_SESSION_COOKIE = "pmos_crm_session";
 // UX hint set at login when the TOTP challenge is still owed; the real gate is
 // server-side in getCurrentUser, which rejects unverified sessions.
 const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
@@ -19,8 +18,13 @@ function isPublicPath(pathname: string): boolean {
   return false;
 }
 
-function isCrmPath(pathname: string): boolean {
-  return pathname === "/crm" || pathname.startsWith("/crm/") || pathname.startsWith("/api/crm");
+function isAdminPath(pathname: string): boolean {
+  return (
+    pathname === "/admin" ||
+    pathname.startsWith("/admin/") ||
+    pathname === "/api/admin" ||
+    pathname.startsWith("/api/admin/")
+  );
 }
 
 export function proxy(request: NextRequest) {
@@ -34,28 +38,11 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (isCrmPath(pathname)) {
-    const isCrmPublic =
-      pathname === "/crm/login" || pathname.startsWith("/api/crm/auth/login");
-    const hasCrmSession = Boolean(request.cookies.get(CRM_SESSION_COOKIE)?.value);
-
-    if (!hasCrmSession && !isCrmPublic) {
-      if (pathname.startsWith("/api/")) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-      return NextResponse.redirect(new URL("/crm/login", request.url));
-    }
-
-    if (hasCrmSession && pathname === "/crm/login") {
-      return NextResponse.redirect(new URL("/crm", request.url));
-    }
-
-    return NextResponse.next();
-  }
-
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
   const isApi = pathname.startsWith("/api/");
 
+  // Pending TOTP challenge routes every page — /admin included — to
+  // /login/2fa. APIs skip the redirect; getCurrentUser rejects them anyway.
   const twoFactorPending = Boolean(
     request.cookies.get(TWO_FACTOR_PENDING_COOKIE)?.value
   );
@@ -67,15 +54,31 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(challenge);
   }
 
+  // PM-OS Admin rides the main app session. This is defense-in-depth only —
+  // it can't validate the token or the PMOS_ADMIN role (no DB on the edge),
+  // so every admin page and /api/admin route re-checks server-side via
+  // requireAdminPage()/apiAdmin().
+  if (isAdminPath(pathname)) {
+    if (!hasSession) {
+      if (isApi) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      const login = new URL("/login", request.url);
+      login.searchParams.set("from", pathname);
+      return NextResponse.redirect(login);
+    }
+    return NextResponse.next();
+  }
+
   if (!hasSession && !isPublicPath(pathname) && !isApi) {
     const login = new URL("/login", request.url);
     login.searchParams.set("from", pathname);
     return NextResponse.redirect(login);
   }
 
-  if (hasSession && (pathname === "/login" || pathname === "/register")) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
-  }
+  // No blind cookie-holder redirect off /login: the cookie may be stale
+  // (revoked session). The login page validates the session server-side and
+  // redirects genuinely signed-in users to /dashboard itself.
 
   return NextResponse.next();
 }

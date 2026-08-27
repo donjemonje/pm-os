@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { db } from "@/lib/db";
-import { isIdeasEnabled } from "@/lib/feature-flags";
-import { getOrCreateWorkspace } from "@/lib/workspace";
+import { ideasEnabledForCurrentUser } from "@/lib/org-features";
+import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 
 export const metadata: Metadata = {
   title: "Ideas Settings — PM-OS",
@@ -17,7 +17,8 @@ const LIST_QUERY = (workspaceId: string) => ({
 });
 
 export default async function IdeasSettingsPage() {
-  if (!isIdeasEnabled()) notFound();
+  await requireUserPage("/settings/ideas");
+  if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
   const [productLines, platforms] = await Promise.all([
     db.productLine.findMany(LIST_QUERY(workspace.id)),

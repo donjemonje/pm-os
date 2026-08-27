@@ -26,15 +26,24 @@ const SIDEBAR_LOGO_HEIGHT = 38;
 
 export function Sidebar({
   ideasEnabled,
+  docsEnabled,
+  chatEnabled,
   user,
   organization,
 }: {
   ideasEnabled: boolean;
+  docsEnabled: boolean;
+  chatEnabled: boolean;
   user: MenuUser | null;
   organization: MenuOrganization | null;
 }) {
   const pathname = usePathname();
-  const items = ideasEnabled ? nav : nav.filter((item) => item.href !== "/ideas");
+  const hidden = new Set([
+    ...(ideasEnabled ? [] : ["/ideas"]),
+    ...(docsEnabled ? [] : ["/docs"]),
+    ...(chatEnabled ? [] : ["/chat"]),
+  ]);
+  const items = nav.filter((item) => !hidden.has(item.href));
 
   return (
     <aside
