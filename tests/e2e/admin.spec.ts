@@ -1,0 +1,219 @@
+import { expect, test, type Page } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import {
+  loginAsRoomLens,
+  loginAsRoomLensAdmin,
+  QA_ADMIN,
+  QA_USER,
+} from "./helpers";
+import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
+import { USER_B } from "./two-factor-helpers";
+
+/**
+ * PM-OS Admin (feature/admin-restriction): role-based access to /admin,
+ * user management with guardrails, per-org feature flags, deactivation.
+ *
+ * Seeded fixtures (scripts/seed-test-db.mjs):
+ *   qa+roomlens-admin@pm-os.io  role PMOS_ADMIN — the actor in every test
+ *   qa+roomlens@pm-os.io        role USER — deactivation target (A3)
+ *   qa+roomlens-2@pm-os.io      role USER — promote/demote target (A1)
+ *
+ * Coverage boundaries with the rest of the suite:
+ * - USER 404 on the three /admin routes: all-pages.spec.ts.
+ * - Ideas 404 under the env default (IDEAS_ENABLED=false, pinned by the
+ *   env guard): all-pages.spec.ts. A2 here covers the per-org override.
+ *
+ * State discipline: beforeAll AND afterAll reset roles, deactivation, and
+ * the org's feature overrides directly in pmos_test, so a mid-test failure
+ * can't leak state into all-pages.spec.ts or two-factor.spec.ts, and the
+ * suite reruns green without re-seeding. All tests write data.
+ */
+
+const ROOMLENS_SLUG = "roomlens";
+
+async function resetAdminFixtures(): Promise<void> {
+  // Same resolved env as the app (yaml wins over shell); the env guard has
+  // already pinned the database to pmos_test before this runs.
+  process.env.DATABASE_URL = RESOLVED_ENV.DATABASE_URL;
+  const db = new PrismaClient();
+  try {
+    await db.user.update({
+      where: { email: QA_ADMIN.email },
+      data: { role: "PMOS_ADMIN", deactivatedAt: null, totpLastUsedStep: null },
+    });
+    await db.user.update({
+      where: { email: QA_USER.email },
+      data: { role: "USER", deactivatedAt: null },
+    });
+    await db.user.update({
+      where: { email: USER_B },
+      data: { role: "USER", deactivatedAt: null },
+    });
+    await db.organization.update({
+      where: { slug: ROOMLENS_SLUG },
+      data: { features: {} },
+    });
+  } catch (e) {
+    throw new Error(
+      `admin spec could not reset the QA fixtures — did you run ` +
+        `\`npm run test:db:setup\`? (${e instanceof Error ? e.message : e})`
+    );
+  } finally {
+    await db.$disconnect();
+  }
+}
+
+/** Row in the /admin/users org table for the given member email. Emails are
+ * mutually non-substring, so hasText is unambiguous. */
+function memberRow(page: Page, email: string) {
+  return page.locator("tr", { hasText: email });
+}
+
+test.describe("PM-OS Admin", () => {
+  test.beforeAll(resetAdminFixtures);
+  test.afterAll(resetAdminFixtures);
+
+  test("A1 admin promotes and demotes a user; self-change guardrails refuse", async ({
+    page,
+  }) => {
+    // Role changes and deactivation confirm via window.confirm.
+    page.on("dialog", (dialog) => dialog.accept());
+
+    await loginAsRoomLensAdmin(page);
+    await page.goto("/admin/users");
+    await expect(
+      page.getByRole("heading", { name: "User Management" })
+    ).toBeVisible();
+
+    const target = memberRow(page, USER_B);
+    const own = memberRow(page, QA_ADMIN.email);
+    await expect(own.getByText("pmos-admin", { exact: true })).toBeVisible();
+
+    // Promote another user to pmos-admin…
+    await expect(target.getByText("user", { exact: true })).toBeVisible();
+    await target.getByRole("button", { name: "Make admin" }).click();
+    await expect(target.getByText("pmos-admin", { exact: true })).toBeVisible();
+
+    // …and demote them back.
+    await target.getByRole("button", { name: "Remove admin" }).click();
+    await expect(target.getByText("user", { exact: true })).toBeVisible();
+
+    // Guardrail: an admin cannot change their own role (with one active
+    // admin this is also what keeps the last admin from locking everyone
+    // out). The API refuses with 400 and the UI surfaces the reason.
+    await own.getByRole("button", { name: "Remove admin" }).click();
+    await expect(
+      page.getByText("You cannot change your own role")
+    ).toBeVisible();
+    await expect(own.getByText("pmos-admin", { exact: true })).toBeVisible();
+
+    // Guardrail: an admin cannot deactivate themselves.
+    await own.getByRole("button", { name: "Deactivate" }).click();
+    await expect(
+      page.getByText("You cannot deactivate your own account")
+    ).toBeVisible();
+    await expect(own.getByText("Deactivated", { exact: true })).toHaveCount(0);
+  });
+
+  test("A2 per-org ideas override gates the Ideas app for that org's user", async ({
+    browser,
+    page,
+  }) => {
+    await loginAsRoomLensAdmin(page);
+    await page.goto("/admin/configurations");
+    await expect(
+      page.getByRole("heading", { name: "Configurations" })
+    ).toBeVisible();
+
+    const orgCard = page.locator("div.rounded-xl", { hasText: "RoomLens" });
+    const ideasRow = orgCard.locator("li", { hasText: "Ideas" });
+    // The effective-state badge only updates from the PATCH response, so it
+    // is a reliable "the override is saved" signal (unlike button state,
+    // which also flips while the request is in flight).
+    const badge = ideasRow.locator("span.rounded-full");
+    await expect(badge).toHaveText("Off (default)");
+
+    // Baseline: with no override, the env default (off) applies to the org.
+    const userContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
+    const userPage = await userContext.newPage();
+    await loginAsRoomLens(userPage);
+    let response = await userPage.goto("/ideas");
+    expect(response?.status(), "/ideas under env default off").toBe(404);
+
+    // Admin turns the org override On → the same user reaches Ideas.
+    await ideasRow.getByRole("button", { name: "On", exact: true }).click();
+    await expect(badge).toHaveText("On");
+    await userPage.goto("/ideas");
+    await expect(
+      userPage.getByRole("heading", { name: "Ideas" })
+    ).toBeVisible();
+
+    // Back to Default → the env default applies again and gates the org.
+    await ideasRow.getByRole("button", { name: "Default (off)" }).click();
+    await expect(badge).toHaveText("Off (default)");
+    response = await userPage.goto("/ideas");
+    expect(response?.status(), "/ideas after override removed").toBe(404);
+
+    await userContext.close();
+  });
+
+  test("A3 deactivation revokes the session and blocks login; reactivation restores access", async ({
+    browser,
+    page,
+  }) => {
+    // Three TOTP logins, two of them for the same user (single-use code
+    // windows force a wait between those) — needs more than the 60s default.
+    test.setTimeout(150_000);
+    page.on("dialog", (dialog) => dialog.accept());
+
+    // The target user logs in first in their own browser context.
+    const victimContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
+    const victimPage = await victimContext.newPage();
+    await loginAsRoomLens(victimPage);
+    // Live-session baseline for the 401 assertion below.
+    expect((await victimPage.request.get("/api/auth/me")).status()).toBe(200);
+
+    await loginAsRoomLensAdmin(page);
+    await page.goto("/admin/users");
+    const row = memberRow(page, QA_USER.email);
+    await row.getByRole("button", { name: "Deactivate" }).click();
+    await expect(row.getByText("Deactivated", { exact: true })).toBeVisible();
+
+    // The live session was revoked server-side: the API rejects it and no
+    // app page renders the user's data anymore.
+    expect((await victimPage.request.get("/api/auth/me")).status()).toBe(401);
+    await victimPage.goto("/dashboard");
+    await expect(
+      victimPage.getByRole("heading", { name: "Dashboard" })
+    ).toHaveCount(0);
+    // KNOWN GAP (flagged at QA, 2026-08-27): with the revoked session's
+    // cookie still in the browser, that navigation renders an unhandled
+    // UnauthorizedError (500) instead of bouncing to /login — the edge proxy
+    // only checks cookie presence, and it also redirects /login →
+    // /dashboard for any cookie-holder, so a deactivated user is stuck on
+    // the error page until they clear cookies. When engineering adds the
+    // dead-cookie redirect, tighten this to `waitForURL(/\/login/)`.
+
+    // Password login is refused while deactivated (same generic error as
+    // wrong credentials — deactivation is not advertised). Fresh context,
+    // because the stale cookie above cannot even reach /login (see gap).
+    const freshContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
+    const freshPage = await freshContext.newPage();
+    await freshPage.goto("/login");
+    await freshPage.locator("#email").fill(QA_USER.email);
+    await freshPage.locator("#password").fill(QA_USER.password);
+    await freshPage.getByRole("button", { name: /sign in/i }).click();
+    await expect(
+      freshPage.getByText("Invalid email or password")
+    ).toBeVisible();
+    expect(new URL(freshPage.url()).pathname).toBe("/login");
+
+    // Reactivate → a fresh login works again, all the way to the dashboard.
+    await row.getByRole("button", { name: "Reactivate" }).click();
+    await expect(row.getByRole("button", { name: "Deactivate" })).toBeVisible();
+    await loginAsRoomLens(freshPage);
+
+    await victimContext.close();
+    await freshContext.close();
+  });
+});
