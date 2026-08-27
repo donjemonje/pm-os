@@ -21,7 +21,10 @@ import { USER_B } from "./two-factor-helpers";
  * Coverage boundaries with the rest of the suite:
  * - USER 404 on the three /admin routes: all-pages.spec.ts.
  * - Ideas 404 under the env default (IDEAS_ENABLED=false, pinned by the
- *   env guard): all-pages.spec.ts. A2 here covers the per-org override.
+ *   env guard): all-pages.spec.ts. A2 here covers the per-org override,
+ *   plus the chat flag's reversed polarity (env default on). Docs shares
+ *   the exact resolution/gating code path and has no separate toggle test;
+ *   its default-on rendering is covered by the all-pages sweep.
  *
  * State discipline: beforeAll AND afterAll reset roles, deactivation, and
  * the org's feature overrides directly in pmos_test, so a mid-test failure
@@ -151,16 +154,18 @@ test.describe("PM-OS Admin", () => {
     await expect(own.getByText("Deactivated", { exact: true })).toHaveCount(0);
   });
 
-  test("A2 per-org ideas override gates the Ideas app for that org's user", async ({
+  test("A2 per-org overrides gate app surfaces: ideas (default off) and chat (default on)", async ({
     browser,
     page,
   }) => {
     await loginAsRoomLensAdmin(page);
-    await page.goto("/admin/configurations");
+    await page.goto("/admin/enablements");
     await expect(
-      page.getByRole("heading", { name: "Configurations" })
+      page.getByRole("heading", { name: "Enablements" })
     ).toBeVisible();
 
+    // The page lists one row per flag (Ideas, Docs, Chat) — scope every
+    // locator to its row so multi-flag rendering can't cross-match.
     const orgCard = page.locator("div.rounded-xl", { hasText: "RoomLens" });
     const ideasRow = orgCard.locator("li", { hasText: "Ideas" });
     // The effective-state badge only updates from the PATCH response, so it
@@ -189,6 +194,36 @@ test.describe("PM-OS Admin", () => {
     await expect(badge).toHaveText("Off (default)");
     response = await userPage.goto("/ideas");
     expect(response?.status(), "/ideas after override removed").toBe(404);
+
+    // Chat: reversed env polarity (CHAT_ENABLED is ON when unset — pinned
+    // by the env guard) and the same resolution mechanism, exercised as one
+    // cheap Off→404→Default round-trip rather than a full per-flag flow:
+    // ideas above already proves override-wins end to end. Docs rides the
+    // identical code path (same registry, layout gate, API wrapper) and gets
+    // no separate toggle test.
+    const chatRow = orgCard.locator("li", { hasText: "Chat" });
+    const chatBadge = chatRow.locator("span.rounded-full");
+    await expect(chatBadge).toHaveText("On (default)");
+
+    await chatRow.getByRole("button", { name: "Off", exact: true }).click();
+    await expect(chatBadge).toHaveText("Off");
+    response = await userPage.goto("/chat");
+    expect(response?.status(), "/chat with org override off").toBe(404);
+    // The API surface carries the same gate (userPage.request rides the org
+    // user's session).
+    expect(
+      (await userPage.request.get("/api/chat/sessions")).status(),
+      "/api/chat/sessions with org override off"
+    ).toBe(404);
+
+    // Reset to Default → chat is back for the org (all-pages.spec depends
+    // on /chat rendering; afterAll also clears features as a backstop).
+    await chatRow.getByRole("button", { name: "Default (on)" }).click();
+    await expect(chatBadge).toHaveText("On (default)");
+    await userPage.goto("/chat");
+    await expect(
+      userPage.getByRole("heading", { name: "Chat" })
+    ).toBeVisible();
 
     await userContext.close();
   });
