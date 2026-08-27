@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiWorkspaceId } from "@/lib/api-auth";
+import { apiWorkspaceId, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 import { stringifyJsonArray } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
+  const disabled = await orgFeatureDisabledResponse("docs");
+  if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;
@@ -22,6 +24,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const disabled = await orgFeatureDisabledResponse("docs");
+  if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;

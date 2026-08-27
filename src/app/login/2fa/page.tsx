@@ -16,7 +16,10 @@ export const metadata: Metadata = {
  */
 export default async function TwoFactorChallengePage() {
   const state = await getTwoFactorState();
-  if (state.status === "none") redirect("/login");
+  // "none" covers a dead session cookie too (e.g. revoked by deactivation):
+  // exit through the ramp that clears stale cookies, otherwise the pending-2FA
+  // cookie would bounce /login straight back here in a loop.
+  if (state.status === "none") redirect("/api/auth/session-expired");
   if (state.status === "verified") redirect("/dashboard");
 
   if (state.status === "enroll") {

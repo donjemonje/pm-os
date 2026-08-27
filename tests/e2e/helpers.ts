@@ -1,5 +1,9 @@
 import { Locator, Page, expect } from "@playwright/test";
-import { loginExpecting2fa, passTwoFactorChallenge } from "./two-factor-helpers";
+import {
+  loginExpecting2fa,
+  passTwoFactorChallenge,
+  TEST_ADMIN_TOTP_SECRET,
+} from "./two-factor-helpers";
 
 /**
  * RoomLens QA credentials, as seeded by scripts/seed-test-db.mjs into the
@@ -12,13 +16,33 @@ export const QA_USER = {
 };
 
 /**
+ * Seeded PMOS_ADMIN user (role-based PM-OS Admin access). Enrolled in TOTP
+ * with its own fixed secret (TEST_ADMIN_TOTP_SECRET).
+ */
+export const QA_ADMIN = {
+  email: "qa+roomlens-admin@pm-os.io",
+  password: "roomlens-qa-pass1",
+};
+
+/**
  * Log in through the real login form, pass the mandatory /login/2fa TOTP
- * challenge with a real code, and wait for the dashboard. This is the ONLY
- * login helper — specs never re-implement login.
+ * challenge with a real code, and wait for the dashboard. These are the ONLY
+ * login helpers — specs never re-implement login.
  */
 export async function loginAsRoomLens(page: Page): Promise<void> {
   await loginExpecting2fa(page, QA_USER.email, QA_USER.password);
   await passTwoFactorChallenge(page);
+  await page.waitForURL("**/dashboard");
+  await expect(
+    page.getByRole("heading", { name: "Dashboard" })
+  ).toBeVisible();
+}
+
+/** Same flow as loginAsRoomLens, for the seeded PMOS_ADMIN user. Lands on
+ * /dashboard like any user — admin-ness only matters on /admin routes. */
+export async function loginAsRoomLensAdmin(page: Page): Promise<void> {
+  await loginExpecting2fa(page, QA_ADMIN.email, QA_ADMIN.password);
+  await passTwoFactorChallenge(page, TEST_ADMIN_TOTP_SECRET);
   await page.waitForURL("**/dashboard");
   await expect(
     page.getByRole("heading", { name: "Dashboard" })

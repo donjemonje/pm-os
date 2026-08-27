@@ -12,6 +12,10 @@ model Organization {
   name       String
   slug       String   @unique
   inviteCode String   @unique
+  /// Per-organization feature overrides, e.g. {"ideas": true}. A key that is
+  /// present wins; a missing key falls back to the env default (IDEAS_ENABLED
+  /// etc.). Managed in PM-OS Admin → Configurations.
+  features   Json     @default("{}")
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -19,11 +23,23 @@ model Organization {
   workspace Workspace?
 }
 
+/// Minimized IAM. PMOS_ADMIN (not plain "admin" — that name is reserved for a
+/// future customer-admin role) grants access to PM-OS Admin. Default USER =
+/// deny-by-default.
+enum UserRole {
+  USER
+  PMOS_ADMIN
+}
+
 model User {
-  id              String        @id @default(uuid())
-  email           String        @unique
-  passwordHash    String?
-  name            String
+  id               String        @id @default(uuid())
+  email            String        @unique
+  passwordHash     String?
+  name             String
+  role             UserRole      @default(USER)
+  /// Soft-deactivation: set = user cannot log in and active sessions are
+  /// rejected. Cleared to reactivate. No hard delete from Admin.
+  deactivatedAt    DateTime?
   /// AES-256-GCM encrypted TOTP secret; null until 2FA enrollment starts.
   totpSecretEnc    String?
   /// Set when the user confirms their first TOTP code; null = 2FA off.
@@ -31,10 +47,10 @@ model User {
   /// Highest TOTP time-step already consumed — codes are strictly single-use.
   /// Recovery is admin-side (clear the totp fields), not backup codes.
   totpLastUsedStep Int?
-  organizationId  String?
-  organization    Organization? @relation(fields: [organizationId], references: [id])
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id])
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   sessions     Session[]
   accounts     OAuthAccount[]
@@ -231,28 +247,6 @@ model QALog {
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId])
-}
-
-
-model CrmUser {
-  id           String       @id @default(uuid())
-  email        String       @unique
-  passwordHash String
-  name         String       @default("CRM Admin")
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  sessions     CrmSession[]
-}
-
-model CrmSession {
-  id        String   @id @default(uuid())
-  userId    String
-  user      CrmUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  @@index([userId])
 }
 
 // ————— Ideas pipeline (Kela POC) —————

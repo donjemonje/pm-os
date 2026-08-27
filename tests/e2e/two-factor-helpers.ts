@@ -10,14 +10,18 @@ import * as OTPAuth from "otpauth";
 /** Seeded users in pmos_test — see scripts/seed-test-db.mjs. */
 export const USER_A = "qa+roomlens@pm-os.io"; // enrolled in TOTP (= QA_USER.email)
 export const USER_B = "qa+roomlens-2@pm-os.io"; // un-enrolled (enrollment flow)
+export const USER_ADMIN = "qa+roomlens-admin@pm-os.io"; // PMOS_ADMIN, enrolled
 
 /**
- * Fixed synthetic TOTP secret for USER_A. Single source of truth for the
- * tests; scripts/seed-test-db.mjs mirrors it and stores it encrypted with
- * the fixed test TOTP_ENC_KEY (test-apphosting.yaml / CI job env).
- * Test-only credential — never use outside pmos_test.
+ * Fixed synthetic TOTP secrets — USER_A gets TEST_TOTP_SECRET, USER_ADMIN
+ * gets TEST_ADMIN_TOTP_SECRET. Single source of truth for the tests;
+ * scripts/seed-test-db.mjs mirrors them and stores them encrypted with the
+ * fixed test TOTP_ENC_KEY (test-apphosting.yaml / CI job env). Each user has
+ * its own secret so their single-use code windows never collide.
+ * Test-only credentials — never use outside pmos_test.
  */
 export const TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+export const TEST_ADMIN_TOTP_SECRET = "KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU";
 
 export const TOTP_PERIOD_MS = 30_000;
 
@@ -78,37 +82,46 @@ export async function submitTwoFactorCode(
     .click();
 }
 
-// Codes are single-use per 30s step (User.totpLastUsedStep). Consecutive
-// logins of the same user inside one window would replay the same code, so
-// we track the last step we consumed and skip past it. The tracker is
-// per-process; a worker restart between spec files loses it, so
-// passTwoFactorChallenge also retries once per window on an "already used"
-// rejection (the code itself is definitionally valid — we just generated it
-// from the enrolled secret with headroom to spare).
-let lastConsumedStep = -1;
+// Codes are single-use per 30s step (User.totpLastUsedStep — per user).
+// Consecutive logins of the same user inside one window would replay the
+// same code, so we track the last step we consumed per secret (each seeded
+// user has its own secret) and skip past it. The tracker is per-process; a
+// worker restart between spec files loses it, so passTwoFactorChallenge
+// also retries once per window on an "already used" rejection (the code
+// itself is definitionally valid — we just generated it from the enrolled
+// secret with headroom to spare).
+const lastConsumedStepBySecret = new Map<string, number>();
 
 /**
- * Complete the /login/2fa challenge for the enrolled RoomLens user
- * (TEST_TOTP_SECRET) and wait for the dashboard. Used by loginAsRoomLens —
- * specs should not call this directly unless they need a bare challenge.
+ * Complete the /login/2fa challenge for an enrolled user (default: the
+ * RoomLens user's TEST_TOTP_SECRET) and wait for the dashboard. Used by
+ * loginAsRoomLens / loginAsRoomLensAdmin — specs should not call this
+ * directly unless they need a bare challenge.
  */
-export async function passTwoFactorChallenge(page: Page): Promise<void> {
+export async function passTwoFactorChallenge(
+  page: Page,
+  secret: string = TEST_TOTP_SECRET
+): Promise<void> {
   const error = page.locator("form p", { hasText: INVALID_CODE_ERROR });
   const dashboardHeading = page.getByRole("heading", { name: "Dashboard" });
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    // Skip any window a previous login in this process already consumed.
-    while (currentStep() <= lastConsumedStep) {
+    // Skip any window a previous login of this user (secret) in this
+    // process already consumed.
+    while (currentStep() <= (lastConsumedStepBySecret.get(secret) ?? -1)) {
       await new Promise((r) => setTimeout(r, msLeftInWindow() + 250));
     }
     await ensureWindowHeadroom(8_000);
     const step = currentStep();
-    await submitTwoFactorCode(page, totpFor(TEST_TOTP_SECRET).generate());
+    await submitTwoFactorCode(page, totpFor(secret).generate());
 
     await expect(error.or(dashboardHeading).first()).toBeVisible({
       timeout: 15_000,
     });
-    lastConsumedStep = Math.max(lastConsumedStep, step);
+    lastConsumedStepBySecret.set(
+      secret,
+      Math.max(lastConsumedStepBySecret.get(secret) ?? -1, step)
+    );
     if (await dashboardHeading.isVisible()) return;
     // Rejected: this window's step was consumed outside our tracker (e.g. an
     // earlier spec file before a worker restart). Retry in the next window.

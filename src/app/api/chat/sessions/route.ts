@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { apiAuthContext } from "@/lib/api-auth";
+import { apiAuthContext, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 
 export async function GET() {
+  const disabled = await orgFeatureDisabledResponse("chat");
+  if (disabled) return disabled;
   const auth = await apiAuthContext();
   if (auth instanceof NextResponse) return auth;
   const { workspaceId, userId } = auth;

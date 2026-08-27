@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiAdmin } from "@/lib/admin-auth";
 import { createOrganizationUser } from "@/lib/auth";
-import { requireCrmUser } from "@/lib/crm-auth";
 
 export async function POST(request: NextRequest) {
-  try {
-    await requireCrmUser();
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const admin = await apiAdmin();
+  if (admin instanceof NextResponse) return admin;
 
   let body: {
     email?: string;

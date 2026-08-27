@@ -11,11 +11,11 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  * - /login, /register       covered as redirects: middleware sends a
  *                           logged-in user to /dashboard. The logged-out
  *                           /login render lives in auth.spec.ts.
- * - /crm, /crm/users        skipped as app pages: separate CRM auth realm
- *                           (pmos_crm_session cookie); the RoomLens app
- *                           session must NOT grant access. Asserted below as
- *                           a redirect to /crm/login instead.
- * - /crm/login              covered via the CRM redirect test.
+ * - /admin, /admin/users,   skipped as app pages: PM-OS Admin requires
+ *   /admin/enablements      User.role === PMOS_ADMIN; the seeded RoomLens
+ *                           user is a regular USER, so these must 404 for
+ *                           them (asserted below). Admin-role coverage lives
+ *                           in the admin feature's own spec.
  * - /login/2fa              covered in two-factor.spec.ts (challenge +
  *                           enrollment). Not swept here: middleware does not
  *                           redirect a fully verified user off /login/2fa —
@@ -76,15 +76,18 @@ test("root and auth routes send a logged-in user to the dashboard", async ({
   }
 });
 
-test("app session does not grant CRM access", async ({ page }) => {
+// Replaces the former CRM auth-realm test: the CRM (own login, own cookie)
+// became PM-OS Admin on the main app session, gated by User.role. A regular
+// user must get a 404 — admin existence is not advertised.
+test("regular app session does not grant PM-OS Admin access", async ({
+  page,
+}) => {
   await loginAsRoomLens(page);
 
-  for (const path of ["/crm", "/crm/users"]) {
-    await page.goto(path);
-    await page.waitForURL("**/crm/login");
-    await expect(
-      page.getByRole("heading", { name: "PM-OS CRM" })
-    ).toBeVisible();
+  for (const path of ["/admin", "/admin/users", "/admin/enablements"]) {
+    const response = await page.goto(path);
+    expect(response?.status(), `${path} should 404 for role USER`).toBe(404);
+    await expect(page.getByText("This page could not be found")).toBeVisible();
   }
 });
 

@@ -75,7 +75,7 @@ const KINDS: Record<string, ListOps> = {
 type RouteContext = { params: Promise<{ kind: string }> };
 
 async function guard(context: RouteContext): Promise<{ ops: ListOps; workspaceId: string } | NextResponse> {
-  const disabled = ideasDisabledResponse();
+  const disabled = await ideasDisabledResponse();
   if (disabled) return disabled;
   const { kind } = await context.params;
   const ops = KINDS[kind];
