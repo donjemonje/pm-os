@@ -1,21 +1,21 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { listOrganizationsWithMembers } from "@/lib/auth";
-import { isIdeasEnabled } from "@/lib/feature-flags";
+import { envFeatureDefault, ORG_FEATURE_KEYS } from "@/lib/feature-flags";
 import { AdminShell } from "../AdminShell";
-import { OrgConfigurations } from "./OrgConfigurations";
+import { OrgEnablements } from "./OrgEnablements";
 
-export default async function AdminConfigurationsPage() {
-  const admin = await requireAdminPage("/admin/configurations");
+export default async function AdminEnablementsPage() {
+  const admin = await requireAdminPage("/admin/enablements");
 
   const organizations = await listOrganizationsWithMembers();
 
   return (
     <AdminShell
       user={admin}
-      title="Configurations"
+      title="Enablements"
       description="Per-organization feature flags. Unset flags follow the environment default."
     >
-      <OrgConfigurations
+      <OrgEnablements
         initialOrganizations={organizations.map((org) => ({
           id: org.id,
           name: org.name,
@@ -23,7 +23,9 @@ export default async function AdminConfigurationsPage() {
           memberCount: org.memberCount,
           features: org.features,
         }))}
-        envDefaults={{ ideas: isIdeasEnabled() }}
+        envDefaults={Object.fromEntries(
+          ORG_FEATURE_KEYS.map((key) => [key, envFeatureDefault(key)])
+        )}
       />
     </AdminShell>
   );

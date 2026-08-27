@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiWorkspaceId } from "@/lib/api-auth";
+import { apiWorkspaceId, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 import { parseJsonArray } from "@/lib/utils";
 
@@ -15,6 +15,8 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const disabled = await orgFeatureDisabledResponse("docs");
+  if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;
@@ -38,6 +40,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const disabled = await orgFeatureDisabledResponse("docs");
+  if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;
@@ -70,6 +74,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const disabled = await orgFeatureDisabledResponse("docs");
+  if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;

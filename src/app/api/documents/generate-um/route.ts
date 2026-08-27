@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiWorkspaceId } from "@/lib/api-auth";
+import { apiWorkspaceId, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 import { fetchIssuesByKeys } from "@/lib/jira";
 import { fetchGoogleDriveFileContents } from "@/lib/google-drive";
@@ -16,6 +16,8 @@ import type { DocumentAudience } from "@/lib/types";
 const VALID_AUDIENCES: DocumentAudience[] = ["external", "internal", "configuration"];
 
 export async function POST(request: NextRequest) {
+  const disabled = await orgFeatureDisabledResponse("docs");
+  if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;

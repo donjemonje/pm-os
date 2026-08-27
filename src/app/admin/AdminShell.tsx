@@ -31,7 +31,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     title: "Platform",
     items: [
-      { label: "Configurations", href: "/admin/configurations", icon: Settings },
+      { label: "Enablements", href: "/admin/enablements", icon: Settings },
     ],
   },
 ];

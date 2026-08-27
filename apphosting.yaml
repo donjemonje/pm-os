@@ -33,6 +33,20 @@ env:
       - BUILD
       - RUNTIME
 
+  # Docs/Chat are live surfaces: unset means ON (unlike IDEAS_ENABLED).
+  # Per-organization overrides live in PM-OS Admin → Enablements.
+  - variable: DOCS_ENABLED
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: CHAT_ENABLED
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
   - variable: NEXT_PUBLIC_APP_URL
     value: "https://app.pm-os.io"
     availability:

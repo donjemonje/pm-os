@@ -19,9 +19,19 @@ const FLAGS: { key: string; label: string; description: string }[] = [
     label: "Ideas",
     description: "Ideas pipeline: page, settings, and import APIs.",
   },
+  {
+    key: "docs",
+    label: "Docs",
+    description: "Documents: pages, editor, generation APIs, dashboard cards.",
+  },
+  {
+    key: "chat",
+    label: "Chat",
+    description: "PMOS Chat: page, floating panel, and chat APIs.",
+  },
 ];
 
-export function OrgConfigurations({
+export function OrgEnablements({
   initialOrganizations,
   envDefaults,
 }: {

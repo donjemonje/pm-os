@@ -7,7 +7,7 @@ import {
   userInitials,
 } from "@/lib/auth";
 import { brand } from "@/lib/brand";
-import { ideasEnabledForCurrentUser } from "@/lib/org-features";
+import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { Shell } from "@/components/layout/Shell";
 
 const chakraPetch = Chakra_Petch({
@@ -48,7 +48,9 @@ export default async function RootLayout({
   // show a sidebar that is still "loading" its identity. getCurrentUser is
   // request-cached, so the per-org ideas flag reuses the same session lookup.
   const user = await getCurrentUser();
-  const ideasEnabled = await ideasEnabledForCurrentUser();
+  const ideasEnabled = await featureEnabledForCurrentUser("ideas");
+  const docsEnabled = await featureEnabledForCurrentUser("docs");
+  const chatEnabled = await featureEnabledForCurrentUser("chat");
   const organization = user?.organizationId
     ? await getOrganizationSummary(user.organizationId)
     : null;
@@ -69,6 +71,8 @@ export default async function RootLayout({
       <body className="font-body antialiased">
         <Shell
           ideasEnabled={ideasEnabled}
+          docsEnabled={docsEnabled}
+          chatEnabled={chatEnabled}
           user={menuUser}
           organization={organization}
         >
