@@ -23,6 +23,7 @@ const STATUS_CHIP_TO_BATCH: Record<string, Idea["batch"]> = {
   New: "new",
   Updated: "updated",
   Archive: "archive",
+  Unchanged: "unchanged",
 };
 
 interface ServerState {
@@ -426,7 +427,13 @@ export function IdeasView({
       const wanted = platformFilter.map((p) => p.toLowerCase());
       if (!(i.platforms ?? []).some((p) => wanted.includes(p.toLowerCase()))) return false;
     }
-    if (statusFilter.length > 0 && !statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
+    if (statusFilter.length > 0) {
+      if (!statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
+    } else if (i.batch === "unchanged") {
+      // The Jira backlog dwarfs a Zendesk batch and is mostly unchanged —
+      // unchanged ideas need no review, so they show only via their chip.
+      return false;
+    }
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
   };
@@ -729,7 +736,7 @@ export function IdeasView({
               const badge = badgeOf(idea);
               const score = scoreOf(idea);
               const hovered = hoverId === idea.id;
-              const showMark = idea.decision === "reviewed" || hovered;
+              const showMark = needsApproval(idea) && (idea.decision === "reviewed" || hovered);
               return (
                 <div
                   key={idea.id}

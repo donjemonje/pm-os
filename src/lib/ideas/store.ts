@@ -367,6 +367,15 @@ export async function mutateIdeas(
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
       });
+      // Approval-exempt ideas carry zero changes for Jira — approving one
+      // would inject a no-op, so the server refuses it outright.
+      if (
+        mutation.decision === "reviewed" &&
+        idea &&
+        APPROVAL_EXEMPT.includes(idea.batchStatus)
+      ) {
+        break;
+      }
       if (idea && idea.decision !== "injected") {
         await db.idea.update({
           where: { id: idea.id },
