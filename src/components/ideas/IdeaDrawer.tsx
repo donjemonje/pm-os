@@ -194,7 +194,9 @@ export function IdeaDrawer({
 
           {!viewingSource &&
             idea &&
-            (idea.products.length > 0 || (idea.platforms ?? []).length > 0) && (
+            (idea.products.length > 0 ||
+              (idea.platforms ?? []).length > 0 ||
+              (idea.customers ?? []).length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {idea.products.map((p) => (
                   <span
@@ -211,6 +213,15 @@ export function IdeaDrawer({
                     className="rounded bg-[rgba(169,140,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#6b4bd0]"
                   >
                     {p}
+                  </span>
+                ))}
+                {/* Affected customers from the supporting tickets; teal per the design. */}
+                {(idea.customers ?? []).map((c) => (
+                  <span
+                    key={`customer-${c}`}
+                    className="rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                  >
+                    {c}
                   </span>
                 ))}
               </div>
@@ -254,6 +265,9 @@ export function IdeaDrawer({
                   </span>
                 )}
                 {ticket.requester && <span>Requester: {ticket.requester}</span>}
+                {(ticket.affectedCustomers ?? []).length > 0 && (
+                  <span>Affected customers: {(ticket.affectedCustomers ?? []).join(", ")}</span>
+                )}
                 {ticket.createdAt && <span>Created: {ticket.createdAt}</span>}
                 {ticket.tags.length > 0 && <span>Tags: {ticket.tags.join(", ")}</span>}
               </div>
@@ -315,6 +329,11 @@ export function IdeaDrawer({
                   {idea.details}
                 </div>
               </div>
+              {(idea.reporters ?? []).length > 0 && (
+                <div className="text-xs text-muted">
+                  Reported by {(idea.reporters ?? []).join(", ")}
+                </div>
+              )}
               {sourceEntries.length > 0 && (
                 <div>
                   <div className={`${MONO_LABEL} mb-2`}>Sources · {sourceEntries.length}</div>

@@ -17,6 +17,8 @@ export interface ZendeskTicket {
   subject: string;
   body: string;
   requester?: string;
+  /** Customers the catalog stage matched in the ticket text; names come from the settings catalog. */
+  affectedCustomers?: string[];
   tags: string[];
   createdAt?: string;
   /** Optional product_line column, used to pre-assign the idea's product. */
@@ -48,6 +50,10 @@ export interface Idea {
   products: string[];
   /** Platform tags (iOS, Web, …) assigned by the catalog stage; names come from the settings catalog. */
   platforms?: string[];
+  /** Who filed the supporting tickets — derived from sources, never stored on the idea. */
+  reporters?: string[];
+  /** Customers the supporting tickets say are affected — union over sources. */
+  customers?: string[];
   batch: IdeaBatchStatus;
   decision: IdeaDecision;
   /** Where this idea came from this batch. */

@@ -42,9 +42,25 @@ export interface ImportSummary {
 const APPROVAL_EXEMPT = ["deleted", "unchanged"];
 
 type TicketRow = Prisma.ZendeskTicketRawGetPayload<Record<string, never>>;
-type IdeaRow = Prisma.IdeaGetPayload<{
-  include: { sources: { include: { ticket: { select: { externalId: true } } } } };
-}>;
+/** Sources carry the ticket fields idea-level lists are derived from. */
+const IDEA_INCLUDE = {
+  sources: {
+    include: {
+      ticket: { select: { externalId: true, requester: true, affectedCustomers: true } },
+    },
+  },
+} as const;
+type IdeaRow = Prisma.IdeaGetPayload<{ include: typeof IDEA_INCLUDE }>;
+
+/** Union of string lists, first occurrence wins on casing, insertion order kept. */
+function distinct(values: string[]): string[] {
+  const seen = new Map<string, string>();
+  for (const v of values) {
+    const key = v.toLowerCase();
+    if (v && !seen.has(key)) seen.set(key, v);
+  }
+  return Array.from(seen.values());
+}
 
 function toClientTicket(row: TicketRow): ZendeskTicket {
   return {
@@ -53,6 +69,7 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
     subject: row.subject,
     body: row.body,
     requester: row.requester ?? undefined,
+    affectedCustomers: (row.affectedCustomers as string[]) ?? [],
     tags: (row.tags as string[]) ?? [],
     createdAt: row.sourceCreatedAt ?? undefined,
     productLine: row.productLine ?? undefined,
@@ -63,12 +80,18 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
 }
 
 function toClientIdea(row: IdeaRow): Idea {
+  // Reporters and affected customers are derived from the linked tickets on
+  // every read — reassigning sources keeps them correct with no stored copy
+  // to go stale.
+  const ticketRows = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
   return {
     id: row.id,
     title: row.title,
     details: row.details,
     products: (row.products as string[]) ?? [],
     platforms: (row.platforms as string[]) ?? [],
+    reporters: distinct(ticketRows.flatMap((t) => (t.requester ? [t.requester] : []))),
+    customers: distinct(ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? [])),
     batch: row.batchStatus as Idea["batch"],
     decision: row.decision as Idea["decision"],
     origin: row.origin as Idea["origin"],
@@ -90,7 +113,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
     db.jiraIdeaSnapshot.findMany({ where: { workspaceId }, orderBy: { key: "asc" } }),
     db.idea.findMany({
       where: { workspaceId },
-      include: { sources: { include: { ticket: { select: { externalId: true } } } } },
+      include: IDEA_INCLUDE,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
   ]);
@@ -131,7 +154,7 @@ export async function importBatch(
   // verdict as it lands, so a failure here loses nothing.
   const catalog = await catalogTickets(
     workspaceId,
-    fresh.map(({ key, subject, body, tags }) => ({ key, subject, body, tags }))
+    fresh.map(({ key, subject, body, requester, tags }) => ({ key, subject, body, requester, tags }))
   );
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
 
@@ -149,6 +172,7 @@ export async function importBatch(
         subject: input.subject,
         body: input.body,
         requester: input.requester ?? null,
+        affectedCustomers: (verdict?.affectedCustomers ?? []) as Prisma.InputJsonValue,
         tags: input.tags as Prisma.InputJsonValue,
         productLine: input.productLine ?? null,
         sourceCreatedAt: input.createdAt ?? null,
@@ -350,7 +374,7 @@ export async function mutateIdeas(
     case "reassign": {
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
-        include: { sources: { include: { ticket: { select: { externalId: true } } } } },
+        include: IDEA_INCLUDE,
       });
       if (!idea) break;
       const ticketRows = await db.zendeskTicketRaw.findMany({

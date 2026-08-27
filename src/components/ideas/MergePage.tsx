@@ -13,6 +13,7 @@ interface MergePageProps {
   query: string;
   productFilter: string[];
   platformFilter: string[];
+  customerFilter: string[];
   pendingOnly: boolean;
   mergeFilter: "Merge" | "Single";
   edit: MergeEdit | null;
@@ -46,6 +47,7 @@ export function MergePage({
   query,
   productFilter,
   platformFilter,
+  customerFilter,
   pendingOnly,
   mergeFilter,
   edit,
@@ -60,6 +62,8 @@ export function MergePage({
     if (q && !i.title.toLowerCase().includes(q)) return false;
     if (productFilter.length > 0 && !i.products.some((p) => productFilter.includes(p))) return false;
     if (platformFilter.length > 0 && !(i.platforms ?? []).some((p) => platformFilter.includes(p)))
+      return false;
+    if (customerFilter.length > 0 && !(i.customers ?? []).some((c) => customerFilter.includes(c)))
       return false;
     if (pendingOnly && i.decision !== "pending") return false;
     return true;

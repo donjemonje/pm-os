@@ -20,9 +20,10 @@ export default async function IdeasSettingsPage() {
   await requireUserPage("/settings/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
-  const [productLines, platforms] = await Promise.all([
+  const [productLines, platforms, customers] = await Promise.all([
     db.productLine.findMany(LIST_QUERY(workspace.id)),
     db.platform.findMany(LIST_QUERY(workspace.id)),
+    db.customer.findMany(LIST_QUERY(workspace.id)),
   ]);
 
   return (
@@ -48,6 +49,15 @@ export default async function IdeasSettingsPage() {
           descriptionPlaceholder="What does this platform cover? (optional)"
           emptyLabel="No platforms yet. Add the first one above."
           initialItems={platforms}
+        />
+        <SettingsListPanel
+          title="Customers"
+          blurb="The customers tickets can affect. PMOS AI tags ideas only with customers from this list when tickets name them — it never invents names."
+          endpoint="/api/ideas/lists/customers"
+          namePlaceholder="Customer name"
+          descriptionPlaceholder="Anything that helps recognize them in tickets, e.g. aliases or tier (optional)"
+          emptyLabel="No customers yet. Add the first one above."
+          initialItems={customers}
         />
       </div>
     </div>

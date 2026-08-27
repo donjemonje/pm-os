@@ -63,10 +63,26 @@ function FilterRow({
   options: string[];
   selected: string[];
   setSelected: React.Dispatch<React.SetStateAction<string[]>>;
-  /** Platform rows use the purple accent from the design; product rows the primary blue. */
-  accent?: "product" | "platform";
+  /** Platform rows purple, customer rows teal, product rows the primary blue — per the design. */
+  accent?: "product" | "platform" | "customer";
 }) {
-  const purple = accent === "platform";
+  const accents = {
+    product: {
+      focus: "focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]",
+      selected: "bg-[rgba(122,167,255,.12)] text-[#3b6fd4]",
+      chip: "bg-primary hover:bg-primary-hover",
+    },
+    platform: {
+      focus: "focus:border-[#9d7ce8] focus:shadow-[0_0_0_1px_rgba(169,140,255,.35)]",
+      selected: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
+      chip: "bg-[#7f5be0] hover:bg-[#6c48cd]",
+    },
+    customer: {
+      focus: "focus:border-[#3aa48f] focus:shadow-[0_0_0_1px_rgba(47,160,143,.3)]",
+      selected: "bg-[rgba(47,160,143,.14)] text-[#0f7a6a]",
+      chip: "bg-[#189179] hover:bg-[#127d67]",
+    },
+  }[accent];
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const shown = options.filter(
@@ -86,11 +102,7 @@ function FilterRow({
           }}
           onFocus={() => setOpen(true)}
           placeholder={placeholder}
-          className={`w-[220px] rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] outline-none ${
-            purple
-              ? "focus:border-[#9d7ce8] focus:shadow-[0_0_0_1px_rgba(169,140,255,.35)]"
-              : "focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
-          }`}
+          className={`w-[220px] rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] outline-none ${accents.focus}`}
         />
         {open && (
           <>
@@ -107,11 +119,7 @@ function FilterRow({
                       )
                     }
                     className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[11.5px] font-medium hover:bg-background ${
-                      isSelected
-                        ? purple
-                          ? "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]"
-                          : "bg-[rgba(122,167,255,.12)] text-[#3b6fd4]"
-                        : "text-[#3f506b]"
+                      isSelected ? accents.selected : "text-[#3f506b]"
                     }`}
                   >
                     {option}
@@ -131,9 +139,7 @@ function FilterRow({
           <button
             key={option}
             onClick={() => setSelected((prev) => prev.filter((x) => x !== option))}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${
-              purple ? "bg-[#7f5be0] hover:bg-[#6c48cd]" : "bg-primary hover:bg-primary-hover"
-            }`}
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${accents.chip}`}
           >
             {option} ✕
           </button>
@@ -146,11 +152,14 @@ function FilterRow({
 export function IdeasView({
   catalogProducts = [],
   catalogPlatforms = [],
+  catalogCustomers = [],
 }: {
   /** Product-line names from the settings catalog, merged into the filter options. */
   catalogProducts?: string[];
   /** Platform names from the settings catalog; the Platform filter's options. */
   catalogPlatforms?: string[];
+  /** Customer names from the settings catalog, merged into the filter options. */
+  catalogCustomers?: string[];
 }) {
   const [tickets, setTickets] = useState<ZendeskTicket[]>([]);
   const [jiraSources, setJiraSources] = useState<JiraSource[]>([]);
@@ -160,6 +169,7 @@ export function IdeasView({
   const [query, setQuery] = useState("");
   const [productFilter, setProductFilter] = useState<string[]>([]);
   const [platformFilter, setPlatformFilter] = useState<string[]>([]);
+  const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
   /** Bumped by "Clear filters" to remount the FilterRows, wiping their local search text. */
@@ -239,6 +249,14 @@ export function IdeasView({
     }
     return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
   }, [catalogProducts, ideas]);
+  const allCustomers = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const name of [...catalogCustomers, ...ideas.flatMap((i) => i.customers ?? [])]) {
+      const key = name.toLowerCase();
+      if (!seen.has(key)) seen.set(key, name);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [catalogCustomers, ideas]);
 
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -423,6 +441,10 @@ export function IdeasView({
       const wanted = platformFilter.map((p) => p.toLowerCase());
       if (!(i.platforms ?? []).some((p) => wanted.includes(p.toLowerCase()))) return false;
     }
+    if (customerFilter.length > 0) {
+      const wanted = customerFilter.map((c) => c.toLowerCase());
+      if (!(i.customers ?? []).some((c) => wanted.includes(c.toLowerCase()))) return false;
+    }
     if (statusFilter.length > 0 && !statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
@@ -444,6 +466,7 @@ export function IdeasView({
     query !== "" ||
     productFilter.length > 0 ||
     platformFilter.length > 0 ||
+    customerFilter.length > 0 ||
     statusFilter.length > 0 ||
     pendingOnly;
 
@@ -623,6 +646,19 @@ export function IdeasView({
               />
             )}
 
+            {allCustomers.length > 0 && (
+              <FilterRow
+                key={`customers-${filterResetKey}`}
+                label="Customer"
+                placeholder="All customers"
+                emptyText="No matching customer"
+                options={allCustomers}
+                selected={customerFilter}
+                setSelected={setCustomerFilter}
+                accent="customer"
+              />
+            )}
+
             <div className="flex flex-wrap items-start gap-2">
               <span className={`${MONO_LABEL} w-[99px] shrink-0 pt-1.5`}>Import Status</span>
               <div className="flex flex-wrap items-center gap-1.5">
@@ -705,6 +741,7 @@ export function IdeasView({
               query={query}
               productFilter={productFilter}
               platformFilter={platformFilter}
+              customerFilter={customerFilter}
               pendingOnly={pendingOnly}
               mergeFilter={mergeFilter}
               edit={edit}
@@ -746,7 +783,9 @@ export function IdeasView({
                     <span className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium">
                       {idea.title}
                     </span>
-                    {(idea.products.length > 0 || (idea.platforms ?? []).length > 0) && (
+                    {(idea.products.length > 0 ||
+                      (idea.platforms ?? []).length > 0 ||
+                      (idea.customers ?? []).length > 0) && (
                       <div className="flex flex-wrap items-center gap-2">
                         {idea.products.map((p) => {
                           // Flag names the model returned that aren't in the
@@ -778,6 +817,28 @@ export function IdeasView({
                             {p}
                           </span>
                         ))}
+                        {(idea.customers ?? []).map((c) => {
+                          // Same off-catalog flag as product lines: the model is
+                          // told to use the customer catalog only, so anything
+                          // else is surfaced, not hidden.
+                          const offCatalog = !catalogCustomers.some(
+                            (k) => k.toLowerCase() === c.toLowerCase()
+                          );
+                          return (
+                            <span
+                              key={`customer-${c}`}
+                              title={offCatalog ? "Not in the customer catalog" : undefined}
+                              className={
+                                offCatalog
+                                  ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                                  : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                              }
+                            >
+                              {c}
+                              {offCatalog ? " ⚑" : ""}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -884,6 +945,7 @@ export function IdeasView({
                       setQuery("");
                       setProductFilter([]);
                       setPlatformFilter([]);
+                      setCustomerFilter([]);
                       setStatusFilter([]);
                       setPendingOnly(false);
                       setFilterResetKey((k) => k + 1);
