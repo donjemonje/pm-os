@@ -16,7 +16,7 @@ import { USER_B } from "./two-factor-helpers";
  * Seeded fixtures (scripts/seed-test-db.mjs):
  *   qa+roomlens-admin@pm-os.io  role PMOS_ADMIN — the actor in every test
  *   qa+roomlens@pm-os.io        role USER — deactivation target (A3)
- *   qa+roomlens-2@pm-os.io      role USER — promote/demote target (A1)
+ *   qa+roomlens-2@pm-os.io      role USER — role-PATCH rejection target (A1)
  *
  * Coverage boundaries with the rest of the suite:
  * - USER 404 on the three /admin routes: all-pages.spec.ts.
@@ -73,10 +73,10 @@ test.describe("PM-OS Admin", () => {
   test.beforeAll(resetAdminFixtures);
   test.afterAll(resetAdminFixtures);
 
-  test("A1 admin promotes and demotes a user; self-change guardrails refuse", async ({
+  test("A1 role changes are script-only: API rejects role PATCH, UI has no role controls, deactivation guardrails hold", async ({
     page,
   }) => {
-    // Role changes and deactivation confirm via window.confirm.
+    // Deactivation confirms via window.confirm.
     page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLensAdmin(page);
@@ -87,27 +87,63 @@ test.describe("PM-OS Admin", () => {
 
     const target = memberRow(page, USER_B);
     const own = memberRow(page, QA_ADMIN.email);
+
+    // Role badges render display-only…
     await expect(own.getByText("pmos-admin", { exact: true })).toBeVisible();
-
-    // Promote another user to pmos-admin…
-    await expect(target.getByText("user", { exact: true })).toBeVisible();
-    await target.getByRole("button", { name: "Make admin" }).click();
-    await expect(target.getByText("pmos-admin", { exact: true })).toBeVisible();
-
-    // …and demote them back.
-    await target.getByRole("button", { name: "Remove admin" }).click();
     await expect(target.getByText("user", { exact: true })).toBeVisible();
 
-    // Guardrail: an admin cannot change their own role (with one active
-    // admin this is also what keeps the last admin from locking everyone
-    // out). The API refuses with 400 and the UI surfaces the reason.
-    await own.getByRole("button", { name: "Remove admin" }).click();
+    // …and the page offers NO role-change affordances (removed 2026-08-27,
+    // Daniel's security call: roles move only via scripts/set-user-role.mjs).
+    // The actions column IS rendered (Deactivate is there), so the
+    // zero-counts below can't pass vacuously on an unrendered table.
     await expect(
-      page.getByText("You cannot change your own role")
+      target.getByRole("button", { name: "Deactivate" })
     ).toBeVisible();
-    await expect(own.getByText("pmos-admin", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Make admin" })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Remove admin" })
+    ).toHaveCount(0);
 
-    // Guardrail: an admin cannot deactivate themselves.
+    // API-level: even a valid admin session cannot change roles.
+    // page.request rides the logged-in admin's cookies; the request is
+    // rejected loudly (400 + script pointer), not silently ignored.
+    const orgsRes = await page.request.get("/api/admin/organizations");
+    expect(orgsRes.status()).toBe(200);
+    const { organizations } = await orgsRes.json();
+    const targetId = organizations
+      .flatMap((org: { members: { id: string; email: string }[] }) => org.members)
+      .find((member: { email: string }) => member.email === USER_B)?.id;
+    expect(targetId, `seeded member ${USER_B} in /api/admin/organizations`).toBeTruthy();
+
+    const promote = await page.request.patch(`/api/admin/users/${targetId}`, {
+      data: { role: "PMOS_ADMIN" },
+    });
+    expect(promote.status()).toBe(400);
+    expect((await promote.json()).error).toBe(
+      "Role changes are not available through the API. Use scripts/set-user-role.mjs."
+    );
+
+    // Bundling `role` with an otherwise-valid change is rejected whole —
+    // no partial application of the deactivation half.
+    const bundled = await page.request.patch(`/api/admin/users/${targetId}`, {
+      data: { role: "USER", deactivated: true },
+    });
+    expect(bundled.status()).toBe(400);
+    await page.reload();
+    await expect(target.getByText("user", { exact: true })).toBeVisible();
+    await expect(
+      target.getByText("Deactivated", { exact: true })
+    ).toHaveCount(0);
+
+    // Surviving guardrail: an admin cannot deactivate themselves — the API
+    // refuses with 400 and the UI surfaces the banner. With the single
+    // seeded active admin, "self" and "last active pmos-admin" coincide;
+    // the self rule fires first (admin-guard.ts checks it before the
+    // last-admin rule), and the last-admin branch is unreachable end-to-end
+    // anyway: the actor must be an active admin, so a last-admin target is
+    // always self. Asserting the message the API actually returns.
     await own.getByRole("button", { name: "Deactivate" }).click();
     await expect(
       page.getByText("You cannot deactivate your own account")
