@@ -8,8 +8,6 @@ import {
   Loader2,
   Plus,
   RotateCcw,
-  Shield,
-  ShieldOff,
   UserPlus,
   UserX,
 } from "lucide-react";
@@ -66,10 +64,7 @@ export function UserManagement({
     }
   }
 
-  async function patchMember(
-    member: Member,
-    change: { deactivated?: boolean; role?: "USER" | "PMOS_ADMIN" }
-  ) {
+  async function patchMember(member: Member, change: { deactivated: boolean }) {
     setBusyUserId(member.id);
     setActionError("");
     try {
@@ -101,14 +96,9 @@ export function UserManagement({
     await patchMember(member, { deactivated });
   }
 
-  async function setRole(member: Member, role: "USER" | "PMOS_ADMIN") {
-    const message =
-      role === "PMOS_ADMIN"
-        ? `Make ${member.name || member.email} a pmos-admin? They will get full access to PM-OS Admin.`
-        : `Remove pmos-admin from ${member.name || member.email}? They will lose access to PM-OS Admin.`;
-    if (!window.confirm(message)) return;
-    await patchMember(member, { role });
-  }
+  // Role changes are deliberately absent from this UI (and rejected by the
+  // API): they happen only via scripts/set-user-role.mjs — Daniel's call,
+  // 2026-08-27. The role badge below is display-only.
 
   async function copyInvite(code: string) {
     try {
@@ -255,28 +245,6 @@ export function UserManagement({
                           {new Date(member.createdAt).toLocaleDateString()}
                         </td>
                         <td className="px-5 py-3 text-right">
-                          {!member.deactivatedAt &&
-                            (member.role === "PMOS_ADMIN" ? (
-                              <button
-                                type="button"
-                                onClick={() => setRole(member, "USER")}
-                                disabled={busyUserId === member.id}
-                                className="mr-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
-                              >
-                                <ShieldOff className="h-3.5 w-3.5" />
-                                Remove admin
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => setRole(member, "PMOS_ADMIN")}
-                                disabled={busyUserId === member.id}
-                                className="mr-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-                              >
-                                <Shield className="h-3.5 w-3.5" />
-                                Make admin
-                              </button>
-                            ))}
                           {member.deactivatedAt ? (
                             <button
                               type="button"

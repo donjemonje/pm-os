@@ -15,7 +15,8 @@
  *   ADMIN_EMAIL=daniel@pm-os.io ADMIN_PASSWORD='...' node scripts/seed-admin.mjs
  * Optional: ADMIN_NAME="Daniel East" ADMIN_ORG_NAME="PM-OS"
  *
- * Further admins are promoted from /admin/users, not seeded.
+ * Further role changes (either direction) go through scripts/set-user-role.mjs
+ * — never the UI or API.
  * Hashing matches src/lib/auth.ts (scrypt, "salt:hash").
  */
 import { PrismaClient } from "@prisma/client";

@@ -1,13 +1,16 @@
 /**
- * Pure guardrails for admin mutations on users (role changes and
- * deactivation). Kept dependency-free so the rules are testable without a
- * DB. The route computes activeAdminCount = users with role PMOS_ADMIN and
- * deactivatedAt null, then asks this function whether the change is allowed.
+ * Pure guardrails for admin mutations on users. Kept dependency-free so the
+ * rules are testable without a DB. The route computes activeAdminCount =
+ * users with role PMOS_ADMIN and deactivatedAt null, then asks this function
+ * whether the change is allowed.
+ *
+ * Role changes are not guarded here because they are not reachable through
+ * the app at all — the admin API rejects them and roles move only via
+ * scripts (seed-admin.mjs / set-user-role.mjs). The deactivation guards
+ * below matter MORE under that model: with no in-app promotion, locking out
+ * the last active pmos-admin means a trip to the scripts to recover.
  *
  * Rules:
- * - an admin cannot change their own role (no self-demotion, and
- *   self-promotion is meaningless — they are already an admin)
- * - the last active pmos-admin cannot be demoted (would lock everyone out)
  * - an admin cannot deactivate themselves
  * - the last active pmos-admin cannot be deactivated
  */
@@ -22,7 +25,6 @@ export type AdminUserMutation = {
     deactivated: boolean;
   };
   change: {
-    role?: RoleName;
     deactivated?: boolean;
   };
   /** Count of users with role PMOS_ADMIN and no deactivation. */
@@ -34,19 +36,6 @@ export function adminMutationError(input: AdminUserMutation): string | null {
   const { actorId, target, change, activeAdminCount } = input;
   const targetIsSelf = target.id === actorId;
   const targetIsActiveAdmin = target.role === "PMOS_ADMIN" && !target.deactivated;
-
-  if (change.role !== undefined && change.role !== target.role) {
-    if (targetIsSelf) {
-      return "You cannot change your own role";
-    }
-    if (
-      change.role === "USER" &&
-      targetIsActiveAdmin &&
-      activeAdminCount <= 1
-    ) {
-      return "Cannot demote the last active pmos-admin";
-    }
-  }
 
   if (change.deactivated === true && !target.deactivated) {
     if (targetIsSelf) {

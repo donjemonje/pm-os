@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
-import { adminMutationError, RoleName } from "@/lib/admin-guard";
+import { adminMutationError } from "@/lib/admin-guard";
 import { db } from "@/lib/db";
 
 /**
- * PATCH { role?: "USER" | "PMOS_ADMIN", deactivated?: boolean }
+ * PATCH { deactivated: boolean } — soft-deactivate / reactivate a user.
  *
- * Minimized IAM + soft-deactivate. Guardrails (see admin-guard.ts): no
- * changing your own role, no deactivating yourself, and the last active
- * pmos-admin can be neither demoted nor deactivated. Deactivation deletes
- * the user's sessions so access ends immediately.
+ * Role changes are NOT accepted here — not from the UI, not from an admin
+ * session (Daniel's security call, 2026-08-27). Roles change only via
+ * scripts/seed-admin.mjs (promote + password) and scripts/set-user-role.mjs
+ * (either direction), in every environment including production. A request
+ * carrying `role` is rejected outright rather than silently ignored.
+ *
+ * Guardrails (see admin-guard.ts): no self-deactivation, and the last
+ * active pmos-admin cannot be deactivated. Deactivation deletes the user's
+ * sessions so access ends immediately.
  *
  * There is intentionally no hard-delete endpoint: a delete here would
  * cascade through sessions, OAuth links, and chat history. If a purge is
@@ -31,23 +36,19 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const hasRole = body.role !== undefined;
-  const hasDeactivated = body.deactivated !== undefined;
-  if (!hasRole && !hasDeactivated) {
+  if (body.role !== undefined) {
     return NextResponse.json(
-      { error: "Provide role and/or deactivated" },
+      {
+        error:
+          "Role changes are not available through the API. Use scripts/set-user-role.mjs.",
+      },
       { status: 400 }
     );
   }
-  if (hasRole && body.role !== "USER" && body.role !== "PMOS_ADMIN") {
+
+  if (typeof body.deactivated !== "boolean") {
     return NextResponse.json(
-      { error: "role must be USER or PMOS_ADMIN" },
-      { status: 400 }
-    );
-  }
-  if (hasDeactivated && typeof body.deactivated !== "boolean") {
-    return NextResponse.json(
-      { error: "deactivated must be true or false" },
+      { error: "Provide deactivated: true or false" },
       { status: 400 }
     );
   }
@@ -65,28 +66,22 @@ export async function PATCH(
     actorId: admin.id,
     target: {
       id: user.id,
-      role: user.role as RoleName,
+      role: user.role,
       deactivated: Boolean(user.deactivatedAt),
     },
-    change: {
-      role: hasRole ? (body.role as RoleName) : undefined,
-      deactivated: hasDeactivated ? (body.deactivated as boolean) : undefined,
-    },
+    change: { deactivated: body.deactivated },
     activeAdminCount,
   });
   if (refusal) {
     return NextResponse.json({ error: refusal }, { status: 400 });
   }
 
-  const data: { role?: RoleName; deactivatedAt?: Date | null } = {};
-  if (hasRole) data.role = body.role as RoleName;
-  if (hasDeactivated) {
-    data.deactivatedAt = body.deactivated ? new Date() : null;
-  }
+  await db.user.update({
+    where: { id },
+    data: { deactivatedAt: body.deactivated ? new Date() : null },
+  });
 
-  await db.user.update({ where: { id }, data });
-
-  if (hasDeactivated && body.deactivated) {
+  if (body.deactivated) {
     await db.session.deleteMany({ where: { userId: id } });
   }
 

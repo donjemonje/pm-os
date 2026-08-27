@@ -8,7 +8,8 @@ import { UnauthorizedError } from "./workspace";
  * admin-ness comes solely from User.role === PMOS_ADMIN.
  *
  * Deny-by-default: role defaults to USER, so nobody is an admin until
- * promoted (seed script or an existing pmos-admin in /admin/users).
+ * promoted via script (seed-admin.mjs / set-user-role.mjs) — role changes
+ * are deliberately impossible through the UI or API, in every environment.
  *
  * The middleware path gate on /admin is defense-in-depth only — every admin
  * page and /api/admin route must call requireAdminPage()/apiAdmin()
