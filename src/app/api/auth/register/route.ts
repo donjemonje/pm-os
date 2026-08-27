@@ -3,6 +3,7 @@ import {
   createSession,
   registerUser,
   sessionCookieOptions,
+  twoFactorPendingCookieOptions,
 } from "@/lib/auth";
 import { loginDisabledResponse, signupDisabledResponse } from "@/lib/auth-guard";
 
@@ -59,8 +60,9 @@ export async function POST(request: NextRequest) {
       organizationName,
       inviteCode,
     });
+    // New accounts enroll in 2FA immediately — the step is mandatory.
     const token = await createSession(user.id);
-    const response = NextResponse.json({ user });
+    const response = NextResponse.json({ user, twoFactorRequired: true });
     const opts = sessionCookieOptions(token);
     response.cookies.set(opts.name, opts.value, {
       httpOnly: opts.httpOnly,
@@ -69,6 +71,8 @@ export async function POST(request: NextRequest) {
       secure: opts.secure,
       maxAge: opts.maxAge,
     });
+    const pending = twoFactorPendingCookieOptions(true);
+    response.cookies.set(pending.name, pending.value, pending);
     return response;
   } catch (e) {
     const message = e instanceof Error ? e.message : "Registration failed";

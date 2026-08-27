@@ -10,7 +10,12 @@ import {
   isOAuthProvider,
   type OAuthProvider,
 } from "./oauth-providers";
-import { createSession, sessionCookieOptions, signInWithOAuth } from "./auth";
+import {
+  createSession,
+  sessionCookieOptions,
+  signInWithOAuth,
+  twoFactorPendingCookieOptions,
+} from "./auth";
 import { isGoogleLoginDisabled, isLoginDisabled } from "./feature-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
@@ -132,11 +137,13 @@ export async function completeOAuth(provider: string, code: string | null, state
       email: profile.email,
       name: profile.name,
     });
+    // 2FA is mandatory: every OAuth login lands on the TOTP step.
     const token = await createSession(user.id);
     const redirectTo = from?.startsWith("/") ? from : "/";
-    const response = NextResponse.redirect(
-      new URL(redirectTo, process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000")
-    );
+    const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const target = new URL("/login/2fa", base);
+    target.searchParams.set("from", redirectTo);
+    const response = NextResponse.redirect(target);
     clearOAuthCookies(response);
     const opts = sessionCookieOptions(token);
     response.cookies.set(opts.name, opts.value, {
@@ -146,6 +153,8 @@ export async function completeOAuth(provider: string, code: string | null, state
       secure: opts.secure,
       maxAge: opts.maxAge,
     });
+    const pending = twoFactorPendingCookieOptions(true);
+    response.cookies.set(pending.name, pending.value, pending);
     return response;
   } catch (e) {
     const message = e instanceof Error ? e.message : "oauth_signin_failed";
