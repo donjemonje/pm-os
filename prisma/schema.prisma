@@ -32,18 +32,25 @@ enum UserRole {
 }
 
 model User {
-  id             String        @id @default(uuid())
-  email          String        @unique
-  passwordHash   String?
-  name           String
-  role           UserRole      @default(USER)
+  id               String        @id @default(uuid())
+  email            String        @unique
+  passwordHash     String?
+  name             String
+  role             UserRole      @default(USER)
   /// Soft-deactivation: set = user cannot log in and active sessions are
   /// rejected. Cleared to reactivate. No hard delete from Admin.
-  deactivatedAt  DateTime?
-  organizationId String?
-  organization   Organization? @relation(fields: [organizationId], references: [id])
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  deactivatedAt    DateTime?
+  /// AES-256-GCM encrypted TOTP secret; null until 2FA enrollment starts.
+  totpSecretEnc    String?
+  /// Set when the user confirms their first TOTP code; null = 2FA off.
+  totpEnabledAt    DateTime?
+  /// Highest TOTP time-step already consumed — codes are strictly single-use.
+  /// Recovery is admin-side (clear the totp fields), not backup codes.
+  totpLastUsedStep Int?
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id])
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   sessions     Session[]
   accounts     OAuthAccount[]
@@ -65,12 +72,15 @@ model OAuthAccount {
 }
 
 model Session {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash         String   @unique
+  expiresAt         DateTime
+  /// False until the TOTP challenge passes; only checked when the user has
+  /// 2FA enabled, so pre-2FA sessions stay valid.
+  twoFactorVerified Boolean  @default(false)
+  createdAt         DateTime @default(now())
 
   @@index([userId])
 }

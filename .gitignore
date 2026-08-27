@@ -13,8 +13,17 @@ node_modules/
 .env
 .env.*
 dev-apphosting.yaml
+test-apphosting.yaml
+
+# playwright output
+test-results/
+playwright-report/
 
 
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+# Playwright
+test-results/
+tests/e2e/artifacts/

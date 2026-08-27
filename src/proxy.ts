@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const SESSION_COOKIE = "pmos_session";
+// UX hint set at login when the TOTP challenge is still owed; the real gate is
+// server-side in getCurrentUser, which rejects unverified sessions.
+const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 
 const PUBLIC_PATHS = ["/", "/login", "/register"];
 
@@ -24,7 +27,7 @@ function isAdminPath(pathname: string): boolean {
   );
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (
@@ -36,6 +39,20 @@ export function middleware(request: NextRequest) {
   }
 
   const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
+  const isApi = pathname.startsWith("/api/");
+
+  // Pending TOTP challenge routes every page — /admin included — to
+  // /login/2fa. APIs skip the redirect; getCurrentUser rejects them anyway.
+  const twoFactorPending = Boolean(
+    request.cookies.get(TWO_FACTOR_PENDING_COOKIE)?.value
+  );
+  if (hasSession && twoFactorPending && !isApi && pathname !== "/login/2fa") {
+    const challenge = new URL("/login/2fa", request.url);
+    if (!isPublicPath(pathname)) {
+      challenge.searchParams.set("from", pathname);
+    }
+    return NextResponse.redirect(challenge);
+  }
 
   // PM-OS Admin rides the main app session. This is defense-in-depth only —
   // it can't validate the token or the PMOS_ADMIN role (no DB on the edge),
@@ -43,7 +60,7 @@ export function middleware(request: NextRequest) {
   // requireAdminPage()/apiAdmin().
   if (isAdminPath(pathname)) {
     if (!hasSession) {
-      if (pathname.startsWith("/api/")) {
+      if (isApi) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
       const login = new URL("/login", request.url);
@@ -52,8 +69,6 @@ export function middleware(request: NextRequest) {
     }
     return NextResponse.next();
   }
-
-  const isApi = pathname.startsWith("/api/");
 
   if (!hasSession && !isPublicPath(pathname) && !isApi) {
     const login = new URL("/login", request.url);

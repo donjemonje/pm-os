@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
 import { Chakra_Petch, Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import {
+  getCurrentUser,
+  getOrganizationSummary,
+  userInitials,
+} from "@/lib/auth";
 import { brand } from "@/lib/brand";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { Shell } from "@/components/layout/Shell";
@@ -39,14 +44,36 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The shell renders with the user's details already in place — pages never
+  // show a sidebar that is still "loading" its identity. getCurrentUser is
+  // request-cached, so the per-org ideas flag reuses the same session lookup.
+  const user = await getCurrentUser();
   const ideasEnabled = await ideasEnabledForCurrentUser();
+  const organization = user?.organizationId
+    ? await getOrganizationSummary(user.organizationId)
+    : null;
+  const menuUser = user
+    ? {
+        email: user.email,
+        name: user.name,
+        initials: userInitials(user.name, user.email),
+        organizationName: user.organizationName,
+      }
+    : null;
+
   return (
     <html
       lang="en"
       className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable}`}
     >
       <body className="font-body antialiased">
-        <Shell ideasEnabled={ideasEnabled}>{children}</Shell>
+        <Shell
+          ideasEnabled={ideasEnabled}
+          user={menuUser}
+          organization={organization}
+        >
+          {children}
+        </Shell>
       </body>
     </html>
   );

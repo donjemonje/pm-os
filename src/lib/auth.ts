@@ -1,9 +1,24 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { db } from "./db";
 import { isSignupAllowed } from "./feature-flags";
+import {
+  decryptTotpSecret,
+  encryptTotpSecret,
+  generateTotpSecret,
+  isFreshTotpStep,
+  verifyTotpCode,
+} from "./two-factor";
 
 export const SESSION_COOKIE = "pmos_session";
+/**
+ * UX marker only — set alongside the session cookie when login still needs the
+ * TOTP challenge, so middleware (which can't reach the DB) can route pages to
+ * /login/2fa. Security never depends on it: getCurrentUser rejects unverified
+ * sessions regardless.
+ */
+export const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 const SESSION_DAYS = 30;
 
 export type AuthUser = {
@@ -172,7 +187,58 @@ export async function getSessionToken(): Promise<string | undefined> {
   return cookieStore.get(SESSION_COOKIE)?.value;
 }
 
-export async function getCurrentUser(): Promise<AuthUser | null> {
+async function findCurrentSessionWithUser() {
+  const token = await getSessionToken();
+  if (!token) return null;
+  const session = await db.session.findUnique({
+    where: { tokenHash: hashToken(token) },
+    include: { user: true },
+  });
+  if (!session || session.expiresAt < new Date()) return null;
+  // Deactivation also invalidates half-completed 2FA challenge sessions:
+  // a deactivated user can neither read enrollment state nor pass the
+  // challenge. (Deactivating already deletes sessions; this covers races.)
+  if (session.user.deactivatedAt) return null;
+  return session;
+}
+
+export type TwoFactorState =
+  | { status: "none" }
+  | { status: "verified" }
+  /** Enrolled — the login challenge is owed. */
+  | { status: "challenge" }
+  /** Not enrolled yet — mandatory enrollment; secret is the base32 to show. */
+  | { status: "enroll"; secret: string; email: string };
+
+/**
+ * State of the mandatory 2FA step for the current request's session, used by
+ * the /login/2fa page. In enroll state this creates (or reuses) the pending
+ * secret so a page refresh doesn't invalidate an already-scanned QR.
+ */
+export async function getTwoFactorState(): Promise<TwoFactorState> {
+  const session = await findCurrentSessionWithUser();
+  if (!session) return { status: "none" };
+  if (session.twoFactorVerified) return { status: "verified" };
+  if (session.user.totpEnabledAt) return { status: "challenge" };
+
+  if (session.user.totpSecretEnc) {
+    return {
+      status: "enroll",
+      secret: decryptTotpSecret(session.user.totpSecretEnc),
+      email: session.user.email,
+    };
+  }
+  const secret = generateTotpSecret();
+  await db.user.update({
+    where: { id: session.user.id },
+    data: { totpSecretEnc: encryptTotpSecret(secret) },
+  });
+  return { status: "enroll", secret, email: session.user.email };
+}
+
+// cache(): one session lookup per request even though both the root layout
+// and the page (or API helper) resolve the current user.
+export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   const token = await getSessionToken();
   if (!token) return null;
 
@@ -194,7 +260,68 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     return null;
   }
 
+  // The 2FA gate for every page and API route: 2FA is mandatory, so a session
+  // that hasn't passed the TOTP step is treated as unauthenticated.
+  if (!session.twoFactorVerified) {
+    return null;
+  }
+
   return toAuthUser(session.user);
+});
+
+export function twoFactorPendingCookieOptions(pending: boolean) {
+  return {
+    name: TWO_FACTOR_PENDING_COOKIE,
+    value: pending ? "1" : "",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: "/",
+    secure: process.env.NODE_ENV === "production",
+    // Lives as long as the session: an abandoned challenge keeps routing to
+    // /login/2fa instead of stranding a half-authenticated session.
+    maxAge: pending ? SESSION_DAYS * 24 * 60 * 60 : 0,
+  };
+}
+
+export type TwoFactorChallengeResult =
+  | { status: "ok" }
+  | { status: "no_session" }
+  | { status: "no_setup" }
+  | { status: "invalid" };
+
+/**
+ * Verifies the mandatory login-time TOTP step for the current request's
+ * session. Handles both cases: an enrolled user passing the challenge, and a
+ * first-time user confirming the secret they just scanned (which completes
+ * enrollment). Marks the session verified on success; codes are single-use.
+ */
+export async function verifyTwoFactorChallenge(
+  code: string
+): Promise<TwoFactorChallengeResult> {
+  const session = await findCurrentSessionWithUser();
+  if (!session) return { status: "no_session" };
+  if (session.twoFactorVerified) return { status: "ok" };
+  if (!session.user.totpSecretEnc) return { status: "no_setup" };
+
+  const secret = decryptTotpSecret(session.user.totpSecretEnc);
+  const step = verifyTotpCode(secret, code);
+  if (step === null || !isFreshTotpStep(step, session.user.totpLastUsedStep)) {
+    return { status: "invalid" };
+  }
+
+  await db.user.update({
+    where: { id: session.user.id },
+    data: {
+      totpLastUsedStep: step,
+      // First successful code completes enrollment.
+      ...(session.user.totpEnabledAt ? {} : { totpEnabledAt: new Date() }),
+    },
+  });
+  await db.session.update({
+    where: { id: session.id },
+    data: { twoFactorVerified: true },
+  });
+  return { status: "ok" };
 }
 
 export async function registerUser(input: {
