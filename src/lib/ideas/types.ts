@@ -19,6 +19,8 @@ export interface ZendeskTicket {
   requester?: string;
   /** Customers the catalog stage matched in the ticket text; names come from the settings catalog. */
   affectedCustomers?: string[];
+  /** Names a PM dismissed from the idea view — kept so the dismissal is reversible. */
+  dismissedCustomers?: string[];
   tags: string[];
   createdAt?: string;
   /** Optional product_line column, used to pre-assign the idea's product. */
@@ -52,8 +54,10 @@ export interface Idea {
   platforms?: string[];
   /** Who filed the supporting tickets — derived from sources, never stored on the idea. */
   reporters?: string[];
-  /** Customers the supporting tickets say are affected — union over sources. */
+  /** Customers the supporting tickets say are affected — union over sources, minus dismissed. */
   customers?: string[];
+  /** Dismissed suggestions, restorable from the drawer. */
+  dismissedCustomers?: string[];
   batch: IdeaBatchStatus;
   decision: IdeaDecision;
   /** Where this idea came from this batch. */

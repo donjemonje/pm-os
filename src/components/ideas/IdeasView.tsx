@@ -979,7 +979,12 @@ export function IdeasView({
             drawerIdea
               ? (action, name) =>
                   void callMutate({
-                    type: action === "approve" ? "approveCustomer" : "dismissCustomer",
+                    type:
+                      action === "approve"
+                        ? "approveCustomer"
+                        : action === "dismiss"
+                          ? "dismissCustomer"
+                          : "undismissCustomer",
                     ideaId: drawerIdea.id,
                     name,
                   })

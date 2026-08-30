@@ -10,6 +10,7 @@ const MUTATION_TYPES = [
   "reassign",
   "approveCustomer",
   "dismissCustomer",
+  "undismissCustomer",
 ];
 
 export async function POST(request: NextRequest) {

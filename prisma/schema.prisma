@@ -280,8 +280,13 @@ model ZendeskTicketRaw {
   requester       String?
   /// Customers the catalog stage matched in the ticket text (from the
   /// Customer catalog). Idea-level lists are derived from sources, so this
-  /// per-ticket verdict is the single source of truth.
+  /// per-ticket verdict is the single source of truth. Never edited by
+  /// review actions — dismissals live in dismissedCustomers so they are
+  /// always reversible.
   affectedCustomers Json     @default("[]")
+  /// Names a PM dismissed from the idea view; subtracted from the derived
+  /// idea list at read time and restorable at any time.
+  dismissedCustomers Json    @default("[]")
   tags            Json       @default("[]")
   productLine     String?
   sourceCreatedAt String?
