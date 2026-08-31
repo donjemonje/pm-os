@@ -531,6 +531,16 @@ export async function mutateIdeas(
           ...mutation.jira.map((key) => ({ ideaId: idea.id, kind: "jira", jiraKey: key })),
         ],
       });
+      // Manually reassigned ticket evidence counts as votes, same as a
+      // pipeline match: the this-batch delta follows the zendesk source count.
+      const oldZen = idea.sources.filter((s) => s.kind === "zendesk").length;
+      const voteDelta = ticketRows.length - oldZen;
+      if (voteDelta !== 0) {
+        await db.idea.update({
+          where: { id: idea.id },
+          data: { newVotes: Math.max(0, idea.newVotes + voteDelta) },
+        });
+      }
       await logEvents(workspaceId, [
         {
           ideaId: idea.id,

@@ -414,7 +414,8 @@ export function IdeasView({
     });
     if (!ok) return;
     setEdit(null);
-    setSelectedFinalId(null);
+    // Keep the edited idea selected so the saved reassignment stays visible.
+    setSelectedFinalId(edit.ideaId);
     setNote("");
   };
 
@@ -694,11 +695,7 @@ export function IdeasView({
                       <button
                         key={label}
                         onClick={() =>
-                          setStatusFilter((prev) =>
-                            prev.includes(label)
-                              ? prev.filter((x) => x !== label)
-                              : [...prev, label]
-                          )
+                          setStatusFilter((prev) => (prev.includes(label) ? [] : [label]))
                         }
                         className={chipClass(statusFilter.includes(label))}
                       >
