@@ -21,8 +21,9 @@ env:
       - BUILD
       - RUNTIME
 
+  # Google SSO is live. Per-org overrides: PM-OS Admin → Enablements → Google SSO.
   - variable: DISABLE_GOOGLE_LOGIN
-    value: "true"
+    value: "false"
     availability:
       - BUILD
       - RUNTIME

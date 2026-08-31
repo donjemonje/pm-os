@@ -22,7 +22,9 @@ env:
       - BUILD
       - RUNTIME
 
-  # --- Auth gates (mirror prod: login on, signup off, Google off) ---
+  # --- Auth gates (login on, signup off; Google pinned OFF in tests — prod
+  # has it on, but tests carry no Google OAuth creds and the pin keeps the
+  # googleSso env default deterministic) ---
   - variable: DISABLE_LOGIN
     value: "false"
     availability:

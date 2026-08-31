@@ -29,6 +29,12 @@ const FLAGS: { key: string; label: string; description: string }[] = [
     label: "Chat",
     description: "PMOS Chat: page, floating panel, and chat APIs.",
   },
+  {
+    key: "googleSso",
+    label: "Google SSO",
+    description:
+      "Sign in with Google for this org's members. Enforced at sign-in; the login-page button follows the env default.",
+  },
 ];
 
 export function OrgEnablements({

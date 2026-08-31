@@ -64,7 +64,7 @@ export function isChatEnabled(): boolean {
 // env default applies. Keys outside ORG_FEATURE_KEYS are rejected by the
 // admin API and ignored here. Managed in PM-OS Admin → Enablements.
 
-export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat"] as const;
+export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat", "googleSso"] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
 
 /** Env-level default for a flag (what applies when the org has no override). */
@@ -76,6 +76,8 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDocsEnabled();
     case "chat":
       return isChatEnabled();
+    case "googleSso":
+      return !isGoogleLoginDisabled();
   }
 }
 

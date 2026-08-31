@@ -16,7 +16,12 @@ import {
   signInWithOAuth,
   twoFactorPendingCookieOptions,
 } from "./auth";
-import { isGoogleLoginDisabled, isLoginDisabled } from "./feature-flags";
+import {
+  envFeatureDefault,
+  isGoogleLoginDisabled,
+  isLoginDisabled,
+  resolveFeature,
+} from "./feature-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
 const OAUTH_PKCE_COOKIE = "pmos_oauth_pkce";
@@ -99,10 +104,6 @@ export async function completeOAuth(provider: string, code: string | null, state
     return loginError("invalid_provider");
   }
 
-  if (provider === "google" && isGoogleLoginDisabled()) {
-    return loginError("google_not_configured");
-  }
-
   if (!code || !state) {
     return loginError("oauth_denied");
   }
@@ -137,6 +138,16 @@ export async function completeOAuth(provider: string, code: string | null, state
       email: profile.email,
       name: profile.name,
     });
+    // Per-org Google SSO gate: enforced here, not on the login page — the org
+    // is only known once the profile resolves to a user. No session is issued.
+    if (
+      provider === "google" &&
+      !resolveFeature(user.organizationFeatures, "googleSso", envFeatureDefault("googleSso"))
+    ) {
+      const response = loginError("google_sso_disabled");
+      clearOAuthCookies(response);
+      return response;
+    }
     // 2FA is mandatory: every OAuth login lands on the TOTP step.
     const token = await createSession(user.id);
     const redirectTo = from?.startsWith("/") ? from : "/";
