@@ -19,9 +19,10 @@ export default async function IdeasPage() {
     orderBy: { name: "asc" as const },
     select: { name: true },
   };
-  const [productLines, platforms] = await Promise.all([
+  const [productLines, platforms, customers] = await Promise.all([
     db.productLine.findMany(listArgs),
     db.platform.findMany(listArgs),
+    db.customer.findMany(listArgs),
   ]);
 
   return (
@@ -29,6 +30,7 @@ export default async function IdeasPage() {
       <IdeasView
         catalogProducts={productLines.map((l) => l.name)}
         catalogPlatforms={platforms.map((p) => p.name)}
+        catalogCustomers={customers.map((c) => c.name)}
       />
     </AppShell>
   );

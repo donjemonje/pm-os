@@ -47,6 +47,29 @@ const KINDS: Record<string, ListOps> = {
     remove: async (workspaceId, id) =>
       (await db.productLine.deleteMany({ where: { id, workspaceId } })).count,
   },
+  customers: {
+    list: (workspaceId) =>
+      db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: ITEM_SELECT }),
+    nameTaken: async (workspaceId, name, excludeId) =>
+      Boolean(
+        await db.customer.findFirst({
+          where: {
+            workspaceId,
+            name: { equals: name, mode: "insensitive" },
+            ...(excludeId ? { id: { not: excludeId } } : {}),
+          },
+          select: { id: true },
+        })
+      ),
+    exists: async (workspaceId, id) =>
+      Boolean(await db.customer.findFirst({ where: { id, workspaceId }, select: { id: true } })),
+    create: (workspaceId, name, description) =>
+      db.customer.create({ data: { workspaceId, name, description } }),
+    update: (id, name, description) =>
+      db.customer.update({ where: { id }, data: { name, description } }),
+    remove: async (workspaceId, id) =>
+      (await db.customer.deleteMany({ where: { id, workspaceId } })).count,
+  },
   platforms: {
     list: (workspaceId) =>
       db.platform.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: ITEM_SELECT }),

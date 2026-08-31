@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpRight, Check, ChevronLeft, ChevronRight, ExternalLink, X } from "lucide-react";
+import {
+  ArrowUpRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import { badgeOf, needsApproval, scoreOf, votesLabel } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
 
@@ -14,6 +22,10 @@ interface IdeaDrawerProps {
   initialSource?: SourceSel | null;
   ticketsByKey: Map<string, ZendeskTicket>;
   jiraByKey: Map<string, JiraSource>;
+  /** Customer catalog names — chips for names outside it render as suggestions. */
+  customerCatalog?: string[];
+  /** Approve adds the suggested customer to the catalog; dismiss hides it on this idea (reversible); undismiss restores it. */
+  onCustomerAction?: (action: "approve" | "dismiss" | "undismiss", name: string) => void;
   onClose: () => void;
   onToggleApprove?: () => void;
   onSave?: (patch: { title: string; details: string; manual: number | null }) => void;
@@ -31,6 +43,8 @@ export function IdeaDrawer({
   initialSource,
   ticketsByKey,
   jiraByKey,
+  customerCatalog = [],
+  onCustomerAction,
   onClose,
   onToggleApprove,
   onSave,
@@ -42,6 +56,7 @@ export function IdeaDrawer({
   const [editTitle, setEditTitle] = useState("");
   const [editManual, setEditManual] = useState("");
   const [editDetails, setEditDetails] = useState("");
+  const [showDismissed, setShowDismissed] = useState(false);
 
   const ticket = srcSel?.kind === "zen" ? ticketsByKey.get(srcSel.key) : undefined;
   const jiraSrc = srcSel?.kind === "jira" ? jiraByKey.get(srcSel.key) : undefined;
@@ -194,7 +209,9 @@ export function IdeaDrawer({
 
           {!viewingSource &&
             idea &&
-            (idea.products.length > 0 || (idea.platforms ?? []).length > 0) && (
+            (idea.products.length > 0 ||
+              (idea.platforms ?? []).length > 0 ||
+              (idea.customers ?? []).length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {idea.products.map((p) => (
                   <span
@@ -213,8 +230,84 @@ export function IdeaDrawer({
                     {p}
                   </span>
                 ))}
+                {/* Affected customers from the supporting tickets; teal when
+                    cataloged, amber suggestion with approve/dismiss when not. */}
+                {(idea.customers ?? []).map((c) => {
+                  const suggested = !customerCatalog.some(
+                    (k) => k.toLowerCase() === c.toLowerCase()
+                  );
+                  if (!suggested) {
+                    return (
+                      <span
+                        key={`customer-${c}`}
+                        className="rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                      >
+                        {c}
+                      </span>
+                    );
+                  }
+                  return (
+                    <span
+                      key={`customer-${c}`}
+                      title="Suggested customer — not in the catalog yet"
+                      className="inline-flex items-center gap-1 rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                    >
+                      {c}
+                      {onCustomerAction && (
+                        <>
+                          <button
+                            title="Add to the Customers catalog"
+                            onClick={() => onCustomerAction("approve", c)}
+                            className="flex rounded-sm p-px text-amber-700 hover:bg-[#daf0e2] hover:text-[#1f8a53]"
+                          >
+                            <Check size={11} strokeWidth={3} />
+                          </button>
+                          <button
+                            title="Dismiss this suggestion"
+                            onClick={() => onCustomerAction("dismiss", c)}
+                            className="flex rounded-sm p-px text-amber-700 hover:bg-[#fdeef2] hover:text-[#c94266]"
+                          >
+                            <X size={11} strokeWidth={3} />
+                          </button>
+                        </>
+                      )}
+                    </span>
+                  );
+                })}
               </div>
             )}
+
+          {/* Dismissed suggestions stay reachable — a dismiss is a review
+              decision, not a deletion, so it can be reversed any time. */}
+          {!viewingSource && idea && (idea.dismissedCustomers ?? []).length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setShowDismissed((v) => !v)}
+                className="font-mono text-[10.5px] font-medium text-[#9aa8be] hover:text-foreground"
+              >
+                {showDismissed ? "▾" : "▸"} {(idea.dismissedCustomers ?? []).length} dismissed
+                customer{(idea.dismissedCustomers ?? []).length === 1 ? "" : "s"}
+              </button>
+              {showDismissed &&
+                (idea.dismissedCustomers ?? []).map((c) => (
+                  <span
+                    key={`dismissed-${c}`}
+                    className="inline-flex items-center gap-1 rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496]"
+                  >
+                    <span className="line-through">{c}</span>
+                    {onCustomerAction && (
+                      <button
+                        title="Restore this customer"
+                        onClick={() => onCustomerAction("undismiss", c)}
+                        className="flex rounded-sm p-px text-[#7a8496] hover:bg-[#daf0e2] hover:text-[#1f8a53]"
+                      >
+                        <RotateCcw size={10} strokeWidth={2.5} />
+                      </button>
+                    )}
+                  </span>
+                ))}
+            </div>
+          )}
 
           {stats.length > 0 && (
             <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))" }}>
@@ -254,6 +347,40 @@ export function IdeaDrawer({
                   </span>
                 )}
                 {ticket.requester && <span>Requester: {ticket.requester}</span>}
+                {(ticket.affectedCustomers ?? []).length > 0 && (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    Affected customers:
+                    {(ticket.affectedCustomers ?? []).map((c) => {
+                      const dismissed = (ticket.dismissedCustomers ?? []).some(
+                        (k) => k.toLowerCase() === c.toLowerCase()
+                      );
+                      const suggested = !customerCatalog.some(
+                        (k) => k.toLowerCase() === c.toLowerCase()
+                      );
+                      return (
+                        <span
+                          key={`ticket-customer-${c}`}
+                          title={
+                            dismissed
+                              ? "Dismissed on the idea — restorable there"
+                              : suggested
+                                ? "Suggested customer — review on the idea"
+                                : undefined
+                          }
+                          className={
+                            dismissed
+                              ? "rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496] line-through"
+                              : suggested
+                                ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                                : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                          }
+                        >
+                          {c}
+                        </span>
+                      );
+                    })}
+                  </span>
+                )}
                 {ticket.createdAt && <span>Created: {ticket.createdAt}</span>}
                 {ticket.tags.length > 0 && <span>Tags: {ticket.tags.join(", ")}</span>}
               </div>
@@ -315,6 +442,11 @@ export function IdeaDrawer({
                   {idea.details}
                 </div>
               </div>
+              {(idea.reporters ?? []).length > 0 && (
+                <div className="text-xs text-muted">
+                  Reported by {(idea.reporters ?? []).join(", ")}
+                </div>
+              )}
               {sourceEntries.length > 0 && (
                 <div>
                   <div className={`${MONO_LABEL} mb-2`}>Sources · {sourceEntries.length}</div>

@@ -107,11 +107,28 @@ model Workspace {
   reviewEvents          ReviewEvent[]
   productLines          ProductLine[]
   platforms             Platform[]
+  customers             Customer[]
 }
 
 /// Workspace-scoped product-line catalog, managed in Settings → Ideas.
 /// Idea.products stays plain strings; this is the reference list.
 model ProductLine {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String    @default("")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+/// Workspace-scoped customer catalog, managed in Settings → Ideas. The
+/// catalog stage tags tickets with affected customers from this list only —
+/// a closed vocabulary, so idea views never show invented customer names.
+model Customer {
   id          String    @id @default(uuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -261,6 +278,15 @@ model ZendeskTicketRaw {
   subject         String
   body            String
   requester       String?
+  /// Customers the catalog stage matched in the ticket text (from the
+  /// Customer catalog). Idea-level lists are derived from sources, so this
+  /// per-ticket verdict is the single source of truth. Never edited by
+  /// review actions — dismissals live in dismissedCustomers so they are
+  /// always reversible.
+  affectedCustomers Json     @default("[]")
+  /// Names a PM dismissed from the idea view; subtracted from the derived
+  /// idea list at read time and restorable at any time.
+  dismissedCustomers Json    @default("[]")
   tags            Json       @default("[]")
   productLine     String?
   sourceCreatedAt String?
