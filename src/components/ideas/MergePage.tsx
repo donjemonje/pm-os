@@ -15,7 +15,7 @@ interface MergePageProps {
   platformFilter: string[];
   customerFilter: string[];
   pendingOnly: boolean;
-  mergeFilter: "Merge" | "Single";
+  mergeFilter: "Merge" | "Single" | "Unchanged";
   edit: MergeEdit | null;
   selectedFinalId: string | "auto" | null;
   onStartEdit: (id: string) => void;
@@ -59,8 +59,10 @@ export function MergePage({
 }: MergePageProps) {
   const matches = (i: Idea): boolean => {
     // Same rule as the Final page: the mostly-unchanged Jira backlog is
-    // noise here — unchanged ideas stay out of the merge view.
-    if (i.batch === "unchanged") return false;
+    // noise here — unchanged ideas show only under their own chip.
+    if (mergeFilter === "Unchanged") {
+      if (i.batch !== "unchanged") return false;
+    } else if (i.batch === "unchanged") return false;
     const q = query.trim().toLowerCase();
     if (q && !i.title.toLowerCase().includes(q)) return false;
     if (productFilter.length > 0 && !i.products.some((p) => productFilter.includes(p))) return false;
@@ -77,7 +79,12 @@ export function MergePage({
   const finals = ideas
     .filter(matches)
     .map((i) => ({ idea: i, count: srcCount(i) }))
-    .filter((c) => c.count === 0 || (mergeFilter === "Merge" ? c.count > 1 : c.count === 1))
+    .filter(
+      (c) =>
+        mergeFilter === "Unchanged" ||
+        c.count === 0 ||
+        (mergeFilter === "Merge" ? c.count > 1 : c.count === 1)
+    )
     .sort((a, b) => {
       if (b.count !== a.count) return b.count - a.count;
       const av = scoreOf(a.idea).value ?? -1;
@@ -108,9 +115,15 @@ export function MergePage({
       const src = all.find((s) => s.key === key);
       if (!src) return;
       const owners = ownersOf(key);
-      // Sources backing only unchanged ideas are hidden with them; edit mode
-      // shows the full pool so any backlog item can still be attached.
-      if (!edit && owners.length > 0 && owners.every((o) => o.batch === "unchanged")) return;
+      // Sources backing only unchanged ideas are hidden with them; the
+      // Unchanged chip and edit mode (attach-anything) show the full pool.
+      if (
+        !edit &&
+        mergeFilter !== "Unchanged" &&
+        owners.length > 0 &&
+        owners.every((o) => o.batch === "unchanged")
+      )
+        return;
       rows.push({
         key,
         id: src.id,
