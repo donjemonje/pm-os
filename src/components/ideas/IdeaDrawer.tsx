@@ -10,7 +10,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import { badgeOf, scoreOf, votesLabel } from "@/lib/ideas/idea";
+import { badgeOf, needsApproval, scoreOf, votesLabel } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
 
 type SourceSel = { kind: "zen" | "jira"; key: string };
@@ -496,17 +496,19 @@ export function IdeaDrawer({
               </>
             ) : (
               <>
-                <button
-                  onClick={() => onToggleApprove?.()}
-                  className={
-                    idea.decision === "pending"
-                      ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                      : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                  }
-                >
-                  <Check size={13} strokeWidth={3} />
-                  {idea.decision === "pending" ? "Approve" : "Approved"}
-                </button>
+                {needsApproval(idea) && (
+                  <button
+                    onClick={() => onToggleApprove?.()}
+                    className={
+                      idea.decision === "pending"
+                        ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
+                        : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
+                    }
+                  >
+                    <Check size={13} strokeWidth={3} />
+                    {idea.decision === "pending" ? "Approve" : "Approved"}
+                  </button>
+                )}
                 {onMerge && (
                   <button
                     onClick={onMerge}

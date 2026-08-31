@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { catalogTickets } from "./catalog";
 import { fetchJiraLiveSources } from "./jira-sync";
+import { matchTickets } from "./match";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
 
 /**
@@ -35,6 +36,8 @@ export interface ImportTicketInput {
 export interface ImportSummary {
   imported: number;
   frs: number;
+  /** FRs merged into an existing Jira idea instead of becoming new ideas. */
+  matched: number;
   bugs: number;
   needsDetails: number;
   duplicates: number;
@@ -155,9 +158,11 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
 }
 
 /**
- * One import: dedupe against the raw store, catalog the new tickets (only
- * FRs become ideas), then resync Jira live state (Jira-origin ideas are
- * replaced wholesale, entering as Unchanged).
+ * One import: dedupe against the raw store, resync Jira live state, catalog
+ * the new tickets (only FRs become ideas), then match each FR against the
+ * live Jira ideas (PRD step 3). A matched FR merges into the existing idea
+ * as evidence — a vote, an Updated status, optional enrichment — instead of
+ * becoming a new idea.
  */
 export async function importBatch(
   workspaceId: string,
@@ -171,6 +176,10 @@ export async function importBatch(
   const fresh = inputs.filter((t) => !known.has(t.key));
   const duplicates = inputs.length - fresh.length;
 
+  // Jira live state is fetched before any judgment: FRs are matched against
+  // the same backlog this batch will display.
+  const jira = await fetchJiraLiveSources(workspaceId);
+
   // LLM judgments happen before any DB writes — the ledger records each
   // verdict as it lands, so a failure here loses nothing.
   const catalog = await catalogTickets(
@@ -178,6 +187,24 @@ export async function importBatch(
     fresh.map(({ key, subject, body, requester, tags }) => ({ key, subject, body, requester, tags }))
   );
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
+
+  const match = await matchTickets(
+    workspaceId,
+    catalog.results
+      .filter((v) => v.kind === "fr")
+      .map((v) => {
+        const input = fresh.find((t) => t.key === v.key);
+        return {
+          key: v.key,
+          subject: input?.subject ?? "",
+          body: input?.body ?? "",
+          productTitle: v.productTitle,
+          productSummary: v.productSummary,
+        };
+      }),
+    jira.connected ? jira.sources : []
+  );
+  const matchByKey = new Map(match.results.map((m) => [m.key, m]));
 
   // Catalog casing wins wherever a name (from the model or the CSV's
   // dedicated field) matches a cataloged customer; unmatched names stay
@@ -190,7 +217,82 @@ export async function importBatch(
 
   const batch = await db.ideaBatch.create({ data: { workspaceId } });
 
+  // Snapshots are replaced wholesale; Jira-origin ideas are upserted by key
+  // so evidence matched in earlier batches survives the resync.
+  if (jira.connected) {
+    await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
+    await db.jiraIdeaSnapshot.createMany({
+      data: jira.sources.map((s) => ({
+        workspaceId,
+        key: s.key,
+        title: s.title,
+        body: s.body,
+        status: s.status ?? null,
+        url: s.url ?? null,
+        components: s.products as Prisma.InputJsonValue,
+      })),
+    });
+
+    const jiraIdeas = await db.idea.findMany({
+      where: { workspaceId, origin: "jira" },
+      include: { sources: true },
+    });
+    const ideaByJiraKey = new Map(
+      jiraIdeas.flatMap((i) => {
+        const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
+        return key ? [[key, i] as const] : [];
+      })
+    );
+    const liveKeys = new Set(jira.sources.map((s) => s.key));
+    const gone = jiraIdeas.filter((i) => {
+      const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
+      return !key || !liveKeys.has(key);
+    });
+    if (gone.length > 0) {
+      await db.idea.deleteMany({ where: { id: { in: gone.map((i) => i.id) } } });
+    }
+
+    for (const s of jira.sources) {
+      const cur = ideaByJiraKey.get(s.key);
+      if (cur) {
+        // Title and products track live Jira; details stay local — they may
+        // carry enrichment or PM edits, and nothing is written back yet. On
+        // a batch with new data, last batch's vote delta becomes existing
+        // and the idea re-enters as Unchanged until a match says otherwise.
+        const rollover = fresh.length > 0;
+        await db.idea.update({
+          where: { id: cur.id },
+          data: {
+            title: s.title,
+            products: s.products as Prisma.InputJsonValue,
+            ...(rollover
+              ? {
+                  existingVotes: cur.existingVotes + cur.newVotes,
+                  newVotes: 0,
+                  batchStatus: "unchanged",
+                }
+              : {}),
+          },
+        });
+      } else {
+        await db.idea.create({
+          data: {
+            workspaceId,
+            title: s.title,
+            details: s.body,
+            products: s.products as Prisma.InputJsonValue,
+            batchStatus: "unchanged",
+            decision: "pending",
+            origin: "jira",
+            sources: { create: [{ kind: "jira", jiraKey: s.key }] },
+          },
+        });
+      }
+    }
+  }
+
   let frs = 0;
+  let matched = 0;
   let bugs = 0;
   let needsDetails = 0;
   for (const input of fresh) {
@@ -220,6 +322,32 @@ export async function importBatch(
     else if (verdict?.kind === "needs_details") needsDetails++;
     else if (verdict?.kind === "fr") {
       frs++;
+      const m = matchByKey.get(input.key);
+      const target = m?.matchedKey
+        ? await db.idea.findFirst({
+            where: {
+              workspaceId,
+              origin: "jira",
+              sources: { some: { kind: "jira", jiraKey: m.matchedKey } },
+            },
+          })
+        : null;
+      if (target) {
+        // Matched FR: evidence on the existing idea, never a new one. The
+        // idea re-enters review as Updated.
+        matched++;
+        await db.idea.update({
+          where: { id: target.id },
+          data: {
+            newVotes: { increment: 1 },
+            batchStatus: "updated",
+            decision: "pending",
+            ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
+            sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
+          },
+        });
+        continue;
+      }
       // Model assignment wins; the CSV product_line column is only a fallback
       // when the model returned nothing at all.
       const products =
@@ -247,45 +375,14 @@ export async function importBatch(
     }
   }
 
-  // Jira live state — replace snapshots and Jira-origin ideas wholesale.
-  const jira = await fetchJiraLiveSources(workspaceId);
-  if (jira.connected) {
-    await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
-    await db.jiraIdeaSnapshot.createMany({
-      data: jira.sources.map((s) => ({
-        workspaceId,
-        key: s.key,
-        title: s.title,
-        body: s.body,
-        status: s.status ?? null,
-        url: s.url ?? null,
-        components: s.products as Prisma.InputJsonValue,
-      })),
-    });
-    await db.idea.deleteMany({ where: { workspaceId, origin: "jira" } });
-    for (const s of jira.sources) {
-      await db.idea.create({
-        data: {
-          workspaceId,
-          title: s.title,
-          details: s.body,
-          products: s.products as Prisma.InputJsonValue,
-          batchStatus: "unchanged",
-          decision: "pending",
-          origin: "jira",
-          sources: { create: [{ kind: "jira", jiraKey: s.key }] },
-        },
-      });
-    }
-  }
-
   const summary: ImportSummary = {
     imported: fresh.length,
     frs,
+    matched,
     bugs,
     needsDetails,
     duplicates,
-    called: catalog.called,
+    called: catalog.called + match.called,
     jiraConnected: jira.connected,
     jiraCount: jira.sources.length,
   };
@@ -331,6 +428,15 @@ export async function mutateIdeas(
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
       });
+      // Approval-exempt ideas carry zero changes for Jira — approving one
+      // would inject a no-op, so the server refuses it outright.
+      if (
+        mutation.decision === "reviewed" &&
+        idea &&
+        APPROVAL_EXEMPT.includes(idea.batchStatus)
+      ) {
+        break;
+      }
       if (idea && idea.decision !== "injected") {
         await db.idea.update({
           where: { id: idea.id },
@@ -425,6 +531,16 @@ export async function mutateIdeas(
           ...mutation.jira.map((key) => ({ ideaId: idea.id, kind: "jira", jiraKey: key })),
         ],
       });
+      // Manually reassigned ticket evidence counts as votes, same as a
+      // pipeline match: the this-batch delta follows the zendesk source count.
+      const oldZen = idea.sources.filter((s) => s.kind === "zendesk").length;
+      const voteDelta = ticketRows.length - oldZen;
+      if (voteDelta !== 0) {
+        await db.idea.update({
+          where: { id: idea.id },
+          data: { newVotes: Math.max(0, idea.newVotes + voteDelta) },
+        });
+      }
       await logEvents(workspaceId, [
         {
           ideaId: idea.id,
