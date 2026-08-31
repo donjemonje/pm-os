@@ -182,7 +182,7 @@ export function IdeasView({
   const [filterResetKey, setFilterResetKey] = useState(0);
 
   const [page, setPage] = useState<"final" | "merge">("final");
-  const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single">("Merge");
+  const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single" | "Unchanged">("Merge");
   const [edit, setEdit] = useState<MergeEdit | null>(null);
   const [selectedFinalId, setSelectedFinalId] = useState<string | "auto" | null>("auto");
 
@@ -679,7 +679,7 @@ export function IdeasView({
               <span className={`${MONO_LABEL} w-[99px] shrink-0 pt-1.5`}>Import Status</span>
               <div className="flex flex-wrap items-center gap-1.5">
                 {page === "merge"
-                  ? (["Merge", "Single"] as const).map((label) => (
+                  ? (["Merge", "Single", "Unchanged"] as const).map((label) => (
                       <button
                         key={label}
                         onClick={() => {
