@@ -267,7 +267,13 @@ test.describe("Ideas — customers & reporters", () => {
       .getByPlaceholder(/aliases or tier/)
       .fill("QA fixture — settings CRUD");
     await panel.getByRole("button", { name: "Add" }).click();
-    await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toBeVisible();
+    // 15s: first hit on the customers API — local runs `next dev`, and the
+    // on-demand route compile can hold the POST past the default 5s expect
+    // timeout (seen 2026-08-31; form correctly disabled mid-flight, product
+    // fine). Same timing-by-design class as the TOTP window waits.
+    await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
     await expect(panel.getByText("QA fixture — settings CRUD")).toBeVisible();
 
     // Persisted, not just optimistic UI.
