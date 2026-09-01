@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { IdeasView } from "@/components/ideas/IdeasView";
 import { db } from "@/lib/db";
-import { ideasEnabledForCurrentUser } from "@/lib/org-features";
+import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 
 export const metadata: Metadata = {
@@ -13,6 +13,7 @@ export const metadata: Metadata = {
 export default async function IdeasPage() {
   const user = await requireUserPage("/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
+  const undoEnabled = await featureEnabledForCurrentUser("ideasUndo");
   const workspace = await getOrCreateWorkspace();
   const listArgs = {
     where: { workspaceId: workspace.id },
@@ -41,6 +42,7 @@ export default async function IdeasPage() {
         catalogPlatforms={platforms.map((p) => p.name)}
         catalogCustomers={customers.map((c) => c.name)}
         defaultProducts={defaultProducts}
+        undoEnabled={undoEnabled}
       />
     </AppShell>
   );

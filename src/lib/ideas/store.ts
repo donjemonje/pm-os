@@ -128,7 +128,7 @@ function toClientIdea(row: IdeaRow): Idea {
 }
 
 export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
-  const [ticketRows, snapshotRows, ideaRows, customerRows] = await Promise.all([
+  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows] = await Promise.all([
     db.zendeskTicketRaw.findMany({
       where: { workspaceId },
       orderBy: [{ importedAt: "asc" }, { id: "asc" }],
@@ -140,7 +140,15 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: { name: true } }),
+    db.ideasPushUndo.findMany({
+      where: { workspaceId },
+      select: { ideaId: true, action: true, jiraKey: true },
+    }),
   ]);
+
+  const undoByIdea = new Map(
+    undoRows.map((u) => [u.ideaId, { action: u.action as "create" | "update", jiraKey: u.jiraKey }])
+  );
 
   return {
     tickets: ticketRows.map(toClientTicket),
@@ -153,7 +161,11 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       url: s.url ?? undefined,
       products: (s.components as string[]) ?? [],
     })),
-    ideas: ideaRows.map(toClientIdea),
+    ideas: ideaRows.map((row) => {
+      const idea = toClientIdea(row);
+      const undo = undoByIdea.get(row.id);
+      return undo ? { ...idea, undoable: undo } : idea;
+    }),
     customerCatalog: customerRows.map((c) => c.name),
   };
 }

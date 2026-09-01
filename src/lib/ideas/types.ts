@@ -62,6 +62,8 @@ export interface Idea {
   /** For Updated ideas: what this import did (votes, enrichment, added metadata). */
   batchChanges?: string[];
   decision: IdeaDecision;
+  /** Set while this idea's write from the LAST merge is still undoable. */
+  undoable?: { action: "create" | "update"; jiraKey: string };
   /** Where this idea came from this batch. */
   origin: "zendesk" | "jira";
   /** Computed score — null until the scoring pipeline exists. */

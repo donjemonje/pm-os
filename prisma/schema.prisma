@@ -117,6 +117,24 @@ model Workspace {
   productLines          ProductLine[]
   platforms             Platform[]
   customers             Customer[]
+  ideasPushUndos        IdeasPushUndo[]
+}
+
+/// Per-idea undo snapshot for the LAST merge to Jira only — executePush
+/// clears the workspace's rows before writing new ones, and a successful
+/// undo deletes its row. Payload shape: src/lib/ideas/undo.ts.
+model IdeasPushUndo {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ideaId      String    @unique
+  jiraKey     String
+  action      String // "create" | "update"
+  payload     Json
+  commentId   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
 }
 
 /// Workspace-scoped product-line catalog, managed in Settings → Ideas.

@@ -674,10 +674,26 @@ export async function addJiraCommentAdf(
   workspaceId: string,
   issueKey: string,
   body: unknown
-) {
-  await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}/comment`, {
+): Promise<{ id: string | null }> {
+  const data = (await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}/comment`, {
     method: "POST",
     body: JSON.stringify({ body }),
+  })) as { id?: string } | null;
+  return { id: data?.id ?? null };
+}
+
+/** Permanent — Jira Cloud has no trash for issues. Callers confirm first. */
+export async function deleteJiraIssue(workspaceId: string, issueKey: string): Promise<void> {
+  await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}`, { method: "DELETE" });
+}
+
+export async function deleteJiraComment(
+  workspaceId: string,
+  issueKey: string,
+  commentId: string
+): Promise<void> {
+  await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}/comment/${commentId}`, {
+    method: "DELETE",
   });
 }
 

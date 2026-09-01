@@ -158,6 +158,7 @@ export function IdeasView({
   catalogPlatforms = [],
   catalogCustomers = [],
   defaultProducts = [],
+  undoEnabled = false,
 }: {
   /** Product-line names from the settings catalog, merged into the filter options. */
   catalogProducts?: string[];
@@ -167,6 +168,8 @@ export function IdeasView({
   catalogCustomers?: string[];
   /** The signed-in user's own product lines — pre-applied as the filter and merge scope. */
   defaultProducts?: string[];
+  /** "ideasUndo" org flag: per-idea undo of the last merge in the drawer. */
+  undoEnabled?: boolean;
 }) {
   const [tickets, setTickets] = useState<ZendeskTicket[]>([]);
   const [jiraSources, setJiraSources] = useState<JiraSource[]>([]);
@@ -367,6 +370,34 @@ export function IdeasView({
     (idea.customers ?? []).filter(
       (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase())
     );
+
+  // Per-idea undo of the last merge (behind the "ideasUndo" org flag). A
+  // created issue is deleted in Jira — permanent, hence the hard confirm.
+  const undoPush = async (idea: Idea) => {
+    if (!idea.undoable) return;
+    const message =
+      idea.undoable.action === "create"
+        ? `Undo will permanently DELETE ${idea.undoable.jiraKey} in Jira — comments and edits made there are lost. Continue?`
+        : `Undo restores ${idea.undoable.jiraKey} to its pre-merge state. Fields edited in Jira since the merge are left alone. Continue?`;
+    if (!window.confirm(message)) return;
+    setError("");
+    try {
+      const res = await fetch("/api/ideas/undo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ideaId: idea.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Undo failed");
+        return;
+      }
+      applyState(data.state);
+      if (data.warnings?.length > 0) setError(data.warnings.join(" · "));
+    } catch {
+      setError("Undo failed — is the dev server running?");
+    }
+  };
 
   const toggleApprove = (id: string) => {
     const idea = ideas.find((i) => i.id === id);
@@ -1150,6 +1181,9 @@ export function IdeasView({
             setDrawerSrc(null);
           }}
           onToggleApprove={drawerIdea ? () => toggleApprove(drawerIdea.id) : undefined}
+          onUndoPush={
+            undoEnabled && drawerIdea?.undoable ? () => void undoPush(drawerIdea) : undefined
+          }
           onSave={
             drawerIdea
               ? (patch) => void callMutate({ type: "edit", ideaId: drawerIdea.id, ...patch })

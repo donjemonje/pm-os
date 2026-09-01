@@ -62,7 +62,7 @@ function distinct(values: string[]): string[] {
   return Array.from(seen.values());
 }
 
-function normText(s: string): string {
+export function normText(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
@@ -133,17 +133,17 @@ function buildDescription(
 // ————— custom-field value plumbing —————
 
 /** Current value of a select/number custom field from the raw issue payload. */
-function readSingleSelect(v: unknown): string | null {
+export function readSingleSelect(v: unknown): string | null {
   if (v && typeof v === "object" && "value" in v) return String((v as { value: unknown }).value ?? "") || null;
   return null;
 }
-function readMultiSelect(v: unknown): string[] {
+export function readMultiSelect(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v
     .map((o) => (o && typeof o === "object" && "value" in o ? String((o as { value: unknown }).value ?? "") : ""))
     .filter(Boolean);
 }
-function readNumber(v: unknown): number {
+export function readNumber(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
@@ -229,17 +229,39 @@ const PUSH_INCLUDE = {
 } as const;
 type PushIdeaRow = Prisma.IdeaGetPayload<{ include: typeof PUSH_INCLUDE }>;
 
+/** One written custom field's before/after, captured for per-idea undo. */
+export interface UndoFieldSnap {
+  kind: "number" | "single" | "multi";
+  /** number → previous number; single → always null (set-if-empty); multi → previous option values. */
+  before: number | string[] | null;
+  /** Exactly what the push wrote — undo restores only while Jira still holds this. */
+  after: number | string | string[];
+}
+
+/** Everything a per-idea undo of the last merge needs; stored in IdeasPushUndo.payload. */
+export interface PushUndoPayload {
+  summary?: { before: string; after: string };
+  description?: { beforeAdf: unknown; afterTextNorm: string };
+  /** Keyed by Jira field id. */
+  fields: Record<string, UndoFieldSnap>;
+  /** Creates only: the origin the push flipped to "jira". */
+  beforeOrigin?: string;
+}
+
 interface UpdateWrite {
   jiraKey: string;
   summary?: string;
   descriptionAdf?: unknown;
   extraFields?: Record<string, unknown>;
   commentLabels: string[];
+  undo: PushUndoPayload;
 }
 interface CreateWrite {
   summary: string;
   descriptionAdf: unknown;
   extraFields: Record<string, unknown>;
+  /** Idea.origin before markInjected flips it — restored on undo. */
+  beforeOrigin: string;
 }
 interface PushWrites {
   creates: Map<string, CreateWrite>;
@@ -427,11 +449,13 @@ async function derivePlan(
     const votes = row.existingVotes + row.newVotes;
     const changes: PushFieldChange[] = [];
     const extraFields: Record<string, unknown> = {};
-    const write: UpdateWrite = { jiraKey: key, commentLabels: [] };
+    const undoFields: Record<string, UndoFieldSnap> = {};
+    const write: UpdateWrite = { jiraKey: key, commentLabels: [], undo: { fields: undoFields } };
 
     if (row.title !== live.summary) {
       changes.push({ field: "summary", label: ATTRIBUTE_LABELS.summary, from: live.summary, to: row.title });
       write.summary = row.title;
+      write.undo.summary = { before: live.summary, after: row.title };
     }
 
     const desc = buildDescription(config, row.details, ideaTickets(row));
@@ -443,6 +467,7 @@ async function derivePlan(
         to: desc.text,
       });
       write.descriptionAdf = desc.adf;
+      write.undo.description = { beforeAdf: live.descriptionAdf, afterTextNorm: normText(desc.text) };
     }
 
     const attrValue = (attr: MappedAttribute, fieldId: string): PushFieldChange | null => {
@@ -458,6 +483,7 @@ async function derivePlan(
         if (row.newVotes <= 0) return null;
         const cur = readNumber(live.extra[fieldId]);
         extraFields[fieldId] = cur + row.newVotes;
+        undoFields[fieldId] = { kind: "number", before: cur, after: cur + row.newVotes };
         return {
           field: attr,
           label: ATTRIBUTE_LABELS[attr],
@@ -479,6 +505,7 @@ async function derivePlan(
         }
         if (allowed.length === 0) return null;
         extraFields[fieldId] = { value: allowed[0] };
+        undoFields[fieldId] = { kind: "single", before: null, after: allowed[0] };
         return { field: attr, label: ATTRIBUTE_LABELS[attr], from: "(empty)", to: allowed[0] };
       }
       // multi_select union
@@ -498,6 +525,7 @@ async function derivePlan(
       if (allowed.length === 0) return null;
       const next = distinct([...cur, ...allowed]);
       extraFields[fieldId] = next.map((value) => ({ value }));
+      undoFields[fieldId] = { kind: "multi", before: cur, after: next };
       return {
         field: attr,
         label: ATTRIBUTE_LABELS[attr],
@@ -589,7 +617,12 @@ async function derivePlan(
       }
     }
 
-    writes.creates.set(row.id, { summary: row.title, descriptionAdf: desc.adf, extraFields });
+    writes.creates.set(row.id, {
+      summary: row.title,
+      descriptionAdf: desc.adf,
+      extraFields,
+      beforeOrigin: row.origin,
+    });
     items.push({
       ideaId: row.id,
       action: "create",
@@ -649,7 +682,29 @@ export async function executePush(
   const { plan, writes, config } = await derivePlan(workspaceId, scope);
   if (plan.blockers.length > 0) return { ok: false, blockers: plan.blockers };
 
+  // Only the LAST merge is undoable — this run's snapshots replace the
+  // previous batch's wholesale.
+  await db.ideasPushUndo.deleteMany({ where: { workspaceId } });
+
   const results: PushResult[] = [];
+  const recordUndo = async (
+    ideaId: string,
+    action: "create" | "update",
+    jiraKey: string,
+    payload: PushUndoPayload,
+    commentId: string | null
+  ) => {
+    await db.ideasPushUndo.create({
+      data: {
+        workspaceId,
+        ideaId,
+        action,
+        jiraKey,
+        payload: payload as unknown as Prisma.InputJsonValue,
+        commentId,
+      },
+    });
+  };
   const markInjected = async (
     ideaId: string,
     payload: Prisma.InputJsonValue,
@@ -688,17 +743,21 @@ export async function executePush(
           });
           continue;
         }
-        const { jiraKey, commentLabels, ...fields } = write;
+        const { jiraKey, commentLabels, undo, ...fields } = write;
         await updateJiraIssue(workspaceId, jiraKey, fields);
         let commentNote: string | undefined;
+        let commentId: string | null = null;
         if (config.updateComment && commentLabels.length > 0) {
           try {
-            await addJiraCommentAdf(workspaceId, jiraKey, buildUpdateComment(config, commentLabels));
+            commentId = (
+              await addJiraCommentAdf(workspaceId, jiraKey, buildUpdateComment(config, commentLabels))
+            ).id;
           } catch (err) {
             // The update itself succeeded — say so, don't fail the item.
             commentNote = `Updated, but the comment failed: ${err instanceof Error ? err.message : "unknown error"}`;
           }
         }
+        await recordUndo(item.ideaId, "update", jiraKey, undo, commentId);
         await markInjected(item.ideaId, {
           jiraAction: "update",
           jiraKey,
@@ -723,6 +782,13 @@ export async function executePush(
           descriptionAdf: write.descriptionAdf,
           extraFields: write.extraFields,
         });
+        await recordUndo(
+          item.ideaId,
+          "create",
+          key,
+          { fields: {}, beforeOrigin: write.beforeOrigin },
+          null
+        );
         await markInjected(
           item.ideaId,
           { jiraAction: "create", jiraKey: key } as unknown as Prisma.InputJsonValue,

@@ -57,6 +57,17 @@ export function isChatEnabled(): boolean {
   return !(value === "false" || value === "0");
 }
 
+/**
+ * Ideas undo gate — env default. Off by default like IDEAS_ENABLED: undo of a
+ * merge is a demo affordance until proven safe for production workflows.
+ */
+export function isIdeasUndoEnabled(): boolean {
+  const raw = process.env.IDEAS_UNDO_ENABLED;
+  if (!raw?.trim()) return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "1";
+}
+
 /** Dashboard feature gate — env default. Same polarity as DOCS_ENABLED: on when unset. */
 export function isDashboardEnabled(): boolean {
   const raw = process.env.DASHBOARD_ENABLED;
@@ -72,7 +83,7 @@ export function isDashboardEnabled(): boolean {
 // env default applies. Keys outside ORG_FEATURE_KEYS are rejected by the
 // admin API and ignored here. Managed in PM-OS Admin → Enablements.
 
-export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat", "dashboard"] as const;
+export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat", "dashboard", "ideasUndo"] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
 
 /** Env-level default for a flag (what applies when the org has no override). */
@@ -86,6 +97,8 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isChatEnabled();
     case "dashboard":
       return isDashboardEnabled();
+    case "ideasUndo":
+      return isIdeasUndoEnabled();
   }
 }
 

@@ -35,6 +35,12 @@ const FLAGS: { key: string; label: string; description: string }[] = [
     description:
       "Dashboard landing page; when off, /dashboard redirects to Releases.",
   },
+  {
+    key: "ideasUndo",
+    label: "Ideas undo",
+    description:
+      "Per-idea undo of the last Jira merge — restores fields (only if unedited since), deletes created issues. Demo affordance.",
+  },
 ];
 
 export function OrgEnablements({

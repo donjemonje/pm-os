@@ -28,6 +28,8 @@ interface IdeaDrawerProps {
   onCustomerAction?: (action: "approve" | "dismiss" | "undismiss", name: string) => void;
   onClose: () => void;
   onToggleApprove?: () => void;
+  /** Set only while this idea's last-merge write is undoable AND the ideasUndo flag is on. */
+  onUndoPush?: () => void;
   onSave?: (patch: { title: string; details: string; manual: number | null }) => void;
   onMerge?: () => void;
 }
@@ -47,6 +49,7 @@ export function IdeaDrawer({
   onCustomerAction,
   onClose,
   onToggleApprove,
+  onUndoPush,
   onSave,
   onMerge,
 }: IdeaDrawerProps) {
@@ -540,6 +543,19 @@ export function IdeaDrawer({
                   </button>
                   );
                 })()}
+                {onUndoPush && idea.decision === "injected" && (
+                  <button
+                    onClick={onUndoPush}
+                    title={
+                      idea.undoable?.action === "create"
+                        ? `Deletes ${idea.undoable.jiraKey} in Jira (asks first)`
+                        : `Restores ${idea.undoable?.jiraKey} to its pre-merge state`
+                    }
+                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-300 bg-amber-50 px-3.5 text-[13px] font-medium text-amber-800 hover:border-amber-400"
+                  >
+                    Undo merge
+                  </button>
+                )}
                 {onMerge && (
                   <button
                     onClick={onMerge}
