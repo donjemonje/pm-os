@@ -27,6 +27,14 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  *                           as 404 below (the env guard pins the flag).
  * - /settings/google-drive  covered: legacy route, must redirect to
  *                           /settings/jira.
+ * - /forgot-password,       public routes (proxy PUBLIC_PATHS); logged-out
+ *   /reset-password         renders covered in auth.spec.ts (forgot form via
+ *                           the /login link) and google-sso.spec.ts G3
+ *                           (reset form with a token). Not in the logged-in
+ *                           redirect loop below: the proxy does not bounce a
+ *                           signed-in user off them (only the /login page
+ *                           itself redirects, server-side) — same class as
+ *                           the /login/2fa note above.
  */
 
 test("logged-in user can open every app page", async ({ page }) => {
