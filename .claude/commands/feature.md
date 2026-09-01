@@ -1,5 +1,5 @@
 ---
-description: Turn this session into a PM-OS feature session — worktree build, push/detach review loop, merge to development
+description: Turn this session into a PM-OS feature session — worktree build, in-place review loop (Daniel cds to the worktree), merge to development
 argument-hint: <feature-name>
 ---
 
@@ -32,14 +32,13 @@ Build the feature in the worktree. Normal quality bar; follow CLAUDE.md.
 
 ## 4. Release for review (repeat until approved)
 
-1. Commit and **push `feature/$ARGUMENTS` to the remote** (`origin`). Feature-branch pushes run no CI — the push is backup + handoff.
-2. `git switch --detach` in the worktree — this frees the branch so Daniel can check it out. **Never remove the worktree.**
-3. Tell Daniel it's ready. He pulls and checks out the branch in his main folder to review.
-4. On review comments: re-attach (`git switch feature/$ARGUMENTS`), fix in the same worktree, push, detach, notify. Repeat.
+1. Commit your work in the worktree. No push, no detach — Daniel reviews in the worktree itself.
+2. Tell Daniel it's ready. **Every "finished" / "ready for review" message — after the initial build and after every review-fix round — must include the worktree's absolute path**, so he can `cd` to it. **Never remove the worktree.**
+3. On review comments: fix in the same worktree, commit, notify with the path again. Repeat.
 
 ## 5. Tests — discuss first (after approval)
 
-Once Daniel approves the feature, discuss with him: what tests (if any) this feature needs. Only implement what's agreed, in the worktree. Run them, push the result.
+Once Daniel approves the feature, discuss with him: what tests (if any) this feature needs. Only implement what's agreed, in the worktree. Run them, commit the result.
 
 ## 6. Merge & clean up
 

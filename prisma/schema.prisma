@@ -55,9 +55,10 @@ model User {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  sessions     Session[]
-  accounts     OAuthAccount[]
-  chatSessions ChatSession[]
+  sessions            Session[]
+  accounts            OAuthAccount[]
+  chatSessions        ChatSession[]
+  passwordResetTokens PasswordResetToken[]
 
   @@index([organizationId])
 }
@@ -421,4 +422,30 @@ model ReviewEvent {
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId, ideaId])
+}
+
+/// System-wide flag overrides — switches that must resolve before sign-in
+/// (e.g. Google SSO on /login), where no organization is known yet. One row
+/// per key; a present row wins, a missing key falls back to the env default.
+/// Keys are allowlisted in feature-flags.ts (SYSTEM_FLAG_KEYS). Managed in
+/// PM-OS Admin → Enablements.
+model SystemFlag {
+  key       String   @id
+  value     Boolean
+  updatedAt DateTime @updatedAt
+}
+
+/// Single-use password-reset tokens (forgot-password email links). Only the
+/// SHA-256 hash of the token is stored; the raw token exists only in the
+/// emailed link. 24h expiry; consumed on use; password-type users only.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }

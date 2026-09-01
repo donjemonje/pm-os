@@ -118,4 +118,8 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_signin_failed: "Sign-in failed. Please try again.",
   signup_disabled: "Sign-up is disabled. Ask an admin to invite you, then sign in.",
   account_deactivated: "This account has been deactivated. Contact your admin.",
+  google_sso_disabled:
+    "Google sign-in is currently disabled. Sign in with email instead.",
+  email_uses_password:
+    "This email uses password sign-in. Enter your email and password below.",
 };

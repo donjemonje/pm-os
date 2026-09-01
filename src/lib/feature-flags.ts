@@ -83,6 +83,28 @@ export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
   return (ORG_FEATURE_KEYS as readonly string[]).includes(key);
 }
 
+// ————— System-wide flag overrides —————
+//
+// Switches that must resolve BEFORE sign-in (no user, so no org): e.g. the
+// Google SSO button on /login. Stored one row per key in SystemFlag; a stored
+// row wins, otherwise the env default applies. Resolution lives in
+// src/lib/system-flags.ts (needs the DB); managed in PM-OS Admin → Enablements.
+
+export const SYSTEM_FLAG_KEYS = ["googleSso"] as const;
+export type SystemFlagKey = (typeof SYSTEM_FLAG_KEYS)[number];
+
+export function isSystemFlagKey(key: string): key is SystemFlagKey {
+  return (SYSTEM_FLAG_KEYS as readonly string[]).includes(key);
+}
+
+/** Env-level default for a system flag (applies when no override row exists). */
+export function envSystemFlagDefault(key: SystemFlagKey): boolean {
+  switch (key) {
+    case "googleSso":
+      return !isGoogleLoginDisabled();
+  }
+}
+
 /** Pure resolver: org override if present, else the env default. */
 export function resolveFeature(
   features: unknown,
