@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { getCurrentUser } from "./auth";
 import { db } from "./db";
 
@@ -11,6 +12,20 @@ export class UnauthorizedError extends Error {
 export async function requireUser() {
   const user = await getCurrentUser();
   if (!user) throw new UnauthorizedError();
+  return user;
+}
+
+/**
+ * Page-side auth guard (API routes keep the throwing requireUser + 401
+ * helpers). No valid session → redirect through the dead-cookie exit ramp,
+ * which clears stale cookies and lands on /login — never a 500, never a
+ * redirect loop.
+ */
+export async function requireUserPage(fromPath: string) {
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect(`/api/auth/session-expired?from=${encodeURIComponent(fromPath)}`);
+  }
   return user;
 }
 

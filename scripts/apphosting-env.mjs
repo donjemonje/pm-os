@@ -2,12 +2,13 @@
  * Load Firebase App Hosting-style env blocks into a plain key/value map.
  * Used locally so dev runs the same variable names as production (apphosting.yaml).
  */
+// NOTE: no `import.meta` in this file — playwright.config.ts imports it,
+// and Playwright's config loader transpiles it to CJS where `import.meta`
+// is a syntax error. Path defaults that need the repo root live in
+// with-apphosting-env.mjs (pure ESM) instead.
 import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { parse } from "yaml";
-
-const ROOT = resolve(import.meta.dirname, "..");
-export const DEFAULT_DEV_APPHOSTING = resolve(ROOT, "dev-apphosting.yaml");
 
 function parseEnvFile(path) {
   const raw = readFileSync(path, "utf8");

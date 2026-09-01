@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { BrandLockup } from "@/components/brand/BrandLockup";
 import { neuralBackgrounds } from "@/lib/neural-backgrounds";
-import { UserMenu } from "./UserMenu";
+import { UserMenu, type MenuOrganization, type MenuUser } from "./UserMenu";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -24,9 +24,29 @@ const nav = [
 
 const SIDEBAR_LOGO_HEIGHT = 38;
 
-export function Sidebar({ ideasEnabled }: { ideasEnabled: boolean }) {
+export function Sidebar({
+  ideasEnabled,
+  docsEnabled,
+  chatEnabled,
+  dashboardEnabled,
+  user,
+  organization,
+}: {
+  ideasEnabled: boolean;
+  docsEnabled: boolean;
+  chatEnabled: boolean;
+  dashboardEnabled: boolean;
+  user: MenuUser | null;
+  organization: MenuOrganization | null;
+}) {
   const pathname = usePathname();
-  const items = ideasEnabled ? nav : nav.filter((item) => item.href !== "/ideas");
+  const hidden = new Set([
+    ...(dashboardEnabled ? [] : ["/dashboard"]),
+    ...(ideasEnabled ? [] : ["/ideas"]),
+    ...(docsEnabled ? [] : ["/docs"]),
+    ...(chatEnabled ? [] : ["/chat"]),
+  ]);
+  const items = nav.filter((item) => !hidden.has(item.href));
 
   return (
     <aside
@@ -37,7 +57,11 @@ export function Sidebar({ ideasEnabled }: { ideasEnabled: boolean }) {
       }}
     >
       <div className="border-b border-white/10 px-4 py-5">
-        <BrandLockup height={SIDEBAR_LOGO_HEIGHT} priority href="/dashboard" />
+        <BrandLockup
+          height={SIDEBAR_LOGO_HEIGHT}
+          priority
+          href={dashboardEnabled ? "/dashboard" : "/releases"}
+        />
       </div>
       <nav className="flex-1 space-y-1 p-3">
         {items.map(({ href, label, icon: Icon }) => {
@@ -64,7 +88,7 @@ export function Sidebar({ ideasEnabled }: { ideasEnabled: boolean }) {
           );
         })}
       </nav>
-      <UserMenu />
+      {user && <UserMenu user={user} organization={organization} />}
     </aside>
   );
 }

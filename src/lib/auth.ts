@@ -1,18 +1,37 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { db } from "./db";
 import { isSignupAllowed } from "./feature-flags";
+import {
+  decryptTotpSecret,
+  encryptTotpSecret,
+  generateTotpSecret,
+  isFreshTotpStep,
+  verifyTotpCode,
+} from "./two-factor";
 
 export const SESSION_COOKIE = "pmos_session";
+/**
+ * UX marker only — set alongside the session cookie when login still needs the
+ * TOTP challenge, so middleware (which can't reach the DB) can route pages to
+ * /login/2fa. Security never depends on it: getCurrentUser rejects unverified
+ * sessions regardless.
+ */
+export const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 const SESSION_DAYS = 30;
 
 export type AuthUser = {
   id: string;
   email: string;
   name: string;
+  /** Minimized IAM: "USER" (default) or "PMOS_ADMIN" (PM-OS Admin access). */
+  role: "USER" | "PMOS_ADMIN";
   workspaceId: string | null;
   organizationId: string | null;
   organizationName: string | null;
+  /** Organization.features JSON — per-org flag overrides ({} when none). */
+  organizationFeatures: unknown;
 };
 
 /** Shape included on user queries so we can resolve org + workspace. */
@@ -121,17 +140,25 @@ function toAuthUser(user: {
   id: string;
   email: string;
   name: string;
+  role: "USER" | "PMOS_ADMIN";
   organization:
-    | { id: string; name: string; workspace: { id: string } | null }
+    | {
+        id: string;
+        name: string;
+        features?: unknown;
+        workspace: { id: string } | null;
+      }
     | null;
 }): AuthUser {
   return {
     id: user.id,
     email: user.email,
     name: user.name,
+    role: user.role,
     workspaceId: user.organization?.workspace?.id ?? null,
     organizationId: user.organization?.id ?? null,
     organizationName: user.organization?.name ?? null,
+    organizationFeatures: user.organization?.features ?? {},
   };
 }
 
@@ -160,7 +187,77 @@ export async function getSessionToken(): Promise<string | undefined> {
   return cookieStore.get(SESSION_COOKIE)?.value;
 }
 
-export async function getCurrentUser(): Promise<AuthUser | null> {
+async function findCurrentSessionWithUser() {
+  const token = await getSessionToken();
+  if (!token) return null;
+  const session = await db.session.findUnique({
+    where: { tokenHash: hashToken(token) },
+    include: { user: true },
+  });
+  if (!session || session.expiresAt < new Date()) return null;
+  // Deactivation also invalidates half-completed 2FA challenge sessions:
+  // a deactivated user can neither read enrollment state nor pass the
+  // challenge. (Deactivating already deletes sessions; this covers races.)
+  if (session.user.deactivatedAt) return null;
+  return session;
+}
+
+export type TwoFactorState =
+  | { status: "none" }
+  | { status: "verified" }
+  /** Enrolled — the login challenge is owed. */
+  | { status: "challenge" }
+  /** Not enrolled yet — mandatory enrollment; secret is the base32 to show. */
+  | { status: "enroll"; secret: string; email: string };
+
+/**
+ * State of the mandatory 2FA step for the current request's session, used by
+ * the /login/2fa page. In enroll state this creates (or reuses) the pending
+ * secret so a page refresh doesn't invalidate an already-scanned QR.
+ */
+export async function getTwoFactorState(): Promise<TwoFactorState> {
+  const session = await findCurrentSessionWithUser();
+  if (!session) return { status: "none" };
+  if (session.twoFactorVerified) return { status: "verified" };
+  if (session.user.totpEnabledAt) return { status: "challenge" };
+
+  if (session.user.totpSecretEnc) {
+    return {
+      status: "enroll",
+      secret: decryptTotpSecret(session.user.totpSecretEnc),
+      email: session.user.email,
+    };
+  }
+  const secret = generateTotpSecret();
+  await db.user.update({
+    where: { id: session.user.id },
+    data: { totpSecretEnc: encryptTotpSecret(secret) },
+  });
+  return { status: "enroll", secret, email: session.user.email };
+}
+
+export type LiveSessionState = "none" | "dead" | "pending" | "verified";
+
+/**
+ * Raw session-cookie truth for the current request, independent of the 2FA
+ * gate in getCurrentUser:
+ * - "none"     no session cookie at all
+ * - "dead"     cookie present but no valid session behind it (revoked by
+ *              deactivation, expired, or deleted) — safe to clear
+ * - "pending"  valid session still owing the TOTP challenge — must NOT clear
+ * - "verified" fully authenticated session
+ */
+export async function getLiveSessionState(): Promise<LiveSessionState> {
+  const token = await getSessionToken();
+  if (!token) return "none";
+  const session = await findCurrentSessionWithUser();
+  if (!session) return "dead";
+  return session.twoFactorVerified ? "verified" : "pending";
+}
+
+// cache(): one session lookup per request even though both the root layout
+// and the page (or API helper) resolve the current user.
+export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   const token = await getSessionToken();
   if (!token) return null;
 
@@ -176,7 +273,74 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     return null;
   }
 
+  // Soft-deactivated users lose access immediately, existing sessions included.
+  if (session.user.deactivatedAt) {
+    await db.session.delete({ where: { id: session.id } });
+    return null;
+  }
+
+  // The 2FA gate for every page and API route: 2FA is mandatory, so a session
+  // that hasn't passed the TOTP step is treated as unauthenticated.
+  if (!session.twoFactorVerified) {
+    return null;
+  }
+
   return toAuthUser(session.user);
+});
+
+export function twoFactorPendingCookieOptions(pending: boolean) {
+  return {
+    name: TWO_FACTOR_PENDING_COOKIE,
+    value: pending ? "1" : "",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    path: "/",
+    secure: process.env.NODE_ENV === "production",
+    // Lives as long as the session: an abandoned challenge keeps routing to
+    // /login/2fa instead of stranding a half-authenticated session.
+    maxAge: pending ? SESSION_DAYS * 24 * 60 * 60 : 0,
+  };
+}
+
+export type TwoFactorChallengeResult =
+  | { status: "ok" }
+  | { status: "no_session" }
+  | { status: "no_setup" }
+  | { status: "invalid" };
+
+/**
+ * Verifies the mandatory login-time TOTP step for the current request's
+ * session. Handles both cases: an enrolled user passing the challenge, and a
+ * first-time user confirming the secret they just scanned (which completes
+ * enrollment). Marks the session verified on success; codes are single-use.
+ */
+export async function verifyTwoFactorChallenge(
+  code: string
+): Promise<TwoFactorChallengeResult> {
+  const session = await findCurrentSessionWithUser();
+  if (!session) return { status: "no_session" };
+  if (session.twoFactorVerified) return { status: "ok" };
+  if (!session.user.totpSecretEnc) return { status: "no_setup" };
+
+  const secret = decryptTotpSecret(session.user.totpSecretEnc);
+  const step = verifyTotpCode(secret, code);
+  if (step === null || !isFreshTotpStep(step, session.user.totpLastUsedStep)) {
+    return { status: "invalid" };
+  }
+
+  await db.user.update({
+    where: { id: session.user.id },
+    data: {
+      totpLastUsedStep: step,
+      // First successful code completes enrollment.
+      ...(session.user.totpEnabledAt ? {} : { totpEnabledAt: new Date() }),
+    },
+  });
+  await db.session.update({
+    where: { id: session.id },
+    data: { twoFactorVerified: true },
+  });
+  return { status: "ok" };
 }
 
 export async function registerUser(input: {
@@ -233,6 +397,7 @@ export async function authenticateUser(
   if (!user?.passwordHash || !verifyPassword(password, user.passwordHash)) {
     return null;
   }
+  if (user.deactivatedAt) return null;
   return toAuthUser(user);
 }
 
@@ -254,6 +419,10 @@ export async function signInWithOAuth(input: {
     include: { user: { include: userWithOrgInclude } },
   });
   if (linked) {
+    if (linked.user.deactivatedAt) throw new Error("account_deactivated");
+    // Login type is sticky: a password account never signs in via SSO, even
+    // when a provider link exists from before this rule.
+    if (linked.user.passwordHash) throw new Error("email_uses_password");
     return toAuthUser(linked.user);
   }
 
@@ -263,6 +432,10 @@ export async function signInWithOAuth(input: {
   });
 
   if (existing) {
+    if (existing.deactivatedAt) throw new Error("account_deactivated");
+    // Login type is sticky: same email but a password account — no auto-link,
+    // no SSO sign-in. (SSO-created users may still link another provider.)
+    if (existing.passwordHash) throw new Error("email_uses_password");
     await db.oAuthAccount.create({
       data: {
         userId: existing.id,
@@ -302,7 +475,7 @@ export async function signInWithOAuth(input: {
 }
 
 /**
- * Backoffice/CRM helper: provision a user inside an organization without
+ * PM-OS Admin helper: provision a user inside an organization without
  * creating a login session. The target organization can either be an existing
  * one (by id) or a brand-new organization created on the fly (by name).
  * A password is optional — omit it to create an SSO-only / invite-pending user.
@@ -360,7 +533,9 @@ export type OrganizationMember = {
   id: string;
   email: string;
   name: string;
+  role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
+  deactivatedAt: string | null;
   createdAt: string;
 };
 
@@ -369,12 +544,25 @@ export type OrganizationWithMembers = {
   name: string;
   slug: string;
   inviteCode: string;
+  features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
   members: OrganizationMember[];
 };
 
-/** Backoffice/CRM helper: list every organization with its member users. */
+/** Narrow an Organization.features JSON value to the boolean overrides we store. */
+export function toFeatureOverrides(features: unknown): Record<string, boolean> {
+  if (!features || typeof features !== "object" || Array.isArray(features)) {
+    return {};
+  }
+  const out: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(features as Record<string, unknown>)) {
+    if (typeof value === "boolean") out[key] = value;
+  }
+  return out;
+}
+
+/** PM-OS Admin helper: list every organization with its member users. */
 export async function listOrganizationsWithMembers(): Promise<
   OrganizationWithMembers[]
 > {
@@ -390,13 +578,16 @@ export async function listOrganizationsWithMembers(): Promise<
     name: org.name,
     slug: org.slug,
     inviteCode: org.inviteCode,
+    features: toFeatureOverrides(org.features),
     createdAt: org.createdAt.toISOString(),
     memberCount: org.users.length,
     members: org.users.map((u) => ({
       id: u.id,
       email: u.email,
       name: u.name,
+      role: u.role,
       hasPassword: Boolean(u.passwordHash),
+      deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
       createdAt: u.createdAt.toISOString(),
     })),
   }));

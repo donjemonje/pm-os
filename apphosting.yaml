@@ -21,14 +21,30 @@ env:
       - BUILD
       - RUNTIME
 
+  # Google SSO is live. This is the env DEFAULT; the admin override lives in
+  # PM-OS Admin → Enablements → System → Google SSO.
   - variable: DISABLE_GOOGLE_LOGIN
-    value: "true"
+    value: "false"
     availability:
       - BUILD
       - RUNTIME
 
   - variable: IDEAS_ENABLED
     value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # Docs/Chat are live surfaces: unset means ON (unlike IDEAS_ENABLED).
+  # Per-organization overrides live in PM-OS Admin → Enablements.
+  - variable: DOCS_ENABLED
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: CHAT_ENABLED
+    value: "true"
     availability:
       - BUILD
       - RUNTIME
@@ -109,7 +125,6 @@ env:
     availability:
       - RUNTIME
 
-  # --- Email / CRM notifications ---
   # --- AI tuning ---
   - variable: AI_CACHE_TTL_MS
     value: "600000"

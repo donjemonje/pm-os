@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiAuthContext } from "@/lib/api-auth";
+import { apiAuthContext, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 import { parseJsonObject } from "@/lib/utils";
 import type { ChatMessageMetadata } from "@/lib/types";
@@ -8,6 +8,8 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const disabled = await orgFeatureDisabledResponse("chat");
+  if (disabled) return disabled;
   const { id } = await params;
   const auth = await apiAuthContext();
   if (auth instanceof NextResponse) return auth;
@@ -40,6 +42,8 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const disabled = await orgFeatureDisabledResponse("chat");
+  if (disabled) return disabled;
   const { id } = await params;
   const auth = await apiAuthContext();
   if (auth instanceof NextResponse) return auth;

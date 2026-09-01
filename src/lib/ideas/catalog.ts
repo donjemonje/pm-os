@@ -6,13 +6,14 @@ import type { CatalogKind, CatalogVerdict } from "./types";
 
 /**
  * Catalog stage: classify each raw Zendesk ticket as FR / Bug / Needs-details
- * and, for FRs, assign product line(s) and platform(s) from the workspace
- * catalogs (Settings → Ideas). Every run judges fresh; each judgment is
+ * and, for FRs, assign product line(s), platform(s) and affected customer(s)
+ * from the workspace catalogs (Settings → Ideas) and rewrite the ticket's subject/body as a
+ * product-voiced title and summary for the resulting idea. Every run judges fresh; each judgment is
  * appended to the ledger so behavior can be audited and determinism measured,
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v2";
+export const CATALOG_PROMPT_VERSION = "catalog-v5";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -32,8 +33,13 @@ First, classify the ticket into exactly one kind:
 Second, ONLY if the ticket is a feature request, assign it within the product:
 - product_lines: which product line(s) the requested capability belongs to. Choose from the catalog provided in the message. Usually one; use several only when the request genuinely spans lines. If the ticket is a feature request but no catalog line fits, assign exactly ["Other"].
 - platforms: which platform(s) the request concerns, chosen from the platform catalog. Assign a platform only when the ticket states or clearly implies it (e.g. "on my phone", "in the browser"); otherwise leave the list empty rather than guessing.
+- affected_customers: every customer the ticket content says is affected by or asking for this. When a mentioned customer matches an entry in the customer catalog, return the catalog's exact name; when the ticket clearly names a customer that is not in the catalog, return the name as written — it is surfaced to the product team as a suggestion. Only list customers the ticket itself names or clearly references; an empty list is the correct answer when none are mentioned. The requester is whoever filed the ticket — often a support or staff member filing on a customer's behalf — so never treat the requester as an affected customer unless the ticket content itself says they are one.
 
-For bugs and needs_details, return empty lists for both.
+Third, ONLY if the ticket is a feature request, rewrite it in product voice:
+- product_title: a short title naming the requested capability, written the way a product manager would put it in a backlog. Name the capability, not the customer's complaint or question.
+- product_summary: 2-4 sentences describing the underlying need and the requested capability in neutral product language. No support framing ("customer says...", "user is asking..."), no requester or customer names (those are captured separately), no ticket phrasing — it should read as if the product team wrote the idea themselves.
+
+For bugs and needs_details, return empty lists and empty strings for all of the above.
 
 Tickets may carry tags. Tags are entered by support agents and customers — humans who are not product managers and who make mistakes — so treat them as weak hints at most. Base your judgment on the subject and body; never let a tag override what the ticket content itself says.
 
@@ -58,12 +64,36 @@ const CATALOG_TOOL = {
         description:
           "For feature requests: platform names from the catalog, only when the ticket states or clearly implies them. Empty otherwise.",
       },
+      affected_customers: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "For feature requests: customers the ticket content says are affected or asking — the catalog's exact name when matched, otherwise the name as written in the ticket. Empty when no customer is mentioned, and for bugs and needs_details.",
+      },
+      product_title: {
+        type: "string",
+        description:
+          "For feature requests: a short product-voiced title naming the capability, as a PM would write it in a backlog. Empty string for bugs and needs_details.",
+      },
+      product_summary: {
+        type: "string",
+        description:
+          "For feature requests: 2-4 sentences describing the underlying need in neutral product language, without support framing. Empty string for bugs and needs_details.",
+      },
       reason: {
         type: "string",
         description: "One short sentence explaining the classification and assignment.",
       },
     },
-    required: ["kind", "product_lines", "platforms", "reason"],
+    required: [
+      "kind",
+      "product_lines",
+      "platforms",
+      "affected_customers",
+      "product_title",
+      "product_summary",
+      "reason",
+    ],
   },
 };
 
@@ -71,6 +101,8 @@ export interface CatalogInput {
   key: string;
   subject: string;
   body: string;
+  /** Who filed the ticket — shown to the model so it never confuses the filer with an affected customer. */
+  requester?: string;
   tags: string[];
 }
 
@@ -78,6 +110,11 @@ export interface CatalogResult extends CatalogVerdict {
   key: string;
   productLines: string[];
   platforms: string[];
+  /** Customers matched from the customer catalog; empty when none are mentioned. */
+  affectedCustomers: string[];
+  /** Product-voiced rewrite, only for FRs; empty otherwise. */
+  productTitle: string;
+  productSummary: string;
 }
 
 interface CatalogListEntry {
@@ -117,14 +154,17 @@ function renderList(title: string, entries: CatalogListEntry[]): string {
 function renderUserMessage(
   input: CatalogInput,
   productLines: CatalogListEntry[],
-  platforms: CatalogListEntry[]
+  platforms: CatalogListEntry[],
+  customers: CatalogListEntry[]
 ): string {
   return [
     renderList("PRODUCT LINE CATALOG", productLines),
     renderList("PLATFORM CATALOG", platforms),
+    renderList("CUSTOMER CATALOG", customers),
     [
       "TICKET",
       `Subject: ${input.subject}`,
+      `Requester: ${input.requester || "(unknown)"}`,
       `Tags: ${input.tags.length > 0 ? input.tags.join(", ") : "(none)"}`,
       "",
       "Body:",
@@ -141,7 +181,7 @@ async function judgeTicket(
   // (`temperature` is deprecated).
   const message = await getClient().messages.create({
     model,
-    max_tokens: 400,
+    max_tokens: 1000,
     system: SYSTEM_PROMPT,
     tools: [CATALOG_TOOL],
     tool_choice: { type: "tool", name: "catalog_ticket" },
@@ -156,6 +196,9 @@ async function judgeTicket(
     kind?: unknown;
     product_lines?: unknown;
     platforms?: unknown;
+    affected_customers?: unknown;
+    product_title?: unknown;
+    product_summary?: unknown;
     reason?: unknown;
   };
   if (!isCatalogKind(raw.kind)) {
@@ -169,6 +212,9 @@ async function judgeTicket(
     reason: typeof raw.reason === "string" ? raw.reason : "",
     productLines: toNames(raw.product_lines),
     platforms: toNames(raw.platforms),
+    affectedCustomers: toNames(raw.affected_customers),
+    productTitle: typeof raw.product_title === "string" ? raw.product_title.trim() : "",
+    productSummary: typeof raw.product_summary === "string" ? raw.product_summary.trim() : "",
   };
 }
 
@@ -190,7 +236,7 @@ export async function catalogTickets(
   tickets: CatalogInput[]
 ): Promise<CatalogBatchResult> {
   const model = getCatalogModel();
-  const [productLines, platforms] = await Promise.all([
+  const [productLines, platforms, customers] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },
@@ -201,11 +247,16 @@ export async function catalogTickets(
       orderBy: { name: "asc" },
       select: { name: true, description: true },
     }),
+    db.customer.findMany({
+      where: { workspaceId },
+      orderBy: { name: "asc" },
+      select: { name: true, description: true },
+    }),
   ]);
 
   const results: CatalogResult[] = [];
   for (const ticket of tickets) {
-    const userMessage = renderUserMessage(ticket, productLines, platforms);
+    const userMessage = renderUserMessage(ticket, productLines, platforms, customers);
     const verdict = await judgeTicket(model, userMessage);
     const input = { system: SYSTEM_PROMPT, user: userMessage };
     await recordVerdict(

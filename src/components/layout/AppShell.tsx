@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { MessageSquare, X } from "lucide-react";
 import { ChatInterface } from "@/components/chat/ChatInterface";
+import { useOrgFeatures } from "@/components/layout/OrgFeaturesContext";
 import type { ChatContext } from "@/lib/types";
 
 interface AppShellProps {
@@ -12,6 +13,9 @@ interface AppShellProps {
 
 export function AppShell({ children, chatContext }: AppShellProps) {
   const [chatOpen, setChatOpen] = useState(false);
+  // Server-resolved org flag (provided by Shell): when chat is off for the
+  // org, the floating chat is gone entirely — the /api/chat routes 404 too.
+  const { chatEnabled } = useOrgFeatures();
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -19,7 +23,7 @@ export function AppShell({ children, chatContext }: AppShellProps) {
         <main className="flex-1 overflow-auto bg-background text-foreground">{children}</main>
       </div>
 
-      {chatOpen && (
+      {chatEnabled && chatOpen && (
         <div className="flex w-[420px] shrink-0 flex-col border-l border-border bg-card shadow-xl">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-medium">
@@ -40,7 +44,7 @@ export function AppShell({ children, chatContext }: AppShellProps) {
         </div>
       )}
 
-      {!chatOpen && (
+      {chatEnabled && !chatOpen && (
         <button
           onClick={() => setChatOpen(true)}
           className="fixed bottom-6 right-6 flex items-center gap-2 rounded-full bg-primary px-4 py-3 text-sm font-medium text-white shadow-lg transition hover:bg-primary-hover"

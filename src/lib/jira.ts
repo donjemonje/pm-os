@@ -132,10 +132,13 @@ async function jiraFetch(workspaceId: string, path: string, init?: RequestInit) 
     throw new Error(`Jira API error (${response.status}): ${await response.text()}`);
   }
 
-  return response.json();
+  // Write endpoints (issue PUT) answer 204 with an empty body.
+  if (response.status === 204) return null;
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
-function adfToText(node: unknown): string {
+export function adfToText(node: unknown): string {
   if (!node || typeof node !== "object") return "";
   const n = node as Record<string, unknown>;
 
@@ -457,6 +460,273 @@ export async function addJiraComment(
   });
 }
 
+// ————— Ideas write-back (issue create/update) —————
+
+/**
+ * Minimal plain-text → ADF: each line becomes a paragraph, blank lines
+ * become empty paragraphs. Deterministic on purpose — what the preview
+ * shows is exactly what Jira receives.
+ */
+export function textToAdf(text: string): { type: string; version: number; content: unknown[] } {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const content = lines.map((line) =>
+    line.trim().length > 0
+      ? { type: "paragraph", content: [{ type: "text", text: line }] }
+      : { type: "paragraph", content: [] }
+  );
+  return {
+    type: "doc",
+    version: 1,
+    content: content.length > 0 ? content : [{ type: "paragraph", content: [] }],
+  };
+}
+
+export interface JiraComponent {
+  id: string;
+  name: string;
+}
+
+export async function listProjectComponents(
+  workspaceId: string,
+  projectKey: string
+): Promise<JiraComponent[]> {
+  const data = (await jiraFetch(
+    workspaceId,
+    `/rest/api/3/project/${projectKey}/components`
+  )) as Array<{ id: string; name: string }> | null;
+  return (data ?? []).map((c) => ({ id: String(c.id), name: c.name }));
+}
+
+export async function createProjectComponent(
+  workspaceId: string,
+  projectKey: string,
+  name: string
+): Promise<JiraComponent> {
+  const data = (await jiraFetch(workspaceId, "/rest/api/3/component", {
+    method: "POST",
+    body: JSON.stringify({ name, project: projectKey }),
+  })) as { id: string; name: string };
+  return { id: String(data.id), name: data.name };
+}
+
+/** Non-subtask issue types available in a project. */
+export async function listProjectIssueTypesFull(
+  workspaceId: string,
+  projectKey: string
+): Promise<Array<{ id: string; name: string }>> {
+  const data = (await jiraFetch(workspaceId, `/rest/api/3/project/${projectKey}`)) as {
+    issueTypes?: Array<{ id: string; name: string; subtask?: boolean }>;
+  };
+  return (data.issueTypes ?? [])
+    .filter((t) => !t.subtask)
+    .map((t) => ({ id: String(t.id), name: t.name }));
+}
+
+export async function listProjectIssueTypes(
+  workspaceId: string,
+  projectKey: string
+): Promise<string[]> {
+  return (await listProjectIssueTypesFull(workspaceId, projectKey)).map((t) => t.name);
+}
+
+/** All fields on the site, keyed by lower-cased display name → field id.
+ *  Custom fields ("Votes", "P_Components", …) can only be written by id. */
+export async function listAllFields(
+  workspaceId: string
+): Promise<Map<string, { id: string; name: string }>> {
+  const data = (await jiraFetch(workspaceId, "/rest/api/3/field")) as Array<{
+    id: string;
+    name: string;
+  }>;
+  const byName = new Map<string, { id: string; name: string }>();
+  for (const f of data ?? []) byName.set(f.name.toLowerCase(), { id: f.id, name: f.name });
+  return byName;
+}
+
+export interface JiraFieldMeta {
+  /** Option names for select fields; undefined for free-typed fields. */
+  allowedValues?: string[];
+}
+
+function extractAllowed(field: { allowedValues?: Array<{ value?: string; name?: string }> }) {
+  if (!Array.isArray(field.allowedValues)) return undefined;
+  return field.allowedValues
+    .map((v) => v.value ?? v.name ?? "")
+    .filter((v): v is string => Boolean(v));
+}
+
+/** Editable fields (with allowed option values) of an existing issue. */
+export async function getEditMetaFields(
+  workspaceId: string,
+  issueKey: string
+): Promise<Map<string, JiraFieldMeta>> {
+  const data = (await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}/editmeta`)) as {
+    fields?: Record<string, { allowedValues?: Array<{ value?: string; name?: string }> }>;
+  };
+  const out = new Map<string, JiraFieldMeta>();
+  for (const [fieldId, meta] of Object.entries(data.fields ?? {})) {
+    out.set(fieldId, { allowedValues: extractAllowed(meta) });
+  }
+  return out;
+}
+
+/** Create-screen fields (with allowed option values) for a project + issue type. */
+export async function getCreateMetaFields(
+  workspaceId: string,
+  projectKey: string,
+  issueTypeName: string
+): Promise<Map<string, JiraFieldMeta>> {
+  const types = await listProjectIssueTypesFull(workspaceId, projectKey);
+  const type = types.find((t) => t.name.toLowerCase() === issueTypeName.toLowerCase());
+  const out = new Map<string, JiraFieldMeta>();
+  if (!type) return out;
+  const data = (await jiraFetch(
+    workspaceId,
+    `/rest/api/3/issue/createmeta/${projectKey}/issuetypes/${type.id}?maxResults=200`
+  )) as {
+    fields?: Array<{ fieldId?: string; key?: string; allowedValues?: Array<{ value?: string; name?: string }> }>;
+    values?: Array<{ fieldId?: string; key?: string; allowedValues?: Array<{ value?: string; name?: string }> }>;
+  };
+  for (const f of data.fields ?? data.values ?? []) {
+    const id = f.fieldId ?? f.key;
+    if (id) out.set(id, { allowedValues: extractAllowed(f) });
+  }
+  return out;
+}
+
+/**
+ * Issues with their raw ADF descriptions — the write-back path edits the
+ * original ADF (append/replace our section) instead of round-tripping
+ * through plain text, so customer formatting is never destroyed.
+ */
+export interface JiraIssueRaw {
+  key: string;
+  summary: string;
+  labels: string[];
+  components: string[];
+  descriptionAdf: unknown | null;
+  descriptionText: string;
+  /** Values of the extra (custom) fields requested, keyed by field id. */
+  extra: Record<string, unknown>;
+}
+
+export async function fetchIssuesRaw(
+  workspaceId: string,
+  keys: string[],
+  extraFieldIds: string[] = []
+): Promise<JiraIssueRaw[]> {
+  if (keys.length === 0) return [];
+  const data = (await jiraFetch(workspaceId, "/rest/api/3/search/jql", {
+    method: "POST",
+    body: JSON.stringify({
+      jql: `key in (${keys.join(",")})`,
+      maxResults: Math.max(keys.length, 100),
+      fields: ["summary", "description", "labels", "components", ...extraFieldIds],
+    }),
+  })) as JqlSearchPage;
+
+  return (data.issues ?? []).map((issue) => {
+    const fields = issue.fields as Record<string, unknown>;
+    const raw = fields.description;
+    const extra: Record<string, unknown> = {};
+    for (const id of extraFieldIds) extra[id] = fields[id];
+    return {
+      key: String(issue.key),
+      summary: String(fields.summary ?? ""),
+      labels: (fields.labels as string[]) ?? [],
+      components: (((fields.components as Array<{ name: string }>) ?? []).map((c) => c.name)),
+      descriptionAdf: raw && typeof raw === "object" ? raw : null,
+      descriptionText: typeof raw === "string" ? raw : adfToText(raw),
+      extra,
+    };
+  });
+}
+
+export interface JiraIssueWrite {
+  summary?: string;
+  /** Plain text, converted line-by-line to ADF. Ignored when descriptionAdf is set. */
+  description?: string;
+  /** Pre-built ADF document — used for updates that preserve existing formatting. */
+  descriptionAdf?: unknown;
+  /** Full component name set to write. */
+  componentNames?: string[];
+  /** Full label set to write. */
+  labels?: string[];
+  /** Custom fields, keyed by field id, values already in Jira's wire shape
+   *  (e.g. number, {value}, [{value}]). */
+  extraFields?: Record<string, unknown>;
+}
+
+function writeFields(input: JiraIssueWrite): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  if (input.summary !== undefined) fields.summary = input.summary;
+  if (input.descriptionAdf !== undefined) fields.description = input.descriptionAdf;
+  else if (input.description !== undefined) fields.description = textToAdf(input.description);
+  if (input.componentNames !== undefined)
+    fields.components = input.componentNames.map((name) => ({ name }));
+  if (input.labels !== undefined) fields.labels = input.labels;
+  for (const [id, value] of Object.entries(input.extraFields ?? {})) fields[id] = value;
+  return fields;
+}
+
+/** Comment with a caller-built ADF body (bullet lists etc.). */
+export async function addJiraCommentAdf(
+  workspaceId: string,
+  issueKey: string,
+  body: unknown
+): Promise<{ id: string | null }> {
+  const data = (await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}/comment`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  })) as { id?: string } | null;
+  return { id: data?.id ?? null };
+}
+
+/** Permanent — Jira Cloud has no trash for issues. Callers confirm first. */
+export async function deleteJiraIssue(workspaceId: string, issueKey: string): Promise<void> {
+  await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}`, { method: "DELETE" });
+}
+
+export async function deleteJiraComment(
+  workspaceId: string,
+  issueKey: string,
+  commentId: string
+): Promise<void> {
+  await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}/comment/${commentId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createJiraIssue(
+  workspaceId: string,
+  params: { projectKey: string; issueTypeName: string } & JiraIssueWrite
+): Promise<{ key: string }> {
+  const data = (await jiraFetch(workspaceId, "/rest/api/3/issue", {
+    method: "POST",
+    body: JSON.stringify({
+      fields: {
+        project: { key: params.projectKey },
+        issuetype: { name: params.issueTypeName },
+        ...writeFields(params),
+      },
+    }),
+  })) as { key: string };
+  return { key: data.key };
+}
+
+export async function updateJiraIssue(
+  workspaceId: string,
+  issueKey: string,
+  input: JiraIssueWrite
+): Promise<void> {
+  const fields = writeFields(input);
+  if (Object.keys(fields).length === 0) return;
+  await jiraFetch(workspaceId, `/rest/api/3/issue/${issueKey}`, {
+    method: "PUT",
+    body: JSON.stringify({ fields }),
+  });
+}
+
 export async function getJiraConnectionStatus(workspaceId: string) {
   const connection = await db.jiraConnection.findUnique({ where: { workspaceId } });
   if (!connection) return null;
@@ -465,6 +735,8 @@ export async function getJiraConnectionStatus(workspaceId: string) {
     siteUrl: connection.siteUrl,
     projectKeys: parseJsonArray(connection.projectKeys),
     prdSource: connection.prdSource,
+    ideasProjectKey: connection.ideasProjectKey,
+    ideasIssueType: connection.ideasIssueType,
     connected: true,
   };
 }

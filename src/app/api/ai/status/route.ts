@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAiProvider, isAiEnabled } from "@/lib/ai-config";
+import { getCurrentUser } from "@/lib/auth";
 import {
   getVertexLocation,
   getVertexModel,
@@ -7,6 +8,12 @@ import {
 } from "@/lib/vertex-config";
 
 export async function GET() {
+  // Leaks deploy metadata (GCP project id, model) — signed-in users only.
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const provider = getAiProvider();
   const model = getVertexModel();
   const enabled = isAiEnabled();

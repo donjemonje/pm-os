@@ -1,0 +1,96 @@
+# E2e runs: on every push to development, plus scheduled Sun / Tue / Thu at
+# 02:00 UTC (~05:00 Israel in summer, ~04:00 in winter — cron is UTC and does
+# not follow DST). Push runs work from development directly; scheduled runs
+# only fire once this file also exists on main (GitHub cron uses the default
+# branch), and always test development via the pinned checkout ref below.
+#
+# Runs the full suite against an ephemeral Postgres + local app boot.
+# Needs NO GitHub secrets — everything is synthetic test data.
+#
+# Production testing is out of scope for now — see git history when we
+# revisit.
+
+name: e2e
+
+on:
+  push:
+    branches: [development]
+  schedule:
+    - cron: "0 2 * * 0,2,4"
+  workflow_dispatch:
+
+# A newer push to development supersedes an in-flight run of the same suite.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-local:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pmos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pmos_test?schema=public
+      SESSION_SECRET: ci-e2e-not-a-secret
+      NEXT_PUBLIC_APP_URL: http://localhost:3200
+      DISABLE_LOGIN: "false"
+      ALLOW_SIGNUP: "false"
+      DISABLE_GOOGLE_LOGIN: "true"
+      # Fake Google OAuth creds: the provider must count as "configured" so
+      # google-sso.spec.ts can observe the googleSso system flag (the providers
+      # listing and the authorize redirect never call Google's servers).
+      GOOGLE_CLIENT_ID: test-google-client-id
+      GOOGLE_CLIENT_SECRET: test-google-client-secret
+      IDEAS_ENABLED: "false"
+      # 2FA secret-encryption key; production-mode boot refuses to start
+      # without it. Synthetic — the test DB holds only synthetic accounts.
+      TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"
+    steps:
+      # Scheduled workflows only fire from the default branch (main), so this
+      # file must exist on main — but the suite always tests development.
+      - uses: actions/checkout@v4
+        with:
+          ref: development
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Push schema to test database
+        run: npx prisma db push --skip-generate
+
+      # --experimental-strip-types: the seed imports encryptTotpSecret from
+      # src/lib/two-factor.ts (TypeScript) to store the fixed test TOTP secret.
+      - name: Seed RoomLens QA org
+        run: node --experimental-strip-types scripts/seed-test-db.mjs
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts webServer runs `next build && next start` in CI.
+      - name: Run e2e suite
+        run: npx playwright test --project=local
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-local
+          path: playwright-report/
+          retention-days: 14

@@ -5,7 +5,7 @@ import { importBatch, type ImportTicketInput } from "@/lib/ideas/store";
 const MAX_BATCH = 200;
 
 export async function POST(request: NextRequest) {
-  const disabled = ideasDisabledResponse();
+  const disabled = await ideasDisabledResponse();
   if (disabled) return disabled;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
@@ -35,6 +35,9 @@ export async function POST(request: NextRequest) {
       body: typeof item.body === "string" ? item.body : "",
       requester: typeof item.requester === "string" ? item.requester : undefined,
       tags: Array.isArray(item.tags) ? item.tags.filter((x) => typeof x === "string") : [],
+      affectedCustomers: Array.isArray(item.affectedCustomers)
+        ? item.affectedCustomers.filter((x) => typeof x === "string")
+        : undefined,
       createdAt: typeof item.createdAt === "string" ? item.createdAt : undefined,
       productLine: typeof item.productLine === "string" ? item.productLine : undefined,
       raw:

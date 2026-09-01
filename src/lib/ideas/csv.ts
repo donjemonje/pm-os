@@ -52,6 +52,7 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   requester: ["requester_name", "requester name", "requester", "submitter"],
   requesterEmail: ["requester_email", "requester email", "email"],
   tags: ["tags"],
+  customers: ["affected_customers", "affected customers", "customers", "customer"],
   created: ["created_at", "created at", "created", "date"],
   product: ["product_line", "product line", "product", "products"],
 };
@@ -100,6 +101,7 @@ export function ticketsFromCsv(text: string): CsvImportResult {
   const iRequester = col("requester");
   const iEmail = col("requesterEmail");
   const iTags = col("tags");
+  const iCustomers = col("customers");
   const iCreated = col("created");
   const iProduct = col("product");
 
@@ -134,6 +136,14 @@ export function ticketsFromCsv(text: string): CsvImportResult {
     };
     const product = cell(r, iProduct);
     if (product) ticket.productLine = product;
+    // The dedicated Zendesk field is one signal among several — it's not
+    // always filled in, so text extraction runs regardless. Names contain
+    // spaces, so split only on list separators.
+    const customers = cell(r, iCustomers)
+      .split(/[,;]+/)
+      .map((c) => c.trim())
+      .filter(Boolean);
+    if (customers.length > 0) ticket.affectedCustomers = customers;
     tickets.push(ticket);
   }
   return { tickets, skipped, errors: [] };

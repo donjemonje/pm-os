@@ -1,11 +1,12 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
-import { isIdeasEnabled } from "@/lib/feature-flags";
+import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 
-export default function SettingsLayout({ children }: { children: React.ReactNode }) {
+export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
+  const ideasEnabled = await ideasEnabledForCurrentUser();
   const sections = [
     { href: "/settings/jira", label: "Integrations" },
-    ...(isIdeasEnabled() ? [{ href: "/settings/ideas", label: "Ideas" }] : []),
+    ...(ideasEnabled ? [{ href: "/settings/ideas", label: "Ideas" }] : []),
   ];
 
   return (

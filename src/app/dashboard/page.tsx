@@ -1,11 +1,22 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ArrowRight, FileText, MessageSquare, Package, Plug } from "lucide-react";
-import { getOrCreateWorkspace } from "@/lib/workspace";
+import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { getJiraConnectionStatus } from "@/lib/jira";
+import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { AppShell } from "@/components/layout/AppShell";
 
 export default async function DashboardPage() {
+  await requireUserPage("/dashboard");
+  // The dashboard is the post-login landing page, so "off" redirects to an
+  // always-on surface instead of the 404 other feature gates use — login,
+  // the logo link, and stale bookmarks all funnel through here.
+  if (!(await featureEnabledForCurrentUser("dashboard"))) redirect("/releases");
+  const [docsEnabled, chatEnabled] = await Promise.all([
+    featureEnabledForCurrentUser("docs"),
+    featureEnabledForCurrentUser("chat"),
+  ]);
   const workspace = await getOrCreateWorkspace();
   const jira = await getJiraConnectionStatus(workspace.id);
 
@@ -54,8 +65,12 @@ export default async function DashboardPage() {
         <div className="mb-8 grid gap-4 sm:grid-cols-3">
           {[
             { label: "Releases", value: releases, icon: Package, href: "/releases" },
-            { label: "Documents", value: documents, icon: FileText, href: "/docs" },
-            { label: "PRD Q&A", value: qaCount, icon: MessageSquare, href: "/chat" },
+            ...(docsEnabled
+              ? [{ label: "Documents", value: documents, icon: FileText, href: "/docs" }]
+              : []),
+            ...(chatEnabled
+              ? [{ label: "PRD Q&A", value: qaCount, icon: MessageSquare, href: "/chat" }]
+              : []),
           ].map(({ label, value, icon: Icon, href }) => (
             <Link
               key={label}
@@ -72,6 +87,7 @@ export default async function DashboardPage() {
           ))}
         </div>
 
+        {docsEnabled && (
         <div>
           <h2 className="mb-4 text-lg font-semibold text-foreground">Recent documents</h2>
           {recentDocs.length === 0 ? (
@@ -106,6 +122,7 @@ export default async function DashboardPage() {
             </div>
           )}
         </div>
+        )}
       </div>
     </AppShell>
   );
