@@ -229,7 +229,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(labeledInput(page, "Prefix")).toHaveValue(
       "#update from @PM-OS, fields affected:"
     );
-    await expect(fieldRow(page, "Votes").locator('input[type="text"]')).toHaveValue("Votes");
+    await expect(fieldRow(page, "Votes").locator('input[type="text"]')).toHaveValue("P_Votes");
     await expect(
       fieldRow(page, "Votes").getByText("Increment by this batch's new votes")
     ).toBeVisible();
@@ -286,7 +286,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     });
     expect(fields.platforms.enabled).toBe(false);
     expect(fields.votes).toEqual({
-      jiraField: "Votes",
+      jiraField: "P_Votes",
       type: "number",
       policy: "increment",
       enabled: true,
@@ -322,7 +322,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     expect(config.junkKey).toBeUndefined();
     expect(config.fields.junkField).toBeUndefined();
     expect(config.fields.votes).toEqual({
-      jiraField: "Votes",
+      jiraField: "P_Votes",
       type: "number",
       policy: "increment",
       enabled: false,

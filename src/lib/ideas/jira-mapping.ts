@@ -58,7 +58,8 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       policy: "set_if_empty",
       enabled: true,
     },
-    votes: { jiraField: "Votes", type: "number", policy: "increment", enabled: true },
+    // Jira's built-in "Votes" name was taken, hence P_Votes (same as P_Components).
+    votes: { jiraField: "P_Votes", type: "number", policy: "increment", enabled: true },
     customers: { jiraField: "Customers", type: "multi_select", policy: "union", enabled: true },
     // Jira's built-in "Components" name was taken, hence P_Components.
     platforms: {
