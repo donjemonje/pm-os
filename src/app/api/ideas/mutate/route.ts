@@ -6,7 +6,6 @@ const MUTATION_TYPES = [
   "decision",
   "edit",
   "approveAll",
-  "inject",
   "reassign",
   "approveCustomer",
   "dismissCustomer",

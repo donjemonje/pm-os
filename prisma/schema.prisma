@@ -47,6 +47,9 @@ model User {
   /// Highest TOTP time-step already consumed — codes are strictly single-use.
   /// Recovery is admin-side (clear the totp fields), not backup codes.
   totpLastUsedStep Int?
+  /// Optional per-user default Product Line filter for the Ideas screen —
+  /// names from the workspace catalog. Empty = no default filter.
+  defaultProductLines Json @default("[]")
   organizationId   String?
   organization     Organization? @relation(fields: [organizationId], references: [id])
   createdAt        DateTime      @default(now())
@@ -90,6 +93,11 @@ model Workspace {
   organizationId String       @unique
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String       @default("My Workspace")
+  /// Ideas → Jira output mapping (field names, write policies, description
+  /// format, ticket-link template). Customer-facing output rules change
+  /// often, so they live in Admin → Ideas, not in code. Shape:
+  /// lib/ideas/jira-mapping.ts.
+  ideasConfig    Json         @default("{}")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -166,6 +174,11 @@ model JiraConnection {
   expiresAt    DateTime
   projectKeys  String    @default("[]")
   prdSource    String    @default("epic_description")
+  /// Ideas write-back target: new ideas become issues of this type in this
+  /// project. Must be one of projectKeys so the next import sees what we
+  /// created. Null + a single selected project = that project.
+  ideasProjectKey String?
+  ideasIssueType  String  @default("Task")
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 }
@@ -348,6 +361,9 @@ model Idea {
   batchStatus   String
   decision      String
   origin        String
+  /// Human-readable narration of what this import did to an Updated idea
+  /// (votes, enrichment, added product lines/platforms). Cleared on rollover.
+  batchChanges  Json      @default("[]")
   pmScore       Int?
   manualScore   Int?
   existingVotes Int       @default(0)

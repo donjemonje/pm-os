@@ -115,6 +115,7 @@ function toClientIdea(row: IdeaRow): Idea {
     ).filter((c) => !dismissedKeys.has(c.toLowerCase())),
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
+    batchChanges: (row.batchChanges as string[]) ?? [],
     decision: row.decision as Idea["decision"],
     origin: row.origin as Idea["origin"],
     pmScore: row.pmScore,
@@ -254,9 +255,14 @@ export async function importBatch(
 
     for (const s of jira.sources) {
       const cur = ideaByJiraKey.get(s.key);
+      // Same fallback as Zendesk-origin ideas: a Jira issue with no
+      // components gets "Other", so every idea has a product line — the
+      // product filter and the scoped merge gate can never silently miss one.
+      const products = s.products.length > 0 ? s.products : ["Other"];
       if (cur) {
         // Title and products track live Jira; details stay local — they may
-        // carry enrichment or PM edits, and nothing is written back yet. On
+        // carry enrichment or PM edits, and the write-back (push.ts) sends
+        // them as a PM-OS section, never as an overwrite of the live body. On
         // a batch with new data, last batch's vote delta becomes existing
         // and the idea re-enters as Unchanged until a match says otherwise.
         const rollover = fresh.length > 0;
@@ -264,12 +270,14 @@ export async function importBatch(
           where: { id: cur.id },
           data: {
             title: s.title,
-            products: s.products as Prisma.InputJsonValue,
+            products: products as Prisma.InputJsonValue,
             ...(rollover
               ? {
                   existingVotes: cur.existingVotes + cur.newVotes,
                   newVotes: 0,
                   batchStatus: "unchanged",
+                  // Last import's narration is stale once the batch rolls over.
+                  batchChanges: [] as unknown as Prisma.InputJsonValue,
                 }
               : {}),
           },
@@ -280,7 +288,7 @@ export async function importBatch(
             workspaceId,
             title: s.title,
             details: s.body,
-            products: s.products as Prisma.InputJsonValue,
+            products: products as Prisma.InputJsonValue,
             batchStatus: "unchanged",
             decision: "pending",
             origin: "jira",
@@ -334,14 +342,42 @@ export async function importBatch(
         : null;
       if (target) {
         // Matched FR: evidence on the existing idea, never a new one. The
-        // idea re-enters review as Updated.
+        // idea re-enters review as Updated and absorbs the new evidence's
+        // metadata (union — nothing is ever removed here). batchChanges
+        // narrates exactly what this import did, for the review UI.
         matched++;
+        const curProducts = (target.products as string[]) ?? [];
+        const curPlatforms = (target.platforms as string[]) ?? [];
+        let nextProducts = distinct([...curProducts, ...verdict.productLines]);
+        // A real product line replaces the "Other" placeholder.
+        if (nextProducts.length > 1) nextProducts = nextProducts.filter((p) => p !== "Other");
+        const nextPlatforms = distinct([...curPlatforms, ...verdict.platforms]);
+        const addedProducts = nextProducts.filter(
+          (p) => !curProducts.some((c) => c.toLowerCase() === p.toLowerCase())
+        );
+        const addedPlatforms = nextPlatforms.filter(
+          (p) => !curPlatforms.some((c) => c.toLowerCase() === p.toLowerCase())
+        );
+
+        const changes: string[] = [`+1 vote (ticket ${input.key})`];
+        if (m?.enrichedSummary) changes.push("Summary enriched with the new ticket");
+        for (const p of addedProducts) changes.push(`Product line added: ${p}`);
+        for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
+        // Several tickets can match the same idea in one import — accumulate.
+        // (fresh tickets exist here, so rollover already reset last batch's
+        // status: "updated" can only mean updated in THIS import.)
+        const prior =
+          target.batchStatus === "updated" ? ((target.batchChanges as string[]) ?? []) : [];
+
         await db.idea.update({
           where: { id: target.id },
           data: {
             newVotes: { increment: 1 },
             batchStatus: "updated",
             decision: "pending",
+            products: nextProducts as Prisma.InputJsonValue,
+            platforms: nextPlatforms as Prisma.InputJsonValue,
+            batchChanges: [...prior, ...changes] as Prisma.InputJsonValue,
             ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
             sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
           },
@@ -394,11 +430,12 @@ export async function importBatch(
   return { summary, state: await getIdeasState(workspaceId) };
 }
 
+// "inject" is not a mutation anymore — marking an idea as In Jira without a
+// real write was the demo behavior. The write-back lives in ./push.ts.
 export type IdeasMutation =
   | { type: "decision"; ideaId: string; decision: "pending" | "reviewed" }
   | { type: "edit"; ideaId: string; title: string; details: string; manual: number | null }
   | { type: "approveAll" }
-  | { type: "inject" }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
@@ -497,20 +534,6 @@ export async function mutateIdeas(
           action: revert ? "unapprove" : "approve",
           payload: { bulk: true },
         }))
-      );
-      break;
-    }
-    case "inject": {
-      const reviewed = await db.idea.findMany({
-        where: { workspaceId, decision: "reviewed" },
-      });
-      await db.idea.updateMany({
-        where: { id: { in: reviewed.map((i) => i.id) } },
-        data: { decision: "injected" },
-      });
-      await logEvents(
-        workspaceId,
-        reviewed.map((i) => ({ ideaId: i.id, action: "inject" }))
       );
       break;
     }

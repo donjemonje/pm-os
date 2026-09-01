@@ -59,6 +59,8 @@ export interface Idea {
   /** Dismissed suggestions, restorable from the drawer. */
   dismissedCustomers?: string[];
   batch: IdeaBatchStatus;
+  /** For Updated ideas: what this import did (votes, enrichment, added metadata). */
+  batchChanges?: string[];
   decision: IdeaDecision;
   /** Where this idea came from this batch. */
   origin: "zendesk" | "jira";

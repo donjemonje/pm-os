@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { MyProductLinesPanel } from "@/components/ideas/MyProductLinesPanel";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { db } from "@/lib/db";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
@@ -17,14 +18,21 @@ const LIST_QUERY = (workspaceId: string) => ({
 });
 
 export default async function IdeasSettingsPage() {
-  await requireUserPage("/settings/ideas");
+  const user = await requireUserPage("/settings/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
-  const [productLines, platforms, customers] = await Promise.all([
+  const [productLines, platforms, customers, dbUser] = await Promise.all([
     db.productLine.findMany(LIST_QUERY(workspace.id)),
     db.platform.findMany(LIST_QUERY(workspace.id)),
     db.customer.findMany(LIST_QUERY(workspace.id)),
+    db.user.findUnique({
+      where: { id: user.id },
+      select: { defaultProductLines: true },
+    }),
   ]);
+  const myProductLines = ((dbUser?.defaultProductLines as string[]) ?? []).filter((p) =>
+    productLines.some((l) => l.name.toLowerCase() === p.toLowerCase())
+  );
 
   return (
     <div>
@@ -40,6 +48,10 @@ export default async function IdeasSettingsPage() {
           descriptionPlaceholder="What is this product line? (optional)"
           emptyLabel="No product lines yet. Add the first one above."
           initialItems={productLines}
+        />
+        <MyProductLinesPanel
+          options={productLines.map((l) => l.name)}
+          initialSelected={myProductLines}
         />
         <SettingsListPanel
           title="Platforms"

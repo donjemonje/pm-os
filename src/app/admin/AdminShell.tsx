@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { Building2, Settings, Users } from "lucide-react";
+import { Building2, Lightbulb, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AdminLogoutButton } from "./AdminLogoutButton";
 
@@ -32,6 +32,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Platform",
     items: [
       { label: "Enablements", href: "/admin/enablements", icon: Settings },
+      { label: "Ideas", href: "/admin/ideas", icon: Lightbulb },
     ],
   },
 ];

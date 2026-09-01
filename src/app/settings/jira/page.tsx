@@ -1,4 +1,5 @@
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
+import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getJiraConnectionStatus } from "@/lib/jira";
 import { getGoogleDriveConnectionStatus } from "@/lib/google-drive";
 import { getJiraOAuthSetupStatus } from "@/lib/jira-oauth-config";
@@ -17,9 +18,10 @@ export default async function IntegrationsSettingsPage({
 }) {
   await requireUserPage("/settings/jira");
   const workspace = await getOrCreateWorkspace();
-  const [jiraStatus, driveStatus] = await Promise.all([
+  const [jiraStatus, driveStatus, ideasEnabled] = await Promise.all([
     getJiraConnectionStatus(workspace.id),
     getGoogleDriveConnectionStatus(workspace.id),
+    ideasEnabledForCurrentUser(),
   ]);
   const jiraOauthSetup = getJiraOAuthSetupStatus();
   const driveOauthSetup = getGoogleDriveOAuthSetupStatus();
@@ -34,6 +36,7 @@ export default async function IntegrationsSettingsPage({
       <IntegrationsPanel
         jiraStatus={jiraStatus}
         driveStatus={driveStatus}
+        ideasEnabled={ideasEnabled}
         jiraOauthReady={jiraOauthSetup.ready}
         driveOauthReady={driveOauthSetup.ready}
         banners={{

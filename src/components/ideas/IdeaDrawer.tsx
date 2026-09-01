@@ -436,6 +436,24 @@ export function IdeaDrawer({
             </>
           ) : idea ? (
             <>
+              {/* What this import did to an Updated idea — the PM shouldn't
+                  have to diff anything by eye. */}
+              {idea.batch === "updated" && (idea.batchChanges ?? []).length > 0 && (
+                <div className="rounded-lg border border-[rgba(122,167,255,.35)] bg-[rgba(122,167,255,.07)] px-3.5 py-2.5">
+                  <div className={`${MONO_LABEL} mb-1.5`}>Updated this import</div>
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {(idea.batchChanges ?? []).map((c, i) => (
+                      <li
+                        key={`${i}-${c}`}
+                        className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
+                      >
+                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#7aa7ff]" />
+                        {c}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <div>
                 <div className={`${MONO_LABEL} mb-1.5`}>Details ({idea.batch})</div>
                 <div className="whitespace-pre-line text-[13.5px] leading-relaxed text-foreground">
