@@ -164,7 +164,7 @@ export function IntegrationsPanel({
             siteUrl={jiraStatus.siteUrl}
             showIdeasTarget={ideasEnabled}
             initialIdeasProjectKey={jiraStatus.ideasProjectKey ?? null}
-            initialIdeasIssueType={jiraStatus.ideasIssueType ?? "Task"}
+            initialIdeasIssueType={jiraStatus.ideasIssueType ?? "Story"}
           />
         )}
       </IntegrationRow>

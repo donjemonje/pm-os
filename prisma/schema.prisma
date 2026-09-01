@@ -179,7 +179,7 @@ model JiraConnection {
   /// project. Must be one of projectKeys so the next import sees what we
   /// created. Null + a single selected project = that project.
   ideasProjectKey String?
-  ideasIssueType  String  @default("Task")
+  ideasIssueType  String  @default("Story")
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 }

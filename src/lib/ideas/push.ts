@@ -301,7 +301,7 @@ async function derivePlan(
   const targetProject =
     status.ideasProjectKey ?? (status.projectKeys.length === 1 ? status.projectKeys[0] : null);
   const target = targetProject
-    ? { projectKey: targetProject, issueType: status.ideasIssueType || "Task" }
+    ? { projectKey: targetProject, issueType: status.ideasIssueType || "Story" }
     : null;
 
   const rows = await db.idea.findMany({

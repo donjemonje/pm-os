@@ -9,7 +9,15 @@ export default async function AdminIdeasPage() {
 
   const organizations = await db.organization.findMany({
     orderBy: { createdAt: "asc" },
-    include: { workspace: { select: { id: true, ideasConfig: true } } },
+    include: {
+      workspace: {
+        select: {
+          id: true,
+          ideasConfig: true,
+          jiraConnection: { select: { ideasIssueType: true } },
+        },
+      },
+    },
   });
 
   return (
@@ -26,6 +34,8 @@ export default async function AdminIdeasPage() {
             name: org.name,
             slug: org.slug,
             config: mergeIdeasJiraConfig(org.workspace?.ideasConfig),
+            // null = no Jira connection yet; the issue-type control is hidden.
+            ideasIssueType: org.workspace?.jiraConnection?.ideasIssueType ?? null,
           }))}
       />
     </AdminShell>

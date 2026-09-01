@@ -14,6 +14,8 @@ interface OrgRow {
   name: string;
   slug: string;
   config: IdeasJiraConfig;
+  /** Jira issue type created ideas get; null when Jira isn't connected. */
+  ideasIssueType: string | null;
 }
 
 const POLICY_LABELS: Record<string, string> = {
@@ -32,6 +34,9 @@ export function IdeasOutputConfig({ organizations }: { organizations: OrgRow[] }
   const [orgId, setOrgId] = useState(organizations[0]?.id ?? "");
   const [configs, setConfigs] = useState<Record<string, IdeasJiraConfig>>(
     Object.fromEntries(organizations.map((o) => [o.id, o.config]))
+  );
+  const [issueTypes, setIssueTypes] = useState<Record<string, string | null>>(
+    Object.fromEntries(organizations.map((o) => [o.id, o.ideasIssueType]))
   );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -65,7 +70,7 @@ export function IdeasOutputConfig({ organizations }: { organizations: OrgRow[] }
       const res = await fetch(`/api/admin/organizations/${orgId}/ideas-config`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
+        body: JSON.stringify({ ...config, ideasIssueType: issueTypes[orgId] ?? undefined }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -73,6 +78,7 @@ export function IdeasOutputConfig({ organizations }: { organizations: OrgRow[] }
         return;
       }
       setConfigs((prev) => ({ ...prev, [orgId]: data.config }));
+      setIssueTypes((prev) => ({ ...prev, [orgId]: data.ideasIssueType ?? prev[orgId] }));
       setSaved(true);
     } catch {
       setError("Save failed");
@@ -96,6 +102,30 @@ export function IdeasOutputConfig({ organizations }: { organizations: OrgRow[] }
           ))}
         </select>
       </label>
+
+      {/* Jira target */}
+      {issueTypes[orgId] !== null && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-sm font-bold">Jira target</h2>
+          <p className="mb-4 mt-0.5 text-xs text-slate-500">
+            New ideas are created as this work type in the connected project (also settable in
+            Settings → Jira). The name must match a work type of the project exactly.
+          </p>
+          <label className="flex items-center gap-3 text-sm">
+            <span className="text-xs font-medium text-slate-600">Issue type</span>
+            <input
+              type="text"
+              value={issueTypes[orgId] ?? ""}
+              onChange={(e) => {
+                setSaved(false);
+                setIssueTypes((prev) => ({ ...prev, [orgId]: e.target.value }));
+              }}
+              placeholder="Story"
+              className={`${inputCls} w-44`}
+            />
+          </label>
+        </section>
+      )}
 
       {/* Description format */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">

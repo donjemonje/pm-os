@@ -24,7 +24,10 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const workspace = await db.workspace.findUnique({ where: { organizationId: id } });
+  const workspace = await db.workspace.findUnique({
+    where: { organizationId: id },
+    include: { jiraConnection: { select: { id: true, ideasIssueType: true } } },
+  });
   if (!workspace) {
     return NextResponse.json({ error: "Organization has no workspace" }, { status: 404 });
   }
@@ -35,5 +38,23 @@ export async function PUT(
     data: { ideasConfig: config as unknown as Prisma.InputJsonValue },
   });
 
-  return NextResponse.json({ config });
+  // The Jira issue type created ideas get lives on the workspace's Jira
+  // connection (also settable in Settings → Jira) — mergeIdeasJiraConfig
+  // drops it from the stored config, so it never exists in two places.
+  let ideasIssueType = workspace.jiraConnection?.ideasIssueType ?? null;
+  const requestedIssueType =
+    body && typeof body === "object" ? (body as Record<string, unknown>).ideasIssueType : undefined;
+  if (
+    workspace.jiraConnection &&
+    typeof requestedIssueType === "string" &&
+    requestedIssueType.trim().length > 0
+  ) {
+    ideasIssueType = requestedIssueType.trim();
+    await db.jiraConnection.update({
+      where: { id: workspace.jiraConnection.id },
+      data: { ideasIssueType },
+    });
+  }
+
+  return NextResponse.json({ config, ideasIssueType });
 }
