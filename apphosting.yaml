@@ -60,6 +60,12 @@ env:
     availability:
       - RUNTIME
 
+  # AES-256-GCM key for TOTP secrets (2FA) — 64 hex chars, Secret Manager only.
+  - variable: TOTP_ENC_KEY
+    secret: pmos-totp-enc-key
+    availability:
+      - RUNTIME
+
   # --- AI (Vertex default in prod; ADC — no key file) ---
   - variable: AI_PROVIDER
     value: vertex
