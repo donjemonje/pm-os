@@ -23,6 +23,7 @@ const STATUS_CHIP_TO_BATCH: Record<string, Idea["batch"]> = {
   New: "new",
   Updated: "updated",
   Archive: "archive",
+  Unchanged: "unchanged",
 };
 
 interface ServerState {
@@ -35,6 +36,7 @@ interface ServerState {
 interface ImportSummary {
   imported: number;
   frs: number;
+  matched: number;
   bugs: number;
   needsDetails: number;
   duplicates: number;
@@ -180,7 +182,7 @@ export function IdeasView({
   const [filterResetKey, setFilterResetKey] = useState(0);
 
   const [page, setPage] = useState<"final" | "merge">("final");
-  const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single">("Merge");
+  const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single" | "Unchanged">("Merge");
   const [edit, setEdit] = useState<MergeEdit | null>(null);
   const [selectedFinalId, setSelectedFinalId] = useState<string | "auto" | null>("auto");
 
@@ -304,6 +306,8 @@ export function IdeasView({
         `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}`,
       ];
       if (s.imported > 0) parts.push(`${s.frs} FR${s.frs === 1 ? "" : "s"} → ideas`);
+      if (s.matched > 0)
+        parts.push(`${s.matched} matched to existing Jira idea${s.matched === 1 ? "" : "s"}`);
       if (s.bugs > 0) parts.push(`${s.bugs} bug${s.bugs === 1 ? "" : "s"} parked`);
       if (s.needsDetails > 0)
         parts.push(`${s.needsDetails} need${s.needsDetails === 1 ? "s" : ""} more details`);
@@ -410,7 +414,8 @@ export function IdeasView({
     });
     if (!ok) return;
     setEdit(null);
-    setSelectedFinalId(null);
+    // Keep the edited idea selected so the saved reassignment stays visible.
+    setSelectedFinalId(edit.ideaId);
     setNote("");
   };
 
@@ -450,7 +455,13 @@ export function IdeasView({
       const wanted = customerFilter.map((c) => c.toLowerCase());
       if (!(i.customers ?? []).some((c) => wanted.includes(c.toLowerCase()))) return false;
     }
-    if (statusFilter.length > 0 && !statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
+    if (statusFilter.length > 0) {
+      if (!statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
+    } else if (i.batch === "unchanged") {
+      // The Jira backlog dwarfs a Zendesk batch and is mostly unchanged —
+      // unchanged ideas need no review, so they show only via their chip.
+      return false;
+    }
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
   };
@@ -668,7 +679,7 @@ export function IdeasView({
               <span className={`${MONO_LABEL} w-[99px] shrink-0 pt-1.5`}>Import Status</span>
               <div className="flex flex-wrap items-center gap-1.5">
                 {page === "merge"
-                  ? (["Merge", "Single"] as const).map((label) => (
+                  ? (["Merge", "Single", "Unchanged"] as const).map((label) => (
                       <button
                         key={label}
                         onClick={() => {
@@ -684,11 +695,7 @@ export function IdeasView({
                       <button
                         key={label}
                         onClick={() =>
-                          setStatusFilter((prev) =>
-                            prev.includes(label)
-                              ? prev.filter((x) => x !== label)
-                              : [...prev, label]
-                          )
+                          setStatusFilter((prev) => (prev.includes(label) ? [] : [label]))
                         }
                         className={chipClass(statusFilter.includes(label))}
                       >
@@ -768,7 +775,7 @@ export function IdeasView({
               const badge = badgeOf(idea);
               const score = scoreOf(idea);
               const hovered = hoverId === idea.id;
-              const showMark = idea.decision === "reviewed" || hovered;
+              const showMark = needsApproval(idea) && (idea.decision === "reviewed" || hovered);
               return (
                 <div
                   key={idea.id}
