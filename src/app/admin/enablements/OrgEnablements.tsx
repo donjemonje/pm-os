@@ -159,7 +159,7 @@ export function OrgEnablements({
   );
 }
 
-function FlagChoice({
+export function FlagChoice({
   label,
   active,
   disabled,

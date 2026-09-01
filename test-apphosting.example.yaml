@@ -22,7 +22,9 @@ env:
       - BUILD
       - RUNTIME
 
-  # --- Auth gates (mirror prod: login on, signup off, Google off) ---
+  # --- Auth gates (login on, signup off; Google pinned OFF in tests — prod
+  # has it on, but tests carry no Google OAuth creds and the pin keeps the
+  # googleSso env default deterministic) ---
   - variable: DISABLE_LOGIN
     value: "false"
     availability:
@@ -37,6 +39,21 @@ env:
 
   - variable: DISABLE_GOOGLE_LOGIN
     value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # Fake Google OAuth creds so the provider counts as "configured" — the
+  # providers listing and the authorize redirect never call Google's servers,
+  # so google-sso.spec.ts can observe the googleSso system flag end to end.
+  - variable: GOOGLE_CLIENT_ID
+    value: test-google-client-id
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: GOOGLE_CLIENT_SECRET
+    value: test-google-client-secret
     availability:
       - BUILD
       - RUNTIME

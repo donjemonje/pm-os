@@ -16,7 +16,8 @@ import {
   signInWithOAuth,
   twoFactorPendingCookieOptions,
 } from "./auth";
-import { isGoogleLoginDisabled, isLoginDisabled } from "./feature-flags";
+import { isLoginDisabled } from "./feature-flags";
+import { systemFlagEnabled } from "./system-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
 const OAUTH_PKCE_COOKIE = "pmos_oauth_pkce";
@@ -66,8 +67,8 @@ export async function startOAuth(provider: string, fromParam?: string | null) {
     return authRedirect("/login", { error: "invalid_provider" });
   }
 
-  if (provider === "google" && isGoogleLoginDisabled()) {
-    return authRedirect("/login", { error: "google_not_configured" });
+  if (provider === "google" && !(await systemFlagEnabled("googleSso"))) {
+    return authRedirect("/login", { error: "google_sso_disabled" });
   }
 
   if (!getOAuthProviderConfig(provider)) {
@@ -99,8 +100,10 @@ export async function completeOAuth(provider: string, code: string | null, state
     return loginError("invalid_provider");
   }
 
-  if (provider === "google" && isGoogleLoginDisabled()) {
-    return loginError("google_not_configured");
+  // System-wide Google SSO switch (admin override, else env default). Checked
+  // again here so a flag flipped mid-flow still blocks the sign-in.
+  if (provider === "google" && !(await systemFlagEnabled("googleSso"))) {
+    return loginError("google_sso_disabled");
   }
 
   if (!code || !state) {

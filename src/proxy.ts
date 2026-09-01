@@ -5,11 +5,17 @@ const SESSION_COOKIE = "pmos_session";
 // server-side in getCurrentUser, which rejects unverified sessions.
 const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 
-const PUBLIC_PATHS = ["/", "/login", "/register"];
+const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot-password", "/reset-password"];
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;
   if (pathname.startsWith("/api/auth/login") || pathname.startsWith("/api/auth/register")) {
+    return true;
+  }
+  if (
+    pathname.startsWith("/api/auth/forgot-password") ||
+    pathname.startsWith("/api/auth/reset-password")
+  ) {
     return true;
   }
   if (pathname.startsWith("/api/auth/oauth")) {

@@ -123,6 +123,31 @@ export default function validateTestEnv(): void {
     }
   }
 
+  // google-sso.spec.ts asserts the googleSso system flag's env default is
+  // OFF ("Off (default)" badge, no google in /api/auth/oauth/providers) and
+  // then flips the admin override. The env default is NOT DISABLE_GOOGLE_LOGIN,
+  // so the pin must resolve true-like.
+  if (!isTrueLike(env.DISABLE_GOOGLE_LOGIN)) {
+    problems.push(
+      `DISABLE_GOOGLE_LOGIN resolves to ${show(env.DISABLE_GOOGLE_LOGIN)} but ` +
+        `google-sso.spec.ts asserts the googleSso env default is off — set it ` +
+        `to "true", or update that spec together with this check`
+    );
+  }
+
+  // google-sso.spec.ts needs Google to count as "configured" so the system
+  // flag is the only gate it observes. Fake creds are fine: the providers
+  // listing and the authorize redirect never call Google's servers.
+  for (const cred of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] as const) {
+    if (!env[cred]?.trim()) {
+      problems.push(
+        `${cred} is not set — google-sso.spec.ts needs the fake test creds ` +
+          `from test-apphosting.example.yaml so the google provider counts as ` +
+          `configured; ${FIX_YAML}`
+      );
+    }
+  }
+
   if (problems.length > 0) {
     throw new Error(
       `Refusing to start: the test environment is misconfigured ` +
@@ -132,6 +157,6 @@ export default function validateTestEnv(): void {
   }
 
   console.log(
-    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, TOTP key set`
+    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, google sso default off (fake creds set), TOTP key set`
   );
 }
