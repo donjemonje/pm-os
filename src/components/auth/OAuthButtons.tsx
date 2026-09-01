@@ -119,5 +119,5 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   signup_disabled: "Sign-up is disabled. Ask an admin to invite you, then sign in.",
   account_deactivated: "This account has been deactivated. Contact your admin.",
   google_sso_disabled:
-    "Google sign-in is disabled for your organization. Sign in with email instead.",
+    "Google sign-in is currently disabled. Sign in with email instead.",
 };

@@ -64,7 +64,7 @@ export function isChatEnabled(): boolean {
 // env default applies. Keys outside ORG_FEATURE_KEYS are rejected by the
 // admin API and ignored here. Managed in PM-OS Admin → Enablements.
 
-export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat", "googleSso"] as const;
+export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat"] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
 
 /** Env-level default for a flag (what applies when the org has no override). */
@@ -76,13 +76,33 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDocsEnabled();
     case "chat":
       return isChatEnabled();
-    case "googleSso":
-      return !isGoogleLoginDisabled();
   }
 }
 
 export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
   return (ORG_FEATURE_KEYS as readonly string[]).includes(key);
+}
+
+// ————— System-wide flag overrides —————
+//
+// Switches that must resolve BEFORE sign-in (no user, so no org): e.g. the
+// Google SSO button on /login. Stored one row per key in SystemFlag; a stored
+// row wins, otherwise the env default applies. Resolution lives in
+// src/lib/system-flags.ts (needs the DB); managed in PM-OS Admin → Enablements.
+
+export const SYSTEM_FLAG_KEYS = ["googleSso"] as const;
+export type SystemFlagKey = (typeof SYSTEM_FLAG_KEYS)[number];
+
+export function isSystemFlagKey(key: string): key is SystemFlagKey {
+  return (SYSTEM_FLAG_KEYS as readonly string[]).includes(key);
+}
+
+/** Env-level default for a system flag (applies when no override row exists). */
+export function envSystemFlagDefault(key: SystemFlagKey): boolean {
+  switch (key) {
+    case "googleSso":
+      return !isGoogleLoginDisabled();
+  }
 }
 
 /** Pure resolver: org override if present, else the env default. */

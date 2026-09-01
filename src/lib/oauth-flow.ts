@@ -16,12 +16,8 @@ import {
   signInWithOAuth,
   twoFactorPendingCookieOptions,
 } from "./auth";
-import {
-  envFeatureDefault,
-  isGoogleLoginDisabled,
-  isLoginDisabled,
-  resolveFeature,
-} from "./feature-flags";
+import { isLoginDisabled } from "./feature-flags";
+import { systemFlagEnabled } from "./system-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
 const OAUTH_PKCE_COOKIE = "pmos_oauth_pkce";
@@ -71,8 +67,8 @@ export async function startOAuth(provider: string, fromParam?: string | null) {
     return authRedirect("/login", { error: "invalid_provider" });
   }
 
-  if (provider === "google" && isGoogleLoginDisabled()) {
-    return authRedirect("/login", { error: "google_not_configured" });
+  if (provider === "google" && !(await systemFlagEnabled("googleSso"))) {
+    return authRedirect("/login", { error: "google_sso_disabled" });
   }
 
   if (!getOAuthProviderConfig(provider)) {
@@ -102,6 +98,12 @@ export async function completeOAuth(provider: string, code: string | null, state
 
   if (!isOAuthProvider(provider)) {
     return loginError("invalid_provider");
+  }
+
+  // System-wide Google SSO switch (admin override, else env default). Checked
+  // again here so a flag flipped mid-flow still blocks the sign-in.
+  if (provider === "google" && !(await systemFlagEnabled("googleSso"))) {
+    return loginError("google_sso_disabled");
   }
 
   if (!code || !state) {
@@ -138,16 +140,6 @@ export async function completeOAuth(provider: string, code: string | null, state
       email: profile.email,
       name: profile.name,
     });
-    // Per-org Google SSO gate: enforced here, not on the login page — the org
-    // is only known once the profile resolves to a user. No session is issued.
-    if (
-      provider === "google" &&
-      !resolveFeature(user.organizationFeatures, "googleSso", envFeatureDefault("googleSso"))
-    ) {
-      const response = loginError("google_sso_disabled");
-      clearOAuthCookies(response);
-      return response;
-    }
     // 2FA is mandatory: every OAuth login lands on the TOTP step.
     const token = await createSession(user.id);
     const redirectTo = from?.startsWith("/") ? from : "/";

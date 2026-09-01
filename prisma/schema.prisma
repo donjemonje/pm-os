@@ -406,3 +406,14 @@ model ReviewEvent {
 
   @@index([workspaceId, ideaId])
 }
+
+/// System-wide flag overrides — switches that must resolve before sign-in
+/// (e.g. Google SSO on /login), where no organization is known yet. One row
+/// per key; a present row wins, a missing key falls back to the env default.
+/// Keys are allowlisted in feature-flags.ts (SYSTEM_FLAG_KEYS). Managed in
+/// PM-OS Admin → Enablements.
+model SystemFlag {
+  key       String   @id
+  value     Boolean
+  updatedAt DateTime @updatedAt
+}
