@@ -149,12 +149,20 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
               />
             </div>
             <div>
-              <label
-                htmlFor="password"
-                className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
-              >
-                Password
-              </label>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label
+                  htmlFor="password"
+                  className="font-subtitle block text-xs font-medium text-brand-muted"
+                >
+                  Password
+                </label>
+                <a
+                  href="/forgot-password"
+                  className="font-subtitle text-xs text-brand-muted transition-colors hover:text-brand-accent"
+                >
+                  Forgot password?
+                </a>
+              </div>
               <input
                 id="password"
                 type="password"

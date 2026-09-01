@@ -420,6 +420,9 @@ export async function signInWithOAuth(input: {
   });
   if (linked) {
     if (linked.user.deactivatedAt) throw new Error("account_deactivated");
+    // Login type is sticky: a password account never signs in via SSO, even
+    // when a provider link exists from before this rule.
+    if (linked.user.passwordHash) throw new Error("email_uses_password");
     return toAuthUser(linked.user);
   }
 
@@ -430,6 +433,9 @@ export async function signInWithOAuth(input: {
 
   if (existing) {
     if (existing.deactivatedAt) throw new Error("account_deactivated");
+    // Login type is sticky: same email but a password account — no auto-link,
+    // no SSO sign-in. (SSO-created users may still link another provider.)
+    if (existing.passwordHash) throw new Error("email_uses_password");
     await db.oAuthAccount.create({
       data: {
         userId: existing.id,

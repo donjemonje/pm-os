@@ -52,9 +52,10 @@ model User {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  sessions     Session[]
-  accounts     OAuthAccount[]
-  chatSessions ChatSession[]
+  sessions            Session[]
+  accounts            OAuthAccount[]
+  chatSessions        ChatSession[]
+  passwordResetTokens PasswordResetToken[]
 
   @@index([organizationId])
 }
@@ -416,4 +417,19 @@ model SystemFlag {
   key       String   @id
   value     Boolean
   updatedAt DateTime @updatedAt
+}
+
+/// Single-use password-reset tokens (forgot-password email links). Only the
+/// SHA-256 hash of the token is stored; the raw token exists only in the
+/// emailed link. 24h expiry; consumed on use; password-type users only.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
