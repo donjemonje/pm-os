@@ -224,7 +224,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
 
     // Defaults from jira-mapping.ts render with the fixed policies on display.
     await expect(labeledInput(page, "Tickets heading")).toHaveValue("Supported Tickets:");
-    await expect(labeledInput(page, "Blank lines before the list")).toHaveValue("5");
+    await expect(labeledInput(page, "Blank lines before the list")).toHaveValue("2");
     await expect(labeledInput(page, "Zendesk ticket link template")).toHaveValue("");
     await expect(labeledInput(page, "Prefix")).toHaveValue(
       "#update from @PM-OS, fields affected:"
@@ -247,7 +247,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
 
     // Edit: description format, one field name, one field toggle, the prefix.
     await labeledInput(page, "Tickets heading").fill("QA Supported:");
-    await labeledInput(page, "Blank lines before the list").fill("2");
+    await labeledInput(page, "Blank lines before the list").fill("3");
     await labeledInput(page, "Zendesk ticket link template").fill(
       "https://qa.zendesk.example/agent/tickets/{id}"
     );
@@ -269,7 +269,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     });
     expect(stored.descriptionMode).toBe("overwrite");
     expect(stored.supportedTicketsHeading).toBe("QA Supported:");
-    expect(stored.descriptionGapLines).toBe(2);
+    expect(stored.descriptionGapLines).toBe(3);
     expect(stored.zendeskTicketUrlTemplate).toBe(
       "https://qa.zendesk.example/agent/tickets/{id}"
     );
@@ -295,7 +295,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     // Reload: the server renders the saved config back, not the defaults.
     await page.reload();
     await expect(labeledInput(page, "Tickets heading")).toHaveValue("QA Supported:");
-    await expect(labeledInput(page, "Blank lines before the list")).toHaveValue("2");
+    await expect(labeledInput(page, "Blank lines before the list")).toHaveValue("3");
     await expect(
       fieldRow(page, "Customers").locator('input[type="text"]')
     ).toHaveValue("QA_Customers");
@@ -317,7 +317,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     expect(res.status()).toBe(200);
     const { config } = await res.json();
     expect(config.descriptionMode).toBe("overwrite");
-    expect(config.descriptionGapLines).toBe(5);
+    expect(config.descriptionGapLines).toBe(2);
     expect(config.supportedTicketsHeading).toBe("Supported Tickets:");
     expect(config.junkKey).toBeUndefined();
     expect(config.fields.junkField).toBeUndefined();

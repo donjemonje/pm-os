@@ -46,7 +46,7 @@ export interface IdeasJiraConfig {
 
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   descriptionMode: "overwrite",
-  descriptionGapLines: 5,
+  descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
   zendeskTicketUrlTemplate: "",
   updateComment: true,
