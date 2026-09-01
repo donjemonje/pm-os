@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ArrowRight, FileText, MessageSquare, Package, Plug } from "lucide-react";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { db } from "@/lib/db";
@@ -8,6 +9,10 @@ import { AppShell } from "@/components/layout/AppShell";
 
 export default async function DashboardPage() {
   await requireUserPage("/dashboard");
+  // The dashboard is the post-login landing page, so "off" redirects to an
+  // always-on surface instead of the 404 other feature gates use — login,
+  // the logo link, and stale bookmarks all funnel through here.
+  if (!(await featureEnabledForCurrentUser("dashboard"))) redirect("/releases");
   const [docsEnabled, chatEnabled] = await Promise.all([
     featureEnabledForCurrentUser("docs"),
     featureEnabledForCurrentUser("chat"),

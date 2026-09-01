@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Search, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { badgeOf, needsApproval, scoreOf } from "@/lib/ideas/idea";
+import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
@@ -156,6 +157,8 @@ export function IdeasView({
   catalogProducts = [],
   catalogPlatforms = [],
   catalogCustomers = [],
+  defaultProducts = [],
+  undoEnabled = false,
 }: {
   /** Product-line names from the settings catalog, merged into the filter options. */
   catalogProducts?: string[];
@@ -163,6 +166,10 @@ export function IdeasView({
   catalogPlatforms?: string[];
   /** Customer names from the settings catalog, merged into the filter options. */
   catalogCustomers?: string[];
+  /** The signed-in user's own product lines — pre-applied as the filter and merge scope. */
+  defaultProducts?: string[];
+  /** "ideasUndo" org flag: per-idea undo of the last merge in the drawer. */
+  undoEnabled?: boolean;
 }) {
   const [tickets, setTickets] = useState<ZendeskTicket[]>([]);
   const [jiraSources, setJiraSources] = useState<JiraSource[]>([]);
@@ -173,7 +180,7 @@ export function IdeasView({
   const [hydrated, setHydrated] = useState(false);
 
   const [query, setQuery] = useState("");
-  const [productFilter, setProductFilter] = useState<string[]>([]);
+  const [productFilter, setProductFilter] = useState<string[]>(defaultProducts);
   const [platformFilter, setPlatformFilter] = useState<string[]>([]);
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
@@ -191,6 +198,13 @@ export function IdeasView({
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  /** Merge scope: selected product lines; empty = all. */
+  const [scopeSel, setScopeSel] = useState<string[]>([]);
+  const [plan, setPlan] = useState<PushPlan | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [mergeError, setMergeError] = useState("");
+  const [pushing, setPushing] = useState(false);
+  const [pushResults, setPushResults] = useState<PushResult[] | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [importing, setImporting] = useState(false);
@@ -348,9 +362,47 @@ export function IdeasView({
     setError("");
   };
 
+  // Suggested metadata still awaiting review on an idea — customers outside
+  // the catalog (dismissed ones are already subtracted server-side). An idea
+  // with any of these cannot be approved; mirrors the server gate in
+  // mutateIdeas, which refuses the decision outright.
+  const unresolvedSuggested = (idea: Idea): string[] =>
+    (idea.customers ?? []).filter(
+      (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase())
+    );
+
+  // Per-idea undo of the last merge (behind the "ideasUndo" org flag). A
+  // created issue is deleted in Jira — permanent, hence the hard confirm.
+  const undoPush = async (idea: Idea) => {
+    if (!idea.undoable) return;
+    const message =
+      idea.undoable.action === "create"
+        ? `Undo will permanently DELETE ${idea.undoable.jiraKey} in Jira — comments and edits made there are lost. Continue?`
+        : `Undo restores ${idea.undoable.jiraKey} to its pre-merge state. Fields edited in Jira since the merge are left alone. Continue?`;
+    if (!window.confirm(message)) return;
+    setError("");
+    try {
+      const res = await fetch("/api/ideas/undo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ideaId: idea.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? "Undo failed");
+        return;
+      }
+      applyState(data.state);
+      if (data.warnings?.length > 0) setError(data.warnings.join(" · "));
+    } catch {
+      setError("Undo failed — is the dev server running?");
+    }
+  };
+
   const toggleApprove = (id: string) => {
     const idea = ideas.find((i) => i.id === id);
     if (!idea || idea.decision === "injected") return;
+    if (idea.decision === "pending" && unresolvedSuggested(idea).length > 0) return;
     setNote("");
     void callMutate({
       type: "decision",
@@ -431,13 +483,15 @@ export function IdeasView({
     unchanged: ideas.filter((i) => i.batch === "unchanged").length,
     archive: ideas.filter((i) => i.batch === "archive").length,
   };
-  const injectDisabled = pending > 0 || reviewed === 0;
+  // Partial merge: the button opens as soon as anything is approved — the
+  // all-reviewed gate applies per selected product line inside the modal.
+  const injectDisabled = reviewed === 0;
   const injectHint =
-    pending > 0
-      ? `Approve all ideas first — ${pending} still awaiting review`
-      : reviewed === 0
-        ? "All changes already merged to Jira"
-        : `Merge ${reviewed} approved changes to Jira`;
+    reviewed === 0
+      ? pending > 0
+        ? `Approve ideas to enable merging — ${pending} awaiting review`
+        : "All changes already merged to Jira"
+      : `Merge approved changes to Jira`;
 
   const matches = (i: Idea): boolean => {
     if (i.batch === "deleted") return false;
@@ -476,7 +530,106 @@ export function IdeasView({
   });
 
   const drawerIdea = drawerId ? ideas.find((i) => i.id === drawerId) : undefined;
-  const approvedForInject = live.filter((i) => i.decision === "reviewed");
+
+  // ——— Merge-to-Jira modal (scope → preview → execute → results) ———
+  const scope = scopeSel.length > 0 ? scopeSel : null;
+  const inMergeScope = (i: Idea): boolean =>
+    !scope || i.products.some((p) => scope.some((s) => s.toLowerCase() === p.toLowerCase()));
+  const scopedPending = approvable.filter(
+    (i) => i.decision === "pending" && inMergeScope(i)
+  ).length;
+  const scopedReviewed = live.filter(
+    (i) => i.decision === "reviewed" && inMergeScope(i)
+  ).length;
+  // One approved idea is enough to merge — pending ideas never block, they
+  // simply stay behind for a later merge.
+  const previewDisabled = scopedReviewed === 0;
+  const previewHint =
+    scopedReviewed === 0
+      ? "Nothing approved in the selected product lines"
+      : `${scopedReviewed} approved change${scopedReviewed === 1 ? "" : "s"} will merge${
+          scopedPending > 0
+            ? ` — ${scopedPending} still pending stay${scopedPending === 1 ? "s" : ""} here`
+            : ""
+        }`;
+
+  const openMerge = () => {
+    // Default the scope to the PM's own product lines when they have any.
+    setScopeSel(defaultProducts.filter((p) => allProducts.some((a) => a.toLowerCase() === p.toLowerCase())));
+    setPlan(null);
+    setPushResults(null);
+    setMergeError("");
+    setConfirmOpen(true);
+  };
+
+  const closeMerge = () => {
+    if (pushing) return;
+    setConfirmOpen(false);
+    setPlan(null);
+    setPushResults(null);
+    setMergeError("");
+  };
+
+  const toggleScope = (name: string) => {
+    setPlan(null); // a changed scope must be re-previewed before it can run
+    setMergeError("");
+    setScopeSel((prev) =>
+      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
+    );
+  };
+
+  const loadPlan = async () => {
+    setPlanLoading(true);
+    setMergeError("");
+    try {
+      const res = await fetch("/api/ideas/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "preview", productLines: scope }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMergeError(data.error ?? "Preview failed");
+        return;
+      }
+      setPlan(data.plan as PushPlan);
+    } catch {
+      setMergeError("Preview failed — is the dev server running?");
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  const runPush = async () => {
+    setPushing(true);
+    setMergeError("");
+    try {
+      const res = await fetch("/api/ideas/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "execute", productLines: scope }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMergeError(data.error ?? "Merge failed");
+        return;
+      }
+      applyState(data.state as ServerState);
+      const results = data.results as PushResult[];
+      setPushResults(results);
+      const okCount = results.filter((r) => r.ok).length;
+      const failCount = results.length - okCount;
+      setNote(
+        failCount === 0
+          ? `${okCount} change${okCount === 1 ? "" : "s"} merged to Jira`
+          : `${okCount} merged, ${failCount} failed — reopen Merge to Jira to retry`
+      );
+    } catch {
+      setMergeError("Merge failed — is the dev server running?");
+    } finally {
+      setPushing(false);
+    }
+  };
 
   const hasFilters =
     query !== "" ||
@@ -486,15 +639,21 @@ export function IdeasView({
     statusFilter.length > 0 ||
     pendingOnly;
 
-  const runInject = async () => {
-    const n = approvedForInject.length;
-    setConfirmOpen(false);
-    const ok = await callMutate({ type: "inject" });
-    if (ok)
-      setNote(
-        `${n} change${n === 1 ? "" : "s"} approved for Jira — write-back arrives with the Jira integration`
-      );
-  };
+  // Esc closes the merge modal (never mid-write). Enter is deliberately not
+  // bound here — a Jira write should always be an explicit click.
+  useEffect(() => {
+    if (!confirmOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !pushing) {
+        setConfirmOpen(false);
+        setPlan(null);
+        setPushResults(null);
+        setMergeError("");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmOpen, pushing]);
 
   return (
     <div className="mx-auto max-w-[1120px] px-10 pb-24 pt-8">
@@ -612,7 +771,7 @@ export function IdeasView({
               <span title={injectHint} className="inline-flex">
                 <button
                   disabled={injectDisabled}
-                  onClick={() => setConfirmOpen(true)}
+                  onClick={openMerge}
                   className="inline-flex h-8 items-center whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   Merge to Jira
@@ -913,10 +1072,15 @@ export function IdeasView({
                     )}
                   </button>
 
-                  {/* Status pill */}
+                  {/* Status pill — Updated carries the what-changed narration on hover */}
                   <span className="flex w-[124px] shrink-0 items-center justify-center">
                     {badge && (
                       <span
+                        title={
+                          idea.batch === "updated" && (idea.batchChanges ?? []).length > 0
+                            ? (idea.batchChanges ?? []).join("\n")
+                            : undefined
+                        }
                         className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium"
                         style={{ background: badge.bg, color: badge.fg, borderColor: badge.bd }}
                       >
@@ -927,14 +1091,28 @@ export function IdeasView({
                   </span>
 
                   {/* Hover approve mark */}
-                  {showMark && (
+                  {showMark && (() => {
+                    const blocked =
+                      idea.decision === "pending" && unresolvedSuggested(idea).length > 0;
+                    return (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         toggleApprove(idea.id);
                       }}
-                      title={idea.decision === "pending" ? "Mark reviewed" : "Mark unreviewed"}
-                      className="absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border p-0 hover:border-[#bfe3cf] hover:bg-[#e9f7ef] hover:text-[#1f8a53]"
+                      disabled={blocked}
+                      title={
+                        blocked
+                          ? "Approve or dismiss the suggested customers first"
+                          : idea.decision === "pending"
+                            ? "Mark reviewed"
+                            : "Mark unreviewed"
+                      }
+                      className={
+                        blocked
+                          ? "absolute right-2 top-1.5 flex h-4 w-4 cursor-not-allowed items-center justify-center rounded-full border p-0 opacity-40"
+                          : "absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border p-0 hover:border-[#bfe3cf] hover:bg-[#e9f7ef] hover:text-[#1f8a53]"
+                      }
                       style={{
                         background: idea.decision === "reviewed" ? "#e9f7ef" : "#ffffff",
                         borderColor: idea.decision === "reviewed" ? "#bfe3cf" : "#c8d4e3",
@@ -943,7 +1121,8 @@ export function IdeasView({
                     >
                       <Check size={9} strokeWidth={3.5} />
                     </button>
-                  )}
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -1002,6 +1181,9 @@ export function IdeasView({
             setDrawerSrc(null);
           }}
           onToggleApprove={drawerIdea ? () => toggleApprove(drawerIdea.id) : undefined}
+          onUndoPush={
+            undoEnabled && drawerIdea?.undoable ? () => void undoPush(drawerIdea) : undefined
+          }
           onSave={
             drawerIdea
               ? (patch) => void callMutate({ type: "edit", ideaId: drawerIdea.id, ...patch })
@@ -1067,62 +1249,197 @@ export function IdeasView({
         </div>
       )}
 
-      {/* Merge-to-Jira confirmation modal */}
+      {/* Merge-to-Jira modal: scope → preview → execute → results */}
       {confirmOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,22,40,.35)] p-10"
-          onClick={() => setConfirmOpen(false)}
+          onClick={closeMerge}
         >
           <div
-            className="flex w-[520px] max-w-full flex-col gap-4 rounded-xl border border-border bg-white p-6"
+            className="flex w-[640px] max-w-full flex-col gap-4 rounded-xl border border-border bg-white p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <div>
-              <div className="font-title text-lg font-semibold">Merge to Jira</div>
-              <div className="mt-1 text-[13px] text-muted">
-                {approvedForInject.length} approved change
-                {approvedForInject.length === 1 ? "" : "s"} will be written to Jira:
-              </div>
-            </div>
-            <div className="flex max-h-72 flex-col gap-1.5 overflow-y-auto">
-              {approvedForInject.map((i) => {
-                const b = badgeOf(i);
-                return (
-                  <div
-                    key={i.id}
-                    className="flex items-center gap-3 rounded-lg border border-[#e8eef7] bg-background px-3 py-2"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{i.title}</span>
-                    {b && (
-                      <span
-                        className="inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium"
-                        style={{ background: b.bg, color: b.fg, borderColor: b.bd }}
-                      >
-                        {b.label}
-                      </span>
-                    )}
+            {pushResults ? (
+              <>
+                <div>
+                  <div className="font-title text-lg font-semibold">
+                    {pushResults.every((r) => r.ok) ? "Merged to Jira" : "Merge finished with errors"}
                   </div>
-                );
-              })}
-            </div>
-            <div className="rounded-lg border border-[#e8eef7] bg-background px-3 py-2 text-xs text-muted">
-              Preview build — the Jira integration isn&apos;t connected yet, so nothing is sent.
-              Approvals are recorded locally.
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmOpen(false)}
-                className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={runInject}
-                className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-              >
-                Confirm merge
-              </button>
-            </div>
+                  <div className="mt-1 text-[13px] text-muted">
+                    {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
+                    {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
+                    run Merge to Jira again to retry just those.
+                  </div>
+                </div>
+                <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
+                  {pushResults.map((r) => (
+                    <div
+                      key={r.ideaId}
+                      className="flex items-start gap-3 rounded-lg border border-[#e8eef7] bg-background px-3 py-2"
+                    >
+                      <span
+                        className={`mt-0.5 shrink-0 text-[13px] font-semibold ${r.ok ? "text-[#1f8a53]" : "text-[#c94266]"}`}
+                      >
+                        {r.ok ? "✓" : "✕"}
+                      </span>
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-[13px] font-medium">{r.title}</span>
+                        {r.ok ? (
+                          <span className="text-[11.5px] text-muted">
+                            {r.action === "create"
+                              ? `Created ${r.jiraKey}`
+                              : r.action === "update"
+                                ? `Updated ${r.jiraKey}`
+                                : `${r.jiraKey} already up to date`}
+                          </span>
+                        ) : (
+                          <span className="text-[11.5px] text-[#c94266]">{r.error}</span>
+                        )}
+                      </div>
+                      {r.url && (
+                        <a
+                          href={r.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="shrink-0 font-mono text-[11px] text-primary hover:underline"
+                        >
+                          {r.jiraKey}
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={closeMerge}
+                    className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <div className="font-title text-lg font-semibold">Merge to Jira</div>
+                  <div className="mt-1 text-[13px] text-muted">
+                    Pick the product lines to merge. Only approved ideas are written — anything
+                    still pending stays here for a later merge.
+                  </div>
+                </div>
+
+                {/* Scope */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => {
+                      setScopeSel([]);
+                      setPlan(null);
+                      setMergeError("");
+                    }}
+                    className={chipClass(scopeSel.length === 0)}
+                  >
+                    All product lines
+                  </button>
+                  {allProducts.map((p) => (
+                    <button key={p} onClick={() => toggleScope(p)} className={chipClass(scopeSel.includes(p))}>
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-muted">{previewHint}</div>
+
+                {/* Preview */}
+                {plan && (
+                  <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
+                    {plan.blockers.map((b) => (
+                      <div
+                        key={b}
+                        className="rounded-lg border border-[#f3c9d5] bg-[#fdeef2] px-3 py-2 text-[12.5px] text-[#c94266]"
+                      >
+                        {b}
+                      </div>
+                    ))}
+                    {plan.items.map((item) => (
+                      <div
+                        key={item.ideaId}
+                        className="flex flex-col gap-1 rounded-lg border border-[#e8eef7] bg-background px-3 py-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                              item.action === "create"
+                                ? "border-[#c4e8d2] bg-[#e9f7ef] text-[#1f8a53]"
+                                : "border-[rgba(122,167,255,.4)] bg-[rgba(122,167,255,.14)] text-[#3b6fd4]"
+                            }`}
+                          >
+                            {item.action === "create" ? "Create" : `Update ${item.jiraKey}`}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+                            {item.title}
+                          </span>
+                        </div>
+                        <span className="text-[11.5px] text-muted">
+                          {item.noop
+                            ? "Already up to date in Jira — will be marked merged"
+                            : item.changes.map((c) => c.label).join(", ")}
+                          {item.votes > 0 ? ` · ${item.votes} vote${item.votes === 1 ? "" : "s"}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                    {plan.warnings.map((w) => (
+                      <div
+                        key={w}
+                        className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800"
+                      >
+                        {w}
+                      </div>
+                    ))}
+                    {plan.skipped.map((s) => (
+                      <div key={s.ideaId} className="px-3 py-1 text-[11.5px] text-muted">
+                        Skipped “{s.title}” — {s.reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {mergeError && (
+                  <div className="rounded-lg border border-[#f3c9d5] bg-[#fdeef2] px-3 py-2 text-[12.5px] text-[#c94266]">
+                    {mergeError}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={closeMerge}
+                    className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
+                  >
+                    Cancel
+                  </button>
+                  {!plan ? (
+                    <span title={previewHint} className="inline-flex">
+                      <button
+                        disabled={previewDisabled || planLoading}
+                        onClick={loadPlan}
+                        className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {planLoading ? "Checking Jira…" : "Preview changes"}
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      disabled={pushing || plan.blockers.length > 0 || plan.items.length === 0}
+                      onClick={runPush}
+                      className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {pushing
+                        ? "Merging…"
+                        : `Confirm merge (${plan.items.length})`}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

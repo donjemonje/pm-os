@@ -47,6 +47,9 @@ model User {
   /// Highest TOTP time-step already consumed — codes are strictly single-use.
   /// Recovery is admin-side (clear the totp fields), not backup codes.
   totpLastUsedStep Int?
+  /// Optional per-user default Product Line filter for the Ideas screen —
+  /// names from the workspace catalog. Empty = no default filter.
+  defaultProductLines Json @default("[]")
   organizationId   String?
   organization     Organization? @relation(fields: [organizationId], references: [id])
   createdAt        DateTime      @default(now())
@@ -91,6 +94,11 @@ model Workspace {
   organizationId String       @unique
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name           String       @default("My Workspace")
+  /// Ideas → Jira output mapping (field names, write policies, description
+  /// format, ticket-link template). Customer-facing output rules change
+  /// often, so they live in Admin → Ideas, not in code. Shape:
+  /// lib/ideas/jira-mapping.ts.
+  ideasConfig    Json         @default("{}")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -109,6 +117,24 @@ model Workspace {
   productLines          ProductLine[]
   platforms             Platform[]
   customers             Customer[]
+  ideasPushUndos        IdeasPushUndo[]
+}
+
+/// Per-idea undo snapshot for the LAST merge to Jira only — executePush
+/// clears the workspace's rows before writing new ones, and a successful
+/// undo deletes its row. Payload shape: src/lib/ideas/undo.ts.
+model IdeasPushUndo {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ideaId      String    @unique
+  jiraKey     String
+  action      String // "create" | "update"
+  payload     Json
+  commentId   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId])
 }
 
 /// Workspace-scoped product-line catalog, managed in Settings → Ideas.
@@ -167,6 +193,11 @@ model JiraConnection {
   expiresAt    DateTime
   projectKeys  String    @default("[]")
   prdSource    String    @default("epic_description")
+  /// Ideas write-back target: new ideas become issues of this type in this
+  /// project. Must be one of projectKeys so the next import sees what we
+  /// created. Null + a single selected project = that project.
+  ideasProjectKey String?
+  ideasIssueType  String  @default("Story")
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 }
@@ -349,6 +380,9 @@ model Idea {
   batchStatus   String
   decision      String
   origin        String
+  /// Human-readable narration of what this import did to an Updated idea
+  /// (votes, enrichment, added product lines/platforms). Cleared on rollover.
+  batchChanges  Json      @default("[]")
   pmScore       Int?
   manualScore   Int?
   existingVotes Int       @default(0)

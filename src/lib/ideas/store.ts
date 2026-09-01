@@ -115,6 +115,7 @@ function toClientIdea(row: IdeaRow): Idea {
     ).filter((c) => !dismissedKeys.has(c.toLowerCase())),
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
+    batchChanges: (row.batchChanges as string[]) ?? [],
     decision: row.decision as Idea["decision"],
     origin: row.origin as Idea["origin"],
     pmScore: row.pmScore,
@@ -127,7 +128,7 @@ function toClientIdea(row: IdeaRow): Idea {
 }
 
 export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
-  const [ticketRows, snapshotRows, ideaRows, customerRows] = await Promise.all([
+  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows] = await Promise.all([
     db.zendeskTicketRaw.findMany({
       where: { workspaceId },
       orderBy: [{ importedAt: "asc" }, { id: "asc" }],
@@ -139,7 +140,15 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: { name: true } }),
+    db.ideasPushUndo.findMany({
+      where: { workspaceId },
+      select: { ideaId: true, action: true, jiraKey: true },
+    }),
   ]);
+
+  const undoByIdea = new Map(
+    undoRows.map((u) => [u.ideaId, { action: u.action as "create" | "update", jiraKey: u.jiraKey }])
+  );
 
   return {
     tickets: ticketRows.map(toClientTicket),
@@ -152,7 +161,11 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       url: s.url ?? undefined,
       products: (s.components as string[]) ?? [],
     })),
-    ideas: ideaRows.map(toClientIdea),
+    ideas: ideaRows.map((row) => {
+      const idea = toClientIdea(row);
+      const undo = undoByIdea.get(row.id);
+      return undo ? { ...idea, undoable: undo } : idea;
+    }),
     customerCatalog: customerRows.map((c) => c.name),
   };
 }
@@ -254,9 +267,14 @@ export async function importBatch(
 
     for (const s of jira.sources) {
       const cur = ideaByJiraKey.get(s.key);
+      // Same fallback as Zendesk-origin ideas: a Jira issue with no
+      // components gets "Other", so every idea has a product line — the
+      // product filter and the scoped merge gate can never silently miss one.
+      const products = s.products.length > 0 ? s.products : ["Other"];
       if (cur) {
         // Title and products track live Jira; details stay local — they may
-        // carry enrichment or PM edits, and nothing is written back yet. On
+        // carry enrichment or PM edits, and the write-back (push.ts) sends
+        // them as a PM-OS section, never as an overwrite of the live body. On
         // a batch with new data, last batch's vote delta becomes existing
         // and the idea re-enters as Unchanged until a match says otherwise.
         const rollover = fresh.length > 0;
@@ -264,12 +282,14 @@ export async function importBatch(
           where: { id: cur.id },
           data: {
             title: s.title,
-            products: s.products as Prisma.InputJsonValue,
+            products: products as Prisma.InputJsonValue,
             ...(rollover
               ? {
                   existingVotes: cur.existingVotes + cur.newVotes,
                   newVotes: 0,
                   batchStatus: "unchanged",
+                  // Last import's narration is stale once the batch rolls over.
+                  batchChanges: [] as unknown as Prisma.InputJsonValue,
                 }
               : {}),
           },
@@ -280,7 +300,7 @@ export async function importBatch(
             workspaceId,
             title: s.title,
             details: s.body,
-            products: s.products as Prisma.InputJsonValue,
+            products: products as Prisma.InputJsonValue,
             batchStatus: "unchanged",
             decision: "pending",
             origin: "jira",
@@ -334,14 +354,42 @@ export async function importBatch(
         : null;
       if (target) {
         // Matched FR: evidence on the existing idea, never a new one. The
-        // idea re-enters review as Updated.
+        // idea re-enters review as Updated and absorbs the new evidence's
+        // metadata (union — nothing is ever removed here). batchChanges
+        // narrates exactly what this import did, for the review UI.
         matched++;
+        const curProducts = (target.products as string[]) ?? [];
+        const curPlatforms = (target.platforms as string[]) ?? [];
+        let nextProducts = distinct([...curProducts, ...verdict.productLines]);
+        // A real product line replaces the "Other" placeholder.
+        if (nextProducts.length > 1) nextProducts = nextProducts.filter((p) => p !== "Other");
+        const nextPlatforms = distinct([...curPlatforms, ...verdict.platforms]);
+        const addedProducts = nextProducts.filter(
+          (p) => !curProducts.some((c) => c.toLowerCase() === p.toLowerCase())
+        );
+        const addedPlatforms = nextPlatforms.filter(
+          (p) => !curPlatforms.some((c) => c.toLowerCase() === p.toLowerCase())
+        );
+
+        const changes: string[] = [`+1 vote (ticket ${input.key})`];
+        if (m?.enrichedSummary) changes.push("Summary enriched with the new ticket");
+        for (const p of addedProducts) changes.push(`Product line added: ${p}`);
+        for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
+        // Several tickets can match the same idea in one import — accumulate.
+        // (fresh tickets exist here, so rollover already reset last batch's
+        // status: "updated" can only mean updated in THIS import.)
+        const prior =
+          target.batchStatus === "updated" ? ((target.batchChanges as string[]) ?? []) : [];
+
         await db.idea.update({
           where: { id: target.id },
           data: {
             newVotes: { increment: 1 },
             batchStatus: "updated",
             decision: "pending",
+            products: nextProducts as Prisma.InputJsonValue,
+            platforms: nextPlatforms as Prisma.InputJsonValue,
+            batchChanges: [...prior, ...changes] as Prisma.InputJsonValue,
             ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
             sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
           },
@@ -394,15 +442,38 @@ export async function importBatch(
   return { summary, state: await getIdeasState(workspaceId) };
 }
 
+// "inject" is not a mutation anymore — marking an idea as In Jira without a
+// real write was the demo behavior. The write-back lives in ./push.ts.
 export type IdeasMutation =
   | { type: "decision"; ideaId: string; decision: "pending" | "reviewed" }
   | { type: "edit"; ideaId: string; title: string; details: string; manual: number | null }
   | { type: "approveAll" }
-  | { type: "inject" }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
   | { type: "undismissCustomer"; ideaId: string; name: string };
+
+/**
+ * Suggested metadata still awaiting the PM's call on this idea. Today that is
+ * customers the extraction surfaced that are neither in the catalog nor
+ * dismissed; any future suggested attribute joins this check. An idea with an
+ * unresolved suggestion cannot be approved — each one must be approved or
+ * dismissed first.
+ */
+function unresolvedSuggestions(row: IdeaRow, catalogLower: Set<string>): string[] {
+  const ticketRows = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
+  const dismissed = new Set(
+    ticketRows.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
+  );
+  return distinct(ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? [])).filter(
+    (c) => !dismissed.has(c.toLowerCase()) && !catalogLower.has(c.toLowerCase())
+  );
+}
+
+async function customerCatalogLower(workspaceId: string): Promise<Set<string>> {
+  const rows = await db.customer.findMany({ where: { workspaceId }, select: { name: true } });
+  return new Set(rows.map((c) => c.name.toLowerCase()));
+}
 
 async function logEvents(
   workspaceId: string,
@@ -427,6 +498,7 @@ export async function mutateIdeas(
     case "decision": {
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
+        include: IDEA_INCLUDE,
       });
       // Approval-exempt ideas carry zero changes for Jira — approving one
       // would inject a no-op, so the server refuses it outright.
@@ -436,6 +508,14 @@ export async function mutateIdeas(
         APPROVAL_EXEMPT.includes(idea.batchStatus)
       ) {
         break;
+      }
+      if (mutation.decision === "reviewed" && idea) {
+        const open = unresolvedSuggestions(idea, await customerCatalogLower(workspaceId));
+        if (open.length > 0) {
+          throw new Error(
+            `Review the suggested customer${open.length === 1 ? "" : "s"} first — approve or dismiss: ${open.join(", ")}`
+          );
+        }
       }
       if (idea && idea.decision !== "injected") {
         await db.idea.update({
@@ -481,10 +561,16 @@ export async function mutateIdeas(
     case "approveAll": {
       const approvable = await db.idea.findMany({
         where: { workspaceId, batchStatus: { notIn: APPROVAL_EXEMPT } },
+        include: IDEA_INCLUDE,
       });
       const revert = approvable.every((i) => i.decision !== "pending");
+      // Bulk approve skips (never fails on) ideas with unresolved suggested
+      // metadata — those need a per-idea call; reverting is always allowed.
+      const catalogLower = revert ? null : await customerCatalogLower(workspaceId);
       const targets = approvable.filter((i) =>
-        revert ? i.decision === "reviewed" : i.decision === "pending"
+        revert
+          ? i.decision === "reviewed"
+          : i.decision === "pending" && unresolvedSuggestions(i, catalogLower!).length === 0
       );
       await db.idea.updateMany({
         where: { id: { in: targets.map((i) => i.id) } },
@@ -497,20 +583,6 @@ export async function mutateIdeas(
           action: revert ? "unapprove" : "approve",
           payload: { bulk: true },
         }))
-      );
-      break;
-    }
-    case "inject": {
-      const reviewed = await db.idea.findMany({
-        where: { workspaceId, decision: "reviewed" },
-      });
-      await db.idea.updateMany({
-        where: { id: { in: reviewed.map((i) => i.id) } },
-        data: { decision: "injected" },
-      });
-      await logEvents(
-        workspaceId,
-        reviewed.map((i) => ({ ideaId: i.id, action: "inject" }))
       );
       break;
     }

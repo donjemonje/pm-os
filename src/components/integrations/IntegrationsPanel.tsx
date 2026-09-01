@@ -10,6 +10,8 @@ type JiraStatus = {
   connected: boolean;
   siteUrl?: string;
   projectKeys?: string[];
+  ideasProjectKey?: string | null;
+  ideasIssueType?: string;
 } | null;
 
 type DriveStatus = {
@@ -28,6 +30,8 @@ type IntegrationsPanelProps = {
     driveSuccess?: boolean;
     driveError?: string;
   };
+  /** Ideas feature flag for the caller's org — shows the write-back target picker. */
+  ideasEnabled?: boolean;
 };
 
 function StatusDot({ connected }: { connected: boolean }) {
@@ -113,6 +117,7 @@ export function IntegrationsPanel({
   jiraOauthReady,
   driveOauthReady,
   banners,
+  ideasEnabled = false,
 }: IntegrationsPanelProps) {
   const [jiraExpanded, setJiraExpanded] = useState(Boolean(jiraStatus?.connected));
   const [driveExpanded, setDriveExpanded] = useState(Boolean(driveStatus?.connected));
@@ -157,6 +162,9 @@ export function IntegrationsPanel({
           <JiraProjectsPanel
             initialProjectKeys={jiraStatus.projectKeys ?? []}
             siteUrl={jiraStatus.siteUrl}
+            showIdeasTarget={ideasEnabled}
+            initialIdeasProjectKey={jiraStatus.ideasProjectKey ?? null}
+            initialIdeasIssueType={jiraStatus.ideasIssueType ?? "Story"}
           />
         )}
       </IntegrationRow>

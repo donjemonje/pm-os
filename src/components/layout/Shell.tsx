@@ -12,6 +12,7 @@ export function Shell({
   ideasEnabled,
   docsEnabled,
   chatEnabled,
+  dashboardEnabled,
   user,
   organization,
 }: {
@@ -19,6 +20,7 @@ export function Shell({
   ideasEnabled: boolean;
   docsEnabled: boolean;
   chatEnabled: boolean;
+  dashboardEnabled: boolean;
   user: MenuUser | null;
   organization: MenuOrganization | null;
 }) {
@@ -39,6 +41,7 @@ export function Shell({
           ideasEnabled={ideasEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
+          dashboardEnabled={dashboardEnabled}
           user={user}
           organization={organization}
         />
