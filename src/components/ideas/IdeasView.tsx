@@ -359,9 +359,19 @@ export function IdeasView({
     setError("");
   };
 
+  // Suggested metadata still awaiting review on an idea — customers outside
+  // the catalog (dismissed ones are already subtracted server-side). An idea
+  // with any of these cannot be approved; mirrors the server gate in
+  // mutateIdeas, which refuses the decision outright.
+  const unresolvedSuggested = (idea: Idea): string[] =>
+    (idea.customers ?? []).filter(
+      (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase())
+    );
+
   const toggleApprove = (id: string) => {
     const idea = ideas.find((i) => i.id === id);
     if (!idea || idea.decision === "injected") return;
+    if (idea.decision === "pending" && unresolvedSuggested(idea).length > 0) return;
     setNote("");
     void callMutate({
       type: "decision",
@@ -1050,14 +1060,28 @@ export function IdeasView({
                   </span>
 
                   {/* Hover approve mark */}
-                  {showMark && (
+                  {showMark && (() => {
+                    const blocked =
+                      idea.decision === "pending" && unresolvedSuggested(idea).length > 0;
+                    return (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         toggleApprove(idea.id);
                       }}
-                      title={idea.decision === "pending" ? "Mark reviewed" : "Mark unreviewed"}
-                      className="absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border p-0 hover:border-[#bfe3cf] hover:bg-[#e9f7ef] hover:text-[#1f8a53]"
+                      disabled={blocked}
+                      title={
+                        blocked
+                          ? "Approve or dismiss the suggested customers first"
+                          : idea.decision === "pending"
+                            ? "Mark reviewed"
+                            : "Mark unreviewed"
+                      }
+                      className={
+                        blocked
+                          ? "absolute right-2 top-1.5 flex h-4 w-4 cursor-not-allowed items-center justify-center rounded-full border p-0 opacity-40"
+                          : "absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border p-0 hover:border-[#bfe3cf] hover:bg-[#e9f7ef] hover:text-[#1f8a53]"
+                      }
                       style={{
                         background: idea.decision === "reviewed" ? "#e9f7ef" : "#ffffff",
                         borderColor: idea.decision === "reviewed" ? "#bfe3cf" : "#c8d4e3",
@@ -1066,7 +1090,8 @@ export function IdeasView({
                     >
                       <Check size={9} strokeWidth={3.5} />
                     </button>
-                  )}
+                    );
+                  })()}
                 </div>
               );
             })}

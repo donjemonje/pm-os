@@ -514,19 +514,32 @@ export function IdeaDrawer({
               </>
             ) : (
               <>
-                {needsApproval(idea) && (
+                {needsApproval(idea) && (() => {
+                  // Unresolved suggested metadata (customers outside the
+                  // catalog) blocks approval — same rule the server enforces.
+                  const blocked =
+                    idea.decision === "pending" &&
+                    (idea.customers ?? []).some(
+                      (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase())
+                    );
+                  return (
                   <button
                     onClick={() => onToggleApprove?.()}
+                    disabled={blocked}
+                    title={blocked ? "Approve or dismiss the suggested customers first" : undefined}
                     className={
-                      idea.decision === "pending"
-                        ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                        : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
+                      blocked
+                        ? "inline-flex h-8 cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium opacity-40"
+                        : idea.decision === "pending"
+                          ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
+                          : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
                     }
                   >
                     <Check size={13} strokeWidth={3} />
                     {idea.decision === "pending" ? "Approve" : "Approved"}
                   </button>
-                )}
+                  );
+                })()}
                 {onMerge && (
                   <button
                     onClick={onMerge}

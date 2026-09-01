@@ -441,6 +441,28 @@ export type IdeasMutation =
   | { type: "dismissCustomer"; ideaId: string; name: string }
   | { type: "undismissCustomer"; ideaId: string; name: string };
 
+/**
+ * Suggested metadata still awaiting the PM's call on this idea. Today that is
+ * customers the extraction surfaced that are neither in the catalog nor
+ * dismissed; any future suggested attribute joins this check. An idea with an
+ * unresolved suggestion cannot be approved — each one must be approved or
+ * dismissed first.
+ */
+function unresolvedSuggestions(row: IdeaRow, catalogLower: Set<string>): string[] {
+  const ticketRows = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
+  const dismissed = new Set(
+    ticketRows.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
+  );
+  return distinct(ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? [])).filter(
+    (c) => !dismissed.has(c.toLowerCase()) && !catalogLower.has(c.toLowerCase())
+  );
+}
+
+async function customerCatalogLower(workspaceId: string): Promise<Set<string>> {
+  const rows = await db.customer.findMany({ where: { workspaceId }, select: { name: true } });
+  return new Set(rows.map((c) => c.name.toLowerCase()));
+}
+
 async function logEvents(
   workspaceId: string,
   events: { ideaId: string; action: string; payload?: unknown }[]
@@ -464,6 +486,7 @@ export async function mutateIdeas(
     case "decision": {
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
+        include: IDEA_INCLUDE,
       });
       // Approval-exempt ideas carry zero changes for Jira — approving one
       // would inject a no-op, so the server refuses it outright.
@@ -473,6 +496,14 @@ export async function mutateIdeas(
         APPROVAL_EXEMPT.includes(idea.batchStatus)
       ) {
         break;
+      }
+      if (mutation.decision === "reviewed" && idea) {
+        const open = unresolvedSuggestions(idea, await customerCatalogLower(workspaceId));
+        if (open.length > 0) {
+          throw new Error(
+            `Review the suggested customer${open.length === 1 ? "" : "s"} first — approve or dismiss: ${open.join(", ")}`
+          );
+        }
       }
       if (idea && idea.decision !== "injected") {
         await db.idea.update({
@@ -518,10 +549,16 @@ export async function mutateIdeas(
     case "approveAll": {
       const approvable = await db.idea.findMany({
         where: { workspaceId, batchStatus: { notIn: APPROVAL_EXEMPT } },
+        include: IDEA_INCLUDE,
       });
       const revert = approvable.every((i) => i.decision !== "pending");
+      // Bulk approve skips (never fails on) ideas with unresolved suggested
+      // metadata — those need a per-idea call; reverting is always allowed.
+      const catalogLower = revert ? null : await customerCatalogLower(workspaceId);
       const targets = approvable.filter((i) =>
-        revert ? i.decision === "reviewed" : i.decision === "pending"
+        revert
+          ? i.decision === "reviewed"
+          : i.decision === "pending" && unresolvedSuggestions(i, catalogLower!).length === 0
       );
       await db.idea.updateMany({
         where: { id: { in: targets.map((i) => i.id) } },
