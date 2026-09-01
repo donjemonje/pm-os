@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Chakra_Petch, Inter, Space_Grotesk } from "next/font/google";
+import { Chakra_Petch, Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import {
   getCurrentUser,
@@ -20,6 +20,12 @@ const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
   variable: "--font-title",
   weight: ["400", "500", "600", "700"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jbmono",
+  weight: ["400", "500", "600"],
 });
 
 const inter = Inter({
@@ -67,7 +73,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable}`}
+      className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-body antialiased">
         <Shell

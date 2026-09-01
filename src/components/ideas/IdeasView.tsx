@@ -6,6 +6,7 @@ import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { badgeOf, needsApproval, scoreOf } from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
+import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
 import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
 
@@ -51,108 +52,6 @@ function chipClass(active: boolean): string {
     : "whitespace-nowrap rounded-full border border-border bg-white px-3 py-1 text-[12.5px] font-medium text-[#3f506b] hover:border-primary/55";
 }
 
-/** Labeled multi-select filter row: searchable dropdown + selected chips. */
-function FilterRow({
-  label,
-  placeholder,
-  emptyText,
-  options,
-  selected,
-  setSelected,
-  accent = "product",
-}: {
-  label: string;
-  placeholder: string;
-  emptyText: string;
-  options: string[];
-  selected: string[];
-  setSelected: React.Dispatch<React.SetStateAction<string[]>>;
-  /** Platform rows purple, customer rows teal, product rows the primary blue — per the design. */
-  accent?: "product" | "platform" | "customer";
-}) {
-  const accents = {
-    product: {
-      focus: "focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]",
-      selected: "bg-[rgba(122,167,255,.12)] text-[#3b6fd4]",
-      chip: "bg-primary hover:bg-primary-hover",
-    },
-    platform: {
-      focus: "focus:border-[#9d7ce8] focus:shadow-[0_0_0_1px_rgba(169,140,255,.35)]",
-      selected: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
-      chip: "bg-[#7f5be0] hover:bg-[#6c48cd]",
-    },
-    customer: {
-      focus: "focus:border-[#3aa48f] focus:shadow-[0_0_0_1px_rgba(47,160,143,.3)]",
-      selected: "bg-[rgba(47,160,143,.14)] text-[#0f7a6a]",
-      chip: "bg-[#189179] hover:bg-[#127d67]",
-    },
-  }[accent];
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const shown = options.filter(
-    (o) => !query.trim() || o.toLowerCase().startsWith(query.trim().toLowerCase())
-  );
-
-  return (
-    <div className="flex items-start gap-2">
-      <span className={`${MONO_LABEL} w-24 shrink-0 pt-2`}>{label}</span>
-      <div className="relative shrink-0">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          placeholder={placeholder}
-          className={`w-[220px] rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] outline-none ${accents.focus}`}
-        />
-        {open && (
-          <>
-            <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
-            <div className="absolute left-0 top-[calc(100%+4px)] z-[25] max-h-60 w-[250px] overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
-              {shown.map((option) => {
-                const isSelected = selected.includes(option);
-                return (
-                  <button
-                    key={option}
-                    onClick={() =>
-                      setSelected((prev) =>
-                        isSelected ? prev.filter((x) => x !== option) : [...prev, option]
-                      )
-                    }
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[11.5px] font-medium hover:bg-background ${
-                      isSelected ? accents.selected : "text-[#3f506b]"
-                    }`}
-                  >
-                    {option}
-                    {isSelected && <Check size={12} strokeWidth={2.5} />}
-                  </button>
-                );
-              })}
-              {shown.length === 0 && (
-                <div className="px-2.5 py-2 text-xs text-muted">{emptyText}</div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 pt-[3px]">
-        {selected.map((option) => (
-          <button
-            key={option}
-            onClick={() => setSelected((prev) => prev.filter((x) => x !== option))}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${accents.chip}`}
-          >
-            {option} ✕
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function IdeasView({
   catalogProducts = [],
   catalogPlatforms = [],
@@ -185,8 +84,6 @@ export function IdeasView({
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
-  /** Bumped by "Clear filters" to remount the FilterRows, wiping their local search text. */
-  const [filterResetKey, setFilterResetKey] = useState(0);
 
   const [page, setPage] = useState<"final" | "merge">("final");
   const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single" | "Unchanged">("Merge");
@@ -631,6 +528,21 @@ export function IdeasView({
     }
   };
 
+  const clearAllFilters = () => {
+    setQuery("");
+    setProductFilter([]);
+    setPlatformFilter([]);
+    setCustomerFilter([]);
+    setStatusFilter([]);
+    setPendingOnly(false);
+  };
+
+  const hasChipRow =
+    productFilter.length > 0 ||
+    platformFilter.length > 0 ||
+    customerFilter.length > 0 ||
+    pendingOnly;
+
   const hasFilters =
     query !== "" ||
     productFilter.length > 0 ||
@@ -780,92 +692,91 @@ export function IdeasView({
             </div>
           </div>
 
-          {/* Search + filters */}
-          <div className="mb-5 flex flex-col gap-3">
-            <div className="relative max-w-[360px]">
-              <Search
-                size={15}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7a8aa3]"
-              />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search ideas…"
-                className="w-full rounded-lg border border-border bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
-              />
-            </div>
-
-            {allProducts.length > 0 && (
-              <FilterRow
-                key={`products-${filterResetKey}`}
-                label="Product Line"
-                placeholder="All products"
-                emptyText="No matching product line"
-                options={allProducts}
-                selected={productFilter}
-                setSelected={setProductFilter}
-              />
-            )}
-
-            {catalogPlatforms.length > 0 && (
-              <FilterRow
-                key={`platforms-${filterResetKey}`}
-                label="Platform"
-                placeholder="All platforms"
-                emptyText="No matching platform"
-                options={catalogPlatforms}
-                selected={platformFilter}
-                setSelected={setPlatformFilter}
-                accent="platform"
-              />
-            )}
-
-            {allCustomers.length > 0 && (
-              <FilterRow
-                key={`customers-${filterResetKey}`}
-                label="Customer"
-                placeholder="All customers"
-                emptyText="No matching customer"
-                options={allCustomers}
-                selected={customerFilter}
-                setSelected={setCustomerFilter}
-                accent="customer"
-              />
-            )}
-
-            <div className="flex flex-wrap items-start gap-2">
-              <span className={`${MONO_LABEL} w-[99px] shrink-0 pt-1.5`}>Import Status</span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {page === "merge"
-                  ? (["Merge", "Single", "Unchanged"] as const).map((label) => (
-                      <button
-                        key={label}
-                        onClick={() => {
-                          setMergeFilter(label);
-                          setSelectedFinalId("auto");
-                        }}
-                        className={chipClass(mergeFilter === label)}
-                      >
-                        {label}
-                      </button>
-                    ))
-                  : Object.keys(STATUS_CHIP_TO_BATCH).map((label) => (
-                      <button
-                        key={label}
-                        onClick={() =>
-                          setStatusFilter((prev) => (prev.includes(label) ? [] : [label]))
-                        }
-                        className={chipClass(statusFilter.includes(label))}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                <span className="mx-1.5 w-px self-stretch bg-[#d5dfec]" />
-                <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
-                  Pending Review
-                </button>
+          {/* Filters — one toolbar row; active-value chips appear below only when set */}
+          <div className="mb-5 flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-[240px]">
+                <Search
+                  size={14}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7a8aa3]"
+                />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search ideas…"
+                  className="h-8 w-full rounded-lg border border-border bg-white pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                />
               </div>
+
+              {allProducts.length > 0 && (
+                <FilterPopover
+                  label="Product Line"
+                  options={allProducts}
+                  selected={productFilter}
+                  onToggle={(o) =>
+                    setProductFilter((prev) =>
+                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                    )
+                  }
+                  emptyText="No matching product line"
+                />
+              )}
+              {catalogPlatforms.length > 0 && (
+                <FilterPopover
+                  label="Platform"
+                  accent="platform"
+                  options={catalogPlatforms}
+                  selected={platformFilter}
+                  onToggle={(o) =>
+                    setPlatformFilter((prev) =>
+                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                    )
+                  }
+                  emptyText="No matching platform"
+                />
+              )}
+              {allCustomers.length > 0 && (
+                <FilterPopover
+                  label="Customer"
+                  accent="customer"
+                  options={allCustomers}
+                  selected={customerFilter}
+                  onToggle={(o) =>
+                    setCustomerFilter((prev) =>
+                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                    )
+                  }
+                  emptyText="No matching customer"
+                />
+              )}
+              {page === "merge" ? (
+                <FilterPopover
+                  single
+                  label="View"
+                  accent="status"
+                  options={["Merge", "Single", "Unchanged"]}
+                  selected={[mergeFilter]}
+                  onToggle={(o) => {
+                    setMergeFilter(o as "Merge" | "Single" | "Unchanged");
+                    setSelectedFinalId("auto");
+                  }}
+                />
+              ) : (
+                <FilterPopover
+                  single
+                  label="Status"
+                  accent="status"
+                  options={Object.keys(STATUS_CHIP_TO_BATCH)}
+                  selected={statusFilter}
+                  onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
+                />
+              )}
+              <span className="h-5 w-px bg-[#d5dfec]" />
+              <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
+                Pending Review
+              </button>
+
               <div className="ml-auto flex shrink-0 items-center gap-2.5">
                 {page === "merge" && edit ? (
                   <>
@@ -901,6 +812,53 @@ export function IdeasView({
                 ) : null}
               </div>
             </div>
+
+            {hasChipRow && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`${MONO_LABEL} mr-1`}>Filters</span>
+                {productFilter.map((option) => (
+                  <button
+                    key={`p-${option}`}
+                    onClick={() => setProductFilter((prev) => prev.filter((x) => x !== option))}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.product.chip}`}
+                  >
+                    {option} ✕
+                  </button>
+                ))}
+                {platformFilter.map((option) => (
+                  <button
+                    key={`pl-${option}`}
+                    onClick={() => setPlatformFilter((prev) => prev.filter((x) => x !== option))}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.platform.chip}`}
+                  >
+                    {option} ✕
+                  </button>
+                ))}
+                {customerFilter.map((option) => (
+                  <button
+                    key={`c-${option}`}
+                    onClick={() => setCustomerFilter((prev) => prev.filter((x) => x !== option))}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.customer.chip}`}
+                  >
+                    {option} ✕
+                  </button>
+                ))}
+                {pendingOnly && (
+                  <button
+                    onClick={() => setPendingOnly(false)}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.status.chip}`}
+                  >
+                    Pending Review ✕
+                  </button>
+                )}
+                <button
+                  onClick={clearAllFilters}
+                  className="ml-1 text-[12px] font-medium text-primary hover:underline"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Body: merge board or idea rows */}
@@ -1131,15 +1089,7 @@ export function IdeasView({
                 No ideas match.{" "}
                 {hasFilters && (
                   <button
-                    onClick={() => {
-                      setQuery("");
-                      setProductFilter([]);
-                      setPlatformFilter([]);
-                      setCustomerFilter([]);
-                      setStatusFilter([]);
-                      setPendingOnly(false);
-                      setFilterResetKey((k) => k + 1);
-                    }}
+                    onClick={clearAllFilters}
                     className="text-primary hover:underline"
                   >
                     Clear filters
