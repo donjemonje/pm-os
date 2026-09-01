@@ -51,6 +51,7 @@ export default async function RootLayout({
   const ideasEnabled = await featureEnabledForCurrentUser("ideas");
   const docsEnabled = await featureEnabledForCurrentUser("docs");
   const chatEnabled = await featureEnabledForCurrentUser("chat");
+  const dashboardEnabled = await featureEnabledForCurrentUser("dashboard");
   const organization = user?.organizationId
     ? await getOrganizationSummary(user.organizationId)
     : null;
@@ -73,6 +74,7 @@ export default async function RootLayout({
           ideasEnabled={ideasEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
+          dashboardEnabled={dashboardEnabled}
           user={menuUser}
           organization={organization}
         >

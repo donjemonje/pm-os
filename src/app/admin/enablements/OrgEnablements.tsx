@@ -29,6 +29,12 @@ const FLAGS: { key: string; label: string; description: string }[] = [
     label: "Chat",
     description: "PMOS Chat: page, floating panel, and chat APIs.",
   },
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    description:
+      "Dashboard landing page; when off, /dashboard redirects to Releases.",
+  },
 ];
 
 export function OrgEnablements({

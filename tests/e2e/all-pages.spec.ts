@@ -12,7 +12,8 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  *                           logged-in user to /dashboard. The logged-out
  *                           /login render lives in auth.spec.ts.
  * - /admin, /admin/users,   skipped as app pages: PM-OS Admin requires
- *   /admin/enablements      User.role === PMOS_ADMIN; the seeded RoomLens
+ *   /admin/enablements,     User.role === PMOS_ADMIN; the seeded RoomLens
+ *   /admin/ideas
  *                           user is a regular USER, so these must 404 for
  *                           them (asserted below). Admin-role coverage lives
  *                           in the admin feature's own spec.
@@ -92,7 +93,7 @@ test("regular app session does not grant PM-OS Admin access", async ({
 }) => {
   await loginAsRoomLens(page);
 
-  for (const path of ["/admin", "/admin/users", "/admin/enablements"]) {
+  for (const path of ["/admin", "/admin/users", "/admin/enablements", "/admin/ideas"]) {
     const response = await page.goto(path);
     expect(response?.status(), `${path} should 404 for role USER`).toBe(404);
     await expect(page.getByText("This page could not be found")).toBeVisible();
