@@ -22,8 +22,9 @@ playwright-report/
 
 
 # Claude Code personal settings
-# .claude is a local symlink to pmos-office/claude/pm-os (commands, launch.json, worktrees)
+# .claude and CLAUDE.md are local symlinks into pmos-office/claude/pm-os (commands, launch.json, worktrees, project instructions)
 .claude
+/CLAUDE.md
 
 # Playwright
 test-results/
