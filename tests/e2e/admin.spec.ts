@@ -167,7 +167,11 @@ test.describe("PM-OS Admin", () => {
     // The page lists one row per flag (Ideas, Docs, Chat) — scope every
     // locator to its row so multi-flag rendering can't cross-match.
     const orgCard = page.locator("div.rounded-xl", { hasText: "RoomLens" });
-    const ideasRow = orgCard.locator("li", { hasText: "Ideas" });
+    // "Ideas undo" is its own row now, so a bare "Ideas" substring match
+    // hits two rows — exclude it explicitly.
+    const ideasRow = orgCard
+      .locator("li", { hasText: "Ideas" })
+      .filter({ hasNotText: "Ideas undo" });
     // The effective-state badge only updates from the PATCH response, so it
     // is a reliable "the override is saved" signal (unlike button state,
     // which also flips while the request is in flight).
