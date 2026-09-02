@@ -4,8 +4,6 @@ import { FormEvent, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Building2,
-  Check,
-  Copy,
   Loader2,
   Plus,
   RotateCcw,
@@ -30,7 +28,6 @@ type Organization = {
   id: string;
   name: string;
   slug: string;
-  inviteCode: string;
   features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
@@ -50,7 +47,6 @@ export function UserManagement({
   const [organizations, setOrganizations] =
     useState<Organization[]>(initialOrganizations);
   const [showAddUser, setShowAddUser] = useState(false);
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [orgToDelete, setOrgToDelete] = useState<Organization | null>(null);
@@ -129,16 +125,6 @@ export function UserManagement({
   // API): they happen only via scripts/set-user-role.mjs — Daniel's call,
   // 2026-08-27. The role badge below is display-only.
 
-  async function copyInvite(code: string) {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopiedCode(code);
-      setTimeout(() => setCopiedCode((c) => (c === code ? null : c)), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -209,30 +195,15 @@ export function UserManagement({
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => copyInvite(org.inviteCode)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                    title="Copy invite code"
-                  >
-                    {copiedCode === org.inviteCode ? (
-                      <Check className="h-3.5 w-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" />
-                    )}
-                    <span className="font-mono">{org.inviteCode}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOrgToDelete(org)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
-                    title="Delete organization"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete organization
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setOrgToDelete(org)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                  title="Delete organization"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete organization
+                </button>
               </div>
 
               {org.members.length === 0 ? (
@@ -489,7 +460,6 @@ function AddUserForm({
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [orgChoice, setOrgChoice] = useState(
     organizations[0]?.id ?? NEW_ORG
   );
@@ -510,7 +480,6 @@ function AddUserForm({
         body: JSON.stringify({
           name,
           email,
-          password: password || undefined,
           organizationId: creatingNewOrg ? undefined : orgChoice,
           organizationName: creatingNewOrg ? newOrgName : undefined,
         }),
@@ -583,7 +552,7 @@ function AddUserForm({
           </select>
         </Field>
 
-        {creatingNewOrg ? (
+        {creatingNewOrg && (
           <Field label="New organization name">
             <input
               required
@@ -593,34 +562,12 @@ function AddUserForm({
               className={inputClass}
             />
           </Field>
-        ) : (
-          <Field label="Temporary password (optional)">
-            <input
-              type="text"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Leave blank to send invite"
-              className={inputClass}
-            />
-          </Field>
-        )}
-
-        {creatingNewOrg && (
-          <Field label="Temporary password (optional)">
-            <input
-              type="text"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Leave blank to send invite"
-              className={inputClass}
-            />
-          </Field>
         )}
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
-        Passwords must be at least 8 characters. Leave it blank to create the
-        user with an invite-pending status.
+        The user is created as invite pending and sets their own password via
+        “Forgot password” on the login page.
       </p>
 
       <div className="mt-5 flex justify-end gap-2">
