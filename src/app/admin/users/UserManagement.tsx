@@ -2,15 +2,18 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
   Check,
   Copy,
   Loader2,
   Plus,
   RotateCcw,
+  Trash2,
   UserPlus,
   UserX,
 } from "lucide-react";
+import { ORG_DELETE_CONFIRMATION } from "@/lib/admin-guard";
 import { cn } from "@/lib/utils";
 
 type Member = {
@@ -50,6 +53,7 @@ export function UserManagement({
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const [orgToDelete, setOrgToDelete] = useState<Organization | null>(null);
 
   const totalUsers = useMemo(
     () => organizations.reduce((sum, org) => sum + org.members.length, 0),
@@ -94,6 +98,31 @@ export function UserManagement({
       return;
     }
     await patchMember(member, { deactivated });
+  }
+
+  async function deleteMember(orgName: string, member: Member) {
+    if (
+      !window.confirm(
+        `Permanently delete ${member.name || member.email} (${orgName})? Their sessions and sign-in methods are removed. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusyUserId(member.id);
+    setActionError("");
+    try {
+      const res = await fetch(`/api/admin/users/${member.id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        await refresh();
+      } else {
+        const data = await res.json().catch(() => null);
+        setActionError(data?.error || "Delete failed");
+      }
+    } finally {
+      setBusyUserId(null);
+    }
   }
 
   // Role changes are deliberately absent from this UI (and rejected by the
@@ -144,6 +173,17 @@ export function UserManagement({
         </p>
       )}
 
+      {orgToDelete && (
+        <DeleteOrganizationDialog
+          organization={orgToDelete}
+          onClose={() => setOrgToDelete(null)}
+          onDeleted={async () => {
+            setOrgToDelete(null);
+            await refresh();
+          }}
+        />
+      )}
+
       {organizations.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-12 text-center text-sm text-slate-500">
           No organizations yet. Add a user and create the first organization
@@ -169,19 +209,30 @@ export function UserManagement({
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => copyInvite(org.inviteCode)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                  title="Copy invite code"
-                >
-                  {copiedCode === org.inviteCode ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-600" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                  <span className="font-mono">{org.inviteCode}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => copyInvite(org.inviteCode)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    title="Copy invite code"
+                  >
+                    {copiedCode === org.inviteCode ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    <span className="font-mono">{org.inviteCode}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOrgToDelete(org)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                    title="Delete organization"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete organization
+                  </button>
+                </div>
               </div>
 
               {org.members.length === 0 ? (
@@ -244,7 +295,7 @@ export function UserManagement({
                         <td className="px-5 py-3 text-slate-500 whitespace-nowrap">
                           {new Date(member.createdAt).toLocaleDateString()}
                         </td>
-                        <td className="px-5 py-3 text-right">
+                        <td className="px-5 py-3 text-right whitespace-nowrap">
                           {member.deactivatedAt ? (
                             <button
                               type="button"
@@ -274,6 +325,16 @@ export function UserManagement({
                               Deactivate
                             </button>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => deleteMember(org.name, member)}
+                            disabled={busyUserId === member.id}
+                            className="ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            title="Permanently delete this user"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -284,6 +345,126 @@ export function UserManagement({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Type-to-confirm dialog for deleting an organization. Enter = confirm (only
+ * once the word matches), Esc = cancel.
+ */
+function DeleteOrganizationDialog({
+  organization,
+  onClose,
+  onDeleted,
+}: {
+  organization: Organization;
+  onClose: () => void;
+  onDeleted: () => void | Promise<void>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const confirmed = typed.trim() === ORG_DELETE_CONFIRMATION;
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!confirmed || loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/admin/organizations/${organization.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: typed.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(data?.error || "Failed to delete organization");
+        return;
+      }
+      await onDeleted();
+    } catch {
+      setError("Something went wrong. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !loading) onClose();
+      }}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-org-title"
+        onSubmit={onSubmit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !loading) onClose();
+        }}
+        className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-red-600" />
+          <h3 id="delete-org-title" className="text-sm font-semibold">
+            Delete {organization.name}?
+          </h3>
+        </div>
+
+        <p className="text-sm text-slate-600">
+          This permanently deletes the organization, its workspace and all of
+          its data (ideas, documents, releases, integrations, chat), and{" "}
+          {organization.memberCount === 1
+            ? "its 1 user"
+            : `all ${organization.memberCount} of its users`}
+          . This cannot be undone.
+        </p>
+
+        {error && (
+          <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        )}
+
+        <label className="mt-4 block">
+          <span className="mb-1 block text-xs font-medium text-slate-500">
+            Type <span className="font-mono font-semibold text-slate-900">{ORG_DELETE_CONFIRMATION}</span> to confirm
+          </span>
+          <input
+            autoFocus
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={ORG_DELETE_CONFIRMATION}
+            autoComplete="off"
+            spellCheck={false}
+            className={inputClass}
+          />
+        </label>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!confirmed || loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? "Deleting…" : "Delete organization"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
