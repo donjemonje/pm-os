@@ -12,6 +12,12 @@ const FLAGS: { key: string; label: string; description: string }[] = [
     description:
       "Sign in with Google: the /login button and the whole OAuth flow. System-wide — the org is unknown before sign-in.",
   },
+  {
+    key: "selfSignup",
+    label: "Self-service sign-up",
+    description:
+      "Lets visitors create their own account and organization via /register (and first-time Google sign-in). Off = only users added in Admin can sign in.",
+  },
 ];
 
 export function SystemFlags({

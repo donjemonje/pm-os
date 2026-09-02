@@ -59,14 +59,6 @@ function hashPassword(pw) {
   return `${salt}:${hash}`;
 }
 
-function makeInviteCode() {
-  return randomBytes(6)
-    .toString("base64url")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 8)
-    .toUpperCase();
-}
-
 async function getOrCreateOrg() {
   const existing = await prisma.organization.findUnique({
     where: { slug: ORG_SLUG },
@@ -80,7 +72,6 @@ async function getOrCreateOrg() {
     data: {
       name: ORG_NAME,
       slug: ORG_SLUG,
-      inviteCode: makeInviteCode(),
       workspace: { create: { name: `${ORG_NAME} Workspace` } },
     },
     include: { workspace: true },

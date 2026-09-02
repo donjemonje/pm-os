@@ -10,9 +10,11 @@ export function isLoginDisabled(): boolean {
 }
 
 /**
- * New-account creation gate. Disabled by default: only existing users may log
- * in. Set ALLOW_SIGNUP=true to open self-service registration (and OAuth
- * first-time account creation). Has no effect when login itself is disabled.
+ * Env default for the "selfSignup" system flag (self-service registration and
+ * OAuth first-time account creation). Off by default: only existing users may
+ * log in. ALLOW_SIGNUP=true opens it; PM-OS Admin → Enablements can override
+ * either way (resolution: isSelfSignupEnabled in system-flags.ts). Has no
+ * effect when login itself is disabled.
  */
 export function isSignupAllowed(): boolean {
   const raw = process.env.ALLOW_SIGNUP;
@@ -113,7 +115,7 @@ export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
 // row wins, otherwise the env default applies. Resolution lives in
 // src/lib/system-flags.ts (needs the DB); managed in PM-OS Admin → Enablements.
 
-export const SYSTEM_FLAG_KEYS = ["googleSso"] as const;
+export const SYSTEM_FLAG_KEYS = ["googleSso", "selfSignup"] as const;
 export type SystemFlagKey = (typeof SYSTEM_FLAG_KEYS)[number];
 
 export function isSystemFlagKey(key: string): key is SystemFlagKey {
@@ -125,6 +127,8 @@ export function envSystemFlagDefault(key: SystemFlagKey): boolean {
   switch (key) {
     case "googleSso":
       return !isGoogleLoginDisabled();
+    case "selfSignup":
+      return isSignupAllowed();
   }
 }
 

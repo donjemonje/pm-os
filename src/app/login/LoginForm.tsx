@@ -35,9 +35,7 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [orgMode, setOrgMode] = useState<"create" | "join">("create");
   const [organizationName, setOrganizationName] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -88,9 +86,7 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
           name,
           email,
           password,
-          ...(orgMode === "join"
-            ? { inviteCode }
-            : { organizationName }),
+          organizationName,
         }),
       });
       const data = await res.json();
@@ -208,63 +204,23 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
               />
             </div>
             <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <label
-                  htmlFor="organization"
-                  className="font-subtitle block text-xs font-medium text-brand-muted"
-                >
-                  Organization
-                </label>
-                <div className="flex gap-1 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setOrgMode("create")}
-                    className={`rounded px-2 py-0.5 font-medium transition-colors ${
-                      orgMode === "create"
-                        ? "bg-brand-accent/20 text-brand-accent"
-                        : "text-brand-muted hover:text-brand-text"
-                    }`}
-                  >
-                    Create new
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOrgMode("join")}
-                    className={`rounded px-2 py-0.5 font-medium transition-colors ${
-                      orgMode === "join"
-                        ? "bg-brand-accent/20 text-brand-accent"
-                        : "text-brand-muted hover:text-brand-text"
-                    }`}
-                  >
-                    Join with code
-                  </button>
-                </div>
-              </div>
-              {orgMode === "create" ? (
-                <input
-                  id="organization"
-                  type="text"
-                  required
-                  placeholder="e.g. RoomLens"
-                  value={organizationName}
-                  onChange={(e) => setOrganizationName(e.target.value)}
-                  className={inputClassName}
-                />
-              ) : (
-                <input
-                  id="invite-code"
-                  type="text"
-                  required
-                  placeholder="Invite code from your admin"
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
-                  className={inputClassName}
-                />
-              )}
+              <label
+                htmlFor="organization"
+                className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
+              >
+                Organization
+              </label>
+              <input
+                id="organization"
+                type="text"
+                required
+                placeholder="e.g. RoomLens"
+                value={organizationName}
+                onChange={(e) => setOrganizationName(e.target.value)}
+                className={inputClassName}
+              />
               <p className="font-subtitle mt-1.5 text-xs text-brand-muted">
-                {orgMode === "create"
-                  ? "Your workspace, integrations, and documents are private to this organization."
-                  : "Join an existing organization to share its documents and integrations."}
+                Your workspace, integrations, and documents are private to this organization.
               </p>
             </div>
             <div>

@@ -19,6 +19,12 @@ import {
  * the global-setup.ts env guard in the same branch. Do not flip the gate
  * casually — it exists to keep the test env prod-shaped.
  *
+ * Since 2026-09-02 ALLOW_SIGNUP is only the env DEFAULT of the "selfSignup"
+ * system flag (PM-OS Admin → Enablements, SystemFlag row). A test can open
+ * the gate at runtime by PATCHing /api/admin/system-flags as the seeded
+ * admin instead of flipping the env — see admin.spec.ts for that path.
+ * Self-signup always creates a new organization; invite codes were removed.
+ *
  * scripts/seed-test-db.mjs deletes qa+signup* users on every run, and the
  * unique suffix below keeps back-to-back runs independent even without a
  * re-seed. Writes data: never @smoke.

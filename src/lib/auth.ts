@@ -2,7 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "./db";
-import { isSignupAllowed } from "./feature-flags";
+import { isSelfSignupEnabled } from "./system-flags";
 import {
   decryptTotpSecret,
   encryptTotpSecret,
@@ -57,14 +57,6 @@ function slugify(input: string): string {
   return base || "org";
 }
 
-function makeInviteCode(): string {
-  return randomBytes(6)
-    .toString("base64url")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 8)
-    .toUpperCase();
-}
-
 async function uniqueOrgSlug(base: string): Promise<string> {
   let slug = base;
   let n = 1;
@@ -75,14 +67,6 @@ async function uniqueOrgSlug(base: string): Promise<string> {
   return slug;
 }
 
-async function uniqueInviteCode(): Promise<string> {
-  let code = makeInviteCode();
-  while (await db.organization.findUnique({ where: { inviteCode: code } })) {
-    code = makeInviteCode();
-  }
-  return code;
-}
-
 /**
  * Create a new organization and its single shared workspace (the tenant data
  * container). All members of the org share this workspace.
@@ -90,12 +74,10 @@ async function uniqueInviteCode(): Promise<string> {
 export async function createOrganizationWithWorkspace(name: string) {
   const orgName = name.trim() || "My Organization";
   const slug = await uniqueOrgSlug(slugify(orgName));
-  const inviteCode = await uniqueInviteCode();
   return db.organization.create({
     data: {
       name: orgName,
       slug,
-      inviteCode,
       workspace: { create: { name: `${orgName} Workspace` } },
     },
     include: { workspace: true },
@@ -348,7 +330,6 @@ export async function registerUser(input: {
   password: string;
   name: string;
   organizationName?: string;
-  inviteCode?: string;
 }): Promise<AuthUser> {
   const email = input.email.trim().toLowerCase();
   const existing = await db.user.findUnique({ where: { email } });
@@ -356,22 +337,13 @@ export async function registerUser(input: {
     throw new Error("An account with this email already exists");
   }
 
-  // Resolve the organization: join an existing one via invite code, otherwise
-  // create a brand-new organization (with its own isolated workspace).
-  let organizationId: string;
-  const inviteCode = input.inviteCode?.trim().toUpperCase();
-  if (inviteCode) {
-    const org = await db.organization.findUnique({ where: { inviteCode } });
-    if (!org) {
-      throw new Error("Invalid organization invite code");
-    }
-    organizationId = org.id;
-  } else {
-    const org = await createOrganizationWithWorkspace(
-      input.organizationName?.trim() || `${input.name.trim()}'s Organization`
-    );
-    organizationId = org.id;
-  }
+  // Self-signup always creates a brand-new organization (with its own
+  // isolated workspace). Joining an existing org is admin-only: PM-OS Admin
+  // adds the user to the org directly.
+  const org = await createOrganizationWithWorkspace(
+    input.organizationName?.trim() || `${input.name.trim()}'s Organization`
+  );
+  const organizationId = org.id;
 
   const user = await db.user.create({
     data: {
@@ -448,7 +420,7 @@ export async function signInWithOAuth(input: {
 
   // No linked account and no existing user with this email: this would be a
   // brand-new signup. Only create the account when signup is allowed.
-  if (!isSignupAllowed()) {
+  if (!(await isSelfSignupEnabled())) {
     throw new Error("signup_disabled");
   }
 
@@ -543,7 +515,6 @@ export type OrganizationWithMembers = {
   id: string;
   name: string;
   slug: string;
-  inviteCode: string;
   features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
@@ -577,7 +548,6 @@ export async function listOrganizationsWithMembers(): Promise<
     id: org.id,
     name: org.name,
     slug: org.slug,
-    inviteCode: org.inviteCode,
     features: toFeatureOverrides(org.features),
     createdAt: org.createdAt.toISOString(),
     memberCount: org.users.length,
@@ -600,7 +570,6 @@ export async function getOrganizationSummary(organizationId: string) {
       id: true,
       name: true,
       slug: true,
-      inviteCode: true,
       _count: { select: { users: true } },
     },
   });
@@ -609,7 +578,6 @@ export async function getOrganizationSummary(organizationId: string) {
     id: org.id,
     name: org.name,
     slug: org.slug,
-    inviteCode: org.inviteCode,
     memberCount: org._count.users,
   };
 }

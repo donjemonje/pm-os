@@ -17,7 +17,6 @@ export type MenuUser = {
 export type MenuOrganization = {
   id: string;
   name: string;
-  inviteCode: string;
   memberCount: number;
 };
 
@@ -29,21 +28,9 @@ export function UserMenu({
   organization: MenuOrganization | null;
 }) {
   const router = useRouter();
-  const [copied, setCopied] = useState(false);
   const [open, setOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  async function copyInvite() {
-    if (!organization) return;
-    try {
-      await navigator.clipboard.writeText(organization.inviteCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // clipboard may be unavailable
-    }
-  }
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -111,24 +98,6 @@ export function UserMenu({
                 {organization.memberCount}{" "}
                 {organization.memberCount === 1 ? "member" : "members"}
               </p>
-              <button
-                type="button"
-                onClick={copyInvite}
-                title="Copy invite code"
-                className="mt-2 flex w-full items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-left transition-colors hover:bg-white/10"
-              >
-                <span className="min-w-0">
-                  <span className="block text-[10px] uppercase tracking-wide text-white/40">
-                    Invite code
-                  </span>
-                  <span className="block truncate font-mono text-sm text-white">
-                    {organization.inviteCode}
-                  </span>
-                </span>
-                <span className="shrink-0 text-xs text-brand-accent">
-                  {copied ? "Copied" : "Copy"}
-                </span>
-              </button>
             </div>
           )}
           <button

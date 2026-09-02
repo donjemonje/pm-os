@@ -11,7 +11,6 @@ model Organization {
   id         String   @id @default(uuid())
   name       String
   slug       String   @unique
-  inviteCode String   @unique
   /// Per-organization feature overrides, e.g. {"ideas": true}. A key that is
   /// present wins; a missing key falls back to the env default (IDEAS_ENABLED
   /// etc.). Managed in PM-OS Admin → Configurations.

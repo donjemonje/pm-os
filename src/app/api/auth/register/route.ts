@@ -10,14 +10,13 @@ import { loginDisabledResponse, signupDisabledResponse } from "@/lib/auth-guard"
 export async function POST(request: NextRequest) {
   const disabled = loginDisabledResponse();
   if (disabled) return disabled;
-  const signupBlocked = signupDisabledResponse();
+  const signupBlocked = await signupDisabledResponse();
   if (signupBlocked) return signupBlocked;
   let body: {
     email?: string;
     password?: string;
     name?: string;
     organizationName?: string;
-    inviteCode?: string;
   };
   try {
     body = await request.json();
@@ -29,16 +28,15 @@ export async function POST(request: NextRequest) {
   const password = body.password;
   const name = body.name?.trim();
   const organizationName = body.organizationName?.trim();
-  const inviteCode = body.inviteCode?.trim();
   if (!email || !password || !name) {
     return NextResponse.json(
       { error: "Name, email, and password are required" },
       { status: 400 }
     );
   }
-  if (!organizationName && !inviteCode) {
+  if (!organizationName) {
     return NextResponse.json(
-      { error: "Provide an organization name to create one, or an invite code to join one" },
+      { error: "Organization name is required" },
       { status: 400 }
     );
   }
@@ -58,7 +56,6 @@ export async function POST(request: NextRequest) {
       password,
       name,
       organizationName,
-      inviteCode,
     });
     // New accounts enroll in 2FA immediately — the step is mandatory.
     const token = await createSession(user.id);

@@ -11,6 +11,14 @@ export async function systemFlagEnabled(key: SystemFlagKey): Promise<boolean> {
   return row ? row.value : envSystemFlagDefault(key);
 }
 
+/**
+ * Self-service registration gate (new accounts via /register and OAuth
+ * first-time sign-in). Admin override wins, else ALLOW_SIGNUP (off by default).
+ */
+export function isSelfSignupEnabled(): Promise<boolean> {
+  return systemFlagEnabled("selfSignup");
+}
+
 /** Only keys with a stored override are present (mirrors org features). */
 export async function listSystemFlagOverrides(): Promise<Record<string, boolean>> {
   const rows = await db.systemFlag.findMany({
