@@ -15,7 +15,7 @@ export type InviteResult = {
  * Used right after PM-OS Admin creates a user, and by "Resend invite".
  *
  * Refuses (throws) for a missing or deactivated user, and for a user who
- * already has a password — they sign in normally and use "Forgot password".
+ * already finished sign-up (password set, or a Google account linked).
  * SMTP failures propagate as-is so the admin sees the real reason.
  */
 export async function sendInvitation(input: {
@@ -24,12 +24,18 @@ export async function sendInvitation(input: {
 }): Promise<InviteResult> {
   const user = await db.user.findUnique({
     where: { id: input.userId },
-    include: { organization: { select: { name: true } } },
+    include: {
+      organization: { select: { name: true } },
+      accounts: { select: { provider: true } },
+    },
   });
   if (!user) throw new Error("User not found");
   if (user.deactivatedAt) throw new Error("User is deactivated");
   if (user.passwordHash) {
     throw new Error("User already has a password — they can use Forgot password");
+  }
+  if (user.accounts.length > 0) {
+    throw new Error("User already signed up with Google — they sign in with the Google button");
   }
 
   const orgName = user.organization?.name ?? "PM-OS";

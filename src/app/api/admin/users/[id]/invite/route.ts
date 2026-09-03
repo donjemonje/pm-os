@@ -28,7 +28,7 @@ export async function POST(
     const notSendable =
       message === "User not found" ||
       message === "User is deactivated" ||
-      message.startsWith("User already has a password");
+      message.startsWith("User already");
     return NextResponse.json(
       { error: message },
       { status: notSendable ? 400 : 502 }

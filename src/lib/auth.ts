@@ -503,6 +503,10 @@ export type OrganizationMember = {
   name: string;
   role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
+  /** Linked SSO providers (e.g. ["google"]). */
+  providers: string[];
+  /** Finished sign-up: has a password or a linked SSO account. Otherwise the invite is still pending. */
+  activated: boolean;
   deactivatedAt: string | null;
   createdAt: string;
 };
@@ -536,7 +540,10 @@ export async function listOrganizationsWithMembers(): Promise<
   const orgs = await db.organization.findMany({
     orderBy: { createdAt: "asc" },
     include: {
-      users: { orderBy: { createdAt: "asc" } },
+      users: {
+        orderBy: { createdAt: "asc" },
+        include: { accounts: { select: { provider: true } } },
+      },
     },
   });
 
@@ -553,6 +560,8 @@ export async function listOrganizationsWithMembers(): Promise<
       name: u.name,
       role: u.role,
       hasPassword: Boolean(u.passwordHash),
+      providers: u.accounts.map((a) => a.provider),
+      activated: Boolean(u.passwordHash) || u.accounts.length > 0,
       deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
       createdAt: u.createdAt.toISOString(),
     })),

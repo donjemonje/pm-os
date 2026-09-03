@@ -21,6 +21,8 @@ type Member = {
   name: string;
   role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
+  providers: string[];
+  activated: boolean;
   deactivatedAt: string | null;
   createdAt: string;
 };
@@ -288,7 +290,7 @@ export function UserManagement({
                               "rounded-full px-2 py-0.5 text-xs font-medium",
                               member.deactivatedAt
                                 ? "bg-slate-100 text-slate-500"
-                                : member.hasPassword
+                                : member.activated
                                   ? "bg-emerald-50 text-emerald-700"
                                   : "bg-amber-50 text-amber-700"
                             )}
@@ -296,8 +298,12 @@ export function UserManagement({
                             {member.deactivatedAt
                               ? "Deactivated"
                               : member.hasPassword
-                                ? "Password set"
-                                : "Invite pending"}
+                                ? "Password"
+                                : member.providers.includes("google")
+                                  ? "Google"
+                                  : member.activated
+                                    ? "Active"
+                                    : "Invite pending"}
                           </span>
                         </td>
                         <td className="px-5 py-3 text-slate-500 whitespace-nowrap">
@@ -333,7 +339,7 @@ export function UserManagement({
                               Deactivate
                             </button>
                           )}
-                          {!member.deactivatedAt && !member.hasPassword && (
+                          {!member.deactivatedAt && !member.activated && (
                             <button
                               type="button"
                               onClick={() => resendInvite(member)}
