@@ -23,10 +23,11 @@ type Override = boolean | undefined;
  * default.
  *
  * DOM contract for tests: rows tr[data-flag=<key>], cells td[data-org=<slug>];
- * each cell holds one span.rounded-full badge (effective state) with
- * data-override="on|off|none", and On / Off / Default (<env>) buttons. Badges
- * show just On/Off — the Default column says what an un-overridden cell
- * inherits.
+ * each cell holds one [data-override="on|off|none"][data-effective="on|off"]
+ * control group with On / Off / Default (<env>) buttons (no text badge — the
+ * pressed button is the state, the Default column says what an
+ * un-overridden cell inherits). Attributes update only from the API
+ * response, so they double as the "saved" signal.
  */
 export function EnablementsMatrix({
   initialOrganizations,
@@ -219,7 +220,6 @@ export function EnablementsMatrix({
                           envDefault={orgEnvDefaults[flag.key]}
                           busy={busy === `${org.id}:${flag.key}`}
                           onChange={(v) => setOrgFlag(org.id, flag.key, v)}
-                          inheritHint={false}
                         />
                       </td>
                     );
@@ -443,29 +443,20 @@ function FlagCell({
   envDefault,
   busy,
   onChange,
-  inheritHint = true,
 }: {
   override: Override;
   envDefault: boolean;
   busy: boolean;
   onChange: (value: boolean | null) => void;
-  /** Append " (default)" to the badge when no override is set. */
-  inheritHint?: boolean;
 }) {
   const hasOverride = typeof override === "boolean";
   const effective = hasOverride ? override : envDefault;
   return (
-    <div className="flex items-center gap-2">
-      <span
-        data-override={hasOverride ? (override ? "on" : "off") : "none"}
-        className={cn(
-          "rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap",
-          effective ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
-        )}
-      >
-        {effective ? "On" : "Off"}
-        {hasOverride || !inheritHint ? "" : " (default)"}
-      </span>
+    <div
+      className="flex items-center gap-2"
+      data-override={hasOverride ? (override ? "on" : "off") : "none"}
+      data-effective={effective ? "on" : "off"}
+    >
       <div className="flex items-center gap-1">
         <FlagChoice
           label="On"
