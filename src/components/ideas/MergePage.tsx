@@ -1,6 +1,5 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
@@ -162,33 +161,23 @@ export function MergePage({
     jiraSources.map((s) => ({ key: s.key, id: s.id, title: s.title }))
   );
 
-  // In edit mode the checked sources gather at the top of their column, so a
-  // select/deselect visibly moves the row into or out of the merged set.
-  const orderRows = (rows: SourceRow[]) =>
-    edit ? [...rows].sort((a, b) => Number(b.checked) - Number(a.checked)) : rows;
-
   const renderColumn = (kind: SourceKind, label: string, rows: SourceRow[], emptyText: string) => (
     <div className="overflow-hidden rounded-xl border border-border bg-white">
       <div className={COL_HEADER}>
         {label} · {rows.length}
       </div>
       <div>
-        <AnimatePresence initial={false}>
-        {orderRows(rows).map((row) => (
-          <motion.div
+        {rows.map((row) => (
+          <div
             key={row.key}
-            layout
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: row.orphan && !row.checked ? 0.5 : 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ layout: { duration: 0.25, ease: "easeInOut" }, duration: 0.18 }}
             onClick={() => {
               if (edit) onToggleSrc(kind, row.key);
               else if (row.ownerId) onStartEdit(row.ownerId);
             }}
-            className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors"
+            className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors duration-150"
             style={{
               background: row.checked || (row.selected && !edit) ? "#daf0e2" : "#ffffff",
+              opacity: row.orphan && !row.checked ? 0.5 : 1,
             }}
           >
             {edit && (
@@ -206,19 +195,25 @@ export function MergePage({
                 {row.checked && <Check size={9} strokeWidth={3.5} />}
               </span>
             )}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenSource(kind, row.key);
-              }}
-              title={kind === "zen" ? "Open ticket" : "Open Jira idea"}
-              className="shrink-0 font-mono text-[10.5px] font-semibold text-primary hover:text-primary-hover hover:underline"
+            <div
+              className={`flex min-w-0 flex-1 items-center gap-2 transition-transform duration-150 ease-out ${
+                row.checked ? "translate-x-1" : ""
+              }`}
             >
-              {row.id}
-            </button>
-            <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[#33445e]">
-              {row.text}
-            </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenSource(kind, row.key);
+                }}
+                title={kind === "zen" ? "Open ticket" : "Open Jira idea"}
+                className="shrink-0 font-mono text-[10.5px] font-semibold text-primary hover:text-primary-hover hover:underline"
+              >
+                {row.id}
+              </button>
+              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[#33445e]">
+                {row.text}
+              </span>
+            </div>
             {row.parkLabel && (
               <span className="shrink-0 rounded-full border border-[#dde5ef] bg-[#eef1f6] px-[5px] py-px font-mono text-[9.5px] font-semibold text-[#7a8496]">
                 {row.parkLabel}
@@ -232,9 +227,8 @@ export function MergePage({
                 {row.owners}×
               </span>
             )}
-          </motion.div>
+          </div>
         ))}
-        </AnimatePresence>
         {rows.length === 0 && <div className="p-4 text-xs text-muted">{emptyText}</div>}
       </div>
     </div>
@@ -249,22 +243,17 @@ export function MergePage({
       <div className="overflow-hidden rounded-xl border border-border bg-white">
         <div className={COL_HEADER}>Final · {finals.length}</div>
         <div>
-          <AnimatePresence initial={false}>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
             const sel = idea.id === selId;
             return (
-              <motion.div
+              <div
                 key={idea.id}
-                layout
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: gone ? 0.55 : 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ layout: { duration: 0.25, ease: "easeInOut" }, duration: 0.18 }}
                 onClick={() => onStartEdit(idea.id)}
-                className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors"
+                className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors duration-150"
                 style={{
                   background: sel && !gone ? "#daf0e2" : "#ffffff",
+                  opacity: gone ? 0.55 : 1,
                 }}
               >
                 <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px]">
@@ -285,10 +274,9 @@ export function MergePage({
                 >
                   {gone ? "Deleted" : `${count} src`}
                 </button>
-              </motion.div>
+              </div>
             );
           })}
-          </AnimatePresence>
           {finals.length === 0 && <div className="p-4 text-xs text-muted">No ideas match</div>}
         </div>
       </div>
