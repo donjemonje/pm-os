@@ -22,7 +22,9 @@ playwright-report/
 
 
 # Claude Code personal settings
-.claude/settings.local.json
+# .claude and CLAUDE.md are local symlinks into pmos-office/claude/pm-os (commands, launch.json, worktrees, project instructions)
+.claude
+/CLAUDE.md
 
 # Playwright
 test-results/
@@ -30,3 +32,4 @@ tests/e2e/artifacts/
 
 # Operator-only script: role changes stay out of git (Daniel, 2026-08-27)
 scripts/set-user-role.mjs
+next-env.d.ts
