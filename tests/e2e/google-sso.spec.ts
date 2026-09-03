@@ -149,6 +149,7 @@ test.describe("Google SSO + forgot-password", () => {
 
   test("G3 reset link sets a new password once, then the new password logs in through 2FA", async ({
     page,
+    request,
   }) => {
     // The emailed raw token (no SMTP creds in tests → the email only
     // prints to the server console, so the row is inserted directly with a
@@ -193,12 +194,13 @@ test.describe("Google SSO + forgot-password", () => {
       page.getByRole("heading", { name: "Dashboard" })
     ).toBeVisible();
 
-    // And the new password is what the login API now accepts (fresh
-    // cookie-less request; a second TOTP login would need a new time window,
-    // so the API answer — 200 + twoFactorRequired — is the proof here).
-    const login = await page.context().request.post("/api/auth/login", {
+    // And the new password is what the login API now accepts — via the
+    // standalone request fixture (its own cookie jar, so the browser
+    // context's verified session is untouched). A second TOTP login would
+    // need a new time window, so the API answer — 200 + twoFactorRequired —
+    // is the proof here.
+    const login = await request.post("/api/auth/login", {
       data: { email: QA_USER.email, password: NEW_PASSWORD },
-      headers: { cookie: "" },
     });
     expect(login.status()).toBe(200);
     expect((await login.json()).twoFactorRequired).toBe(true);

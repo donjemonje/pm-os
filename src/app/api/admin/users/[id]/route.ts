@@ -99,30 +99,33 @@ export async function DELETE(
 
   const { id } = await params;
 
-  const user = await db.user.findUnique({ where: { id } });
-  if (!user) {
-    return NextResponse.json({ error: "User not found" }, { status: 404 });
-  }
+  // Count, guard and delete in one transaction so two admins deleting each
+  // other concurrently cannot leave the system without an active pmos-admin.
+  const outcome = await db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({ where: { id } });
+    if (!user) return { status: 404 as const, error: "User not found" };
 
-  const activeAdminCount = await db.user.count({
-    where: { role: "PMOS_ADMIN", deactivatedAt: null },
+    const activeAdminCount = await tx.user.count({
+      where: { role: "PMOS_ADMIN", deactivatedAt: null },
+    });
+    const refusal = adminMutationError({
+      actorId: admin.id,
+      target: {
+        id: user.id,
+        role: user.role,
+        deactivated: Boolean(user.deactivatedAt),
+      },
+      change: { deleted: true },
+      activeAdminCount,
+    });
+    if (refusal) return { status: 400 as const, error: refusal };
+
+    await tx.user.delete({ where: { id } });
+    return { status: 200 as const };
   });
 
-  const refusal = adminMutationError({
-    actorId: admin.id,
-    target: {
-      id: user.id,
-      role: user.role,
-      deactivated: Boolean(user.deactivatedAt),
-    },
-    change: { deleted: true },
-    activeAdminCount,
-  });
-  if (refusal) {
-    return NextResponse.json({ error: refusal }, { status: 400 });
+  if (outcome.status !== 200) {
+    return NextResponse.json({ error: outcome.error }, { status: outcome.status });
   }
-
-  await db.user.delete({ where: { id } });
-
   return NextResponse.json({ ok: true });
 }

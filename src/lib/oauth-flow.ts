@@ -25,6 +25,26 @@ import {
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
 const OAUTH_PKCE_COOKIE = "pmos_oauth_pkce";
+const OAUTH_INVITE_COOKIE = "pmos_oauth_invite";
+
+/**
+ * Only same-origin app paths may be used as a post-login redirect. A bare
+ * startsWith("/") check lets "//evil.com" and "/\\evil.com" through (both
+ * resolve to another host), so the value is parsed against the app origin.
+ */
+function safeAppPath(value: string | null | undefined): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) {
+    return "/";
+  }
+  const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  try {
+    const url = new URL(value, base);
+    if (url.origin !== new URL(base).origin) return "/";
+    return url.pathname + url.search;
+  } catch {
+    return "/";
+  }
+}
 
 function authRedirect(path: string, params?: Record<string, string>) {
   const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -61,9 +81,14 @@ function setOAuthCookies(
 function clearOAuthCookies(response: NextResponse) {
   response.cookies.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 });
   response.cookies.set(OAUTH_PKCE_COOKIE, "", { path: "/", maxAge: 0 });
+  response.cookies.set(OAUTH_INVITE_COOKIE, "", { path: "/", maxAge: 0 });
 }
 
-export async function startOAuth(provider: string, fromParam?: string | null) {
+export async function startOAuth(
+  provider: string,
+  fromParam?: string | null,
+  inviteToken?: string | null
+) {
   if (isLoginDisabled()) {
     return authRedirect("/login");
   }
@@ -79,7 +104,7 @@ export async function startOAuth(provider: string, fromParam?: string | null) {
     return authRedirect("/login", { error: `${provider}_not_configured` });
   }
 
-  const from = fromParam?.startsWith("/") ? fromParam : "/";
+  const from = safeAppPath(fromParam);
   const state = randomUUID();
   const { verifier, challenge } = generatePkce();
   const authorizeUrl = buildAuthorizeUrl(provider, state, challenge);
@@ -90,6 +115,16 @@ export async function startOAuth(provider: string, fromParam?: string | null) {
 
   const response = NextResponse.redirect(authorizeUrl);
   setOAuthCookies(response, state, provider, from, verifier);
+  // Invite completion via Google: carry the invite token across the round
+  // trip so signInWithOAuth can require and consume it.
+  if (inviteToken?.trim()) {
+    response.cookies.set(OAUTH_INVITE_COOKIE, inviteToken.trim(), {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 600,
+    });
+  }
   return response;
 }
 
@@ -115,6 +150,7 @@ export async function completeOAuth(provider: string, code: string | null, state
   const cookieStore = await cookies();
   const storedState = cookieStore.get(OAUTH_STATE_COOKIE)?.value;
   const pkceVerifier = cookieStore.get(OAUTH_PKCE_COOKIE)?.value;
+  const inviteToken = cookieStore.get(OAUTH_INVITE_COOKIE)?.value ?? null;
 
   if (!storedState || !pkceVerifier) {
     return loginError("oauth_expired");
@@ -141,8 +177,9 @@ export async function completeOAuth(provider: string, code: string | null, state
       providerUserId: profile.providerUserId,
       email: profile.email,
       name: profile.name,
+      inviteToken,
     });
-    const redirectTo = from?.startsWith("/") ? from : "/";
+    const redirectTo = safeAppPath(from);
     const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
     // 2FA is mandatory — every OAuth login lands on the TOTP step — unless

@@ -174,9 +174,12 @@ export async function fetchOAuthProfile(
     const data = (await res.json()) as {
       id?: string;
       email?: string;
+      verified_email?: boolean;
       name?: string;
     };
-    if (!data.id || !data.email) return null;
+    // Account linking (and a possibly 2FA-skipping session) keys off the
+    // email, so only a Google-verified address is acceptable.
+    if (!data.id || !data.email || data.verified_email !== true) return null;
     return {
       providerUserId: data.id,
       email: data.email,

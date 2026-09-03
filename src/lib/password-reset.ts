@@ -1,41 +1,15 @@
-import { createHash, randomBytes } from "crypto";
 import { db } from "./db";
 import { hashPassword } from "./auth";
 import { renderBrandedEmail } from "./email-templates";
 import { sendEmail } from "./mailer";
+import { hashResetToken, issuePasswordToken } from "./password-tokens";
+
+export { issuePasswordToken, lookupPasswordToken } from "./password-tokens";
 
 const RESET_TTL_MS = 24 * 60 * 60 * 1000;
 
-function hashResetToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
 export function appBaseUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000";
-}
-
-/**
- * Issue a single-use set-password token for a user and return the raw token
- * (only the hash is stored). One outstanding link per user: a new token
- * invalidates older unused ones. Shared by password reset (24h) and admin
- * invitations (7d, see invitations.ts) — both are consumed by resetPassword.
- */
-export async function issuePasswordToken(
-  userId: string,
-  ttlMs: number
-): Promise<string> {
-  const token = randomBytes(32).toString("base64url");
-  await db.$transaction([
-    db.passwordResetToken.deleteMany({ where: { userId, usedAt: null } }),
-    db.passwordResetToken.create({
-      data: {
-        userId,
-        tokenHash: hashResetToken(token),
-        expiresAt: new Date(Date.now() + ttlMs),
-      },
-    }),
-  ]);
-  return token;
 }
 
 /**
@@ -69,29 +43,6 @@ export async function requestPasswordReset(emailRaw: string): Promise<void> {
     text,
     html,
   });
-}
-
-/**
- * Peek at a set-password token without consuming it — for the invite
- * landing page. Null for unknown, used, expired, or deactivated.
- */
-export async function lookupPasswordToken(token: string): Promise<{
-  email: string;
-  name: string;
-  organizationName: string | null;
-} | null> {
-  const row = await db.passwordResetToken.findUnique({
-    where: { tokenHash: hashResetToken(token) },
-    include: { user: { include: { organization: { select: { name: true } } } } },
-  });
-  if (!row || row.usedAt || row.expiresAt < new Date() || row.user.deactivatedAt) {
-    return null;
-  }
-  return {
-    email: row.user.email,
-    name: row.user.name,
-    organizationName: row.user.organization?.name ?? null,
-  };
 }
 
 /**

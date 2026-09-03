@@ -47,7 +47,6 @@ export function PasswordInput({
         type="button"
         aria-label="Hold to show password"
         title="Hold to show password"
-        tabIndex={-1}
         onMouseDown={(e) => {
           e.preventDefault(); // keep focus in the input
           show();

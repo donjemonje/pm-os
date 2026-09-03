@@ -4,16 +4,14 @@
  * ORG_FEATURE_KEYS in feature-flags.ts — the admin API
  * validate against those.
  *
- * Every flag is scope "org": a per-organization override with an env default.
- * (System-wide switches were removed 2026-09-03 — Google sign-in is always on
- * when configured, and there is no self-service sign-up.)
+ * Every flag is a per-organization override with an env default. (System-wide
+ * switches were removed 2026-09-03 — Google sign-in is always on when
+ * configured, and there is no self-service sign-up.)
  */
 
-export type FlagScope = "system" | "org";
 
 export type FlagDef = {
   key: string;
-  scope: FlagScope;
   label: string;
   description: string;
 };
@@ -31,7 +29,6 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     flags: [
       {
         key: "ssoSkips2fa",
-        scope: "org",
         label: "Google SSO skips 2FA",
         description:
           "Members who sign in with Google land in the app without the TOTP challenge or enrollment. Password sign-ins always require 2FA.",
@@ -44,13 +41,11 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     flags: [
       {
         key: "ideas",
-        scope: "org",
         label: "Ideas",
         description: "Ideas pipeline: page, settings, and import APIs.",
       },
       {
         key: "ideasUndo",
-        scope: "org",
         label: "Ideas undo",
         description:
           "Per-idea undo of the last Jira merge — restores fields (only if unedited since), deletes created issues. Demo affordance.",
@@ -63,7 +58,6 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     flags: [
       {
         key: "docs",
-        scope: "org",
         label: "Docs",
         description:
           "Documents and Releases: pages, editor, generation APIs, dashboard cards.",
@@ -76,7 +70,6 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     flags: [
       {
         key: "chat",
-        scope: "org",
         label: "Chat",
         description: "PMOS Chat: page, floating panel, and chat APIs.",
       },
@@ -88,7 +81,6 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     flags: [
       {
         key: "dashboard",
-        scope: "org",
         label: "Dashboard",
         description:
           "Dashboard page. The post-login landing is the first ON surface in menu order (Dashboard, Ideas, Docs, Chat, Settings).",

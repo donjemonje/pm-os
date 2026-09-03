@@ -6,7 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { brand } from "@/lib/brand";
 import { isGoogleLoginDisabled, isLoginDisabled } from "@/lib/feature-flags";
 import { getOAuthProviderStatuses } from "@/lib/oauth-providers";
-import { lookupPasswordToken } from "@/lib/password-reset";
+import { lookupPasswordToken } from "@/lib/password-tokens";
 import { InviteChoices } from "./InviteChoices";
 
 export const metadata: Metadata = {
@@ -36,7 +36,7 @@ export default async function InvitePage({
   if (user) redirect("/");
 
   const { token } = await searchParams;
-  const invite = token ? await lookupPasswordToken(token) : null;
+  const invite = token ? await lookupPasswordToken(token, { inviteOnly: true }) : null;
 
   const googleAvailable =
     invite !== null &&

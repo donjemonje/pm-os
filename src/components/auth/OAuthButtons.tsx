@@ -119,6 +119,8 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   signup_disabled:
     "No PM-OS account exists for this Google email. Ask your admin for an invite.",
   account_deactivated: "This account has been deactivated. Contact your admin.",
+  invite_required:
+    "This invite link has expired or was already used. Ask your admin to resend the invite.",
   google_sso_disabled:
     "Google sign-in is disabled in this environment. Sign in with email instead.",
   email_uses_password:

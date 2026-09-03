@@ -42,6 +42,13 @@ function getTransporter(): Transporter {
     host: process.env.SMTP_HOST?.trim() || "smtp.gmail.com",
     port,
     secure: port === 465,
+    // 587 must upgrade to TLS, never fall back to plaintext.
+    requireTLS: port !== 465,
+    // Bounded waits: an unreachable SMTP host must fail the request in
+    // seconds, not hang the admin's "Add user" call for minutes.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
     auth: {
       user: process.env.SMTP_USER!.trim(),
       pass: process.env.SMTP_PASSWORD!.trim(),

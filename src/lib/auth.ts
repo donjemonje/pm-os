@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "./db";
 import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "./password-policy";
+import { consumePasswordTokenForUser } from "./password-tokens";
 import {
   decryptTotpSecret,
   encryptTotpSecret,
@@ -336,39 +337,6 @@ export async function verifyTwoFactorChallenge(
   return { status: "ok" };
 }
 
-export async function registerUser(input: {
-  email: string;
-  password: string;
-  name: string;
-  organizationName?: string;
-}): Promise<AuthUser> {
-  const email = input.email.trim().toLowerCase();
-  const existing = await db.user.findUnique({ where: { email } });
-  if (existing) {
-    throw new Error("An account with this email already exists");
-  }
-
-  // Self-signup always creates a brand-new organization (with its own
-  // isolated workspace). Joining an existing org is admin-only: PM-OS Admin
-  // adds the user to the org directly.
-  const org = await createOrganizationWithWorkspace(
-    input.organizationName?.trim() || `${input.name.trim()}'s Organization`
-  );
-  const organizationId = org.id;
-
-  const user = await db.user.create({
-    data: {
-      email,
-      name: input.name.trim(),
-      passwordHash: hashPassword(input.password),
-      organizationId,
-    },
-    include: userWithOrgInclude,
-  });
-
-  return toAuthUser(user);
-}
-
 export async function authenticateUser(
   email: string,
   password: string
@@ -389,6 +357,8 @@ export async function signInWithOAuth(input: {
   providerUserId: string;
   email: string;
   name: string;
+  /** Raw invite token from /invite → "Sign Up with Google" (see oauth-flow). */
+  inviteToken?: string | null;
 }): Promise<AuthUser> {
   const email = input.email.trim().toLowerCase();
 
@@ -417,22 +387,23 @@ export async function signInWithOAuth(input: {
   if (existing) {
     if (existing.deactivatedAt) throw new Error("account_deactivated");
     // Login type is sticky: same email but a password account — no auto-link,
-    // no SSO sign-in. (SSO-created users may still link another provider.)
+    // no SSO sign-in.
     if (existing.passwordHash) throw new Error("email_uses_password");
-    await db.$transaction([
-      db.oAuthAccount.create({
-        data: {
-          userId: existing.id,
-          provider: input.provider,
-          providerUserId: input.providerUserId,
-        },
-      }),
-      // An invite-pending user completing sign-up via Google: retire any
-      // outstanding set-password link so the invite can't also be used.
-      db.passwordResetToken.deleteMany({
-        where: { userId: existing.id, usedAt: null },
-      }),
-    ]);
+    // A no-password, no-link user is an invite that was never completed.
+    // Completing it via Google needs the live invite token (same 7-day,
+    // single-use promise as the password path) — the email claim alone is
+    // not enough to claim the account. Consuming the token also revokes the
+    // user's other unused links.
+    if (!(await consumePasswordTokenForUser(existing.id, input.inviteToken))) {
+      throw new Error("invite_required");
+    }
+    await db.oAuthAccount.create({
+      data: {
+        userId: existing.id,
+        provider: input.provider,
+        providerUserId: input.providerUserId,
+      },
+    });
     return toAuthUser(existing);
   }
 

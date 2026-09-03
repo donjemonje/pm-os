@@ -109,41 +109,42 @@ export async function DELETE(
     );
   }
 
-  const org = await db.organization.findUnique({
-    where: { id },
-    include: {
-      users: { select: { id: true, role: true, deactivatedAt: true } },
-    },
-  });
-  if (!org) {
-    return NextResponse.json({ error: "Organization not found" }, { status: 404 });
-  }
-
-  const activeAdminCount = await db.user.count({
-    where: { role: "PMOS_ADMIN", deactivatedAt: null },
-  });
-
-  const refusal = adminOrgDeleteError({
-    actorId: admin.id,
-    members: org.users.map((u) => ({
-      id: u.id,
-      role: u.role,
-      deactivated: Boolean(u.deactivatedAt),
-    })),
-    activeAdminCount,
-  });
-  if (refusal) {
-    return NextResponse.json({ error: refusal }, { status: 400 });
-  }
-
-  // Users hang off the org without a cascade rule (they would be orphaned
-  // with organizationId = null), so delete them explicitly. Each user delete
-  // cascades sessions/OAuth/reset tokens; the org delete cascades the
+  // Load, count, guard and delete in one transaction so a concurrent admin
+  // deletion cannot leave the system without an active pmos-admin. Users
+  // hang off the org without a cascade rule (they would be orphaned with
+  // organizationId = null), so they are deleted explicitly; each user delete
+  // cascades sessions/OAuth/reset tokens, the org delete cascades the
   // workspace and all of its data.
-  await db.$transaction([
-    db.user.deleteMany({ where: { organizationId: id } }),
-    db.organization.delete({ where: { id } }),
-  ]);
+  const outcome = await db.$transaction(async (tx) => {
+    const org = await tx.organization.findUnique({
+      where: { id },
+      include: {
+        users: { select: { id: true, role: true, deactivatedAt: true } },
+      },
+    });
+    if (!org) return { status: 404 as const, error: "Organization not found" };
 
+    const activeAdminCount = await tx.user.count({
+      where: { role: "PMOS_ADMIN", deactivatedAt: null },
+    });
+    const refusal = adminOrgDeleteError({
+      actorId: admin.id,
+      members: org.users.map((u) => ({
+        id: u.id,
+        role: u.role,
+        deactivated: Boolean(u.deactivatedAt),
+      })),
+      activeAdminCount,
+    });
+    if (refusal) return { status: 400 as const, error: refusal };
+
+    await tx.user.deleteMany({ where: { organizationId: id } });
+    await tx.organization.delete({ where: { id } });
+    return { status: 200 as const };
+  });
+
+  if (outcome.status !== 200) {
+    return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+  }
   return NextResponse.json({ ok: true });
 }

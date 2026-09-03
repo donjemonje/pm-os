@@ -7,5 +7,6 @@ export async function GET(
 ) {
   const { provider } = await params;
   const from = request.nextUrl.searchParams.get("from");
-  return startOAuth(provider, from);
+  const invite = request.nextUrl.searchParams.get("invite");
+  return startOAuth(provider, from, invite);
 }

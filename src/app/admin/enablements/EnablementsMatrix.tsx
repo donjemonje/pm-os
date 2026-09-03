@@ -60,7 +60,6 @@ export function EnablementsMatrix({
     return FLAG_AREAS.map((a) => ({
       ...a,
       flags: a.flags.filter((flag) => {
-        if (flag.scope !== "org") return false;
         if (area !== "all" && a.key !== area) return false;
         if (!overridesOnly) return true;
         return visibleOrgs.some(
@@ -375,7 +374,6 @@ function FragmentRows({
         <tr
           key={flag.key}
           data-flag={flag.key}
-          data-scope={flag.scope}
           className="border-t border-slate-100 hover:bg-slate-50/50"
         >
           <td className="sticky left-0 z-10 w-[16rem] max-w-[16rem] bg-white/95 px-4 py-2.5 align-middle backdrop-blur">
