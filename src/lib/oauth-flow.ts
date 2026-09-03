@@ -16,7 +16,12 @@ import {
   signInWithOAuth,
   twoFactorPendingCookieOptions,
 } from "./auth";
-import { envFeatureDefault, isLoginDisabled, resolveFeature } from "./feature-flags";
+import {
+  envFeatureDefault,
+  isGoogleLoginDisabled,
+  isLoginDisabled,
+  resolveFeature,
+} from "./feature-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
 const OAUTH_PKCE_COOKIE = "pmos_oauth_pkce";
@@ -66,6 +71,10 @@ export async function startOAuth(provider: string, fromParam?: string | null) {
     return authRedirect("/login", { error: "invalid_provider" });
   }
 
+  if (provider === "google" && isGoogleLoginDisabled()) {
+    return authRedirect("/login", { error: "google_sso_disabled" });
+  }
+
   if (!getOAuthProviderConfig(provider)) {
     return authRedirect("/login", { error: `${provider}_not_configured` });
   }
@@ -93,6 +102,10 @@ export async function completeOAuth(provider: string, code: string | null, state
 
   if (!isOAuthProvider(provider)) {
     return loginError("invalid_provider");
+  }
+
+  if (provider === "google" && isGoogleLoginDisabled()) {
+    return loginError("google_sso_disabled");
   }
 
   if (!code || !state) {

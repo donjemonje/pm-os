@@ -2,10 +2,9 @@ import { redirect } from "next/navigation";
 import { LoginDisabledView } from "@/components/auth/LoginDisabledView";
 import { getCurrentUser } from "@/lib/auth";
 import { isLoginDisabled } from "@/lib/feature-flags";
-import { isSelfSignupEnabled } from "@/lib/system-flags";
 import { LoginForm } from "./LoginForm";
 
-// Auth gates (DISABLE_LOGIN env, selfSignup system flag) resolve per request, so this page
+// The DISABLE_LOGIN gate is a runtime env var, so this page
 // must be evaluated per request rather than prerendered at build time.
 export const dynamic = "force-dynamic";
 
@@ -21,5 +20,5 @@ export default async function LoginPage() {
     return <LoginDisabledView />;
   }
 
-  return <LoginForm signupAllowed={await isSelfSignupEnabled()} />;
+  return <LoginForm />;
 }

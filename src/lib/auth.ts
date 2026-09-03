@@ -2,9 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "./db";
-import { envFeatureDefault, resolveFeature } from "./feature-flags";
 import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "./password-policy";
-import { isSelfSignupEnabled } from "./system-flags";
 import {
   decryptTotpSecret,
   encryptTotpSecret,
@@ -386,20 +384,6 @@ export async function authenticateUser(
   return toAuthUser(user);
 }
 
-/**
- * Per-org Google SSO gate (PM-OS Admin → Enablements → Login → Google SSO).
- * The org is only known once Google has returned the email, so this runs
- * inside signInWithOAuth — before any linking side effect. `features` is the
- * org's overrides JSON; a brand-new self-signup has no org yet and gets the
- * env default.
- */
-function assertGoogleAllowed(provider: string, features: unknown): void {
-  if (provider !== "google") return;
-  if (!resolveFeature(features, "googleSso", envFeatureDefault("googleSso"))) {
-    throw new Error("google_sso_disabled");
-  }
-}
-
 export async function signInWithOAuth(input: {
   provider: string;
   providerUserId: string;
@@ -422,7 +406,6 @@ export async function signInWithOAuth(input: {
     // Login type is sticky: a password account never signs in via SSO, even
     // when a provider link exists from before this rule.
     if (linked.user.passwordHash) throw new Error("email_uses_password");
-    assertGoogleAllowed(input.provider, linked.user.organization?.features);
     return toAuthUser(linked.user);
   }
 
@@ -436,7 +419,6 @@ export async function signInWithOAuth(input: {
     // Login type is sticky: same email but a password account — no auto-link,
     // no SSO sign-in. (SSO-created users may still link another provider.)
     if (existing.passwordHash) throw new Error("email_uses_password");
-    assertGoogleAllowed(input.provider, existing.organization?.features);
     await db.$transaction([
       db.oAuthAccount.create({
         data: {
@@ -454,34 +436,10 @@ export async function signInWithOAuth(input: {
     return toAuthUser(existing);
   }
 
-  // No linked account and no existing user with this email: this would be a
-  // brand-new signup. Only create the account when signup is allowed.
-  if (!(await isSelfSignupEnabled())) {
-    throw new Error("signup_disabled");
-  }
-  // A new org starts with no overrides: the env default decides.
-  assertGoogleAllowed(input.provider, {});
-
-  const name = input.name.trim() || email.split("@")[0];
-  const org = await createOrganizationWithWorkspace(`${name}'s Organization`);
-
-  const user = await db.user.create({
-    data: {
-      email,
-      name,
-      passwordHash: null,
-      organizationId: org.id,
-      accounts: {
-        create: {
-          provider: input.provider,
-          providerUserId: input.providerUserId,
-        },
-      },
-    },
-    include: userWithOrgInclude,
-  });
-
-  return toAuthUser(user);
+  // No linked account and no user with this email: there is no self-service
+  // sign-up — accounts are created in PM-OS Admin and activated through the
+  // invite link. The login page shows this as "ask your admin for an invite".
+  throw new Error("signup_disabled");
 }
 
 /**

@@ -116,10 +116,11 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_token_failed: "Could not complete sign-in. Please try again.",
   oauth_profile_failed: "Could not read your profile from the provider.",
   oauth_signin_failed: "Sign-in failed. Please try again.",
-  signup_disabled: "Sign-up is disabled. Ask an admin to invite you, then sign in.",
+  signup_disabled:
+    "No PM-OS account exists for this Google email. Ask your admin for an invite.",
   account_deactivated: "This account has been deactivated. Contact your admin.",
   google_sso_disabled:
-    "Google sign-in is currently disabled. Sign in with email instead.",
+    "Google sign-in is disabled in this environment. Sign in with email instead.",
   email_uses_password:
     "This email uses password sign-in. Enter your email and password below.",
 };

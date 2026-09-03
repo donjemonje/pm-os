@@ -11,7 +11,6 @@ import type { MenuOrganization, MenuUser } from "./UserMenu";
 const NO_SHELL_PATHS = [
   "/",
   "/login",
-  "/register",
   "/forgot-password",
   "/reset-password",
   "/invite",

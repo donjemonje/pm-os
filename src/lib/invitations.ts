@@ -32,6 +32,7 @@ export async function sendInvitation(input: {
     throw new Error("User already has a password — they can use Forgot password");
   }
 
+  const orgName = user.organization?.name ?? "PM-OS";
   const token = await issuePasswordToken(user.id, INVITE_TTL_MS);
   const link = `${appBaseUrl()}/invite?token=${token}`;
   const inviter = input.invitedByName.trim() || "A PM-OS admin";
@@ -39,7 +40,7 @@ export async function sendInvitation(input: {
   const { html, text } = renderBrandedEmail({
     preheader: `${inviter} invited you to PM-OS`,
     heading: "You're invited to PM-OS",
-    paragraphs: [`Hi ${user.name},`, `${inviter} invited you to PM-OS.`],
+    paragraphs: [`Hi ${user.name},`, `${inviter} invited you to ${orgName} Organization.`],
     cta: { label: "Complete Sign-Up", url: link },
     note: "The link expires in 7 days and can be used once.",
   });

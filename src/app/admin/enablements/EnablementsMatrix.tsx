@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Globe, Loader2, Search, X } from "lucide-react";
+import { Check, ChevronDown, Loader2, Search, X } from "lucide-react";
 import { FLAG_AREAS, type FlagDef } from "@/lib/flag-catalog";
 import { cn } from "@/lib/utils";
 
@@ -17,33 +17,25 @@ export type OrgColumn = {
 type Override = boolean | undefined;
 
 /**
- * Enablements: a System card on top (install-wide switches, one value each)
- * and a matrix below — rows = per-org flags grouped by product area,
+ * Enablements matrix — rows = per-org flags grouped by product area,
  * columns = organizations. Search + multi-select filter columns, area chips
  * filter row groups, "Overrides only" hides rows where everything is on
  * default.
  *
- * DOM contract for tests: matrix rows tr[data-flag=<key>], cells
- * td[data-org=<slug>]; system rows li[data-flag=<key>]; each holds one
- * span.rounded-full badge (effective state) with data-override="on|off|none",
- * and On / Off / Default (<env>) buttons. Matrix badges show just On/Off —
- * the Default column says what an un-overridden cell inherits; the System
- * card badge keeps the "(default)" hint.
+ * DOM contract for tests: rows tr[data-flag=<key>], cells td[data-org=<slug>];
+ * each cell holds one span.rounded-full badge (effective state) with
+ * data-override="on|off|none", and On / Off / Default (<env>) buttons. Badges
+ * show just On/Off — the Default column says what an un-overridden cell
+ * inherits.
  */
 export function EnablementsMatrix({
   initialOrganizations,
   orgEnvDefaults,
-  initialSystemFlags,
-  systemEnvDefaults,
 }: {
   initialOrganizations: OrgColumn[];
   orgEnvDefaults: Record<string, boolean>;
-  /** Only keys with a stored override are present. */
-  initialSystemFlags: Record<string, boolean>;
-  systemEnvDefaults: Record<string, boolean>;
 }) {
   const [organizations, setOrganizations] = useState(initialOrganizations);
-  const [systemFlags, setSystemFlags] = useState(initialSystemFlags);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
@@ -62,11 +54,6 @@ export function EnablementsMatrix({
       );
     });
   }, [organizations, search, selectedOrgIds]);
-
-  const systemFlagDefs = useMemo(
-    () => FLAG_AREAS.flatMap((a) => a.flags.filter((f) => f.scope === "system")),
-    []
-  );
 
   const areas = useMemo(() => {
     return FLAG_AREAS.map((a) => ({
@@ -108,28 +95,6 @@ export function EnablementsMatrix({
     }
   }
 
-  async function setSystemFlag(key: string, value: boolean | null) {
-    setBusy(`system:${key}`);
-    setError("");
-    try {
-      const res = await fetch("/api/admin/system-flags", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ flags: { [key]: value } }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Failed to update flag");
-        return;
-      }
-      setSystemFlags(data.flags);
-    } catch {
-      setError("Something went wrong. Try again.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
   const orgColumnCount = Math.max(visibleOrgs.length, 1);
 
   return (
@@ -137,43 +102,6 @@ export function EnablementsMatrix({
       {error && (
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
-
-      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-            <Globe className="h-5 w-5" />
-          </div>
-          <div>
-            <p className="font-semibold">System</p>
-            <p className="text-xs text-slate-500">
-              One value for the whole install — applies before sign-in, across all organizations
-            </p>
-          </div>
-        </div>
-        <ul className="divide-y divide-slate-100">
-          {systemFlagDefs.map((flag) => (
-            <li
-              key={flag.key}
-              data-flag={flag.key}
-              data-scope="system"
-              className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
-            >
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-slate-900">{flag.label}</p>
-                <p className="truncate text-xs text-slate-500" title={flag.description}>
-                  {flag.description}
-                </p>
-              </div>
-              <FlagCell
-                override={systemFlags[flag.key]}
-                envDefault={systemEnvDefaults[flag.key]}
-                busy={busy === `system:${flag.key}`}
-                onChange={(v) => setSystemFlag(flag.key, v)}
-              />
-            </li>
-          ))}
-        </ul>
-      </section>
 
       <div className="flex flex-wrap items-center gap-3">
         <label className="relative">
@@ -521,7 +449,7 @@ function FlagCell({
   envDefault: boolean;
   busy: boolean;
   onChange: (value: boolean | null) => void;
-  /** Append " (default)" to the badge when no override is set (System card). */
+  /** Append " (default)" to the badge when no override is set. */
   inheritHint?: boolean;
 }) {
   const hasOverride = typeof override === "boolean";

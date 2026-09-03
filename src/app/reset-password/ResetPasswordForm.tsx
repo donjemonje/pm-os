@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
 import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
 import { PasswordChecklist } from "@/components/auth/PasswordChecklist";
@@ -10,6 +10,7 @@ import { BrandLogo } from "@/components/brand/BrandLogo";
 import { brand } from "@/lib/brand";
 
 function ResetPasswordInner() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
   // Invite links (sent by PM-OS Admin) reuse the same token mechanism with
@@ -20,7 +21,6 @@ function ResetPasswordInner() {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [done, setDone] = useState(false);
 
   const policyOk = isPasswordValid(password);
   const canSubmit = policyOk && confirm.length > 0 && password === confirm;
@@ -48,7 +48,10 @@ function ResetPasswordInner() {
         setError(data.error || "Something went wrong. Try again.");
         return;
       }
-      setDone(true);
+      // Signed in by the API; 2FA (challenge or first enrollment) is next,
+      // then the app — no intermediate "now sign in" screen.
+      router.push("/login/2fa?from=%2Fdashboard");
+      router.refresh();
     } catch {
       setError("Something went wrong. Try again.");
     } finally {
@@ -69,22 +72,7 @@ function ResetPasswordInner() {
           </h1>
         </div>
 
-        {done ? (
-          <div className="space-y-4">
-            <p className="font-subtitle text-sm text-brand-muted">
-              {invite
-                ? "Password set. Sign in to finish setting up your account."
-                : "Password updated. Sign in with your new password."}
-            </p>
-            <a
-              href="/login"
-              className="font-title block w-full rounded-lg py-2.5 text-center text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90"
-              style={{ background: brand.accent }}
-            >
-              Sign in
-            </a>
-          </div>
-        ) : !token ? (
+        {!token ? (
           <div className="space-y-4">
             <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
               {invite

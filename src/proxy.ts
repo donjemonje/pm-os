@@ -8,7 +8,6 @@ const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 const PUBLIC_PATHS = [
   "/",
   "/login",
-  "/register",
   "/forgot-password",
   "/reset-password",
   "/invite",
@@ -16,7 +15,7 @@ const PUBLIC_PATHS = [
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.includes(pathname)) return true;
-  if (pathname.startsWith("/api/auth/login") || pathname.startsWith("/api/auth/register")) {
+  if (pathname.startsWith("/api/auth/login")) {
     return true;
   }
   if (

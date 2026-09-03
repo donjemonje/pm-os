@@ -4,7 +4,7 @@ import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { getCurrentUser } from "@/lib/auth";
 import { brand } from "@/lib/brand";
-import { envFeatureDefault, isLoginDisabled, resolveFeature } from "@/lib/feature-flags";
+import { isGoogleLoginDisabled, isLoginDisabled } from "@/lib/feature-flags";
 import { getOAuthProviderStatuses } from "@/lib/oauth-providers";
 import { lookupPasswordToken } from "@/lib/password-reset";
 import { InviteChoices } from "./InviteChoices";
@@ -23,9 +23,9 @@ export const dynamic = "force-dynamic";
  *     password, so Google links to the existing account and signs in; the
  *     invite token is retired on link (signInWithOAuth).
  *   - Password: the set-password form with the same token.
- * Google is offered only when the invitee's organization has Google SSO on
- * and the provider is configured. With a single method available there is
- * no choice to make: the page redirects straight to the set-password form.
+ * Google is offered whenever Google sign-in is configured and not hidden by
+ * env (DISABLE_GOOGLE_LOGIN). With a single method available there is no
+ * choice to make: the page redirects straight to the set-password form.
  */
 export default async function InvitePage({
   searchParams,
@@ -41,7 +41,7 @@ export default async function InvitePage({
   const googleAvailable =
     invite !== null &&
     !isLoginDisabled() &&
-    resolveFeature(invite.organizationFeatures, "googleSso", envFeatureDefault("googleSso")) &&
+    !isGoogleLoginDisabled() &&
     getOAuthProviderStatuses().some((p) => p.provider === "google" && p.configured);
 
   if (invite && !googleAvailable) {

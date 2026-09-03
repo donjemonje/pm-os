@@ -15,14 +15,8 @@ env:
       - BUILD
       - RUNTIME
 
-  - variable: ALLOW_SIGNUP
-    value: "false"
-    availability:
-      - BUILD
-      - RUNTIME
-
-  # Google SSO is live. This is the env DEFAULT of the per-organization
-  # "Google SSO" flag (PM-OS Admin → Enablements → Login).
+  # Google sign-in is live (env-only switch; no admin flag). Sign-up is
+  # invite-only (PM-OS Admin → Users), so there is no ALLOW_SIGNUP anymore.
   - variable: DISABLE_GOOGLE_LOGIN
     value: "false"
     availability:

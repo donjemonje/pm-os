@@ -132,20 +132,19 @@ export default function validateTestEnv(): void {
     }
   }
 
-  // google-sso.spec.ts asserts the per-org googleSso flag's env default is
-  // OFF ("Off (default)" badge on the RoomLens cell) and then flips the
-  // admin override. The env default is NOT DISABLE_GOOGLE_LOGIN,
-  // so the pin must resolve true-like.
+  // google-sso.spec.ts G1 asserts the env-only Google switch: with
+  // DISABLE_GOOGLE_LOGIN on, google is absent from the providers list and
+  // the authorize endpoint bounces to /login?error=google_sso_disabled.
   if (!isTrueLike(env.DISABLE_GOOGLE_LOGIN)) {
     problems.push(
       `DISABLE_GOOGLE_LOGIN resolves to ${show(env.DISABLE_GOOGLE_LOGIN)} but ` +
-        `google-sso.spec.ts asserts the googleSso env default is off — set it ` +
+        `google-sso.spec.ts G1 asserts Google is hidden by env — set it ` +
         `to "true", or update that spec together with this check`
     );
   }
 
-  // google-sso.spec.ts needs Google to count as "configured" so the provider
-  // flag is the only gate it observes. Fake creds are fine: the providers
+  // google-sso.spec.ts needs Google to count as "configured" so the env
+  // switch is the only gate it observes. Fake creds are fine: the providers
   // listing and the authorize redirect never call Google's servers.
   for (const cred of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] as const) {
     if (!env[cred]?.trim()) {

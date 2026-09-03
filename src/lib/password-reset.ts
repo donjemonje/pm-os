@@ -79,14 +79,10 @@ export async function lookupPasswordToken(token: string): Promise<{
   email: string;
   name: string;
   organizationName: string | null;
-  /** Organization.features JSON ({} when none) — for per-org gates. */
-  organizationFeatures: unknown;
 } | null> {
   const row = await db.passwordResetToken.findUnique({
     where: { tokenHash: hashResetToken(token) },
-    include: {
-      user: { include: { organization: { select: { name: true, features: true } } } },
-    },
+    include: { user: { include: { organization: { select: { name: true } } } } },
   });
   if (!row || row.usedAt || row.expiresAt < new Date() || row.user.deactivatedAt) {
     return null;
@@ -95,20 +91,19 @@ export async function lookupPasswordToken(token: string): Promise<{
     email: row.user.email,
     name: row.user.name,
     organizationName: row.user.organization?.name ?? null,
-    organizationFeatures: row.user.organization?.features ?? {},
   };
 }
 
 /**
  * Consume a set-password link (reset or invite): set the new password, mark
  * the token used, and revoke every active session (the standard post-reset
- * lockout). Throws "reset_invalid" for unknown, expired, or already-used
- * tokens.
+ * lockout). Returns the user id so the caller can start a fresh session.
+ * Throws "reset_invalid" for unknown, expired, or already-used tokens.
  */
 export async function resetPassword(
   token: string,
   newPassword: string
-): Promise<void> {
+): Promise<{ userId: string }> {
   const row = await db.passwordResetToken.findUnique({
     where: { tokenHash: hashResetToken(token) },
     include: { user: true },
@@ -128,4 +123,5 @@ export async function resetPassword(
     }),
     db.session.deleteMany({ where: { userId: row.userId } }),
   ]);
+  return { userId: row.userId };
 }

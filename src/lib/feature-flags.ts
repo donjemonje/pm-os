@@ -1,5 +1,4 @@
 export const LOGIN_DISABLED_MESSAGE = "Login is Currently Disabled";
-export const SIGNUP_DISABLED_MESSAGE = "Sign-up is currently disabled";
 
 export function isLoginDisabled(): boolean {
   const raw = process.env.DISABLE_LOGIN;
@@ -9,21 +8,7 @@ export function isLoginDisabled(): boolean {
   return true;
 }
 
-/**
- * Env default for the "selfSignup" system flag (self-service registration and
- * OAuth first-time account creation). Off by default: only existing users may
- * log in. ALLOW_SIGNUP=true opens it; PM-OS Admin → Enablements can override
- * either way (resolution: isSelfSignupEnabled in system-flags.ts). Has no
- * effect when login itself is disabled.
- */
-export function isSignupAllowed(): boolean {
-  const raw = process.env.ALLOW_SIGNUP;
-  if (!raw?.trim()) return false;
-  const value = raw.trim().toLowerCase();
-  return value === "true" || value === "1";
-}
-
-/** Env default for the per-org "googleSso" flag (DISABLE_GOOGLE_LOGIN=true → off). */
+/** Env-only switch: hide Google sign-in everywhere (login, invites, OAuth flow). */
 export function isGoogleLoginDisabled(): boolean {
   const raw = process.env.DISABLE_GOOGLE_LOGIN;
   if (!raw?.trim()) return false;
@@ -102,7 +87,6 @@ export const ORG_FEATURE_KEYS = [
   "chat",
   "dashboard",
   "ideasUndo",
-  "googleSso",
   "ssoSkips2fa",
 ] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
@@ -120,8 +104,6 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDashboardEnabled();
     case "ideasUndo":
       return isIdeasUndoEnabled();
-    case "googleSso":
-      return !isGoogleLoginDisabled();
     case "ssoSkips2fa":
       return isSsoSkips2faDefault();
   }
@@ -129,31 +111,6 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
 
 export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
   return (ORG_FEATURE_KEYS as readonly string[]).includes(key);
-}
-
-// ————— System-wide flag overrides —————
-//
-// Switches that must resolve BEFORE sign-in (no user, so no org): e.g.
-// self-service sign-up. Stored one row per key in SystemFlag; a stored row
-// wins, otherwise the env default applies. Resolution lives in
-// src/lib/system-flags.ts (needs the DB); managed in PM-OS Admin → Enablements.
-// (Google SSO used to live here; since 2026-09-03 it is a per-org flag —
-// the /login button shows whenever Google is configured, and the org's flag
-// is enforced once Google returns the email, in signInWithOAuth.)
-
-export const SYSTEM_FLAG_KEYS = ["selfSignup"] as const;
-export type SystemFlagKey = (typeof SYSTEM_FLAG_KEYS)[number];
-
-export function isSystemFlagKey(key: string): key is SystemFlagKey {
-  return (SYSTEM_FLAG_KEYS as readonly string[]).includes(key);
-}
-
-/** Env-level default for a system flag (applies when no override row exists). */
-export function envSystemFlagDefault(key: SystemFlagKey): boolean {
-  switch (key) {
-    case "selfSignup":
-      return isSignupAllowed();
-  }
 }
 
 /** Pure resolver: org override if present, else the env default. */
