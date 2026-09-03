@@ -31,6 +31,7 @@ export function Sidebar({
   dashboardEnabled,
   user,
   organization,
+  appVersion,
 }: {
   ideasEnabled: boolean;
   docsEnabled: boolean;
@@ -38,6 +39,7 @@ export function Sidebar({
   dashboardEnabled: boolean;
   user: MenuUser | null;
   organization: MenuOrganization | null;
+  appVersion: string;
 }) {
   const pathname = usePathname();
   const hidden = new Set([
@@ -88,7 +90,9 @@ export function Sidebar({
           );
         })}
       </nav>
-      {user && <UserMenu user={user} organization={organization} />}
+      {user && (
+        <UserMenu user={user} organization={organization} appVersion={appVersion} />
+      )}
     </aside>
   );
 }

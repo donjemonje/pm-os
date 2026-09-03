@@ -24,6 +24,7 @@ export function Shell({
   dashboardEnabled,
   user,
   organization,
+  appVersion,
 }: {
   children: React.ReactNode;
   ideasEnabled: boolean;
@@ -32,6 +33,7 @@ export function Shell({
   dashboardEnabled: boolean;
   user: MenuUser | null;
   organization: MenuOrganization | null;
+  appVersion: string;
 }) {
   const pathname = usePathname();
   const isAuthPage =
@@ -56,6 +58,7 @@ export function Shell({
           dashboardEnabled={dashboardEnabled}
           user={user}
           organization={organization}
+          appVersion={appVersion}
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>

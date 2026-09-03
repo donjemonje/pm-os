@@ -1,6 +1,6 @@
 {
   "name": "pmos",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- next dev",

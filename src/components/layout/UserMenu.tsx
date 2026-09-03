@@ -23,9 +23,12 @@ export type MenuOrganization = {
 export function UserMenu({
   user,
   organization,
+  appVersion,
 }: {
   user: MenuUser;
   organization: MenuOrganization | null;
+  /** package.json version — shown at the bottom of the menu. */
+  appVersion: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -110,6 +113,12 @@ export function UserMenu({
             <LogOut size={16} />
             {loggingOut ? "Signing out…" : "Sign out"}
           </button>
+          <div
+            className="border-t border-white/10 px-3 py-2 text-[11px] text-white/40"
+            data-app-version={appVersion}
+          >
+            PM-OS v{appVersion}
+          </div>
         </div>
       )}
     </div>
