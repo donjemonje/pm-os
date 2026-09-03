@@ -14,7 +14,7 @@ export default async function LoginPage() {
   // genuinely signed-in user is sent to the dashboard; a stale cookie just
   // renders the form, and logging in overwrites it.
   const user = await getCurrentUser();
-  if (user) redirect("/dashboard");
+  if (user) redirect("/");
 
   if (isLoginDisabled()) {
     return <LoginDisabledView />;

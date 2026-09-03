@@ -29,7 +29,7 @@ export function InviteChoices({
   googleAvailable: boolean;
 }) {
   const passwordHref = `/reset-password?token=${encodeURIComponent(token)}&invite=1`;
-  const googleHref = `/api/auth/oauth/google?from=${encodeURIComponent("/dashboard")}`;
+  const googleHref = "/api/auth/oauth/google?from=%2F";
 
   return (
     <div className="space-y-5">

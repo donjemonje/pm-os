@@ -33,7 +33,7 @@ export default async function InvitePage({
   searchParams: Promise<{ token?: string }>;
 }) {
   const user = await getCurrentUser();
-  if (user) redirect("/dashboard");
+  if (user) redirect("/");
 
   const { token } = await searchParams;
   const invite = token ? await lookupPasswordToken(token) : null;

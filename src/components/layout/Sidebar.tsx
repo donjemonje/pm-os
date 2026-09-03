@@ -62,7 +62,7 @@ export function Sidebar({
         <BrandLockup
           height={SIDEBAR_LOGO_HEIGHT}
           priority
-          href={dashboardEnabled ? "/dashboard" : "/releases"}
+          href="/"
         />
       </div>
       <nav className="flex-1 space-y-1 p-3">

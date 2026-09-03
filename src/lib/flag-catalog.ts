@@ -66,7 +66,7 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         scope: "org",
         label: "Docs",
         description:
-          "Documents: pages, editor, generation APIs, dashboard cards.",
+          "Documents and Releases: pages, editor, generation APIs, dashboard cards.",
       },
     ],
   },
@@ -91,7 +91,7 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         scope: "org",
         label: "Dashboard",
         description:
-          "Dashboard landing page; when off, /dashboard redirects to Releases.",
+          "Dashboard page. The post-login landing is the first ON surface in menu order (Dashboard, Ideas, Docs, Chat, Settings).",
       },
     ],
   },

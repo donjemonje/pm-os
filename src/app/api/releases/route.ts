@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiWorkspaceId } from "@/lib/api-auth";
+import { apiWorkspaceId, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 import { fetchIssuesForVersion } from "@/lib/jira";
 import { generateReleaseNotes, isAiEnabled } from "@/lib/ai";
 import { stringifyJsonArray } from "@/lib/utils";
 
 export async function GET() {
+  const gated = await orgFeatureDisabledResponse("docs");
+  if (gated) return gated;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;
@@ -22,6 +24,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const gated = await orgFeatureDisabledResponse("docs");
+  if (gated) return gated;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;

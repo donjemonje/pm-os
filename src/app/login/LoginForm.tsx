@@ -20,7 +20,7 @@ const inputClassName =
 function LoginFormInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get("from") || "/dashboard";
+  const from = searchParams.get("from") || "/";
   const oauthError = searchParams.get("error");
   const oauthErrorMessage = oauthError
     ? OAUTH_ERROR_MESSAGES[oauthError] ?? "Sign-in failed. Please try again."
@@ -46,7 +46,7 @@ function LoginFormInner() {
         setError(data.error || "Login failed");
         return;
       }
-      const target = from.startsWith("/") ? from : "/dashboard";
+      const target = from.startsWith("/") ? from : "/";
       if (data.twoFactorRequired) {
         router.push(`/login/2fa?from=${encodeURIComponent(target)}`);
       } else {

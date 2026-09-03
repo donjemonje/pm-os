@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (state === "verified") {
-    return NextResponse.redirect(new URL(from ?? "/dashboard", request.url));
+    return NextResponse.redirect(new URL(from ?? "/", request.url));
   }
 
   // "dead" or "none": land on /login; clear whatever stale cookies exist.

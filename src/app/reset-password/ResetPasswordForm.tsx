@@ -50,7 +50,7 @@ function ResetPasswordInner() {
       }
       // Signed in by the API; 2FA (challenge or first enrollment) is next,
       // then the app — no intermediate "now sign in" screen.
-      router.push("/login/2fa?from=%2Fdashboard");
+      router.push("/login/2fa?from=%2F");
       router.refresh();
     } catch {
       setError("Something went wrong. Try again.");

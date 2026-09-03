@@ -105,7 +105,7 @@ export function AdminShell({
 
           <div className="border-t border-slate-200 px-5 py-4">
             <Link
-              href="/dashboard"
+              href="/"
               className="text-xs text-slate-500 hover:text-slate-800"
             >
               ← Back to app
