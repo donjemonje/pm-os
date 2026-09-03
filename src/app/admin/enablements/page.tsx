@@ -1,5 +1,5 @@
 import { requireAdminPage } from "@/lib/admin-auth";
-import { listOrganizationsWithMembers } from "@/lib/auth";
+import { listOrganizationsSummary } from "@/lib/auth";
 import {
   envFeatureDefault,
   envSystemFlagDefault,
@@ -13,7 +13,7 @@ import { EnablementsMatrix } from "./EnablementsMatrix";
 export default async function AdminEnablementsPage() {
   const admin = await requireAdminPage("/admin/enablements");
 
-  const organizations = await listOrganizationsWithMembers();
+  const organizations = await listOrganizationsSummary();
   const systemFlags = await listSystemFlagOverrides();
 
   return (
@@ -23,13 +23,7 @@ export default async function AdminEnablementsPage() {
       description="Feature switches by area. System-wide switches apply before sign-in; per-organization switches override the environment default."
     >
       <EnablementsMatrix
-        initialOrganizations={organizations.map((org) => ({
-          id: org.id,
-          name: org.name,
-          slug: org.slug,
-          memberCount: org.memberCount,
-          features: org.features,
-        }))}
+        initialOrganizations={organizations}
         orgEnvDefaults={Object.fromEntries(
           ORG_FEATURE_KEYS.map((key) => [key, envFeatureDefault(key)])
         )}

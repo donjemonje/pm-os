@@ -30,10 +30,10 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     flags: [
       {
         key: "googleSso",
-        scope: "system",
+        scope: "org",
         label: "Google SSO",
         description:
-          "Sign in with Google: the /login button and the whole OAuth flow. System-wide — the org is unknown before sign-in.",
+          "Members of this org may sign in with Google, and invites offer Google sign-up. Enforced once Google returns the email; the /login button shows whenever Google is configured.",
       },
       {
         key: "selfSignup",

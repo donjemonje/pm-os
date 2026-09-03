@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Loader2, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Loader2, Search, X } from "lucide-react";
 import { FLAG_AREAS, type FlagDef } from "@/lib/flag-catalog";
 import { cn } from "@/lib/utils";
 
@@ -45,15 +45,19 @@ export function EnablementsMatrix({
   const [search, setSearch] = useState("");
   const [area, setArea] = useState<string>("all");
   const [overridesOnly, setOverridesOnly] = useState(false);
+  /** Explicitly picked organizations (empty = all). Combined with search. */
+  const [selectedOrgIds, setSelectedOrgIds] = useState<Set<string>>(new Set());
 
   const visibleOrgs = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return organizations;
-    return organizations.filter(
-      (org) =>
+    return organizations.filter((org) => {
+      if (selectedOrgIds.size > 0 && !selectedOrgIds.has(org.id)) return false;
+      if (!q) return true;
+      return (
         org.name.toLowerCase().includes(q) || org.slug.toLowerCase().includes(q)
-    );
-  }, [organizations, search]);
+      );
+    });
+  }, [organizations, search, selectedOrgIds]);
 
   const areas = useMemo(() => {
     return FLAG_AREAS.map((a) => ({
@@ -138,6 +142,12 @@ export function EnablementsMatrix({
             className="w-64 rounded-lg border border-slate-300 bg-white py-2 pl-8 pr-3 text-sm text-slate-900 outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-900/10"
           />
         </label>
+
+        <OrgPicker
+          organizations={organizations}
+          selected={selectedOrgIds}
+          onChange={setSelectedOrgIds}
+        />
 
         <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by area">
           <AreaChip label="All areas" active={area === "all"} onClick={() => setArea("all")} />
@@ -261,6 +271,118 @@ export function EnablementsMatrix({
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Multi-select organization filter: a dropdown of checkboxes. Empty
+ * selection = every organization. Esc closes, click-outside closes.
+ */
+function OrgPicker({
+  organizations,
+  selected,
+  onChange,
+}: {
+  organizations: OrgColumn[];
+  selected: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  function toggle(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next);
+  }
+
+  const label =
+    selected.size === 0
+      ? "All organizations"
+      : selected.size === 1
+        ? organizations.find((o) => selected.has(o.id))?.name ?? "1 organization"
+        : `${selected.size} organizations`;
+
+  return (
+    <div
+      ref={ref}
+      className="relative"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm",
+          selected.size > 0
+            ? "border-slate-900 bg-slate-900 text-white"
+            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+        )}
+      >
+        {label}
+        <ChevronDown className="h-4 w-4 opacity-70" />
+      </button>
+      {selected.size > 0 && (
+        <button
+          type="button"
+          onClick={() => onChange(new Set())}
+          aria-label="Clear organization filter"
+          title="Clear"
+          className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
+      {open && (
+        <ul
+          role="listbox"
+          aria-multiselectable="true"
+          className="absolute left-0 z-20 mt-1 max-h-72 w-64 overflow-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+        >
+          {organizations.length === 0 && (
+            <li className="px-2 py-1.5 text-sm text-slate-400">No organizations</li>
+          )}
+          {organizations.map((org) => {
+            const on = selected.has(org.id);
+            return (
+              <li key={org.id} role="option" aria-selected={on}>
+                <button
+                  type="button"
+                  onClick={() => toggle(org.id)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-slate-50"
+                >
+                  <span
+                    className={cn(
+                      "flex h-4 w-4 items-center justify-center rounded border",
+                      on ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300"
+                    )}
+                    aria-hidden
+                  >
+                    {on && <Check className="h-3 w-3" />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{org.name}</span>
+                  <span className="text-xs text-slate-400">/{org.slug}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

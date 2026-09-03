@@ -5,7 +5,7 @@ import { isSystemFlagKey } from "@/lib/feature-flags";
 import { listSystemFlagOverrides } from "@/lib/system-flags";
 
 /**
- * PATCH { flags: { googleSso: true | false | null } }
+ * PATCH { flags: { selfSignup: true | false | null } }
  * true/false sets a system-wide override; null removes the override so the
  * env default applies again. Unknown flag keys are rejected.
  */

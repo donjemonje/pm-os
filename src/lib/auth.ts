@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "./db";
+import { envFeatureDefault, resolveFeature } from "./feature-flags";
 import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "./password-policy";
 import { isSelfSignupEnabled } from "./system-flags";
 import {
@@ -385,6 +386,20 @@ export async function authenticateUser(
   return toAuthUser(user);
 }
 
+/**
+ * Per-org Google SSO gate (PM-OS Admin → Enablements → Login → Google SSO).
+ * The org is only known once Google has returned the email, so this runs
+ * inside signInWithOAuth — before any linking side effect. `features` is the
+ * org's overrides JSON; a brand-new self-signup has no org yet and gets the
+ * env default.
+ */
+function assertGoogleAllowed(provider: string, features: unknown): void {
+  if (provider !== "google") return;
+  if (!resolveFeature(features, "googleSso", envFeatureDefault("googleSso"))) {
+    throw new Error("google_sso_disabled");
+  }
+}
+
 export async function signInWithOAuth(input: {
   provider: string;
   providerUserId: string;
@@ -407,6 +422,7 @@ export async function signInWithOAuth(input: {
     // Login type is sticky: a password account never signs in via SSO, even
     // when a provider link exists from before this rule.
     if (linked.user.passwordHash) throw new Error("email_uses_password");
+    assertGoogleAllowed(input.provider, linked.user.organization?.features);
     return toAuthUser(linked.user);
   }
 
@@ -420,6 +436,7 @@ export async function signInWithOAuth(input: {
     // Login type is sticky: same email but a password account — no auto-link,
     // no SSO sign-in. (SSO-created users may still link another provider.)
     if (existing.passwordHash) throw new Error("email_uses_password");
+    assertGoogleAllowed(input.provider, existing.organization?.features);
     await db.$transaction([
       db.oAuthAccount.create({
         data: {
@@ -442,6 +459,8 @@ export async function signInWithOAuth(input: {
   if (!(await isSelfSignupEnabled())) {
     throw new Error("signup_disabled");
   }
+  // A new org starts with no overrides: the env default decides.
+  assertGoogleAllowed(input.provider, {});
 
   const name = input.name.trim() || email.split("@")[0];
   const org = await createOrganizationWithWorkspace(`${name}'s Organization`);
@@ -579,6 +598,39 @@ export async function listOrganizationsWithMembers(): Promise<
       deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
       createdAt: u.createdAt.toISOString(),
     })),
+  }));
+}
+
+export type OrganizationSummaryRow = {
+  id: string;
+  name: string;
+  slug: string;
+  memberCount: number;
+  features: Record<string, boolean>;
+};
+
+/**
+ * PM-OS Admin helper for the Enablements matrix: every organization with a
+ * member COUNT only (no member rows — listOrganizationsWithMembers loads
+ * every user of every org, which the flags page never needs).
+ */
+export async function listOrganizationsSummary(): Promise<OrganizationSummaryRow[]> {
+  const orgs = await db.organization.findMany({
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      features: true,
+      _count: { select: { users: true } },
+    },
+  });
+  return orgs.map((org) => ({
+    id: org.id,
+    name: org.name,
+    slug: org.slug,
+    memberCount: org._count.users,
+    features: toFeatureOverrides(org.features),
   }));
 }
 

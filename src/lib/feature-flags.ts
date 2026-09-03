@@ -23,7 +23,7 @@ export function isSignupAllowed(): boolean {
   return value === "true" || value === "1";
 }
 
-/** Hide Google sign-in on /login while keeping Google Drive integration OAuth. */
+/** Env default for the per-org "googleSso" flag (DISABLE_GOOGLE_LOGIN=true → off). */
 export function isGoogleLoginDisabled(): boolean {
   const raw = process.env.DISABLE_GOOGLE_LOGIN;
   if (!raw?.trim()) return false;
@@ -102,6 +102,7 @@ export const ORG_FEATURE_KEYS = [
   "chat",
   "dashboard",
   "ideasUndo",
+  "googleSso",
   "ssoSkips2fa",
 ] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
@@ -119,6 +120,8 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDashboardEnabled();
     case "ideasUndo":
       return isIdeasUndoEnabled();
+    case "googleSso":
+      return !isGoogleLoginDisabled();
     case "ssoSkips2fa":
       return isSsoSkips2faDefault();
   }
@@ -130,12 +133,15 @@ export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
 
 // ————— System-wide flag overrides —————
 //
-// Switches that must resolve BEFORE sign-in (no user, so no org): e.g. the
-// Google SSO button on /login. Stored one row per key in SystemFlag; a stored
-// row wins, otherwise the env default applies. Resolution lives in
+// Switches that must resolve BEFORE sign-in (no user, so no org): e.g.
+// self-service sign-up. Stored one row per key in SystemFlag; a stored row
+// wins, otherwise the env default applies. Resolution lives in
 // src/lib/system-flags.ts (needs the DB); managed in PM-OS Admin → Enablements.
+// (Google SSO used to live here; since 2026-09-03 it is a per-org flag —
+// the /login button shows whenever Google is configured, and the org's flag
+// is enforced once Google returns the email, in signInWithOAuth.)
 
-export const SYSTEM_FLAG_KEYS = ["googleSso", "selfSignup"] as const;
+export const SYSTEM_FLAG_KEYS = ["selfSignup"] as const;
 export type SystemFlagKey = (typeof SYSTEM_FLAG_KEYS)[number];
 
 export function isSystemFlagKey(key: string): key is SystemFlagKey {
@@ -145,8 +151,6 @@ export function isSystemFlagKey(key: string): key is SystemFlagKey {
 /** Env-level default for a system flag (applies when no override row exists). */
 export function envSystemFlagDefault(key: SystemFlagKey): boolean {
   switch (key) {
-    case "googleSso":
-      return !isGoogleLoginDisabled();
     case "selfSignup":
       return isSignupAllowed();
   }

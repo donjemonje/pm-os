@@ -79,10 +79,14 @@ export async function lookupPasswordToken(token: string): Promise<{
   email: string;
   name: string;
   organizationName: string | null;
+  /** Organization.features JSON ({} when none) — for per-org gates. */
+  organizationFeatures: unknown;
 } | null> {
   const row = await db.passwordResetToken.findUnique({
     where: { tokenHash: hashResetToken(token) },
-    include: { user: { include: { organization: { select: { name: true } } } } },
+    include: {
+      user: { include: { organization: { select: { name: true, features: true } } } },
+    },
   });
   if (!row || row.usedAt || row.expiresAt < new Date() || row.user.deactivatedAt) {
     return null;
@@ -91,6 +95,7 @@ export async function lookupPasswordToken(token: string): Promise<{
     email: row.user.email,
     name: row.user.name,
     organizationName: row.user.organization?.name ?? null,
+    organizationFeatures: row.user.organization?.features ?? {},
   };
 }
 

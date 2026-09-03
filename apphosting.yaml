@@ -21,8 +21,8 @@ env:
       - BUILD
       - RUNTIME
 
-  # Google SSO is live. This is the env DEFAULT; the admin override lives in
-  # PM-OS Admin → Enablements → System → Google SSO.
+  # Google SSO is live. This is the env DEFAULT of the per-organization
+  # "Google SSO" flag (PM-OS Admin → Enablements → Login).
   - variable: DISABLE_GOOGLE_LOGIN
     value: "false"
     availability:

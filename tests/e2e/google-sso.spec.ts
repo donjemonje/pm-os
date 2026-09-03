@@ -11,7 +11,8 @@ import {
 /**
  * Google SSO system flag + forgot-password (feature/google-sso).
  *
- * G1  googleSso system-flag round-trip: admin override wins, env default
+ * G1  googleSso per-ORG flag round-trip on the Enablements matrix (admin
+ *     override wins, env default
  *     (DISABLE_GOOGLE_LOGIN=true → off, pinned by the env guard) otherwise;
  *     observed on /api/auth/oauth/providers and the authorize redirect.
  *     Fake Google creds in the test env make the provider "configured" —
@@ -29,7 +30,7 @@ import {
  * user with a passwordHash can never complete a Google sign-in
  * (email_uses_password), even with a pre-existing OAuthAccount link.
  *
- * State discipline: beforeAll AND afterAll clear the googleSso override,
+ * State discipline: beforeAll AND afterAll clear RoomLens's feature overrides,
  * clear all PasswordResetToken rows, and re-set QA_USER's passwordHash to
  * the seeded password (re-hashed with the app's salt:scrypt format — no
  * in-memory state, so it survives the worker restart a mid-test failure
@@ -79,7 +80,10 @@ function appPasswordHash(password: string): string {
 async function resetGoogleSsoFixtures(): Promise<void> {
   await withDb(async (db) => {
     try {
-      await db.systemFlag.deleteMany({ where: { key: "googleSso" } });
+      await db.organization.update({
+        where: { slug: "roomlens" },
+        data: { features: {} },
+      });
       await db.passwordResetToken.deleteMany({});
       // Re-hash the seeded password (undoes G3's change; a fresh salt gives
       // a different string than the seed's, but verifyPassword only cares
@@ -101,7 +105,7 @@ test.describe("Google SSO + forgot-password", () => {
   test.beforeAll(resetGoogleSsoFixtures);
   test.afterAll(resetGoogleSsoFixtures);
 
-  test("G1 googleSso system flag: admin override drives the providers list and the authorize redirect", async ({
+  test("G1 googleSso per-org flag: RoomLens override round-trips on the Enablements matrix; Google stays listed for sign-in", async ({
     page,
   }) => {
     await loginAsRoomLensAdmin(page);
@@ -110,15 +114,19 @@ test.describe("Google SSO + forgot-password", () => {
       page.getByRole("heading", { name: "Enablements" })
     ).toBeVisible();
 
-    // Enablements matrix: the Google SSO system flag is one row with a
-    // single cell spanning the org columns (tr[data-flag] contract). Badge
-    // over button state, as in admin.spec A2: it only updates from the
-    // PATCH response.
-    const row = page.locator('tr[data-flag="googleSso"]');
-    const badge = row.locator("span.rounded-full");
+    // Enablements matrix: the Google SSO row's RoomLens cell (tr[data-flag] /
+    // td[data-org] contract). Badge over button state, as in admin.spec A2:
+    // it only updates from the PATCH response.
+    const cell = page
+      .locator('tr[data-flag="googleSso"]')
+      .locator('td[data-org="roomlens"]');
+    const badge = cell.locator("span.rounded-full");
     await expect(badge).toHaveText("Off (default)");
 
-    // Baseline (env default off): google is hidden even though configured.
+    // Google SSO is per-org and enforced AFTER Google returns the email
+    // (signInWithOAuth) — before sign-in the org is unknown, so the provider
+    // is listed whenever configured, regardless of any org's flag. Fake creds
+    // make it "configured"; nothing here calls Google.
     const providerIds = async () => {
       const res = await page.request.get("/api/auth/oauth/providers");
       expect(res.status()).toBe(200);
@@ -127,41 +135,35 @@ test.describe("Google SSO + forgot-password", () => {
       };
       return providers.map((p) => p.provider);
     };
-    expect(await providerIds()).not.toContain("google");
-
-    // …and starting the flow bounces straight back to /login with the error.
-    const authorizeLocation = async () => {
-      const res = await page.request.get("/api/auth/oauth/google", {
-        maxRedirects: 0,
-      });
-      expect(res.status(), "authorize endpoint must redirect").toBeGreaterThanOrEqual(300);
-      expect(res.status()).toBeLessThan(400);
-      return res.headers()["location"] ?? "";
-    };
-    expect(await authorizeLocation()).toBe(
-      `${LOCAL_BASE_URL}/login?error=google_sso_disabled`
-    );
-
-    // Override On → provider listed, authorize goes to Google's consent URL
-    // (never followed — fake creds, no network call to Google).
-    await row.getByRole("button", { name: "On", exact: true }).click();
-    await expect(badge).toHaveText("On");
     expect(await providerIds()).toContain("google");
-    expect(await authorizeLocation()).toMatch(
+    const authorize = await page.request.get("/api/auth/oauth/google", {
+      maxRedirects: 0,
+    });
+    expect(authorize.headers()["location"] ?? "").toMatch(
       /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/
     );
 
-    // Override Off → hidden and blocked again, now by the explicit override.
-    await row.getByRole("button", { name: "Off", exact: true }).click();
-    await expect(badge).toHaveText("Off");
-    expect(await providerIds()).not.toContain("google");
-    expect(await authorizeLocation()).toBe(
-      `${LOCAL_BASE_URL}/login?error=google_sso_disabled`
+    // Override On → stored on the org and reflected by the badge…
+    await cell.getByRole("button", { name: "On", exact: true }).click();
+    await expect(badge).toHaveText("On");
+    const orgsOn = await page.request.get("/api/admin/organizations");
+    const roomlensOn = (await orgsOn.json()).organizations.find(
+      (o: { slug: string }) => o.slug === "roomlens"
     );
+    expect(roomlensOn.features.googleSso).toBe(true);
 
-    // Clear the override → back to the env default.
-    await row.getByRole("button", { name: "Default (off)" }).click();
+    // …Off → explicit false…
+    await cell.getByRole("button", { name: "Off", exact: true }).click();
+    await expect(badge).toHaveText("Off");
+
+    // …Default → override removed, env default (off) applies again.
+    await cell.getByRole("button", { name: "Default (off)" }).click();
     await expect(badge).toHaveText("Off (default)");
+    const orgsDef = await page.request.get("/api/admin/organizations");
+    const roomlensDef = (await orgsDef.json()).organizations.find(
+      (o: { slug: string }) => o.slug === "roomlens"
+    );
+    expect(roomlensDef.features.googleSso).toBeUndefined();
   });
 
   test("G2 forgot-password request is enumeration-safe: identical response, token row only for the real user", async ({

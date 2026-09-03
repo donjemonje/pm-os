@@ -54,15 +54,15 @@ export function InviteChoices({
           style={{ background: brand.accent }}
         >
           <KeyRound className="h-4 w-4" aria-hidden />
-          Sign up with a password
+          Sign Up
         </a>
       </div>
 
-      <p className="font-subtitle text-xs text-brand-muted">
-        {googleAvailable
-          ? `Google sign-up must use the Google account for ${email}.`
-          : `Your account email is ${email}.`}
-      </p>
+      {googleAvailable && (
+        <p className="font-subtitle text-xs text-brand-muted">
+          Google sign-up must use the Google account for {email}.
+        </p>
+      )}
     </div>
   );
 }
