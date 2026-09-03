@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Search, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
-import { badgeOf, needsApproval, scoreOf } from "@/lib/ideas/idea";
+import { badgeOf, needsApproval, scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
@@ -20,13 +20,6 @@ const IMPORT_STEPS: { label: string; hint: string }[] = [
   { label: "AI is reviewing each ticket", hint: "Spotting feature requests and where they belong" },
   { label: "Preparing ideas for review", hint: "Almost there" },
 ];
-
-const STATUS_CHIP_TO_BATCH: Record<string, Idea["batch"]> = {
-  New: "new",
-  Updated: "updated",
-  Archive: "archive",
-  Unchanged: "unchanged",
-};
 
 interface ServerState {
   tickets: ZendeskTicket[];
@@ -86,7 +79,6 @@ export function IdeasView({
   const [pendingOnly, setPendingOnly] = useState(false);
 
   const [page, setPage] = useState<"final" | "merge">("final");
-  const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single" | "Unchanged">("Merge");
   const [edit, setEdit] = useState<MergeEdit | null>(null);
   const [selectedFinalId, setSelectedFinalId] = useState<string | "auto" | null>("auto");
 
@@ -319,7 +311,6 @@ export function IdeasView({
     setPage("merge");
     setDrawerId(null);
     setDrawerSrc(null);
-    setMergeFilter(target && srcCount(target) === 1 ? "Single" : "Merge");
     setEdit(target ? { ideaId: target.id, zen: [...target.zen], jira: [...target.jira] } : null);
     setSelectedFinalId(target ? target.id : "auto");
   };
@@ -750,28 +741,14 @@ export function IdeasView({
                   emptyText="No matching customer"
                 />
               )}
-              {page === "merge" ? (
-                <FilterPopover
-                  single
-                  label="View"
-                  accent="status"
-                  options={["Merge", "Single", "Unchanged"]}
-                  selected={[mergeFilter]}
-                  onToggle={(o) => {
-                    setMergeFilter(o as "Merge" | "Single" | "Unchanged");
-                    setSelectedFinalId("auto");
-                  }}
-                />
-              ) : (
-                <FilterPopover
-                  single
-                  label="Status"
-                  accent="status"
-                  options={Object.keys(STATUS_CHIP_TO_BATCH)}
-                  selected={statusFilter}
-                  onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
-                />
-              )}
+              <FilterPopover
+                single
+                label="Status"
+                accent="status"
+                options={Object.keys(STATUS_CHIP_TO_BATCH)}
+                selected={statusFilter}
+                onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
+              />
               <span className="h-5 w-px bg-[#d5dfec]" />
               <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
                 Pending Review
@@ -872,7 +849,7 @@ export function IdeasView({
               platformFilter={platformFilter}
               customerFilter={customerFilter}
               pendingOnly={pendingOnly}
-              mergeFilter={mergeFilter}
+              statusFilter={statusFilter}
               edit={edit}
               selectedFinalId={selectedFinalId}
               onStartEdit={startEdit}

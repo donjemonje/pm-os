@@ -45,3 +45,11 @@ export function badgeOf(i: Idea): BadgeStyle | null {
 export function needsApproval(i: Idea): boolean {
   return i.batch !== "deleted" && i.batch !== "unchanged";
 }
+
+/** Filter-chip label -> Idea.batch value (shared by the Final and Merge views). */
+export const STATUS_CHIP_TO_BATCH: Record<string, Idea["batch"]> = {
+  New: "new",
+  Updated: "updated",
+  Archive: "archive",
+  Unchanged: "unchanged",
+};

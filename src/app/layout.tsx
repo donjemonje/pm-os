@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Chakra_Petch, Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 import {
   getCurrentUser,
@@ -70,6 +71,8 @@ export default async function RootLayout({
       }
     : null;
 
+  const sidebarCollapsed = (await cookies()).get("pmos_sidebar")?.value === "collapsed";
+
   return (
     <html
       lang="en"
@@ -77,6 +80,7 @@ export default async function RootLayout({
     >
       <body className="font-body antialiased">
         <Shell
+          sidebarDefaultCollapsed={sidebarCollapsed}
           ideasEnabled={ideasEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}

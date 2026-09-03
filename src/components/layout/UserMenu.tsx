@@ -24,9 +24,12 @@ export type MenuOrganization = {
 export function UserMenu({
   user,
   organization,
+  collapsed = false,
 }: {
   user: MenuUser;
   organization: MenuOrganization | null;
+  /** Narrow-rail mode: avatar-only trigger; the menu overflows the rail. */
+  collapsed?: boolean;
 }) {
   const router = useRouter();
   const [copied, setCopied] = useState(false);
@@ -68,12 +71,13 @@ export function UserMenu({
   }
 
   return (
-    <div className="relative border-t border-white/10 p-3" ref={menuRef}>
+    <div className={cn("relative border-t border-white/10", collapsed ? "p-2" : "p-3")} ref={menuRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors",
+          "flex w-full items-center gap-3 rounded-lg py-2 text-left transition-colors",
+          collapsed ? "justify-center px-0" : "px-2",
           open ? "bg-white/10" : "hover:bg-white/5"
         )}
         aria-expanded={open}
@@ -85,18 +89,23 @@ export function UserMenu({
         >
           {user.initials}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-white">{user.name}</span>
-          <span className="block truncate text-xs text-white/50">
-            {user.organizationName ?? user.email}
+        {!collapsed && (
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-white">{user.name}</span>
+            <span className="block truncate text-xs text-white/50">
+              {user.organizationName ?? user.email}
+            </span>
           </span>
-        </span>
+        )}
       </button>
 
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full left-3 right-3 mb-1 overflow-hidden rounded-lg border border-white/10 bg-sidebar shadow-lg"
+          className={cn(
+            "absolute bottom-full mb-1 overflow-hidden rounded-lg border border-white/10 bg-sidebar shadow-lg",
+            collapsed ? "left-2 w-56" : "left-3 right-3"
+          )}
         >
           <div className="border-b border-white/10 px-3 py-2">
             <p className="truncate text-xs text-white/50">{user.email}</p>

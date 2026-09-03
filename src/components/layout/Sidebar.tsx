@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 import {
   FileText,
   LayoutDashboard,
   Lightbulb,
+  Menu,
   MessageSquare,
   Settings,
 } from "lucide-react";
@@ -25,6 +27,7 @@ const nav = [
 const SIDEBAR_LOGO_HEIGHT = 38;
 
 export function Sidebar({
+  defaultCollapsed,
   ideasEnabled,
   docsEnabled,
   chatEnabled,
@@ -32,6 +35,8 @@ export function Sidebar({
   user,
   organization,
 }: {
+  /** Initial rail state, read from the pmos_sidebar cookie on the server. */
+  defaultCollapsed: boolean;
   ideasEnabled: boolean;
   docsEnabled: boolean;
   chatEnabled: boolean;
@@ -40,6 +45,15 @@ export function Sidebar({
   organization: MenuOrganization | null;
 }) {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
+  const toggle = () =>
+    setCollapsed((v) => {
+      const next = !v;
+      document.cookie = `pmos_sidebar=${next ? "collapsed" : "expanded"}; path=/; max-age=31536000; samesite=lax`;
+      return next;
+    });
+
   const hidden = new Set([
     ...(dashboardEnabled ? [] : ["/dashboard"]),
     ...(ideasEnabled ? [] : ["/ideas"]),
@@ -50,18 +64,30 @@ export function Sidebar({
 
   return (
     <aside
-      className="relative flex h-full w-60 shrink-0 flex-col bg-cover bg-center bg-no-repeat text-sidebar-fg"
+      className={cn(
+        "relative flex h-full shrink-0 flex-col bg-cover bg-center bg-no-repeat text-sidebar-fg transition-[width] duration-200",
+        collapsed ? "w-[60px]" : "w-60"
+      )}
       style={{
         backgroundColor: "var(--sidebar)",
         backgroundImage: `url('${neuralBackgrounds.diagonal}')`,
       }}
     >
-      <div className="border-b border-white/10 px-4 py-5">
-        <BrandLockup
-          height={SIDEBAR_LOGO_HEIGHT}
-          priority
-          href={dashboardEnabled ? "/dashboard" : "/releases"}
-        />
+      <div
+        className={cn(
+          "flex items-center border-b border-white/10 py-5",
+          collapsed ? "justify-center px-0" : "gap-3 px-4"
+        )}
+      >
+        <button
+          onClick={toggle}
+          title={collapsed ? "Expand menu" : "Collapse menu"}
+          aria-label={collapsed ? "Expand menu" : "Collapse menu"}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white"
+        >
+          <Menu size={18} />
+        </button>
+        {!collapsed && <BrandLockup height={SIDEBAR_LOGO_HEIGHT} priority href="/dashboard" />}
       </div>
       <nav className="flex-1 space-y-1 p-3">
         {items.map(({ href, label, icon: Icon }) => {
@@ -75,20 +101,22 @@ export function Sidebar({
             <Link
               key={href}
               href={href}
+              title={collapsed ? label : undefined}
               className={cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-2.5 rounded-lg py-2 text-sm transition-colors",
+                collapsed ? "justify-center px-0" : "px-3",
                 active
                   ? "bg-brand-accent/20 text-brand-accent shadow-[inset_0_0_0_1px_rgba(122,167,255,0.45),0_0_14px_rgba(122,167,255,0.3)]"
                   : "text-white/70 hover:bg-white/5 hover:text-white"
               )}
             >
-              <Icon size={16} />
-              {label}
+              <Icon size={16} className="shrink-0" />
+              {!collapsed && label}
             </Link>
           );
         })}
       </nav>
-      {user && <UserMenu user={user} organization={organization} />}
+      {user && <UserMenu user={user} organization={organization} collapsed={collapsed} />}
     </aside>
   );
 }

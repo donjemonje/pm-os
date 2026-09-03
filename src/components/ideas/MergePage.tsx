@@ -1,7 +1,8 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
-import { scoreOf } from "@/lib/ideas/idea";
+import { scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 
 type SourceKind = "zen" | "jira";
@@ -15,7 +16,8 @@ interface MergePageProps {
   platformFilter: string[];
   customerFilter: string[];
   pendingOnly: boolean;
-  mergeFilter: "Merge" | "Single" | "Unchanged";
+  /** Shared Status filter from the toolbar (chip labels; empty = all except Unchanged). */
+  statusFilter: string[];
   edit: MergeEdit | null;
   selectedFinalId: string | "auto" | null;
   onStartEdit: (id: string) => void;
@@ -49,7 +51,7 @@ export function MergePage({
   platformFilter,
   customerFilter,
   pendingOnly,
-  mergeFilter,
+  statusFilter,
   edit,
   selectedFinalId,
   onStartEdit,
@@ -57,12 +59,18 @@ export function MergePage({
   onOpenIdea,
   onOpenSource,
 }: MergePageProps) {
+  // The mostly-unchanged Jira backlog is noise: unchanged ideas show only
+  // when the Status filter says Unchanged, same as the Final page.
+  const unchangedView = statusFilter.includes("Unchanged");
+
   const matches = (i: Idea): boolean => {
-    // Same rule as the Final page: the mostly-unchanged Jira backlog is
-    // noise here — unchanged ideas show only under their own chip.
-    if (mergeFilter === "Unchanged") {
+    if (unchangedView) {
       if (i.batch !== "unchanged") return false;
-    } else if (i.batch === "unchanged") return false;
+    } else {
+      if (i.batch === "unchanged") return false;
+      if (statusFilter.length > 0 && !statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch))
+        return false;
+    }
     const q = query.trim().toLowerCase();
     if (q && !i.title.toLowerCase().includes(q)) return false;
     if (productFilter.length > 0 && !i.products.some((p) => productFilter.includes(p))) return false;
@@ -79,12 +87,6 @@ export function MergePage({
   const finals = ideas
     .filter(matches)
     .map((i) => ({ idea: i, count: srcCount(i) }))
-    .filter(
-      (c) =>
-        mergeFilter === "Unchanged" ||
-        c.count === 0 ||
-        (mergeFilter === "Merge" ? c.count > 1 : c.count === 1)
-    )
     .sort((a, b) => {
       if (b.count !== a.count) return b.count - a.count;
       const av = scoreOf(a.idea).value ?? -1;
@@ -119,7 +121,7 @@ export function MergePage({
       // Unchanged chip and edit mode (attach-anything) show the full pool.
       if (
         !edit &&
-        mergeFilter !== "Unchanged" &&
+        !unchangedView &&
         owners.length > 0 &&
         owners.every((o) => o.batch === "unchanged")
       )
@@ -160,23 +162,33 @@ export function MergePage({
     jiraSources.map((s) => ({ key: s.key, id: s.id, title: s.title }))
   );
 
+  // In edit mode the checked sources gather at the top of their column, so a
+  // select/deselect visibly moves the row into or out of the merged set.
+  const orderRows = (rows: SourceRow[]) =>
+    edit ? [...rows].sort((a, b) => Number(b.checked) - Number(a.checked)) : rows;
+
   const renderColumn = (kind: SourceKind, label: string, rows: SourceRow[], emptyText: string) => (
     <div className="overflow-hidden rounded-xl border border-border bg-white">
       <div className={COL_HEADER}>
         {label} · {rows.length}
       </div>
       <div>
-        {rows.map((row) => (
-          <div
+        <AnimatePresence initial={false}>
+        {orderRows(rows).map((row) => (
+          <motion.div
             key={row.key}
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: row.orphan && !row.checked ? 0.5 : 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ layout: { duration: 0.25, ease: "easeInOut" }, duration: 0.18 }}
             onClick={() => {
               if (edit) onToggleSrc(kind, row.key);
               else if (row.ownerId) onStartEdit(row.ownerId);
             }}
-            className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2"
+            className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors"
             style={{
               background: row.checked || (row.selected && !edit) ? "#daf0e2" : "#ffffff",
-              opacity: row.orphan && !row.checked ? 0.5 : 1,
             }}
           >
             {edit && (
@@ -220,8 +232,9 @@ export function MergePage({
                 {row.owners}×
               </span>
             )}
-          </div>
+          </motion.div>
         ))}
+        </AnimatePresence>
         {rows.length === 0 && <div className="p-4 text-xs text-muted">{emptyText}</div>}
       </div>
     </div>
@@ -236,17 +249,22 @@ export function MergePage({
       <div className="overflow-hidden rounded-xl border border-border bg-white">
         <div className={COL_HEADER}>Final · {finals.length}</div>
         <div>
+          <AnimatePresence initial={false}>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
             const sel = idea.id === selId;
             return (
-              <div
+              <motion.div
                 key={idea.id}
+                layout
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: gone ? 0.55 : 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ layout: { duration: 0.25, ease: "easeInOut" }, duration: 0.18 }}
                 onClick={() => onStartEdit(idea.id)}
-                className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2"
+                className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors"
                 style={{
                   background: sel && !gone ? "#daf0e2" : "#ffffff",
-                  opacity: gone ? 0.55 : 1,
                 }}
               >
                 <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px]">
@@ -267,9 +285,10 @@ export function MergePage({
                 >
                   {gone ? "Deleted" : `${count} src`}
                 </button>
-              </div>
+              </motion.div>
             );
           })}
+          </AnimatePresence>
           {finals.length === 0 && <div className="p-4 text-xs text-muted">No ideas match</div>}
         </div>
       </div>

@@ -9,6 +9,7 @@ const NO_SHELL_PATHS = ["/", "/login", "/register"];
 
 export function Shell({
   children,
+  sidebarDefaultCollapsed,
   ideasEnabled,
   docsEnabled,
   chatEnabled,
@@ -17,6 +18,8 @@ export function Shell({
   organization,
 }: {
   children: React.ReactNode;
+  /** Server-read cookie state so the rail renders collapsed without a flash. */
+  sidebarDefaultCollapsed: boolean;
   ideasEnabled: boolean;
   docsEnabled: boolean;
   chatEnabled: boolean;
@@ -38,6 +41,7 @@ export function Shell({
     <OrgFeaturesProvider value={{ chatEnabled }}>
       <div className="flex h-screen overflow-hidden">
         <Sidebar
+          defaultCollapsed={sidebarDefaultCollapsed}
           ideasEnabled={ideasEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
