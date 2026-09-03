@@ -19,27 +19,14 @@ function escapeHtml(s: string): string {
 
 const FONT =
   "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-
-/**
- * Hosted brand mark for the email header. Mail clients fetch it from the
- * public app host (Gmail via its image proxy), so it must be a URL that is
- * reachable from the internet — never NEXT_PUBLIC_APP_URL, which is
- * localhost in dev. Override with EMAIL_LOGO_URL.
- */
-function emailLogoUrl(): string {
-  return (
-    process.env.EMAIL_LOGO_URL?.trim() ||
-    "https://app.pm-os.io/brand/brain-tight.png"
-  );
-}
 const DARK = "#050A15";
 const ACCENT = "#7aa7ff";
 
 /**
  * Table-based, inline-styled HTML (what mail clients actually render) plus a
- * plain-text twin. Dark brand header with the hosted logo (alt text carries
- * the name for clients that block remote images; no attachments), light
- * body card, one button. The raw link is repeated under the button for clients that strip
+ * plain-text twin. Dark brand header with a text wordmark — deliberately no
+ * images: no remote fetch to wait for, no attachment, and one less thing
+ * for spam filters to weigh. Light body card, one button. The raw link is repeated under the button for clients that strip
  * buttons.
  */
 export function renderBrandedEmail(input: BrandedEmail): {
@@ -87,7 +74,8 @@ ${preheaderHtml}
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;width:100%;">
         <tr>
           <td align="center" style="background:${DARK};border-radius:16px 16px 0 0;padding:28px 24px 22px;">
-            <img src="${escapeHtml(emailLogoUrl())}" width="96" height="110" alt="PM-OS" style="display:block;width:96px;height:auto;border:0;margin:0 auto;font-family:${FONT};font-size:24px;font-weight:700;color:${ACCENT};">
+            <div style="font-family:${FONT};font-size:28px;line-height:32px;font-weight:700;letter-spacing:2px;color:${ACCENT};">PM-OS</div>
+            <div style="font-family:${FONT};font-size:11px;line-height:16px;letter-spacing:1.5px;text-transform:uppercase;color:#aaa3c4;margin-top:4px;">Product Management Operating System</div>
           </td>
         </tr>
         <tr>
