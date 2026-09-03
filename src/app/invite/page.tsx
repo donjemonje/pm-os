@@ -24,8 +24,8 @@ export const dynamic = "force-dynamic";
  *     invite token is retired on link (signInWithOAuth).
  *   - Password: the set-password form with the same token.
  * Google is offered whenever Google sign-in is configured and not hidden by
- * env (DISABLE_GOOGLE_LOGIN). With a single method available there is no
- * choice to make: the page redirects straight to the set-password form.
+ * env (DISABLE_GOOGLE_LOGIN). The screen always shows — with Google hidden
+ * it simply has the one "Sign Up" button.
  */
 export default async function InvitePage({
   searchParams,
@@ -44,9 +44,6 @@ export default async function InvitePage({
     !isGoogleLoginDisabled() &&
     getOAuthProviderStatuses().some((p) => p.provider === "google" && p.configured);
 
-  if (invite && !googleAvailable) {
-    redirect(`/reset-password?token=${encodeURIComponent(token!)}&invite=1`);
-  }
 
   return (
     <AuthNeuralBackground>

@@ -57,13 +57,15 @@ export function isIdeasUndoEnabled(): boolean {
 
 /**
  * Env default for the per-org "ssoSkips2fa" flag: Google sign-ins skip the
- * TOTP step. Off unless SSO_SKIPS_2FA=true — 2FA is mandatory by default.
+ * TOTP step. ON when unset (Google already authenticated the user);
+ * SSO_SKIPS_2FA=false makes Google sign-ins take the TOTP step too by default.
+ * Password sign-ins always require 2FA regardless.
  */
 export function isSsoSkips2faDefault(): boolean {
   const raw = process.env.SSO_SKIPS_2FA;
-  if (!raw?.trim()) return false;
+  if (!raw?.trim()) return true;
   const value = raw.trim().toLowerCase();
-  return value === "true" || value === "1";
+  return !(value === "false" || value === "0");
 }
 
 /** Dashboard feature gate — env default. Off when unset; DASHBOARD_ENABLED=true turns it on globally. */
