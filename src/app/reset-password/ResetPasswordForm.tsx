@@ -12,6 +12,9 @@ const inputClassName =
 function ResetPasswordInner() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
+  // Invite links (sent by PM-OS Admin) reuse the same token mechanism with
+  // welcome wording; the API path is identical.
+  const invite = searchParams.get("invite") === "1";
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -55,14 +58,16 @@ function ResetPasswordInner() {
         <div className="mb-8 flex items-center justify-center gap-4">
           <BrandLogo height={84} className="shrink-0" priority />
           <h1 className="font-title text-2xl font-bold leading-tight tracking-tight text-brand-text">
-            New password
+            {invite ? "Welcome to PM-OS" : "New password"}
           </h1>
         </div>
 
         {done ? (
           <div className="space-y-4">
             <p className="font-subtitle text-sm text-brand-muted">
-              Password updated. Sign in with your new password.
+              {invite
+                ? "Password set. Sign in to finish setting up your account."
+                : "Password updated. Sign in with your new password."}
             </p>
             <a
               href="/login"
@@ -75,18 +80,26 @@ function ResetPasswordInner() {
         ) : !token ? (
           <div className="space-y-4">
             <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-              This reset link is missing its token. Open the link from your email,
-              or request a new one.
+              {invite
+                ? "This invite link is missing its token. Open the link from your email, or ask your admin to resend the invite."
+                : "This reset link is missing its token. Open the link from your email, or request a new one."}
             </p>
-            <a
-              href="/forgot-password"
-              className="font-title block text-center text-sm font-semibold text-brand-accent hover:opacity-80"
-            >
-              Request a new link
-            </a>
+            {!invite && (
+              <a
+                href="/forgot-password"
+                className="font-title block text-center text-sm font-semibold text-brand-accent hover:opacity-80"
+              >
+                Request a new link
+              </a>
+            )}
           </div>
         ) : (
           <form onSubmit={onSubmit} className="space-y-4">
+            {invite && (
+              <p className="font-subtitle text-sm text-brand-muted">
+                Set a password to activate your account.
+              </p>
+            )}
             {error && (
               <p className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
                 {error}
@@ -97,7 +110,7 @@ function ResetPasswordInner() {
                 htmlFor="new-password"
                 className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
               >
-                New password
+                {invite ? "Password" : "New password"}
               </label>
               <input
                 id="new-password"
@@ -138,7 +151,7 @@ function ResetPasswordInner() {
               className="font-title w-full rounded-lg py-2.5 text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90 disabled:opacity-60"
               style={{ background: brand.accent }}
             >
-              {loading ? "Saving…" : "Set new password"}
+              {loading ? "Saving…" : invite ? "Set password" : "Set new password"}
             </button>
           </form>
         )}

@@ -19,7 +19,7 @@ import {
  * G2  forgot-password is enumeration-safe: identical { ok: true } for a real
  *     and a nonexistent email; a token row exists only for the real user.
  * G3  full reset path: emailed link (token row inserted directly — with no
- *     RESEND_API_KEY the email only prints to the server console) → new
+ *     SMTP_USER/SMTP_PASSWORD the email only prints to the server console) → new
  *     password via the UI → token is single-use → login works with the new
  *     password through the mandatory 2FA challenge.
  * G4  expired token is refused with the same generic 400.
@@ -193,7 +193,7 @@ test.describe("Google SSO + forgot-password", () => {
   test("G3 reset link sets a new password once, then the new password logs in through 2FA", async ({
     page,
   }) => {
-    // The emailed raw token (no RESEND_API_KEY in tests → the email only
+    // The emailed raw token (no SMTP creds in tests → the email only
     // prints to the server console, so the row is inserted directly with a
     // known raw token, hashed exactly like requestPasswordReset does).
     const rawToken = await withDb(async (db) => {
