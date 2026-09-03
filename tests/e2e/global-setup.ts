@@ -33,6 +33,7 @@ const show = (v?: string) => (v === undefined ? "<unset>" : `"${v}"`);
 export default function validateTestEnv(): void {
   const env = RESOLVED_ENV;
   const problems: string[] = [];
+  let testDbName: string | undefined;
 
   // Login must be enabled (DISABLE_LOGIN is default-closed: unset = disabled).
   if (!isFalseLike(env.DISABLE_LOGIN)) {
@@ -42,7 +43,9 @@ export default function validateTestEnv(): void {
     );
   }
 
-  // Tests may only ever run against the dedicated pmos_test database.
+  // Tests run against the dedicated pmos_test database (CI, shared local
+  // runs) or a feature's own dev clone pmos_ft_<name> (feature QA inside
+  // /feature runs on the developer's DB) — NEVER the shared dev DB "pmos".
   if (!env.DATABASE_URL?.trim()) {
     problems.push(`DATABASE_URL is not set — the app cannot reach a database; ${FIX_YAML}`);
   } else {
@@ -54,12 +57,18 @@ export default function validateTestEnv(): void {
     } catch {
       problems.push(`DATABASE_URL is not a parseable URL; ${FIX_YAML}`);
     }
-    if (dbName !== undefined && dbName !== "pmos_test") {
+    if (
+      dbName !== undefined &&
+      dbName !== "pmos_test" &&
+      !/^pmos_ft_[a-z0-9_]+$/.test(dbName)
+    ) {
       problems.push(
         `DATABASE_URL points at database "${dbName}" — tests only ever run ` +
-          `against "pmos_test" (NEVER the dev database "pmos"); ${FIX_YAML}`
+          `against "pmos_test" or a feature clone "pmos_ft_<name>" (NEVER the ` +
+          `shared dev database "pmos"); ${FIX_YAML}`
       );
     }
+    testDbName = dbName;
   }
 
   // Session cookies can't be signed without it — login would 500.
@@ -157,6 +166,6 @@ export default function validateTestEnv(): void {
   }
 
   console.log(
-    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, google sso default off (fake creds set), TOTP key set`
+    `[test-env] OK — login enabled, database ${testDbName}, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, google sso default off (fake creds set), TOTP key set`
   );
 }
