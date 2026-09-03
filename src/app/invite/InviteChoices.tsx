@@ -42,10 +42,15 @@ export function InviteChoices({
       <div className="space-y-4">
         {googleAvailable && (
           <>
-            <a href={googleHref} className={optionClassName}>
-              <GoogleIcon />
-              Sign up with Google
-            </a>
+            <div>
+              <a href={googleHref} className={optionClassName}>
+                <GoogleIcon />
+                Sign Up with Google
+              </a>
+              <p className="font-subtitle mt-1.5 text-center text-xs text-brand-muted">
+                Google sign-up must use the Google account for {email}.
+              </p>
+            </div>
             <div className="relative">
               <div className="absolute inset-0 flex items-center" aria-hidden>
                 <span className="w-full border-t border-white/10" />
@@ -60,15 +65,10 @@ export function InviteChoices({
         )}
         <a href={passwordHref} className={optionClassName}>
           <KeyRound className="h-5 w-5" aria-hidden />
-          Sign Up
+          Sign Up with Credentials
         </a>
       </div>
 
-      {googleAvailable && (
-        <p className="font-subtitle text-xs text-brand-muted">
-          Google sign-up must use the Google account for {email}.
-        </p>
-      )}
     </div>
   );
 }
