@@ -48,7 +48,7 @@ export function InviteChoices({
                 Sign Up with Google
               </a>
               <p className="font-subtitle mt-1.5 text-center text-xs text-brand-muted">
-                Google sign-up must use the Google account for {email}.
+                Google sign-up must use the {email} Google account
               </p>
             </div>
             <div className="relative">
