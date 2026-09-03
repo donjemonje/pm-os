@@ -201,8 +201,9 @@ test.describe("PM-OS Admin", () => {
     response = await userPage.goto("/ideas");
     expect(response?.status(), "/ideas after override removed").toBe(404);
 
-    // Chat: reversed env polarity (CHAT_ENABLED is ON when unset — pinned
-    // by the env guard) and the same resolution mechanism, exercised as one
+    // Chat: env default ON in the test env (CHAT_ENABLED=true, pinned by the
+    // env guard — the flag is off when unset) and the same resolution
+    // mechanism, exercised as one
     // cheap Off→404→Default round-trip rather than a full per-flag flow:
     // ideas above already proves override-wins end to end. Docs rides the
     // identical code path (same registry, layout gate, API wrapper) and gets

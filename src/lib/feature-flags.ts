@@ -25,23 +25,23 @@ export function isIdeasEnabled(): boolean {
 }
 
 /**
- * Docs feature gate — env default. Unlike IDEAS_ENABLED this is ON when
- * unset: docs is a live surface and a missing env var must not hide it.
- * Set DOCS_ENABLED=false to disable globally.
+ * Docs feature gate — env default. Off when unset (same polarity as
+ * IDEAS_ENABLED since 2026-09-03): surfaces are opted in per organization in
+ * PM-OS Admin → Enablements, or globally with DOCS_ENABLED=true.
  */
 export function isDocsEnabled(): boolean {
   const raw = process.env.DOCS_ENABLED;
-  if (!raw?.trim()) return true;
+  if (!raw?.trim()) return false;
   const value = raw.trim().toLowerCase();
-  return !(value === "false" || value === "0");
+  return value === "true" || value === "1";
 }
 
-/** Chat feature gate — env default. Same polarity as DOCS_ENABLED: on when unset. */
+/** Chat feature gate — env default. Off when unset; CHAT_ENABLED=true turns it on globally. */
 export function isChatEnabled(): boolean {
   const raw = process.env.CHAT_ENABLED;
-  if (!raw?.trim()) return true;
+  if (!raw?.trim()) return false;
   const value = raw.trim().toLowerCase();
-  return !(value === "false" || value === "0");
+  return value === "true" || value === "1";
 }
 
 /**
@@ -66,12 +66,12 @@ export function isSsoSkips2faDefault(): boolean {
   return value === "true" || value === "1";
 }
 
-/** Dashboard feature gate — env default. Same polarity as DOCS_ENABLED: on when unset. */
+/** Dashboard feature gate — env default. Off when unset; DASHBOARD_ENABLED=true turns it on globally. */
 export function isDashboardEnabled(): boolean {
   const raw = process.env.DASHBOARD_ENABLED;
-  if (!raw?.trim()) return true;
+  if (!raw?.trim()) return false;
   const value = raw.trim().toLowerCase();
-  return !(value === "false" || value === "0");
+  return value === "true" || value === "1";
 }
 
 // ————— Per-organization feature overrides —————

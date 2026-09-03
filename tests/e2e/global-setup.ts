@@ -118,16 +118,17 @@ export default function validateTestEnv(): void {
     );
   }
 
-  // all-pages.spec.ts asserts /docs and /chat render, and admin.spec A2
-  // asserts chat's env default is on. Both flags are on when unset
-  // (src/lib/feature-flags.ts), so only an explicit false-like value here
-  // is a misconfiguration.
-  for (const flag of ["DOCS_ENABLED", "CHAT_ENABLED"] as const) {
-    if (isFalseLike(env[flag])) {
+  // all-pages.spec.ts asserts /docs, /chat and /dashboard render, and
+  // admin.spec A2 asserts chat's env default is on. All three flags are OFF
+  // when unset (src/lib/feature-flags.ts, since 2026-09-03), so the test env
+  // must pin them on explicitly.
+  for (const flag of ["DOCS_ENABLED", "CHAT_ENABLED", "DASHBOARD_ENABLED"] as const) {
+    if (!isTrueLike(env[flag])) {
       problems.push(
         `${flag} resolves to ${show(env[flag])} but the suite asserts that ` +
-          `surface renders (all-pages.spec.ts, admin.spec.ts A2) — unset it ` +
-          `or set it to "true", or update those specs together with this check`
+          `surface renders (all-pages.spec.ts, admin.spec.ts A2) — set it to ` +
+          `"true" in test-apphosting.yaml (and CI), or update those specs ` +
+          `together with this check`
       );
     }
   }
@@ -165,6 +166,6 @@ export default function validateTestEnv(): void {
   }
 
   console.log(
-    `[test-env] OK — login enabled, database ${testDbName}, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, google sso default off (fake creds set), TOTP key set`
+    `[test-env] OK — login enabled, database ${testDbName}, app at ${LOCAL_BASE_URL}, ideas off, docs/chat/dashboard pinned on, google hidden by env (fake creds set), TOTP key set`
   );
 }

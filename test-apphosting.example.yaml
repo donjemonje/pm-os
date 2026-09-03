@@ -58,6 +58,25 @@ env:
       - BUILD
       - RUNTIME
 
+  # Off when unset (2026-09-03); the suite asserts these surfaces render.
+  - variable: DOCS_ENABLED
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: CHAT_ENABLED
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: DASHBOARD_ENABLED
+    value: "true"
+    availability:
+      - BUILD
+      - RUNTIME
+
   # --- 2FA (mandatory) ---
   # Fixed synthetic key for encrypting the seeded test TOTP secret. Keep this
   # EXACT value: it must match the CI job env (.github/workflows/e2e.yml) and

@@ -29,16 +29,22 @@ env:
       - BUILD
       - RUNTIME
 
-  # Docs/Chat are live surfaces: unset means ON (unlike IDEAS_ENABLED).
-  # Per-organization overrides live in PM-OS Admin → Enablements.
+  # Surfaces are OFF by default (2026-09-03) and opted in per organization in
+  # PM-OS Admin → Enablements. Set one to "true" only to force it on globally.
   - variable: DOCS_ENABLED
-    value: "true"
+    value: "false"
     availability:
       - BUILD
       - RUNTIME
 
   - variable: CHAT_ENABLED
-    value: "true"
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: DASHBOARD_ENABLED
+    value: "false"
     availability:
       - BUILD
       - RUNTIME
