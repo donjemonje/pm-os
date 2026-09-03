@@ -191,8 +191,9 @@ test.describe("PM-OS Admin", () => {
       userPage.getByRole("heading", { name: "Ideas" })
     ).toBeVisible();
 
-    // Back to Default → the env default applies again and gates the org.
-    await ideasCell.getByRole("button", { name: "Default (off)" }).click();
+    // Back to default: matrix cells have no Default button — re-clicking the
+    // active On clears the override, and the env default gates the org again.
+    await ideasCell.getByRole("button", { name: "On", exact: true }).click();
     await expect(badge).toHaveText("Off (default)");
     response = await userPage.goto("/ideas");
     expect(response?.status(), "/ideas after override removed").toBe(404);
@@ -222,7 +223,7 @@ test.describe("PM-OS Admin", () => {
 
     // Reset to Default → chat is back for the org (all-pages.spec depends
     // on /chat rendering; afterAll also clears features as a backstop).
-    await chatCell.getByRole("button", { name: "Default (on)" }).click();
+    await chatCell.getByRole("button", { name: "Off", exact: true }).click(); // active → clears
     await expect(chatBadge).toHaveText("On (default)");
     await userPage.goto("/chat");
     await expect(
