@@ -25,9 +25,7 @@ type Override = boolean | undefined;
  *
  * DOM contract for tests: matrix rows tr[data-flag=<key>], cells
  * td[data-org=<slug>]; system rows li[data-flag=<key>]; each holds one
- * span.rounded-full badge and On / Off buttons. In the matrix, clicking the
- * active On/Off again clears the override (the Default column shows what
- * then applies); the System card keeps an explicit Default (<env>) button.
+ * span.rounded-full badge and On / Off / Default (<env>) buttons.
  */
 export function EnablementsMatrix({
   initialOrganizations,
@@ -290,7 +288,6 @@ export function EnablementsMatrix({
                           envDefault={orgEnvDefaults[flag.key]}
                           busy={busy === `${org.id}:${flag.key}`}
                           onChange={(v) => setOrgFlag(org.id, flag.key, v)}
-                          showDefaultButton={false}
                         />
                       </td>
                     );
@@ -514,18 +511,14 @@ function FlagCell({
   envDefault,
   busy,
   onChange,
-  showDefaultButton = true,
 }: {
   override: Override;
   envDefault: boolean;
   busy: boolean;
   onChange: (value: boolean | null) => void;
-  /** false = matrix cells: no Default button; re-clicking the active On/Off clears the override. */
-  showDefaultButton?: boolean;
 }) {
   const hasOverride = typeof override === "boolean";
   const effective = hasOverride ? override : envDefault;
-  const clearable = !showDefaultButton;
   return (
     <div className="flex items-center gap-2">
       <span
@@ -542,25 +535,21 @@ function FlagCell({
           label="On"
           active={hasOverride && override === true}
           disabled={busy}
-          clearable={clearable}
-          onClick={() => onChange(clearable && override === true ? null : true)}
+          onClick={() => onChange(true)}
         />
         <FlagChoice
           label="Off"
           active={hasOverride && override === false}
           disabled={busy}
-          clearable={clearable}
-          onClick={() => onChange(clearable && override === false ? null : false)}
+          onClick={() => onChange(false)}
         />
-        {showDefaultButton && (
-          <FlagChoice
-            label="Def"
-            ariaLabel={`Default (${envDefault ? "on" : "off"})`}
-            active={!hasOverride}
-            disabled={busy}
-            onClick={() => onChange(null)}
-          />
-        )}
+        <FlagChoice
+          label="Def"
+          ariaLabel={`Default (${envDefault ? "on" : "off"})`}
+          active={!hasOverride}
+          disabled={busy}
+          onClick={() => onChange(null)}
+        />
       </div>
       {busy && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
     </div>
@@ -572,15 +561,12 @@ function FlagChoice({
   ariaLabel,
   active,
   disabled,
-  clearable = false,
   onClick,
 }: {
   label: string;
   ariaLabel?: string;
   active: boolean;
   disabled: boolean;
-  /** Active button stays clickable and clears the override. */
-  clearable?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -588,9 +574,8 @@ function FlagChoice({
       type="button"
       onClick={onClick}
       aria-label={ariaLabel}
-      aria-pressed={active}
-      title={active && clearable ? "Click again to clear the override" : ariaLabel}
-      disabled={disabled || (active && !clearable)}
+      title={ariaLabel}
+      disabled={disabled || active}
       className={cn(
         "rounded-md border px-2 py-0.5 text-xs font-medium transition-colors",
         active

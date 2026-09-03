@@ -156,8 +156,8 @@ test.describe("Google SSO + forgot-password", () => {
     await cell.getByRole("button", { name: "Off", exact: true }).click();
     await expect(badge).toHaveText("Off");
 
-    // …re-click the active Off → override removed, env default (off) applies.
-    await cell.getByRole("button", { name: "Off", exact: true }).click();
+    // …Default → override removed, env default (off) applies again.
+    await cell.getByRole("button", { name: "Default (off)" }).click();
     await expect(badge).toHaveText("Off (default)");
     const orgsDef = await page.request.get("/api/admin/organizations");
     const roomlensDef = (await orgsDef.json()).organizations.find(
