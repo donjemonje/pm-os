@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Loader2, Search, X } from "lucide-react";
+import { Check, ChevronDown, Globe, Loader2, Search, X } from "lucide-react";
 import { FLAG_AREAS, type FlagDef } from "@/lib/flag-catalog";
 import { cn } from "@/lib/utils";
 
@@ -17,13 +17,14 @@ export type OrgColumn = {
 type Override = boolean | undefined;
 
 /**
- * Enablements as a matrix: rows = flags grouped by product area, columns =
- * organizations. System-wide flags (no per-org value) render one cell that
- * spans the org columns. Search filters columns, area chips filter row
- * groups, "Overrides only" hides rows where everything is on default.
+ * Enablements: a System card on top (install-wide switches, one value each)
+ * and a matrix below — rows = per-org flags grouped by product area,
+ * columns = organizations. Search + multi-select filter columns, area chips
+ * filter row groups, "Overrides only" hides rows where everything is on
+ * default.
  *
- * DOM contract for tests: tr[data-flag=<key>][data-scope=system|org],
- * td[data-org=<slug>] (system cells: data-org="system"); each cell has one
+ * DOM contract for tests: matrix rows tr[data-flag=<key>], cells
+ * td[data-org=<slug>]; system rows li[data-flag=<key>]; each holds one
  * span.rounded-full badge and On / Off / Default (<env>) buttons.
  */
 export function EnablementsMatrix({
@@ -59,21 +60,24 @@ export function EnablementsMatrix({
     });
   }, [organizations, search, selectedOrgIds]);
 
+  const systemFlagDefs = useMemo(
+    () => FLAG_AREAS.flatMap((a) => a.flags.filter((f) => f.scope === "system")),
+    []
+  );
+
   const areas = useMemo(() => {
     return FLAG_AREAS.map((a) => ({
       ...a,
       flags: a.flags.filter((flag) => {
+        if (flag.scope !== "org") return false;
         if (area !== "all" && a.key !== area) return false;
         if (!overridesOnly) return true;
-        if (flag.scope === "system") {
-          return typeof systemFlags[flag.key] === "boolean";
-        }
         return visibleOrgs.some(
           (org) => typeof org.features[flag.key] === "boolean"
         );
       }),
     })).filter((a) => a.flags.length > 0);
-  }, [area, overridesOnly, systemFlags, visibleOrgs]);
+  }, [area, overridesOnly, visibleOrgs]);
 
   async function setOrgFlag(orgId: string, key: string, value: boolean | null) {
     setBusy(`${orgId}:${key}`);
@@ -127,6 +131,47 @@ export function EnablementsMatrix({
 
   return (
     <div className="space-y-4">
+      {error && (
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+      )}
+
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+            <Globe className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-semibold">System</p>
+            <p className="text-xs text-slate-500">
+              One value for the whole install — applies before sign-in, across all organizations
+            </p>
+          </div>
+        </div>
+        <ul className="divide-y divide-slate-100">
+          {systemFlagDefs.map((flag) => (
+            <li
+              key={flag.key}
+              data-flag={flag.key}
+              data-scope="system"
+              className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-slate-900">{flag.label}</p>
+                <p className="truncate text-xs text-slate-500" title={flag.description}>
+                  {flag.description}
+                </p>
+              </div>
+              <FlagCell
+                override={systemFlags[flag.key]}
+                envDefault={systemEnvDefaults[flag.key]}
+                busy={busy === `system:${flag.key}`}
+                onChange={(v) => setSystemFlag(flag.key, v)}
+              />
+            </li>
+          ))}
+        </ul>
+      </section>
+
       <div className="flex flex-wrap items-center gap-3">
         <label className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -171,10 +216,6 @@ export function EnablementsMatrix({
           Overrides only
         </label>
       </div>
-
-      {error && (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
-      )}
 
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full min-w-max border-collapse text-left text-sm">
@@ -229,30 +270,8 @@ export function EnablementsMatrix({
                 areaLabel={a.label}
                 flags={a.flags}
                 colSpan={2 + orgColumnCount}
-                envDefaultOf={(flag) =>
-                  flag.scope === "system"
-                    ? systemEnvDefaults[flag.key]
-                    : orgEnvDefaults[flag.key]
-                }
+                envDefaultOf={(flag) => orgEnvDefaults[flag.key]}
                 renderFlag={(flag) => {
-                  if (flag.scope === "system") {
-                    const override: Override = systemFlags[flag.key];
-                    return (
-                      <td
-                        data-org="system"
-                        colSpan={orgColumnCount}
-                        className="px-4 py-2.5 align-middle"
-                      >
-                        <FlagCell
-                          override={override}
-                          envDefault={systemEnvDefaults[flag.key]}
-                          busy={busy === `system:${flag.key}`}
-                          onChange={(v) => setSystemFlag(flag.key, v)}
-                          scopeLabel="System-wide"
-                        />
-                      </td>
-                    );
-                  }
                   if (visibleOrgs.length === 0) {
                     return <td className="px-4 py-2.5 text-slate-300">—</td>;
                   }
@@ -492,13 +511,11 @@ function FlagCell({
   envDefault,
   busy,
   onChange,
-  scopeLabel,
 }: {
   override: Override;
   envDefault: boolean;
   busy: boolean;
   onChange: (value: boolean | null) => void;
-  scopeLabel?: string;
 }) {
   const hasOverride = typeof override === "boolean";
   const effective = hasOverride ? override : envDefault;
@@ -535,9 +552,6 @@ function FlagCell({
         />
       </div>
       {busy && <Loader2 className="h-4 w-4 animate-spin text-slate-400" />}
-      {scopeLabel && (
-        <span className="ml-1 text-xs text-slate-400">{scopeLabel}</span>
-      )}
     </div>
   );
 }
