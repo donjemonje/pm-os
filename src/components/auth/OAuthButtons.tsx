@@ -98,7 +98,7 @@ export function OAuthButtons({
           <span
             className={`px-2 font-subtitle ${isDark ? "bg-[#0a1220] text-brand-muted" : "bg-card text-muted"}`}
           >
-            Or continue with email
+            Or
           </span>
         </div>
       </div>

@@ -140,7 +140,7 @@ function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
             onClick={onBackToSignIn}
             className="font-subtitle block w-full text-sm text-brand-muted hover:text-brand-text"
           >
-            Back to sign in
+            Back to log in
           </button>
         </div>
       </div>

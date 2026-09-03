@@ -270,7 +270,7 @@ test.describe("PM-OS Admin", () => {
     await victimPage.goto("/dashboard");
     await victimPage.waitForURL(/\/login/);
     await expect(
-      victimPage.getByRole("button", { name: "Sign In" })
+      victimPage.getByRole("button", { name: "Log In" })
     ).toBeVisible();
 
     // Password login is refused while deactivated (same generic error as
@@ -280,7 +280,7 @@ test.describe("PM-OS Admin", () => {
     await freshPage.goto("/login");
     await freshPage.locator("#email").fill(QA_USER.email);
     await freshPage.locator("#password").fill(QA_USER.password);
-    await freshPage.getByRole("button", { name: /sign in/i }).click();
+    await freshPage.getByRole("button", { name: /log in/i }).click();
     await expect(
       freshPage.getByText("Invalid email or password")
     ).toBeVisible();

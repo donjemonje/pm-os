@@ -3,10 +3,7 @@ import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { QA_USER } from "./helpers";
 import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
-import {
-  loginExpecting2fa,
-  passTwoFactorChallenge,
-} from "./two-factor-helpers";
+import { passTwoFactorChallenge } from "./two-factor-helpers";
 
 /**
  * Google sign-in + forgot-password (feature/google-sso; flags removed on
@@ -21,8 +18,9 @@ import {
  *     and a nonexistent email; a token row exists only for the real user.
  * G3  full reset path: emailed link (token row inserted directly — with no
  *     SMTP_USER/SMTP_PASSWORD the email only prints to the server console) → new
- *     password via the UI → token is single-use → login works with the new
- *     password through the mandatory 2FA challenge.
+ *     password via the UI → signed in on the spot and routed to the TOTP
+ *     challenge (no "now sign in" screen) → token is single-use → the new
+ *     password is accepted by the login API.
  * G4  expired token is refused with the same generic 400.
  *
  * NOT covered here (needs a mocked Google token endpoint — out of scope by
@@ -173,9 +171,9 @@ test.describe("Google SSO + forgot-password", () => {
     await page.locator("#new-password").fill(NEW_PASSWORD);
     await page.locator("#confirm-password").fill(NEW_PASSWORD);
     await page.getByRole("button", { name: "Set new password" }).click();
-    await expect(
-      page.getByText("Password updated. Sign in with your new password.")
-    ).toBeVisible();
+    // Setting the password signs the user in: the API set the session cookie
+    // with 2FA owed and the form went straight to the TOTP challenge.
+    await page.waitForURL(/\/login\/2fa/);
 
     // Single-use: replaying the same token is refused with the generic 400.
     const replay = await page.request.post("/api/auth/reset-password", {
@@ -188,13 +186,22 @@ test.describe("Google SSO + forgot-password", () => {
     // …and the replay did not overwrite the password set by the first use:
     // the full login below only works if NEW_PASSWORD is still in place.
 
-    // The new password signs in through the mandatory TOTP challenge.
-    await loginExpecting2fa(page, QA_USER.email, NEW_PASSWORD);
+    // Finish the auto sign-in through the mandatory TOTP challenge → app.
     await passTwoFactorChallenge(page);
     await page.waitForURL("**/dashboard");
     await expect(
       page.getByRole("heading", { name: "Dashboard" })
     ).toBeVisible();
+
+    // And the new password is what the login API now accepts (fresh
+    // cookie-less request; a second TOTP login would need a new time window,
+    // so the API answer — 200 + twoFactorRequired — is the proof here).
+    const login = await page.context().request.post("/api/auth/login", {
+      data: { email: QA_USER.email, password: NEW_PASSWORD },
+      headers: { cookie: "" },
+    });
+    expect(login.status()).toBe(200);
+    expect((await login.json()).twoFactorRequired).toBe(true);
     // afterAll restores the seeded passwordHash for the other specs.
   });
 

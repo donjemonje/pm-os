@@ -69,7 +69,7 @@ function LoginFormInner() {
         <div className="mb-8 flex items-center justify-center gap-4">
           <BrandLogo height={84} className="shrink-0" priority />
           <h1 className="font-title text-2xl font-bold leading-tight tracking-tight text-brand-text">
-            Sign in
+            Log in
           </h1>
         </div>
 
@@ -125,7 +125,7 @@ function LoginFormInner() {
             className="font-title w-full rounded-lg py-2.5 text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90 disabled:opacity-60"
             style={{ background: brand.accent }}
           >
-            {loading ? "Signing in…" : "Sign In"}
+            {loading ? "Logging in…" : "Log In"}
           </button>
         </form>
       </div>
