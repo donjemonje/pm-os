@@ -1,7 +1,8 @@
 "use client";
 
 import { KeyRound } from "lucide-react";
-import { brand } from "@/lib/brand";
+const optionClassName =
+  "flex w-full items-center justify-center gap-2.5 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-brand-text transition-colors hover:bg-white/10";
 
 function GoogleIcon() {
   return (
@@ -38,22 +39,27 @@ export function InviteChoices({
         Choose how you want to sign in from now on.
       </p>
 
-      <div className="grid gap-2">
+      <div className="space-y-4">
         {googleAvailable && (
-          <a
-            href={googleHref}
-            className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-brand-text transition-colors hover:bg-white/10"
-          >
-            <GoogleIcon />
-            Sign up with Google
-          </a>
+          <>
+            <a href={googleHref} className={optionClassName}>
+              <GoogleIcon />
+              Sign up with Google
+            </a>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center" aria-hidden>
+                <span className="w-full border-t border-white/10" />
+              </div>
+              <div className="relative flex justify-center">
+                <span className="font-subtitle bg-[#0a1220] px-2 text-xs uppercase tracking-wide text-brand-muted">
+                  or
+                </span>
+              </div>
+            </div>
+          </>
         )}
-        <a
-          href={passwordHref}
-          className="font-title flex w-full items-center justify-center gap-2.5 rounded-lg py-2.5 text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90"
-          style={{ background: brand.accent }}
-        >
-          <KeyRound className="h-4 w-4" aria-hidden />
+        <a href={passwordHref} className={optionClassName}>
+          <KeyRound className="h-5 w-5" aria-hidden />
           Sign Up
         </a>
       </div>
