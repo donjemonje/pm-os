@@ -180,8 +180,11 @@ export function EnablementsMatrix({
         <table className="w-full min-w-max border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500">
-              <th className="sticky left-0 z-10 bg-slate-50/95 px-4 py-3 font-medium backdrop-blur">
+              <th className="sticky left-0 z-10 w-[16rem] max-w-[16rem] bg-slate-50/95 px-4 py-3 font-medium backdrop-blur">
                 Feature
+              </th>
+              <th className="px-3 py-3 font-medium" title="Environment default — applies wherever no override is set">
+                Default
               </th>
               {visibleOrgs.length === 0 ? (
                 <th className="px-4 py-3 font-medium normal-case tracking-normal text-slate-400">
@@ -212,7 +215,7 @@ export function EnablementsMatrix({
             {areas.length === 0 && (
               <tr>
                 <td
-                  colSpan={1 + orgColumnCount}
+                  colSpan={2 + orgColumnCount}
                   className="px-4 py-8 text-center text-sm text-slate-400"
                 >
                   Nothing to show with the current filters.
@@ -225,7 +228,12 @@ export function EnablementsMatrix({
                 areaKey={a.key}
                 areaLabel={a.label}
                 flags={a.flags}
-                colSpan={1 + orgColumnCount}
+                colSpan={2 + orgColumnCount}
+                envDefaultOf={(flag) =>
+                  flag.scope === "system"
+                    ? systemEnvDefaults[flag.key]
+                    : orgEnvDefaults[flag.key]
+                }
                 renderFlag={(flag) => {
                   if (flag.scope === "system") {
                     const override: Override = systemFlags[flag.key];
@@ -392,12 +400,14 @@ function FragmentRows({
   areaLabel,
   flags,
   colSpan,
+  envDefaultOf,
   renderFlag,
 }: {
   areaKey: string;
   areaLabel: string;
   flags: FlagDef[];
   colSpan: number;
+  envDefaultOf: (flag: FlagDef) => boolean;
   renderFlag: (flag: FlagDef) => React.ReactNode;
 }) {
   return (
@@ -417,11 +427,27 @@ function FragmentRows({
           data-scope={flag.scope}
           className="border-t border-slate-100 hover:bg-slate-50/50"
         >
-          <td className="sticky left-0 z-10 max-w-[18rem] bg-white/95 px-4 py-2.5 align-middle backdrop-blur">
-            <p className="text-sm font-medium text-slate-900">{flag.label}</p>
-            <p className="text-xs leading-snug text-slate-500" title={flag.description}>
+          <td className="sticky left-0 z-10 w-[16rem] max-w-[16rem] bg-white/95 px-4 py-2.5 align-middle backdrop-blur">
+            <p className="truncate text-sm font-medium text-slate-900">{flag.label}</p>
+            {/* One line; the full text is the hover tooltip. */}
+            <p
+              className="truncate text-xs text-slate-500"
+              title={flag.description}
+            >
               {flag.description}
             </p>
+          </td>
+          <td className="px-3 py-2.5 align-middle" data-default={String(envDefaultOf(flag))}>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-xs font-medium",
+                envDefaultOf(flag)
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-slate-100 text-slate-500"
+              )}
+            >
+              {envDefaultOf(flag) ? "On" : "Off"}
+            </span>
           </td>
           {renderFlag(flag)}
         </tr>
