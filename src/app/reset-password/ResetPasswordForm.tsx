@@ -4,12 +4,10 @@ import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
 import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
 import { PasswordChecklist } from "@/components/auth/PasswordChecklist";
+import { PasswordInput } from "@/components/auth/PasswordInput";
 import { isPasswordValid } from "@/lib/password-policy";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { brand } from "@/lib/brand";
-
-const inputClassName =
-  "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-body text-brand-text outline-none transition-colors placeholder:text-brand-muted/60 focus:border-brand-accent/50 focus:ring-1 focus:ring-brand-accent/30";
 
 function ResetPasswordInner() {
   const searchParams = useSearchParams();
@@ -59,7 +57,7 @@ function ResetPasswordInner() {
   }
 
   return (
-    <AuthNeuralBackground>
+    <AuthNeuralBackground width="lg">
       <div
         className="rounded-2xl border border-white/10 bg-[#050A15]/85 p-8 shadow-2xl backdrop-blur-xl"
         style={{ boxShadow: `0 25px 50px -12px ${brand.accentFaint}` }}
@@ -114,40 +112,43 @@ function ResetPasswordInner() {
                 {error}
               </p>
             )}
-            <div>
-              <label
-                htmlFor="new-password"
-                className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
-              >
-                {invite ? "Password" : "New password"}
-              </label>
-              <input
-                id="new-password"
-                type="password"
-                autoComplete="new-password"
-                required
-                autoFocus
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={inputClassName}
-              />
-              <PasswordChecklist password={password} />
-            </div>
-            <div>
-              <label
-                htmlFor="confirm-password"
-                className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
-              >
-                Confirm password
-              </label>
-              <input
-                id="confirm-password"
-                type="password"
-                autoComplete="new-password"
-                required
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                className={inputClassName}
+            {/* Inputs left, live requirements right (stacked on narrow screens). */}
+            <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:gap-6">
+              <div className="space-y-4">
+                <div>
+                  <label
+                    htmlFor="new-password"
+                    className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
+                  >
+                    {invite ? "Password" : "New password"}
+                  </label>
+                  <PasswordInput
+                    id="new-password"
+                    autoComplete="new-password"
+                    autoFocus
+                    value={password}
+                    onChange={setPassword}
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="confirm-password"
+                    className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
+                  >
+                    Confirm password
+                  </label>
+                  <PasswordInput
+                    id="confirm-password"
+                    autoComplete="new-password"
+                    value={confirm}
+                    onChange={setConfirm}
+                  />
+                </div>
+              </div>
+              <PasswordChecklist
+                password={password}
+                confirm={confirm}
+                className="sm:pt-6"
               />
             </div>
             <button

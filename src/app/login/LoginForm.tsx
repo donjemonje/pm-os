@@ -5,6 +5,7 @@ import { FormEvent, Suspense, useState } from "react";
 import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
 import { OAuthButtons, OAUTH_ERROR_MESSAGES } from "@/components/auth/OAuthButtons";
 import { PasswordChecklist } from "@/components/auth/PasswordChecklist";
+import { PasswordInput } from "@/components/auth/PasswordInput";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { brand } from "@/lib/brand";
 import { isPasswordValid } from "@/lib/password-policy";
@@ -162,14 +163,11 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
                   Forgot password?
                 </a>
               </div>
-              <input
+              <PasswordInput
                 id="password"
-                type="password"
                 autoComplete="current-password"
-                required
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={inputClassName}
+                onChange={setPassword}
               />
             </div>
             <button
@@ -243,23 +241,22 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
                 className={inputClassName}
               />
             </div>
-            <div>
-              <label
-                htmlFor="signup-password"
-                className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
-              >
-                Password
-              </label>
-              <input
-                id="signup-password"
-                type="password"
-                autoComplete="new-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={inputClassName}
-              />
-              <PasswordChecklist password={password} />
+            <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:gap-6">
+              <div>
+                <label
+                  htmlFor="signup-password"
+                  className="font-subtitle mb-1.5 block text-xs font-medium text-brand-muted"
+                >
+                  Password
+                </label>
+                <PasswordInput
+                  id="signup-password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={setPassword}
+                />
+              </div>
+              <PasswordChecklist password={password} className="sm:pt-6" />
             </div>
             <button
               type="submit"
