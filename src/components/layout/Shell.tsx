@@ -5,7 +5,16 @@ import { OrgFeaturesProvider } from "./OrgFeaturesContext";
 import { Sidebar } from "./Sidebar";
 import type { MenuOrganization, MenuUser } from "./UserMenu";
 
-const NO_SHELL_PATHS = ["/", "/login", "/register"];
+// Every public (pre-auth) page. These must never render inside the app
+// chrome: the sidebar would flash before the page's own background paints
+// over it, and the form would center in the area beside the sidebar.
+const NO_SHELL_PATHS = [
+  "/",
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+];
 
 export function Shell({
   children,
@@ -30,7 +39,10 @@ export function Shell({
     pathname.startsWith("/login/") ||
     pathname.startsWith("/admin");
 
-  if (isAuthPage) {
+  // No session → no chrome, whatever the path. The proxy already bounces
+  // anonymous visitors off app pages, so this only affects public pages, and
+  // it guarantees a signed-out visitor can never see a sidebar frame.
+  if (isAuthPage || !user) {
     return <>{children}</>;
   }
 
