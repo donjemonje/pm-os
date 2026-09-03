@@ -37,7 +37,9 @@ import {
  * into other specs.
  */
 
-const NEW_PASSWORD = "roomlens-qa-newpass1";
+// Must satisfy the password policy (lib/password-policy.ts): the API checks
+// it before the token, so a weak value would mask the token assertions.
+const NEW_PASSWORD = "Roomlens-qa-newpass1";
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -220,7 +222,7 @@ test.describe("Google SSO + forgot-password", () => {
 
     // Single-use: replaying the same token is refused with the generic 400.
     const replay = await page.request.post("/api/auth/reset-password", {
-      data: { token: rawToken, password: "another-valid-pass1" },
+      data: { token: rawToken, password: "Another-valid-pass1" },
     });
     expect(replay.status()).toBe(400);
     expect((await replay.json()).error).toBe(
@@ -250,7 +252,7 @@ test.describe("Google SSO + forgot-password", () => {
     });
 
     const res = await request.post("/api/auth/reset-password", {
-      data: { token: rawToken, password: "valid-length-pass1" },
+      data: { token: rawToken, password: "Valid-length-pass1" },
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).error).toBe(

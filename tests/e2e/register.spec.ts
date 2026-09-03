@@ -51,7 +51,7 @@ test.describe("signup entry path", () => {
     // Default org mode is "Create new".
     await page.locator("#organization").fill(`QA Signup Org ${suffix}`);
     await page.locator("#signup-email").fill(email);
-    await page.locator("#signup-password").fill("signup-qa-pass1");
+    await page.locator("#signup-password").fill("Signup-qa-pass1");
     await page.getByRole("button", { name: "Sign Up" }).click();
 
     // Mandatory 2FA: signup lands on inline enrollment, not the app.

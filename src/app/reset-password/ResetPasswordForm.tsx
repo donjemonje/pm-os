@@ -3,6 +3,8 @@
 import { useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
 import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
+import { PasswordChecklist } from "@/components/auth/PasswordChecklist";
+import { isPasswordValid } from "@/lib/password-policy";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { brand } from "@/lib/brand";
 
@@ -22,9 +24,16 @@ function ResetPasswordInner() {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
 
+  const policyOk = isPasswordValid(password);
+  const canSubmit = policyOk && confirm.length > 0 && password === confirm;
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
+    if (!policyOk) {
+      setError("Your password doesn't meet all the requirements yet");
+      return;
+    }
     if (password !== confirm) {
       setError("Passwords don't match");
       return;
@@ -117,15 +126,12 @@ function ResetPasswordInner() {
                 type="password"
                 autoComplete="new-password"
                 required
-                minLength={8}
                 autoFocus
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={inputClassName}
               />
-              <p className="font-subtitle mt-1.5 text-xs text-brand-muted">
-                At least 8 characters
-              </p>
+              <PasswordChecklist password={password} />
             </div>
             <div>
               <label
@@ -139,7 +145,6 @@ function ResetPasswordInner() {
                 type="password"
                 autoComplete="new-password"
                 required
-                minLength={8}
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 className={inputClassName}
@@ -147,7 +152,7 @@ function ResetPasswordInner() {
             </div>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !canSubmit}
               className="font-title w-full rounded-lg py-2.5 text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90 disabled:opacity-60"
               style={{ background: brand.accent }}
             >

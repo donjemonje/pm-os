@@ -4,8 +4,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useState } from "react";
 import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
 import { OAuthButtons, OAUTH_ERROR_MESSAGES } from "@/components/auth/OAuthButtons";
+import { PasswordChecklist } from "@/components/auth/PasswordChecklist";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { brand } from "@/lib/brand";
+import { isPasswordValid } from "@/lib/password-policy";
 
 const inputClassName =
   "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-body text-brand-text outline-none transition-colors placeholder:text-brand-muted/60 focus:border-brand-accent/50 focus:ring-1 focus:ring-brand-accent/30";
@@ -105,6 +107,7 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
   }
 
   const isSignIn = mode === "signIn";
+  const signupPasswordOk = isPasswordValid(password);
 
   return (
     <AuthNeuralBackground>
@@ -252,16 +255,15 @@ function AuthFormInner({ initialMode = "signIn", signupAllowed = false }: AuthFo
                 type="password"
                 autoComplete="new-password"
                 required
-                minLength={8}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={inputClassName}
               />
-              <p className="font-subtitle mt-1.5 text-xs text-brand-muted">At least 8 characters</p>
+              <PasswordChecklist password={password} />
             </div>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !signupPasswordOk}
               className="font-title w-full rounded-lg py-2.5 text-sm font-semibold text-[#050A15] transition-colors hover:opacity-90 disabled:opacity-60"
               style={{ background: brand.accent }}
             >

@@ -6,6 +6,7 @@ import {
   twoFactorPendingCookieOptions,
 } from "@/lib/auth";
 import { loginDisabledResponse, signupDisabledResponse } from "@/lib/auth-guard";
+import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "@/lib/password-policy";
 
 export async function POST(request: NextRequest) {
   const disabled = loginDisabledResponse();
@@ -40,11 +41,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (password.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters" },
-      { status: 400 }
-    );
+  if (!isPasswordValid(password)) {
+    return NextResponse.json({ error: PASSWORD_POLICY_MESSAGE }, { status: 400 });
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: "Invalid email address" }, { status: 400 });

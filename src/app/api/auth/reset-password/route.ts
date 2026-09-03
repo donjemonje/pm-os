@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loginDisabledResponse } from "@/lib/auth-guard";
+import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "@/lib/password-policy";
 import { resetPassword } from "@/lib/password-reset";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -23,11 +24,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (password.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters" },
-      { status: 400 }
-    );
+  if (!isPasswordValid(password)) {
+    return NextResponse.json({ error: PASSWORD_POLICY_MESSAGE }, { status: 400 });
   }
 
   if (!rateLimit(`pw-reset-consume:${token.slice(0, 16)}`, 5, 60_000)) {

@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "./db";
+import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "./password-policy";
 import { isSelfSignupEnabled } from "./system-flags";
 import {
   decryptTotpSecret,
@@ -466,8 +467,8 @@ export async function createOrganizationUser(input: {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new Error("Invalid email address");
   }
-  if (input.password && input.password.length < 8) {
-    throw new Error("Password must be at least 8 characters");
+  if (input.password && !isPasswordValid(input.password)) {
+    throw new Error(PASSWORD_POLICY_MESSAGE);
   }
 
   const existing = await db.user.findUnique({ where: { email } });
