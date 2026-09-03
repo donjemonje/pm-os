@@ -97,10 +97,6 @@ export function UserMenu({
               <p className="mt-0.5 truncate text-sm font-medium text-white">
                 {organization.name}
               </p>
-              <p className="text-xs text-white/50">
-                {organization.memberCount}{" "}
-                {organization.memberCount === 1 ? "member" : "members"}
-              </p>
             </div>
           )}
           <button
