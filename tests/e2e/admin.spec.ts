@@ -164,18 +164,16 @@ test.describe("PM-OS Admin", () => {
       page.getByRole("heading", { name: "Enablements" })
     ).toBeVisible();
 
-    // The page lists one row per flag (Ideas, Docs, Chat) — scope every
-    // locator to its row so multi-flag rendering can't cross-match.
-    const orgCard = page.locator("div.rounded-xl", { hasText: "RoomLens" });
-    // "Ideas undo" is its own row now, so a bare "Ideas" substring match
-    // hits two rows — exclude it explicitly.
-    const ideasRow = orgCard
-      .locator("li", { hasText: "Ideas" })
-      .filter({ hasNotText: "Ideas undo" });
+    // Enablements is a matrix (rows = flags, columns = orgs): address the
+    // RoomLens cell of a flag row by the data attributes the component
+    // guarantees (tr[data-flag] / td[data-org]).
+    const ideasCell = page
+      .locator('tr[data-flag="ideas"]')
+      .locator('td[data-org="roomlens"]');
     // The effective-state badge only updates from the PATCH response, so it
     // is a reliable "the override is saved" signal (unlike button state,
     // which also flips while the request is in flight).
-    const badge = ideasRow.locator("span.rounded-full");
+    const badge = ideasCell.locator("span.rounded-full");
     await expect(badge).toHaveText("Off (default)");
 
     // Baseline: with no override, the env default (off) applies to the org.
@@ -186,7 +184,7 @@ test.describe("PM-OS Admin", () => {
     expect(response?.status(), "/ideas under env default off").toBe(404);
 
     // Admin turns the org override On → the same user reaches Ideas.
-    await ideasRow.getByRole("button", { name: "On", exact: true }).click();
+    await ideasCell.getByRole("button", { name: "On", exact: true }).click();
     await expect(badge).toHaveText("On");
     await userPage.goto("/ideas");
     await expect(
@@ -194,7 +192,7 @@ test.describe("PM-OS Admin", () => {
     ).toBeVisible();
 
     // Back to Default → the env default applies again and gates the org.
-    await ideasRow.getByRole("button", { name: "Default (off)" }).click();
+    await ideasCell.getByRole("button", { name: "Default (off)" }).click();
     await expect(badge).toHaveText("Off (default)");
     response = await userPage.goto("/ideas");
     expect(response?.status(), "/ideas after override removed").toBe(404);
@@ -205,11 +203,13 @@ test.describe("PM-OS Admin", () => {
     // ideas above already proves override-wins end to end. Docs rides the
     // identical code path (same registry, layout gate, API wrapper) and gets
     // no separate toggle test.
-    const chatRow = orgCard.locator("li", { hasText: "Chat" });
-    const chatBadge = chatRow.locator("span.rounded-full");
+    const chatCell = page
+      .locator('tr[data-flag="chat"]')
+      .locator('td[data-org="roomlens"]');
+    const chatBadge = chatCell.locator("span.rounded-full");
     await expect(chatBadge).toHaveText("On (default)");
 
-    await chatRow.getByRole("button", { name: "Off", exact: true }).click();
+    await chatCell.getByRole("button", { name: "Off", exact: true }).click();
     await expect(chatBadge).toHaveText("Off");
     response = await userPage.goto("/chat");
     expect(response?.status(), "/chat with org override off").toBe(404);
@@ -222,7 +222,7 @@ test.describe("PM-OS Admin", () => {
 
     // Reset to Default → chat is back for the org (all-pages.spec depends
     // on /chat rendering; afterAll also clears features as a backstop).
-    await chatRow.getByRole("button", { name: "Default (on)" }).click();
+    await chatCell.getByRole("button", { name: "Default (on)" }).click();
     await expect(chatBadge).toHaveText("On (default)");
     await userPage.goto("/chat");
     await expect(

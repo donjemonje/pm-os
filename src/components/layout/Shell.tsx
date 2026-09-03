@@ -14,6 +14,7 @@ const NO_SHELL_PATHS = [
   "/register",
   "/forgot-password",
   "/reset-password",
+  "/invite",
 ];
 
 export function Shell({

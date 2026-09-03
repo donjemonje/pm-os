@@ -33,7 +33,7 @@ export async function sendInvitation(input: {
   }
 
   const token = await issuePasswordToken(user.id, INVITE_TTL_MS);
-  const link = `${appBaseUrl()}/reset-password?token=${token}&invite=1`;
+  const link = `${appBaseUrl()}/invite?token=${token}`;
   const orgName = user.organization?.name ?? "PM-OS";
   const inviter = input.invitedByName.trim() || "A PM-OS admin";
 
@@ -42,11 +42,10 @@ export async function sendInvitation(input: {
     heading: `You're invited to ${orgName}`,
     paragraphs: [
       `Hi ${user.name},`,
-      `${inviter} invited you to join ${orgName} on PM-OS. Set your password to activate your account.`,
+      `${inviter} invited you to join ${orgName} on PM-OS. Complete your sign-up with Google or with a password.`,
     ],
-    cta: { label: "Set your password", url: link },
-    note:
-      "The link expires in 7 days and can be used once. After setting your password you'll sign in and set up two-factor authentication.",
+    cta: { label: "Complete your sign-up", url: link },
+    note: "The link expires in 7 days and can be used once.",
   });
 
   return sendEmail({

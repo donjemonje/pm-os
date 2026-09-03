@@ -8,8 +8,7 @@ import {
 } from "@/lib/feature-flags";
 import { listSystemFlagOverrides } from "@/lib/system-flags";
 import { AdminShell } from "../AdminShell";
-import { OrgEnablements } from "./OrgEnablements";
-import { SystemFlags } from "./SystemFlags";
+import { EnablementsMatrix } from "./EnablementsMatrix";
 
 export default async function AdminEnablementsPage() {
   const admin = await requireAdminPage("/admin/enablements");
@@ -21,28 +20,24 @@ export default async function AdminEnablementsPage() {
     <AdminShell
       user={admin}
       title="Enablements"
-      description="System-wide switches and per-organization feature flags. Unset flags follow the environment default."
+      description="Feature switches by area. System-wide switches apply before sign-in; per-organization switches override the environment default."
     >
-      <div className="space-y-6">
-        <SystemFlags
-          initialFlags={systemFlags}
-          envDefaults={Object.fromEntries(
-            SYSTEM_FLAG_KEYS.map((key) => [key, envSystemFlagDefault(key)])
-          )}
-        />
-        <OrgEnablements
-          initialOrganizations={organizations.map((org) => ({
-            id: org.id,
-            name: org.name,
-            slug: org.slug,
-            memberCount: org.memberCount,
-            features: org.features,
-          }))}
-          envDefaults={Object.fromEntries(
-            ORG_FEATURE_KEYS.map((key) => [key, envFeatureDefault(key)])
-          )}
-        />
-      </div>
+      <EnablementsMatrix
+        initialOrganizations={organizations.map((org) => ({
+          id: org.id,
+          name: org.name,
+          slug: org.slug,
+          memberCount: org.memberCount,
+          features: org.features,
+        }))}
+        orgEnvDefaults={Object.fromEntries(
+          ORG_FEATURE_KEYS.map((key) => [key, envFeatureDefault(key)])
+        )}
+        initialSystemFlags={systemFlags}
+        systemEnvDefaults={Object.fromEntries(
+          SYSTEM_FLAG_KEYS.map((key) => [key, envSystemFlagDefault(key)])
+        )}
+      />
     </AdminShell>
   );
 }

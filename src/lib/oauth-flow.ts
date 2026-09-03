@@ -16,7 +16,7 @@ import {
   signInWithOAuth,
   twoFactorPendingCookieOptions,
 } from "./auth";
-import { isLoginDisabled } from "./feature-flags";
+import { envFeatureDefault, isLoginDisabled, resolveFeature } from "./feature-flags";
 import { systemFlagEnabled } from "./system-flags";
 
 const OAUTH_STATE_COOKIE = "pmos_oauth_state";
@@ -140,12 +140,27 @@ export async function completeOAuth(provider: string, code: string | null, state
       email: profile.email,
       name: profile.name,
     });
-    // 2FA is mandatory: every OAuth login lands on the TOTP step.
-    const token = await createSession(user.id);
     const redirectTo = from?.startsWith("/") ? from : "/";
     const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const target = new URL("/login/2fa", base);
-    target.searchParams.set("from", redirectTo);
+
+    // 2FA is mandatory — every OAuth login lands on the TOTP step — unless
+    // the user's organization has "Google SSO skips 2FA" on (PM-OS Admin →
+    // Enablements → Login). Then the session starts verified and the user
+    // goes straight to the app.
+    const skipTwoFactor = resolveFeature(
+      user.organizationFeatures,
+      "ssoSkips2fa",
+      envFeatureDefault("ssoSkips2fa")
+    );
+    const token = await createSession(user.id, { twoFactorVerified: skipTwoFactor });
+
+    let target: URL;
+    if (skipTwoFactor) {
+      target = new URL(redirectTo, base);
+    } else {
+      target = new URL("/login/2fa", base);
+      target.searchParams.set("from", redirectTo);
+    }
     const response = NextResponse.redirect(target);
     clearOAuthCookies(response);
     const opts = sessionCookieOptions(token);
@@ -156,7 +171,7 @@ export async function completeOAuth(provider: string, code: string | null, state
       secure: opts.secure,
       maxAge: opts.maxAge,
     });
-    const pending = twoFactorPendingCookieOptions(true);
+    const pending = twoFactorPendingCookieOptions(!skipTwoFactor);
     response.cookies.set(pending.name, pending.value, pending);
     return response;
   } catch (e) {

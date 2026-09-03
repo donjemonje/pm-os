@@ -110,10 +110,11 @@ test.describe("Google SSO + forgot-password", () => {
       page.getByRole("heading", { name: "Enablements" })
     ).toBeVisible();
 
-    // The System card renders above the org cards; its Google SSO row is the
-    // only "Google SSO" li on the page. Badge over button state, as in
-    // admin.spec A2: it only updates from the PATCH response.
-    const row = page.locator("li", { hasText: "Google SSO" });
+    // Enablements matrix: the Google SSO system flag is one row with a
+    // single cell spanning the org columns (tr[data-flag] contract). Badge
+    // over button state, as in admin.spec A2: it only updates from the
+    // PATCH response.
+    const row = page.locator('tr[data-flag="googleSso"]');
     const badge = row.locator("span.rounded-full");
     await expect(badge).toHaveText("Off (default)");
 

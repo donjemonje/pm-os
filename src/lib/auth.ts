@@ -145,7 +145,17 @@ function toAuthUser(user: {
   };
 }
 
-export async function createSession(userId: string): Promise<string> {
+export async function createSession(
+  userId: string,
+  options: {
+    /**
+     * Start the session already past the TOTP step. Only for the per-org
+     * "Google SSO skips 2FA" flag (oauth-flow.ts); every other login leaves
+     * this false and goes through /login/2fa.
+     */
+    twoFactorVerified?: boolean;
+  } = {}
+): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + SESSION_DAYS);
@@ -155,6 +165,7 @@ export async function createSession(userId: string): Promise<string> {
       userId,
       tokenHash: hashToken(token),
       expiresAt,
+      twoFactorVerified: options.twoFactorVerified === true,
     },
   });
 
@@ -409,13 +420,20 @@ export async function signInWithOAuth(input: {
     // Login type is sticky: same email but a password account — no auto-link,
     // no SSO sign-in. (SSO-created users may still link another provider.)
     if (existing.passwordHash) throw new Error("email_uses_password");
-    await db.oAuthAccount.create({
-      data: {
-        userId: existing.id,
-        provider: input.provider,
-        providerUserId: input.providerUserId,
-      },
-    });
+    await db.$transaction([
+      db.oAuthAccount.create({
+        data: {
+          userId: existing.id,
+          provider: input.provider,
+          providerUserId: input.providerUserId,
+        },
+      }),
+      // An invite-pending user completing sign-up via Google: retire any
+      // outstanding set-password link so the invite can't also be used.
+      db.passwordResetToken.deleteMany({
+        where: { userId: existing.id, usedAt: null },
+      }),
+    ]);
     return toAuthUser(existing);
   }
 

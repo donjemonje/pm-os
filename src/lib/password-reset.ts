@@ -73,6 +73,29 @@ export async function requestPasswordReset(emailRaw: string): Promise<void> {
 }
 
 /**
+ * Peek at a set-password token without consuming it — for the invite
+ * landing page. Null for unknown, used, expired, or deactivated.
+ */
+export async function lookupPasswordToken(token: string): Promise<{
+  email: string;
+  name: string;
+  organizationName: string | null;
+} | null> {
+  const row = await db.passwordResetToken.findUnique({
+    where: { tokenHash: hashResetToken(token) },
+    include: { user: { include: { organization: { select: { name: true } } } } },
+  });
+  if (!row || row.usedAt || row.expiresAt < new Date() || row.user.deactivatedAt) {
+    return null;
+  }
+  return {
+    email: row.user.email,
+    name: row.user.name,
+    organizationName: row.user.organization?.name ?? null,
+  };
+}
+
+/**
  * Consume a set-password link (reset or invite): set the new password, mark
  * the token used, and revoke every active session (the standard post-reset
  * lockout). Throws "reset_invalid" for unknown, expired, or already-used
