@@ -174,7 +174,10 @@ test.describe("PM-OS Admin", () => {
     // is a reliable "the override is saved" signal (unlike button state,
     // which also flips while the request is in flight).
     const badge = ideasCell.locator("span.rounded-full");
-    await expect(badge).toHaveText("Off (default)");
+    // Matrix badges show the effective state only; data-override tells
+    // whether it comes from an override ("on"/"off") or the default ("none").
+    await expect(badge).toHaveText("Off");
+    await expect(badge).toHaveAttribute("data-override", "none");
 
     // Baseline: with no override, the env default (off) applies to the org.
     const userContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
@@ -186,6 +189,7 @@ test.describe("PM-OS Admin", () => {
     // Admin turns the org override On → the same user reaches Ideas.
     await ideasCell.getByRole("button", { name: "On", exact: true }).click();
     await expect(badge).toHaveText("On");
+    await expect(badge).toHaveAttribute("data-override", "on");
     await userPage.goto("/ideas");
     await expect(
       userPage.getByRole("heading", { name: "Ideas" })
@@ -193,7 +197,8 @@ test.describe("PM-OS Admin", () => {
 
     // Back to Default → the env default applies again and gates the org.
     await ideasCell.getByRole("button", { name: "Default (off)" }).click();
-    await expect(badge).toHaveText("Off (default)");
+    await expect(badge).toHaveAttribute("data-override", "none");
+    await expect(badge).toHaveText("Off");
     response = await userPage.goto("/ideas");
     expect(response?.status(), "/ideas after override removed").toBe(404);
 
@@ -207,10 +212,12 @@ test.describe("PM-OS Admin", () => {
       .locator('tr[data-flag="chat"]')
       .locator('td[data-org="roomlens"]');
     const chatBadge = chatCell.locator("span.rounded-full");
-    await expect(chatBadge).toHaveText("On (default)");
+    await expect(chatBadge).toHaveText("On");
+    await expect(chatBadge).toHaveAttribute("data-override", "none");
 
     await chatCell.getByRole("button", { name: "Off", exact: true }).click();
     await expect(chatBadge).toHaveText("Off");
+    await expect(chatBadge).toHaveAttribute("data-override", "off");
     response = await userPage.goto("/chat");
     expect(response?.status(), "/chat with org override off").toBe(404);
     // The API surface carries the same gate (userPage.request rides the org
@@ -223,7 +230,8 @@ test.describe("PM-OS Admin", () => {
     // Reset to Default → chat is back for the org (all-pages.spec depends
     // on /chat rendering; afterAll also clears features as a backstop).
     await chatCell.getByRole("button", { name: "Default (on)" }).click();
-    await expect(chatBadge).toHaveText("On (default)");
+    await expect(chatBadge).toHaveAttribute("data-override", "none");
+    await expect(chatBadge).toHaveText("On");
     await userPage.goto("/chat");
     await expect(
       userPage.getByRole("heading", { name: "Chat" })

@@ -25,7 +25,10 @@ type Override = boolean | undefined;
  *
  * DOM contract for tests: matrix rows tr[data-flag=<key>], cells
  * td[data-org=<slug>]; system rows li[data-flag=<key>]; each holds one
- * span.rounded-full badge and On / Off / Default (<env>) buttons.
+ * span.rounded-full badge (effective state) with data-override="on|off|none",
+ * and On / Off / Default (<env>) buttons. Matrix badges show just On/Off —
+ * the Default column says what an un-overridden cell inherits; the System
+ * card badge keeps the "(default)" hint.
  */
 export function EnablementsMatrix({
   initialOrganizations,
@@ -288,6 +291,7 @@ export function EnablementsMatrix({
                           envDefault={orgEnvDefaults[flag.key]}
                           busy={busy === `${org.id}:${flag.key}`}
                           onChange={(v) => setOrgFlag(org.id, flag.key, v)}
+                          inheritHint={false}
                         />
                       </td>
                     );
@@ -511,24 +515,28 @@ function FlagCell({
   envDefault,
   busy,
   onChange,
+  inheritHint = true,
 }: {
   override: Override;
   envDefault: boolean;
   busy: boolean;
   onChange: (value: boolean | null) => void;
+  /** Append " (default)" to the badge when no override is set (System card). */
+  inheritHint?: boolean;
 }) {
   const hasOverride = typeof override === "boolean";
   const effective = hasOverride ? override : envDefault;
   return (
     <div className="flex items-center gap-2">
       <span
+        data-override={hasOverride ? (override ? "on" : "off") : "none"}
         className={cn(
           "rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap",
           effective ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
         )}
       >
         {effective ? "On" : "Off"}
-        {hasOverride ? "" : " (default)"}
+        {hasOverride || !inheritHint ? "" : " (default)"}
       </span>
       <div className="flex items-center gap-1">
         <FlagChoice

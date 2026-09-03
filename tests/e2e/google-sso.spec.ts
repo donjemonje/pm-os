@@ -121,7 +121,8 @@ test.describe("Google SSO + forgot-password", () => {
       .locator('tr[data-flag="googleSso"]')
       .locator('td[data-org="roomlens"]');
     const badge = cell.locator("span.rounded-full");
-    await expect(badge).toHaveText("Off (default)");
+    await expect(badge).toHaveText("Off");
+    await expect(badge).toHaveAttribute("data-override", "none");
 
     // Google SSO is per-org and enforced AFTER Google returns the email
     // (signInWithOAuth) — before sign-in the org is unknown, so the provider
@@ -146,6 +147,7 @@ test.describe("Google SSO + forgot-password", () => {
     // Override On → stored on the org and reflected by the badge…
     await cell.getByRole("button", { name: "On", exact: true }).click();
     await expect(badge).toHaveText("On");
+    await expect(badge).toHaveAttribute("data-override", "on");
     const orgsOn = await page.request.get("/api/admin/organizations");
     const roomlensOn = (await orgsOn.json()).organizations.find(
       (o: { slug: string }) => o.slug === "roomlens"
@@ -154,11 +156,12 @@ test.describe("Google SSO + forgot-password", () => {
 
     // …Off → explicit false…
     await cell.getByRole("button", { name: "Off", exact: true }).click();
-    await expect(badge).toHaveText("Off");
+    await expect(badge).toHaveAttribute("data-override", "off");
 
     // …Default → override removed, env default (off) applies again.
     await cell.getByRole("button", { name: "Default (off)" }).click();
-    await expect(badge).toHaveText("Off (default)");
+    await expect(badge).toHaveAttribute("data-override", "none");
+    await expect(badge).toHaveText("Off");
     const orgsDef = await page.request.get("/api/admin/organizations");
     const roomlensDef = (await orgsDef.json()).organizations.find(
       (o: { slug: string }) => o.slug === "roomlens"
