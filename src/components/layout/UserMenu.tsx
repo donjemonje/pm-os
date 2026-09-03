@@ -71,13 +71,12 @@ export function UserMenu({
   }
 
   return (
-    <div className={cn("relative border-t border-white/10", collapsed ? "p-2" : "p-3")} ref={menuRef}>
+    <div className="relative border-t border-white/10 p-3" ref={menuRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-3 rounded-lg py-2 text-left transition-colors",
-          collapsed ? "justify-center px-0" : "px-2",
+          "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors",
           open ? "bg-white/10" : "hover:bg-white/5"
         )}
         aria-expanded={open}
@@ -89,14 +88,17 @@ export function UserMenu({
         >
           {user.initials}
         </span>
-        {!collapsed && (
-          <span className="min-w-0 flex-1">
+        <span
+          className="shrink-0 overflow-hidden transition-[max-width,opacity] duration-200 ease-out"
+          style={{ maxWidth: collapsed ? 0 : 140, opacity: collapsed ? 0 : 1 }}
+        >
+          <span className="block w-[140px]">
             <span className="block truncate text-sm font-medium text-white">{user.name}</span>
             <span className="block truncate text-xs text-white/50">
               {user.organizationName ?? user.email}
             </span>
           </span>
-        )}
+        </span>
       </button>
 
       {open && (
