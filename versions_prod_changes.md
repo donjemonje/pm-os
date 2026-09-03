@@ -18,8 +18,9 @@ Rules (see the `/feature` command):
 ## 1.0.0 (production, current)
 
 Baseline: what app.pm-os.io runs as of 2026-09-01 (rollout caught main up with
-development; login verified). package.json on `main` still says 0.1.0 —
-hotfix to 1.0.0 + tag `v1.0.0` pending Daniel's go (a push to main deploys).
+development; login verified). Known as 1.0.0 by convention — package.json on
+`main` still says 0.1.0 and nothing in the app shows a version; the visible
+version starts with 2.0.0. No hotfix (Daniel, 2026-09-03).
 
 - [ ] Google SSO credentials check in prod (open since the 09-01 rollout).
 - ~~RESEND credentials~~ — superseded: 2.0.0 sends over Workspace SMTP.
