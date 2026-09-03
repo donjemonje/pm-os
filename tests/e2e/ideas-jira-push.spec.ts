@@ -252,11 +252,16 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       "https://qa.zendesk.example/agent/tickets/{id}"
     );
     await fieldRow(page, "Customers").locator('input[type="text"]').fill("QA_Customers");
-    await fieldRow(page, "Components").getByRole("checkbox").uncheck();
-    // Disabling an attribute disables its field-name input.
+    // Components (platforms → P_Components) is OFF by default since
+    // 2026-09-03, so its field-name input starts disabled; enabling the
+    // attribute enables the input.
     await expect(
       fieldRow(page, "Components").locator('input[type="text"]')
     ).toBeDisabled();
+    await fieldRow(page, "Components").getByRole("checkbox").check();
+    await expect(
+      fieldRow(page, "Components").locator('input[type="text"]')
+    ).toBeEnabled();
     await labeledInput(page, "Prefix").fill("QA update:");
 
     await page.getByRole("button", { name: "Save" }).click();
@@ -284,7 +289,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       policy: "union",
       enabled: true,
     });
-    expect(fields.platforms.enabled).toBe(false);
+    expect(fields.platforms.enabled).toBe(true);
     expect(fields.votes).toEqual({
       jiraField: "P_Votes",
       type: "number",
@@ -299,7 +304,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(
       fieldRow(page, "Customers").locator('input[type="text"]')
     ).toHaveValue("QA_Customers");
-    await expect(fieldRow(page, "Components").getByRole("checkbox")).not.toBeChecked();
+    await expect(fieldRow(page, "Components").getByRole("checkbox")).toBeChecked();
 
     // PUT normalization: garbage in, complete valid config out — the same
     // mergeIdeasJiraConfig the push path runs, so a stored config can never
@@ -327,8 +332,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       policy: "increment",
       enabled: false,
     });
-    // PUT replaces the whole config — the earlier platforms toggle is gone.
-    expect(config.fields.platforms.enabled).toBe(true);
+    // PUT replaces the whole config — the earlier platforms toggle is gone,
+    // back to the default (off).
+    expect(config.fields.platforms.enabled).toBe(false);
 
     // An org id without a workspace is refused, not upserted.
     const missing = await page.request.put(
