@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { emailLogoAttachment, renderBrandedEmail } from "./email-templates";
+import { renderBrandedEmail } from "./email-templates";
 import { sendEmail } from "./mailer";
 import { appBaseUrl, issuePasswordToken } from "./password-reset";
 
@@ -53,6 +53,5 @@ export async function sendInvitation(input: {
     subject: `${inviter} invited you to ${orgName} on PM-OS`,
     text,
     html,
-    attachments: [emailLogoAttachment()],
   });
 }

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { db } from "./db";
 import { hashPassword } from "./auth";
-import { emailLogoAttachment, renderBrandedEmail } from "./email-templates";
+import { renderBrandedEmail } from "./email-templates";
 import { sendEmail } from "./mailer";
 
 const RESET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -68,7 +68,6 @@ export async function requestPasswordReset(emailRaw: string): Promise<void> {
     subject: "Reset your PM-OS password",
     text,
     html,
-    attachments: [emailLogoAttachment()],
   });
 }
 

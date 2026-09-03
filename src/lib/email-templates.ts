@@ -1,17 +1,3 @@
-import { EMAIL_LOGO_PNG_BASE64 } from "./email-logo";
-
-export const EMAIL_LOGO_CID = "pmos-logo";
-
-/** Inline logo attachment for nodemailer — referenced as cid:pmos-logo in the HTML. */
-export function emailLogoAttachment() {
-  return {
-    filename: "pm-os.png",
-    content: Buffer.from(EMAIL_LOGO_PNG_BASE64, "base64"),
-    contentType: "image/png",
-    cid: EMAIL_LOGO_CID,
-  };
-}
-
 export type BrandedEmail = {
   /** Hidden preview line shown by inbox clients next to the subject. */
   preheader?: string;
@@ -38,7 +24,8 @@ const ACCENT = "#7aa7ff";
 
 /**
  * Table-based, inline-styled HTML (what mail clients actually render) plus a
- * plain-text twin. Dark brand header with the logo, light body card, one
+ * plain-text twin. Dark brand header with an HTML wordmark (no images — no
+ * attachments, nothing for the client to block), light body card, one
  * button. The raw link is repeated under the button for clients that strip
  * buttons.
  */
@@ -86,8 +73,9 @@ ${preheaderHtml}
     <td align="center" style="padding:32px 16px;">
       <table role="presentation" width="560" cellspacing="0" cellpadding="0" border="0" style="max-width:560px;width:100%;">
         <tr>
-          <td align="center" style="background:${DARK};border-radius:16px 16px 0 0;padding:28px 24px 20px;">
-            <img src="cid:${EMAIL_LOGO_CID}" width="96" alt="PM-OS" style="display:block;width:96px;height:auto;border:0;margin:0 auto;">
+          <td align="center" style="background:${DARK};border-radius:16px 16px 0 0;padding:28px 24px 22px;">
+            <div style="font-family:${FONT};font-size:28px;line-height:32px;font-weight:700;letter-spacing:2px;color:${ACCENT};">PM-OS</div>
+            <div style="font-family:${FONT};font-size:11px;line-height:16px;letter-spacing:1.5px;text-transform:uppercase;color:#aaa3c4;margin-top:4px;">Product Management Operating System</div>
           </td>
         </tr>
         <tr>
