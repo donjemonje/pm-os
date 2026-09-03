@@ -68,7 +68,7 @@ env:
 
   # --- Email (invites, password reset) — Google Workspace SMTP ---
   # SMTP_USER is the mailbox that authenticates (Google app password in
-  # SMTP_PASSWORD). EMAIL_FROM is the visible sender: the support@ alias must
+  # SMTP_PASSWORD). SMTP_FROM is the visible sender: the support@ alias must
   # be configured as "Send mail as" on that mailbox or Gmail rewrites it.
   # Both SMTP_USER and SMTP_PASSWORD unset = emails print to the server log.
   - variable: SMTP_HOST
@@ -91,12 +91,12 @@ env:
     availability:
       - RUNTIME
 
-  - variable: EMAIL_FROM
+  - variable: SMTP_FROM
     value: "PM-OS <support@pm-os.io>"
     availability:
       - RUNTIME
 
-  - variable: EMAIL_REPLY_TO
+  - variable: SMTP_REPLY_TO
     value: support@pm-os.io
     availability:
       - RUNTIME

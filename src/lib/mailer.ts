@@ -8,12 +8,12 @@ import nodemailer, { type Transporter } from "nodemailer";
  *                              the full email is printed to the server
  *                              console so flows are testable locally.
  *   SMTP_HOST / SMTP_PORT      default smtp.gmail.com / 465 (implicit TLS).
- *   EMAIL_FROM                 visible sender, default "PM-OS <SMTP_USER>".
+ *   SMTP_FROM                 visible sender, default "PM-OS <SMTP_USER>".
  *                              A Workspace alias (support@pm-os.io) works
  *                              when it is configured as "Send mail as" on
  *                              the SMTP_USER mailbox; otherwise Gmail
  *                              rewrites it to SMTP_USER.
- *   EMAIL_REPLY_TO             optional Reply-To.
+ *   SMTP_REPLY_TO             optional Reply-To.
  */
 
 export type OutboundEmail = {
@@ -63,8 +63,8 @@ export async function sendEmail(
   }
 
   const user = process.env.SMTP_USER!.trim();
-  const from = process.env.EMAIL_FROM?.trim() || `PM-OS <${user}>`;
-  const replyTo = process.env.EMAIL_REPLY_TO?.trim() || undefined;
+  const from = process.env.SMTP_FROM?.trim() || `PM-OS <${user}>`;
+  const replyTo = process.env.SMTP_REPLY_TO?.trim() || undefined;
 
   await getTransporter().sendMail({
     from,
