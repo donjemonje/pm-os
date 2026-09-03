@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { db } from "./db";
 import { hashPassword } from "./auth";
+import { emailLogoAttachment, renderBrandedEmail } from "./email-templates";
 import { sendEmail } from "./mailer";
 
 const RESET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -51,15 +52,23 @@ export async function requestPasswordReset(emailRaw: string): Promise<void> {
 
   const token = await issuePasswordToken(user.id, RESET_TTL_MS);
   const link = `${appBaseUrl()}/reset-password?token=${token}`;
+  const { html, text } = renderBrandedEmail({
+    preheader: "Set a new password for your PM-OS account",
+    heading: "Reset your password",
+    paragraphs: [
+      `Hi ${user.name},`,
+      "Someone requested a password reset for your PM-OS account. Use the button below to set a new password.",
+    ],
+    cta: { label: "Set a new password", url: link },
+    note:
+      "The link expires in 24 hours and can be used once. If this wasn't you, you can ignore this email — your password is unchanged.",
+  });
   await sendEmail({
     to: email,
     subject: "Reset your PM-OS password",
-    text:
-      `Hi ${user.name},\n\n` +
-      `Someone requested a password reset for your PM-OS account. ` +
-      `Open this link to set a new password:\n\n${link}\n\n` +
-      `The link expires in 24 hours and can be used once.\n\n` +
-      `If this wasn't you, you can ignore this email — your password is unchanged.`,
+    text,
+    html,
+    attachments: [emailLogoAttachment()],
   });
 }
 

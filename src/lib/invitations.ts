@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { emailLogoAttachment, renderBrandedEmail } from "./email-templates";
 import { sendEmail } from "./mailer";
 import { appBaseUrl, issuePasswordToken } from "./password-reset";
 
@@ -36,16 +37,23 @@ export async function sendInvitation(input: {
   const orgName = user.organization?.name ?? "PM-OS";
   const inviter = input.invitedByName.trim() || "A PM-OS admin";
 
+  const { html, text } = renderBrandedEmail({
+    preheader: `${inviter} invited you to ${orgName} on PM-OS`,
+    heading: `You're invited to ${orgName}`,
+    paragraphs: [
+      `Hi ${user.name},`,
+      `${inviter} invited you to join ${orgName} on PM-OS. Set your password to activate your account.`,
+    ],
+    cta: { label: "Set your password", url: link },
+    note:
+      "The link expires in 7 days and can be used once. After setting your password you'll sign in and set up two-factor authentication.",
+  });
+
   return sendEmail({
     to: user.email,
     subject: `${inviter} invited you to ${orgName} on PM-OS`,
-    text:
-      `Hi ${user.name},\n\n` +
-      `${inviter} invited you to join ${orgName} on PM-OS.\n\n` +
-      `Set your password to activate your account:\n\n${link}\n\n` +
-      `The link expires in 7 days and can be used once. After setting your ` +
-      `password you'll sign in and set up two-factor authentication.\n\n` +
-      `If you weren't expecting this, you can ignore this email.\n\n` +
-      `— PM-OS`,
+    text,
+    html,
+    attachments: [emailLogoAttachment()],
   });
 }

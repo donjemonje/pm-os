@@ -19,7 +19,12 @@ import nodemailer, { type Transporter } from "nodemailer";
 export type OutboundEmail = {
   to: string;
   subject: string;
+  /** Plain-text body — always required (fallback + what the dev console shows). */
   text: string;
+  /** Optional HTML twin (see email-templates.ts). */
+  html?: string;
+  /** Inline/CID attachments for the HTML (e.g. the brand logo). */
+  attachments?: { filename: string; content: Buffer; contentType: string; cid: string }[];
 };
 
 export function isEmailConfigured(): boolean {
@@ -72,6 +77,8 @@ export async function sendEmail(
     replyTo,
     subject: input.subject,
     text: input.text,
+    html: input.html,
+    attachments: input.attachments,
   });
   return { delivered: true };
 }
