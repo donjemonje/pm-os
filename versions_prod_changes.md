@@ -7,9 +7,22 @@ A new app version does not resolve these by itself; someone has to do them.
 Rules (see the `/feature` command):
 - A feature that needs any such step adds it here, under the version it ships
   in, before its review handoff. The handoff message repeats the list.
-- The version comes from `package.json` (`version`), bumped at release
-  (development → main). Features in flight write under the upcoming version.
+- The version comes from `package.json` (`version`). `main` carries what
+  production runs; `development` carries the upcoming version (the first
+  feature of a new version bumps it). Release = development → main, tagged
+  `vX.Y.Z`.
 - Tick items as they are done in prod; keep done items for the record.
+
+---
+
+## 1.0.0 (production, current)
+
+Baseline: what app.pm-os.io runs as of 2026-09-01 (rollout caught main up with
+development; login verified). package.json on `main` still says 0.1.0 —
+hotfix to 1.0.0 + tag `v1.0.0` pending Daniel's go (a push to main deploys).
+
+- [ ] Google SSO credentials check in prod (open since the 09-01 rollout).
+- ~~RESEND credentials~~ — superseded: 2.0.0 sends over Workspace SMTP.
 
 ---
 
