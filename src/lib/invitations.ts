@@ -34,23 +34,19 @@ export async function sendInvitation(input: {
 
   const token = await issuePasswordToken(user.id, INVITE_TTL_MS);
   const link = `${appBaseUrl()}/invite?token=${token}`;
-  const orgName = user.organization?.name ?? "PM-OS";
   const inviter = input.invitedByName.trim() || "A PM-OS admin";
 
   const { html, text } = renderBrandedEmail({
-    preheader: `${inviter} invited you to ${orgName} on PM-OS`,
-    heading: `You're invited to ${orgName}`,
-    paragraphs: [
-      `Hi ${user.name},`,
-      `${inviter} invited you to join ${orgName} on PM-OS. Complete your sign-up with Google or with a password.`,
-    ],
-    cta: { label: "Complete your sign-up", url: link },
+    preheader: `${inviter} invited you to PM-OS`,
+    heading: "You're invited to PM-OS",
+    paragraphs: [`Hi ${user.name},`, `${inviter} invited you to PM-OS.`],
+    cta: { label: "Complete Sign-Up", url: link },
     note: "The link expires in 7 days and can be used once.",
   });
 
   return sendEmail({
     to: user.email,
-    subject: `${inviter} invited you to ${orgName} on PM-OS`,
+    subject: `${inviter} invited you to PM-OS`,
     text,
     html,
   });
