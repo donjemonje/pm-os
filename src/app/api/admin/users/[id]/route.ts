@@ -16,9 +16,11 @@ import { db } from "@/lib/db";
  * active pmos-admin cannot be deactivated. Deactivation deletes the user's
  * sessions so access ends immediately.
  *
- * There is intentionally no hard-delete endpoint: a delete here would
- * cascade through sessions, OAuth links, and chat history. If a purge is
- * ever needed, it goes through a migration script with Daniel's sign-off.
+ * DELETE — hard-delete a user (added 2026-09-02 at Daniel's request; until
+ * then Admin only soft-deactivated). Same guardrails as deactivation: no
+ * self-delete, and the last active pmos-admin cannot be deleted. Sessions,
+ * OAuth links, and password-reset tokens cascade; the user's chat sessions
+ * are kept with userId set to null (schema onDelete rules).
  */
 export async function PATCH(
   request: NextRequest,
@@ -85,5 +87,45 @@ export async function PATCH(
     await db.session.deleteMany({ where: { userId: id } });
   }
 
+  return NextResponse.json({ ok: true });
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const admin = await apiAdmin();
+  if (admin instanceof NextResponse) return admin;
+
+  const { id } = await params;
+
+  // Count, guard and delete in one transaction so two admins deleting each
+  // other concurrently cannot leave the system without an active pmos-admin.
+  const outcome = await db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({ where: { id } });
+    if (!user) return { status: 404 as const, error: "User not found" };
+
+    const activeAdminCount = await tx.user.count({
+      where: { role: "PMOS_ADMIN", deactivatedAt: null },
+    });
+    const refusal = adminMutationError({
+      actorId: admin.id,
+      target: {
+        id: user.id,
+        role: user.role,
+        deactivated: Boolean(user.deactivatedAt),
+      },
+      change: { deleted: true },
+      activeAdminCount,
+    });
+    if (refusal) return { status: 400 as const, error: refusal };
+
+    await tx.user.delete({ where: { id } });
+    return { status: 200 as const };
+  });
+
+  if (outcome.status !== 200) {
+    return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+  }
   return NextResponse.json({ ok: true });
 }

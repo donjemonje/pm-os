@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { apiWorkspaceId } from "@/lib/api-auth";
+import { apiWorkspaceId, orgFeatureDisabledResponse } from "@/lib/api-auth";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const gated = await orgFeatureDisabledResponse("docs");
+  if (gated) return gated;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
   const workspaceId = workspaceResult;

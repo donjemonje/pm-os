@@ -62,11 +62,13 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
     votes: { jiraField: "P_Votes", type: "number", policy: "increment", enabled: true },
     customers: { jiraField: "Customers", type: "multi_select", policy: "union", enabled: true },
     // Jira's built-in "Components" name was taken, hence P_Components.
+    // Off by default (Daniel, 2026-09-03): most Jira projects have no
+    // P_Components field; an org turns it on in Admin → Ideas.
     platforms: {
       jiraField: "P_Components",
       type: "multi_select",
       policy: "union",
-      enabled: true,
+      enabled: false,
     },
   },
 };

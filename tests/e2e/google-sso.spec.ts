@@ -1,27 +1,26 @@
 import { createHash, randomBytes, scryptSync } from "crypto";
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
-import { loginAsRoomLensAdmin, QA_USER } from "./helpers";
+import { QA_USER } from "./helpers";
 import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
-import {
-  loginExpecting2fa,
-  passTwoFactorChallenge,
-} from "./two-factor-helpers";
+import { passTwoFactorChallenge } from "./two-factor-helpers";
 
 /**
- * Google SSO system flag + forgot-password (feature/google-sso).
+ * Google sign-in + forgot-password (feature/google-sso; flags removed on
+ * feature/admin-delete-user-org — Google is always on when configured, the
+ * only switch is env DISABLE_GOOGLE_LOGIN, and sign-up is invite-only).
  *
- * G1  googleSso system-flag round-trip: admin override wins, env default
- *     (DISABLE_GOOGLE_LOGIN=true → off, pinned by the env guard) otherwise;
- *     observed on /api/auth/oauth/providers and the authorize redirect.
- *     Fake Google creds in the test env make the provider "configured" —
- *     neither endpoint ever calls Google's servers.
+ * G1  env switch: with DISABLE_GOOGLE_LOGIN=true (pinned by the env guard)
+ *     google is absent from /api/auth/oauth/providers and the authorize
+ *     endpoint bounces to /login?error=google_sso_disabled. Fake Google
+ *     creds make the provider "configured" — nothing ever calls Google.
  * G2  forgot-password is enumeration-safe: identical { ok: true } for a real
  *     and a nonexistent email; a token row exists only for the real user.
  * G3  full reset path: emailed link (token row inserted directly — with no
- *     RESEND_API_KEY the email only prints to the server console) → new
- *     password via the UI → token is single-use → login works with the new
- *     password through the mandatory 2FA challenge.
+ *     SMTP_USER/SMTP_PASSWORD the email only prints to the server console) → new
+ *     password via the UI → signed in on the spot and routed to the TOTP
+ *     challenge (no "now sign in" screen) → token is single-use → the new
+ *     password is accepted by the login API.
  * G4  expired token is refused with the same generic 400.
  *
  * NOT covered here (needs a mocked Google token endpoint — out of scope by
@@ -29,15 +28,16 @@ import {
  * user with a passwordHash can never complete a Google sign-in
  * (email_uses_password), even with a pre-existing OAuthAccount link.
  *
- * State discipline: beforeAll AND afterAll clear the googleSso override,
- * clear all PasswordResetToken rows, and re-set QA_USER's passwordHash to
+ * State discipline: beforeAll AND afterAll clear all PasswordResetToken rows, and re-set QA_USER's passwordHash to
  * the seeded password (re-hashed with the app's salt:scrypt format — no
  * in-memory state, so it survives the worker restart a mid-test failure
  * causes). Nothing can leak a changed password or an enabled Google button
  * into other specs.
  */
 
-const NEW_PASSWORD = "roomlens-qa-newpass1";
+// Must satisfy the password policy (lib/password-policy.ts): the API checks
+// it before the token, so a weak value would mask the token assertions.
+const NEW_PASSWORD = "Roomlens-qa-newpass1";
 
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -77,7 +77,6 @@ function appPasswordHash(password: string): string {
 async function resetGoogleSsoFixtures(): Promise<void> {
   await withDb(async (db) => {
     try {
-      await db.systemFlag.deleteMany({ where: { key: "googleSso" } });
       await db.passwordResetToken.deleteMany({});
       // Re-hash the seeded password (undoes G3's change; a fresh salt gives
       // a different string than the seed's, but verifyPassword only cares
@@ -99,66 +98,24 @@ test.describe("Google SSO + forgot-password", () => {
   test.beforeAll(resetGoogleSsoFixtures);
   test.afterAll(resetGoogleSsoFixtures);
 
-  test("G1 googleSso system flag: admin override drives the providers list and the authorize redirect", async ({
-    page,
+  test("G1 env switch: DISABLE_GOOGLE_LOGIN hides Google from the providers list and blocks the authorize endpoint", async ({
+    request,
   }) => {
-    await loginAsRoomLensAdmin(page);
-    await page.goto("/admin/enablements");
-    await expect(
-      page.getByRole("heading", { name: "Enablements" })
-    ).toBeVisible();
-
-    // The System card renders above the org cards; its Google SSO row is the
-    // only "Google SSO" li on the page. Badge over button state, as in
-    // admin.spec A2: it only updates from the PATCH response.
-    const row = page.locator("li", { hasText: "Google SSO" });
-    const badge = row.locator("span.rounded-full");
-    await expect(badge).toHaveText("Off (default)");
-
-    // Baseline (env default off): google is hidden even though configured.
-    const providerIds = async () => {
-      const res = await page.request.get("/api/auth/oauth/providers");
-      expect(res.status()).toBe(200);
-      const { providers } = (await res.json()) as {
-        providers: { provider: string }[];
-      };
-      return providers.map((p) => p.provider);
+    const res = await request.get("/api/auth/oauth/providers");
+    expect(res.status()).toBe(200);
+    const { providers } = (await res.json()) as {
+      providers: { provider: string }[];
     };
-    expect(await providerIds()).not.toContain("google");
+    expect(providers.map((p) => p.provider)).not.toContain("google");
 
-    // …and starting the flow bounces straight back to /login with the error.
-    const authorizeLocation = async () => {
-      const res = await page.request.get("/api/auth/oauth/google", {
-        maxRedirects: 0,
-      });
-      expect(res.status(), "authorize endpoint must redirect").toBeGreaterThanOrEqual(300);
-      expect(res.status()).toBeLessThan(400);
-      return res.headers()["location"] ?? "";
-    };
-    expect(await authorizeLocation()).toBe(
+    const authorize = await request.get("/api/auth/oauth/google", {
+      maxRedirects: 0,
+    });
+    expect(authorize.status(), "authorize endpoint must redirect").toBeGreaterThanOrEqual(300);
+    expect(authorize.status()).toBeLessThan(400);
+    expect(authorize.headers()["location"] ?? "").toBe(
       `${LOCAL_BASE_URL}/login?error=google_sso_disabled`
     );
-
-    // Override On → provider listed, authorize goes to Google's consent URL
-    // (never followed — fake creds, no network call to Google).
-    await row.getByRole("button", { name: "On", exact: true }).click();
-    await expect(badge).toHaveText("On");
-    expect(await providerIds()).toContain("google");
-    expect(await authorizeLocation()).toMatch(
-      /^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?/
-    );
-
-    // Override Off → hidden and blocked again, now by the explicit override.
-    await row.getByRole("button", { name: "Off", exact: true }).click();
-    await expect(badge).toHaveText("Off");
-    expect(await providerIds()).not.toContain("google");
-    expect(await authorizeLocation()).toBe(
-      `${LOCAL_BASE_URL}/login?error=google_sso_disabled`
-    );
-
-    // Clear the override → back to the env default.
-    await row.getByRole("button", { name: "Default (off)" }).click();
-    await expect(badge).toHaveText("Off (default)");
   });
 
   test("G2 forgot-password request is enumeration-safe: identical response, token row only for the real user", async ({
@@ -192,8 +149,9 @@ test.describe("Google SSO + forgot-password", () => {
 
   test("G3 reset link sets a new password once, then the new password logs in through 2FA", async ({
     page,
+    request,
   }) => {
-    // The emailed raw token (no RESEND_API_KEY in tests → the email only
+    // The emailed raw token (no SMTP creds in tests → the email only
     // prints to the server console, so the row is inserted directly with a
     // known raw token, hashed exactly like requestPasswordReset does).
     const rawToken = await withDb(async (db) => {
@@ -214,13 +172,13 @@ test.describe("Google SSO + forgot-password", () => {
     await page.locator("#new-password").fill(NEW_PASSWORD);
     await page.locator("#confirm-password").fill(NEW_PASSWORD);
     await page.getByRole("button", { name: "Set new password" }).click();
-    await expect(
-      page.getByText("Password updated. Sign in with your new password.")
-    ).toBeVisible();
+    // Setting the password signs the user in: the API set the session cookie
+    // with 2FA owed and the form went straight to the TOTP challenge.
+    await page.waitForURL(/\/login\/2fa/);
 
     // Single-use: replaying the same token is refused with the generic 400.
     const replay = await page.request.post("/api/auth/reset-password", {
-      data: { token: rawToken, password: "another-valid-pass1" },
+      data: { token: rawToken, password: "Another-valid-pass1" },
     });
     expect(replay.status()).toBe(400);
     expect((await replay.json()).error).toBe(
@@ -229,13 +187,23 @@ test.describe("Google SSO + forgot-password", () => {
     // …and the replay did not overwrite the password set by the first use:
     // the full login below only works if NEW_PASSWORD is still in place.
 
-    // The new password signs in through the mandatory TOTP challenge.
-    await loginExpecting2fa(page, QA_USER.email, NEW_PASSWORD);
+    // Finish the auto sign-in through the mandatory TOTP challenge → app.
     await passTwoFactorChallenge(page);
     await page.waitForURL("**/dashboard");
     await expect(
       page.getByRole("heading", { name: "Dashboard" })
     ).toBeVisible();
+
+    // And the new password is what the login API now accepts — via the
+    // standalone request fixture (its own cookie jar, so the browser
+    // context's verified session is untouched). A second TOTP login would
+    // need a new time window, so the API answer — 200 + twoFactorRequired —
+    // is the proof here.
+    const login = await request.post("/api/auth/login", {
+      data: { email: QA_USER.email, password: NEW_PASSWORD },
+    });
+    expect(login.status()).toBe(200);
+    expect((await login.json()).twoFactorRequired).toBe(true);
     // afterAll restores the seeded passwordHash for the other specs.
   });
 
@@ -250,7 +218,7 @@ test.describe("Google SSO + forgot-password", () => {
     });
 
     const res = await request.post("/api/auth/reset-password", {
-      data: { token: rawToken, password: "valid-length-pass1" },
+      data: { token: rawToken, password: "Valid-length-pass1" },
     });
     expect(res.status()).toBe(400);
     expect((await res.json()).error).toBe(

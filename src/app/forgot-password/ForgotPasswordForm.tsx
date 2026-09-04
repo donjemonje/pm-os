@@ -60,7 +60,7 @@ export function ForgotPasswordForm() {
               href="/login"
               className="font-title block text-center text-sm font-semibold text-brand-accent hover:opacity-80"
             >
-              Back to sign in
+              Back to log in
             </a>
           </div>
         ) : (
@@ -104,7 +104,7 @@ export function ForgotPasswordForm() {
               href="/login"
               className="font-subtitle block text-center text-xs text-brand-muted hover:text-brand-text"
             >
-              Back to sign in
+              Back to log in
             </a>
           </form>
         )}

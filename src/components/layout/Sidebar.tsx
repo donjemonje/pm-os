@@ -57,6 +57,7 @@ export function Sidebar({
   dashboardEnabled,
   user,
   organization,
+  appVersion,
 }: {
   /** Initial rail state, read from the pmos_sidebar cookie on the server. */
   defaultCollapsed: boolean;
@@ -66,6 +67,7 @@ export function Sidebar({
   dashboardEnabled: boolean;
   user: MenuUser | null;
   organization: MenuOrganization | null;
+  appVersion: string;
 }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
@@ -108,7 +110,7 @@ export function Sidebar({
           <Menu size={18} />
         </button>
         <Curtain collapsed={collapsed} width={150}>
-          <BrandLockup height={SIDEBAR_LOGO_HEIGHT} priority href="/dashboard" />
+          <BrandLockup height={SIDEBAR_LOGO_HEIGHT} priority href="/" />
         </Curtain>
       </div>
       <nav className="flex-1 space-y-1 p-3">
@@ -139,7 +141,14 @@ export function Sidebar({
           );
         })}
       </nav>
-      {user && <UserMenu user={user} organization={organization} collapsed={collapsed} />}
+      {user && (
+        <UserMenu
+          user={user}
+          organization={organization}
+          collapsed={collapsed}
+          appVersion={appVersion}
+        />
+      )}
     </aside>
   );
 }

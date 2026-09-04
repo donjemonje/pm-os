@@ -14,7 +14,7 @@ type Enrollment = { qrDataUrl: string; secret: string };
 function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get("from") || "/dashboard";
+  const from = searchParams.get("from") || "/";
 
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
@@ -36,7 +36,7 @@ function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
         setError(data.error || "Verification failed");
         return;
       }
-      router.push(from.startsWith("/") ? from : "/dashboard");
+      router.push(from.startsWith("/") ? from : "/");
       router.refresh();
     } catch {
       setError("Something went wrong. Try again.");
@@ -140,7 +140,7 @@ function ChallengeFormInner({ enrollment }: { enrollment?: Enrollment }) {
             onClick={onBackToSignIn}
             className="font-subtitle block w-full text-sm text-brand-muted hover:text-brand-text"
           >
-            Back to sign in
+            Back to log in
           </button>
         </div>
       </div>

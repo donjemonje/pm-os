@@ -1,5 +1,4 @@
 export const LOGIN_DISABLED_MESSAGE = "Login is Currently Disabled";
-export const SIGNUP_DISABLED_MESSAGE = "Sign-up is currently disabled";
 
 export function isLoginDisabled(): boolean {
   const raw = process.env.DISABLE_LOGIN;
@@ -9,19 +8,7 @@ export function isLoginDisabled(): boolean {
   return true;
 }
 
-/**
- * New-account creation gate. Disabled by default: only existing users may log
- * in. Set ALLOW_SIGNUP=true to open self-service registration (and OAuth
- * first-time account creation). Has no effect when login itself is disabled.
- */
-export function isSignupAllowed(): boolean {
-  const raw = process.env.ALLOW_SIGNUP;
-  if (!raw?.trim()) return false;
-  const value = raw.trim().toLowerCase();
-  return value === "true" || value === "1";
-}
-
-/** Hide Google sign-in on /login while keeping Google Drive integration OAuth. */
+/** Env-only switch: hide Google sign-in everywhere (login, invites, OAuth flow). */
 export function isGoogleLoginDisabled(): boolean {
   const raw = process.env.DISABLE_GOOGLE_LOGIN;
   if (!raw?.trim()) return false;
@@ -38,23 +25,23 @@ export function isIdeasEnabled(): boolean {
 }
 
 /**
- * Docs feature gate — env default. Unlike IDEAS_ENABLED this is ON when
- * unset: docs is a live surface and a missing env var must not hide it.
- * Set DOCS_ENABLED=false to disable globally.
+ * Docs feature gate — env default. Off when unset (same polarity as
+ * IDEAS_ENABLED since 2026-09-03): surfaces are opted in per organization in
+ * PM-OS Admin → Enablements, or globally with DOCS_ENABLED=true.
  */
 export function isDocsEnabled(): boolean {
   const raw = process.env.DOCS_ENABLED;
-  if (!raw?.trim()) return true;
+  if (!raw?.trim()) return false;
   const value = raw.trim().toLowerCase();
-  return !(value === "false" || value === "0");
+  return value === "true" || value === "1";
 }
 
-/** Chat feature gate — env default. Same polarity as DOCS_ENABLED: on when unset. */
+/** Chat feature gate — env default. Off when unset; CHAT_ENABLED=true turns it on globally. */
 export function isChatEnabled(): boolean {
   const raw = process.env.CHAT_ENABLED;
-  if (!raw?.trim()) return true;
+  if (!raw?.trim()) return false;
   const value = raw.trim().toLowerCase();
-  return !(value === "false" || value === "0");
+  return value === "true" || value === "1";
 }
 
 /**
@@ -68,12 +55,25 @@ export function isIdeasUndoEnabled(): boolean {
   return value === "true" || value === "1";
 }
 
-/** Dashboard feature gate — env default. Same polarity as DOCS_ENABLED: on when unset. */
-export function isDashboardEnabled(): boolean {
-  const raw = process.env.DASHBOARD_ENABLED;
+/**
+ * Env default for the per-org "ssoSkips2fa" flag: Google sign-ins skip the
+ * TOTP step. ON when unset (Google already authenticated the user);
+ * SSO_SKIPS_2FA=false makes Google sign-ins take the TOTP step too by default.
+ * Password sign-ins always require 2FA regardless.
+ */
+export function isSsoSkips2faDefault(): boolean {
+  const raw = process.env.SSO_SKIPS_2FA;
   if (!raw?.trim()) return true;
   const value = raw.trim().toLowerCase();
   return !(value === "false" || value === "0");
+}
+
+/** Dashboard feature gate — env default. Off when unset; DASHBOARD_ENABLED=true turns it on globally. */
+export function isDashboardEnabled(): boolean {
+  const raw = process.env.DASHBOARD_ENABLED;
+  if (!raw?.trim()) return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "1";
 }
 
 // ————— Per-organization feature overrides —————
@@ -83,7 +83,14 @@ export function isDashboardEnabled(): boolean {
 // env default applies. Keys outside ORG_FEATURE_KEYS are rejected by the
 // admin API and ignored here. Managed in PM-OS Admin → Enablements.
 
-export const ORG_FEATURE_KEYS = ["ideas", "docs", "chat", "dashboard", "ideasUndo"] as const;
+export const ORG_FEATURE_KEYS = [
+  "ideas",
+  "docs",
+  "chat",
+  "dashboard",
+  "ideasUndo",
+  "ssoSkips2fa",
+] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
 
 /** Env-level default for a flag (what applies when the org has no override). */
@@ -99,33 +106,13 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDashboardEnabled();
     case "ideasUndo":
       return isIdeasUndoEnabled();
+    case "ssoSkips2fa":
+      return isSsoSkips2faDefault();
   }
 }
 
 export function isOrgFeatureKey(key: string): key is OrgFeatureKey {
   return (ORG_FEATURE_KEYS as readonly string[]).includes(key);
-}
-
-// ————— System-wide flag overrides —————
-//
-// Switches that must resolve BEFORE sign-in (no user, so no org): e.g. the
-// Google SSO button on /login. Stored one row per key in SystemFlag; a stored
-// row wins, otherwise the env default applies. Resolution lives in
-// src/lib/system-flags.ts (needs the DB); managed in PM-OS Admin → Enablements.
-
-export const SYSTEM_FLAG_KEYS = ["googleSso"] as const;
-export type SystemFlagKey = (typeof SYSTEM_FLAG_KEYS)[number];
-
-export function isSystemFlagKey(key: string): key is SystemFlagKey {
-  return (SYSTEM_FLAG_KEYS as readonly string[]).includes(key);
-}
-
-/** Env-level default for a system flag (applies when no override row exists). */
-export function envSystemFlagDefault(key: SystemFlagKey): boolean {
-  switch (key) {
-    case "googleSso":
-      return !isGoogleLoginDisabled();
-  }
 }
 
 /** Pure resolver: org override if present, else the env default. */

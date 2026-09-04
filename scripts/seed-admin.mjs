@@ -39,14 +39,6 @@ function slugify(input) {
   return base || "org";
 }
 
-function makeInviteCode() {
-  return randomBytes(6)
-    .toString("base64url")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 8)
-    .toUpperCase();
-}
-
 const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
 const password = process.env.ADMIN_PASSWORD;
 const name = process.env.ADMIN_NAME?.trim() || "Admin";
@@ -86,7 +78,6 @@ if (existing) {
       data: {
         name: orgName,
         slug: `${slug}-${randomBytes(2).toString("hex")}`,
-        inviteCode: makeInviteCode(),
         workspace: { create: { name: `${orgName} Workspace` } },
       },
     });

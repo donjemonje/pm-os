@@ -164,19 +164,19 @@ test.describe("PM-OS Admin", () => {
       page.getByRole("heading", { name: "Enablements" })
     ).toBeVisible();
 
-    // The page lists one row per flag (Ideas, Docs, Chat) — scope every
-    // locator to its row so multi-flag rendering can't cross-match.
-    const orgCard = page.locator("div.rounded-xl", { hasText: "RoomLens" });
-    // "Ideas undo" is its own row now, so a bare "Ideas" substring match
-    // hits two rows — exclude it explicitly.
-    const ideasRow = orgCard
-      .locator("li", { hasText: "Ideas" })
-      .filter({ hasNotText: "Ideas undo" });
-    // The effective-state badge only updates from the PATCH response, so it
-    // is a reliable "the override is saved" signal (unlike button state,
-    // which also flips while the request is in flight).
-    const badge = ideasRow.locator("span.rounded-full");
-    await expect(badge).toHaveText("Off (default)");
+    // Enablements is a matrix (rows = flags, columns = orgs): address the
+    // RoomLens cell of a flag row by the data attributes the component
+    // guarantees (tr[data-flag] / td[data-org]).
+    const ideasCell = page
+      .locator('tr[data-flag="ideas"]')
+      .locator('td[data-org="roomlens"]');
+    // The cell's control group carries data-override ("on"/"off"/"none") and
+    // data-effective ("on"/"off"); both update only from the PATCH response,
+    // so they are a reliable "the override is saved" signal (unlike button
+    // state, which also flips while the request is in flight).
+    const badge = ideasCell.locator("[data-override]");
+    await expect(badge).toHaveAttribute("data-effective", "off");
+    await expect(badge).toHaveAttribute("data-override", "none");
 
     // Baseline: with no override, the env default (off) applies to the org.
     const userContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
@@ -186,31 +186,38 @@ test.describe("PM-OS Admin", () => {
     expect(response?.status(), "/ideas under env default off").toBe(404);
 
     // Admin turns the org override On → the same user reaches Ideas.
-    await ideasRow.getByRole("button", { name: "On", exact: true }).click();
-    await expect(badge).toHaveText("On");
+    await ideasCell.getByRole("button", { name: "On", exact: true }).click();
+    await expect(badge).toHaveAttribute("data-override", "on");
+    await expect(badge).toHaveAttribute("data-effective", "on");
     await userPage.goto("/ideas");
     await expect(
       userPage.getByRole("heading", { name: "Ideas" })
     ).toBeVisible();
 
     // Back to Default → the env default applies again and gates the org.
-    await ideasRow.getByRole("button", { name: "Default (off)" }).click();
-    await expect(badge).toHaveText("Off (default)");
+    await ideasCell.getByRole("button", { name: "Default (off)" }).click();
+    await expect(badge).toHaveAttribute("data-override", "none");
+    await expect(badge).toHaveAttribute("data-effective", "off");
     response = await userPage.goto("/ideas");
     expect(response?.status(), "/ideas after override removed").toBe(404);
 
-    // Chat: reversed env polarity (CHAT_ENABLED is ON when unset — pinned
-    // by the env guard) and the same resolution mechanism, exercised as one
+    // Chat: env default ON in the test env (CHAT_ENABLED=true, pinned by the
+    // env guard — the flag is off when unset) and the same resolution
+    // mechanism, exercised as one
     // cheap Off→404→Default round-trip rather than a full per-flag flow:
     // ideas above already proves override-wins end to end. Docs rides the
     // identical code path (same registry, layout gate, API wrapper) and gets
     // no separate toggle test.
-    const chatRow = orgCard.locator("li", { hasText: "Chat" });
-    const chatBadge = chatRow.locator("span.rounded-full");
-    await expect(chatBadge).toHaveText("On (default)");
+    const chatCell = page
+      .locator('tr[data-flag="chat"]')
+      .locator('td[data-org="roomlens"]');
+    const chatBadge = chatCell.locator("[data-override]");
+    await expect(chatBadge).toHaveAttribute("data-effective", "on");
+    await expect(chatBadge).toHaveAttribute("data-override", "none");
 
-    await chatRow.getByRole("button", { name: "Off", exact: true }).click();
-    await expect(chatBadge).toHaveText("Off");
+    await chatCell.getByRole("button", { name: "Off", exact: true }).click();
+    await expect(chatBadge).toHaveAttribute("data-override", "off");
+    await expect(chatBadge).toHaveAttribute("data-effective", "off");
     response = await userPage.goto("/chat");
     expect(response?.status(), "/chat with org override off").toBe(404);
     // The API surface carries the same gate (userPage.request rides the org
@@ -222,8 +229,9 @@ test.describe("PM-OS Admin", () => {
 
     // Reset to Default → chat is back for the org (all-pages.spec depends
     // on /chat rendering; afterAll also clears features as a backstop).
-    await chatRow.getByRole("button", { name: "Default (on)" }).click();
-    await expect(chatBadge).toHaveText("On (default)");
+    await chatCell.getByRole("button", { name: "Default (on)" }).click();
+    await expect(chatBadge).toHaveAttribute("data-override", "none");
+    await expect(chatBadge).toHaveAttribute("data-effective", "on");
     await userPage.goto("/chat");
     await expect(
       userPage.getByRole("heading", { name: "Chat" })
@@ -262,7 +270,7 @@ test.describe("PM-OS Admin", () => {
     await victimPage.goto("/dashboard");
     await victimPage.waitForURL(/\/login/);
     await expect(
-      victimPage.getByRole("button", { name: "Sign In" })
+      victimPage.getByRole("button", { name: "Log In" })
     ).toBeVisible();
 
     // Password login is refused while deactivated (same generic error as
@@ -272,7 +280,7 @@ test.describe("PM-OS Admin", () => {
     await freshPage.goto("/login");
     await freshPage.locator("#email").fill(QA_USER.email);
     await freshPage.locator("#password").fill(QA_USER.password);
-    await freshPage.getByRole("button", { name: /sign in/i }).click();
+    await freshPage.getByRole("button", { name: /log in/i }).click();
     await expect(
       freshPage.getByText("Invalid email or password")
     ).toBeVisible();

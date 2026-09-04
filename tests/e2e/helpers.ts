@@ -1,4 +1,6 @@
 import { Locator, Page, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { RESOLVED_ENV } from "./test-env";
 import {
   loginExpecting2fa,
   passTwoFactorChallenge,
@@ -70,4 +72,22 @@ export async function expectAppPageRenders(
     page.getByText("Application error: a client-side exception has occurred"),
     `error boundary shown for ${path}`
   ).toHaveCount(0);
+}
+
+/**
+ * Run a callback against the test database with the same resolved env the
+ * app gets (yaml wins over shell; the env guard has already pinned the DB
+ * name to pmos_test / a pmos_ft_* clone). Use it for fixture setup/reset in
+ * beforeAll/afterAll and for DB-side assertions — never for login.
+ */
+export async function withTestDb<T>(
+  fn: (db: PrismaClient) => Promise<T>
+): Promise<T> {
+  process.env.DATABASE_URL = RESOLVED_ENV.DATABASE_URL;
+  const db = new PrismaClient();
+  try {
+    return await fn(db);
+  } finally {
+    await db.$disconnect();
+  }
 }
