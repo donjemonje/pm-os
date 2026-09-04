@@ -53,10 +53,12 @@ export default async function IdeasSettingsPage() {
           emptyLabel="No product lines yet. Add the first one above."
           initialItems={productLines}
         />
-        <MyProductLinesPanel
-          options={productLines.map((l) => l.name)}
-          initialSelected={myProductLines}
-        />
+        {productLines.length > 0 && (
+          <MyProductLinesPanel
+            options={productLines.map((l) => l.name)}
+            initialSelected={myProductLines}
+          />
+        )}
         {platformsEnabled && (
           <SettingsListPanel
             title="Platforms"
