@@ -68,8 +68,6 @@ app boot misconfigured. `tests/e2e/global-setup.ts` validates the resolved
 env (shell env + test-apphosting.yaml, yaml wins — the exact env the app
 gets) before any test runs, and fails with one line per problem:
 
-- `DISABLE_LOGIN` resolves to `false` (login enabled — it is disabled by
-  default when unset).
 - `DATABASE_URL` is set and its database name is exactly `pmos_test` —
   hard fail otherwise, so tests can never touch the dev database.
 - `SESSION_SECRET` is set (login would 500 without it).

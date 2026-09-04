@@ -121,8 +121,6 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   account_deactivated: "This account has been deactivated. Contact your admin.",
   invite_required:
     "This invite link has expired or was already used. Ask your admin to resend the invite.",
-  google_sso_disabled:
-    "Google sign-in is disabled in this environment. Sign in with email instead.",
   email_uses_password:
     "This email uses password sign-in. Enter your email and password below.",
 };

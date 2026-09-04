@@ -1,21 +1,3 @@
-export const LOGIN_DISABLED_MESSAGE = "Login is Currently Disabled";
-
-export function isLoginDisabled(): boolean {
-  const raw = process.env.DISABLE_LOGIN;
-  if (!raw?.trim()) return true;
-  const value = raw.trim().toLowerCase();
-  if (value === "false" || value === "0") return false;
-  return true;
-}
-
-/** Env-only switch: hide Google sign-in everywhere (login, invites, OAuth flow). */
-export function isGoogleLoginDisabled(): boolean {
-  const raw = process.env.DISABLE_GOOGLE_LOGIN;
-  if (!raw?.trim()) return false;
-  const value = raw.trim().toLowerCase();
-  return value === "true" || value === "1";
-}
-
 /** Ideas feature gate — env default. Off by default; set IDEAS_ENABLED=true to enable globally. */
 export function isIdeasEnabled(): boolean {
   const raw = process.env.IDEAS_ENABLED;

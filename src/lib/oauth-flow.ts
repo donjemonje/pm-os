@@ -18,8 +18,6 @@ import {
 } from "./auth";
 import {
   envFeatureDefault,
-  isGoogleLoginDisabled,
-  isLoginDisabled,
   resolveFeature,
 } from "./feature-flags";
 
@@ -89,15 +87,8 @@ export async function startOAuth(
   fromParam?: string | null,
   inviteToken?: string | null
 ) {
-  if (isLoginDisabled()) {
-    return authRedirect("/login");
-  }
   if (!isOAuthProvider(provider)) {
     return authRedirect("/login", { error: "invalid_provider" });
-  }
-
-  if (provider === "google" && isGoogleLoginDisabled()) {
-    return authRedirect("/login", { error: "google_sso_disabled" });
   }
 
   if (!getOAuthProviderConfig(provider)) {
@@ -129,18 +120,10 @@ export async function startOAuth(
 }
 
 export async function completeOAuth(provider: string, code: string | null, state: string | null) {
-  if (isLoginDisabled()) {
-    return authRedirect("/login");
-  }
-
   const loginError = (error: string) => authRedirect("/login", { error });
 
   if (!isOAuthProvider(provider)) {
     return loginError("invalid_provider");
-  }
-
-  if (provider === "google" && isGoogleLoginDisabled()) {
-    return loginError("google_sso_disabled");
   }
 
   if (!code || !state) {

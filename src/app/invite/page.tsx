@@ -4,7 +4,6 @@ import { AuthNeuralBackground } from "@/components/auth/AuthNeuralBackground";
 import { BrandLogo } from "@/components/brand/BrandLogo";
 import { getCurrentUser } from "@/lib/auth";
 import { brand } from "@/lib/brand";
-import { isGoogleLoginDisabled, isLoginDisabled } from "@/lib/feature-flags";
 import { getOAuthProviderStatuses } from "@/lib/oauth-providers";
 import { lookupPasswordToken } from "@/lib/password-tokens";
 import { InviteChoices } from "./InviteChoices";
@@ -23,9 +22,8 @@ export const dynamic = "force-dynamic";
  *     password, so Google links to the existing account and signs in; the
  *     invite token is retired on link (signInWithOAuth).
  *   - Password: the set-password form with the same token.
- * Google is offered whenever Google sign-in is configured and not hidden by
- * env (DISABLE_GOOGLE_LOGIN). The screen always shows — with Google hidden
- * it simply has the one "Sign Up" button.
+ * Google is offered whenever Google sign-in is configured. The screen always
+ * shows — without Google it simply has the one "Sign Up" button.
  */
 export default async function InvitePage({
   searchParams,
@@ -40,8 +38,6 @@ export default async function InvitePage({
 
   const googleAvailable =
     invite !== null &&
-    !isLoginDisabled() &&
-    !isGoogleLoginDisabled() &&
     getOAuthProviderStatuses().some((p) => p.provider === "google" && p.configured);
 
 

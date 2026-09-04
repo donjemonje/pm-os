@@ -15,7 +15,7 @@ const inputClassName =
  * Sign-in only. There is no self-service sign-up: accounts are created by
  * PM-OS Admin and activated through the invite link (/invite), with either
  * Google or a password. Google sign-in is offered whenever the provider is
- * configured (env DISABLE_GOOGLE_LOGIN hides it).
+ * configured; login itself can never be disabled.
  */
 function LoginFormInner() {
   const router = useRouter();

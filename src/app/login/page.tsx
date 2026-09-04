@@ -1,11 +1,9 @@
 import { redirect } from "next/navigation";
-import { LoginDisabledView } from "@/components/auth/LoginDisabledView";
 import { getCurrentUser } from "@/lib/auth";
-import { isLoginDisabled } from "@/lib/feature-flags";
 import { LoginForm } from "./LoginForm";
 
-// The DISABLE_LOGIN gate is a runtime env var, so this page
-// must be evaluated per request rather than prerendered at build time.
+// The session check reads cookies, so this page must be evaluated per
+// request rather than prerendered at build time.
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
@@ -15,10 +13,6 @@ export default async function LoginPage() {
   // renders the form, and logging in overwrites it.
   const user = await getCurrentUser();
   if (user) redirect("/");
-
-  if (isLoginDisabled()) {
-    return <LoginDisabledView />;
-  }
 
   return <LoginForm />;
 }
