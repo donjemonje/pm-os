@@ -558,6 +558,18 @@ export function IdeasView({
     return () => window.removeEventListener("keydown", onKey);
   }, [confirmOpen, pushing]);
 
+  // Esc discards the merge edit (standing rule: Esc = cancel). The merge
+  // modal's own Esc handler wins while it is open.
+  useEffect(() => {
+    if (!edit || confirmOpen || drawerId || drawerSrc) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") cancelEdit();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit, confirmOpen, drawerId, drawerSrc]);
+
   return (
     <div className="mx-auto max-w-[1120px] px-10 pb-24 pt-8">
       <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFile} />
@@ -755,26 +767,7 @@ export function IdeasView({
               </button>
 
               <div className="ml-auto flex shrink-0 items-center gap-2.5">
-                {page === "merge" && edit ? (
-                  <>
-                    <span className="whitespace-nowrap text-xs text-muted">
-                      {edit.zen.length + edit.jira.length} source
-                      {edit.zen.length + edit.jira.length === 1 ? "" : "s"} selected
-                    </span>
-                    <button
-                      onClick={cancelEdit}
-                      className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={saveEdit}
-                      className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                    >
-                      Save
-                    </button>
-                  </>
-                ) : page === "final" ? (
+                {page === "final" && (
                   <span title={pending > 0 ? `${pending} awaiting review` : "All approved"}>
                     <button
                       onClick={() => {
@@ -786,7 +779,7 @@ export function IdeasView({
                       {pending > 0 ? "Approve all" : "Undo approve all"}
                     </button>
                   </span>
-                ) : null}
+                )}
               </div>
             </div>
 
@@ -853,6 +846,8 @@ export function IdeasView({
               edit={edit}
               selectedFinalId={selectedFinalId}
               onStartEdit={startEdit}
+              onSaveEdit={saveEdit}
+              onCancelEdit={cancelEdit}
               onToggleSrc={toggleSrc}
               onOpenIdea={(id) => {
                 setDrawerId(id);

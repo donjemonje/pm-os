@@ -1,6 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 
@@ -20,6 +20,8 @@ interface MergePageProps {
   edit: MergeEdit | null;
   selectedFinalId: string | "auto" | null;
   onStartEdit: (id: string) => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
   onToggleSrc: (kind: SourceKind, key: string) => void;
   onOpenIdea: (id: string) => void;
   onOpenSource: (kind: SourceKind, key: string) => void;
@@ -54,6 +56,8 @@ export function MergePage({
   edit,
   selectedFinalId,
   onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
   onToggleSrc,
   onOpenIdea,
   onOpenSource,
@@ -82,6 +86,14 @@ export function MergePage({
   };
 
   const srcCount = (i: Idea) => i.zen.length + i.jira.length;
+
+  const sameSet = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((x) => b.includes(x));
+  const editedIdea = edit ? ideas.find((i) => i.id === edit.ideaId) : undefined;
+  const editDirty =
+    edit != null &&
+    editedIdea != null &&
+    !(sameSet(edit.zen, editedIdea.zen) && sameSet(edit.jira, editedIdea.jira));
 
   const finals = ideas
     .filter(matches)
@@ -180,13 +192,20 @@ export function MergePage({
               opacity: row.orphan && !row.checked ? 0.5 : 1,
             }}
           >
-            {edit && (
+            <span
+              className="shrink-0 overflow-hidden transition-[width,margin,opacity] duration-200 ease-out"
+              style={{
+                width: edit ? 15 : 0,
+                marginRight: edit ? 0 : -8,
+                opacity: edit ? 1 : 0,
+              }}
+            >
               <span
                 onClick={(e) => {
                   e.stopPropagation();
-                  onToggleSrc(kind, row.key);
+                  if (edit) onToggleSrc(kind, row.key);
                 }}
-                className="flex h-[15px] w-[15px] shrink-0 cursor-pointer items-center justify-center rounded border text-white"
+                className="flex h-[15px] w-[15px] cursor-pointer items-center justify-center rounded border text-white"
                 style={{
                   background: row.checked ? "#1f8a53" : "#ffffff",
                   borderColor: row.checked ? "#1f8a53" : "#c8d4e3",
@@ -194,7 +213,7 @@ export function MergePage({
               >
                 {row.checked && <Check size={9} strokeWidth={3.5} />}
               </span>
-            )}
+            </span>
             <div
               className={`flex min-w-0 flex-1 items-center gap-2 transition-transform duration-150 ease-out ${
                 row.checked ? "translate-x-1" : ""
@@ -256,6 +275,32 @@ export function MergePage({
                   opacity: gone ? 0.55 : 1,
                 }}
               >
+                {edit && idea.id === edit.ideaId && (
+                  <span className="flex shrink-0 items-center gap-1">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCancelEdit();
+                      }}
+                      title="Discard source changes (Esc)"
+                      className="flex h-5 w-5 items-center justify-center rounded-full border border-[#c8d4e3] bg-white text-[#7a8aa3] hover:border-[#a3556b] hover:text-[#a3556b]"
+                    >
+                      <X size={11} strokeWidth={2.5} />
+                    </button>
+                    {editDirty && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSaveEdit();
+                        }}
+                        title="Save source changes"
+                        className="flex h-5 w-5 items-center justify-center rounded-full border border-[#1f8a53] bg-[#1f8a53] text-white hover:bg-[#187647]"
+                      >
+                        <Check size={11} strokeWidth={3} />
+                      </button>
+                    )}
+                  </span>
+                )}
                 <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px]">
                   {idea.title}
                 </span>
