@@ -603,10 +603,15 @@ export async function mutateIdeas(
           ...mutation.jira.map((key) => ({ ideaId: idea.id, kind: "jira", jiraKey: key })),
         ],
       });
-      // Manually reassigned ticket evidence counts as votes, same as a
-      // pipeline match: the this-batch delta follows the zendesk source count.
+      // Votes = all merged evidence: every ticket and every merged Jira idea
+      // counts, excluding a jira-origin idea's own issue (it is always one of
+      // its jira sources). The this-batch delta follows that evidence count.
+      const selfJira = idea.origin === "jira" ? 1 : 0;
       const oldZen = idea.sources.filter((s) => s.kind === "zendesk").length;
-      const voteDelta = ticketRows.length - oldZen;
+      const oldJira = idea.sources.filter((s) => s.kind === "jira").length;
+      const oldEvidence = oldZen + Math.max(0, oldJira - selfJira);
+      const newEvidence = ticketRows.length + Math.max(0, mutation.jira.length - selfJira);
+      const voteDelta = newEvidence - oldEvidence;
       if (voteDelta !== 0) {
         await db.idea.update({
           where: { id: idea.id },
