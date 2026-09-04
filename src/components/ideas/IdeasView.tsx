@@ -397,7 +397,9 @@ export function IdeasView({
       const wanted = customerFilter.map((c) => c.toLowerCase());
       if (!(i.customers ?? []).some((c) => wanted.includes(c.toLowerCase()))) return false;
     }
-    if (statusFilter.length > 0) {
+    if (statusFilter.includes("All")) {
+      // "All" shows every idea, the unchanged Jira backlog included.
+    } else if (statusFilter.length > 0) {
       if (!statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
     } else if (i.batch === "unchanged") {
       // The Jira backlog dwarfs a Zendesk batch and is mostly unchanged —
@@ -757,7 +759,7 @@ export function IdeasView({
                 single
                 label="Status"
                 accent="status"
-                options={Object.keys(STATUS_CHIP_TO_BATCH)}
+                options={["All", ...Object.keys(STATUS_CHIP_TO_BATCH)]}
                 selected={statusFilter}
                 onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
               />

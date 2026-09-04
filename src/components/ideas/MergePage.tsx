@@ -65,9 +65,12 @@ export function MergePage({
   // The mostly-unchanged Jira backlog is noise: unchanged ideas show only
   // when the Status filter says Unchanged, same as the Final page.
   const unchangedView = statusFilter.includes("Unchanged");
+  const allView = statusFilter.includes("All");
 
   const matches = (i: Idea): boolean => {
-    if (unchangedView) {
+    if (allView) {
+      // "All" shows everything, the unchanged backlog included.
+    } else if (unchangedView) {
       if (i.batch !== "unchanged") return false;
     } else {
       if (i.batch === "unchanged") return false;
@@ -133,6 +136,7 @@ export function MergePage({
       if (
         !edit &&
         !unchangedView &&
+        !allView &&
         owners.length > 0 &&
         owners.every((o) => o.batch === "unchanged")
       )
