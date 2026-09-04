@@ -72,6 +72,11 @@ export async function resetPassword(
       where: { id: row.id },
       data: { usedAt: new Date() },
     }),
+    // Sibling links (e.g. an older invite kept alive across a resend) die
+    // with the consumed one — same contract as the Google path.
+    db.passwordResetToken.deleteMany({
+      where: { userId: row.userId, usedAt: null },
+    }),
     db.session.deleteMany({ where: { userId: row.userId } }),
   ]);
   return { userId: row.userId };
