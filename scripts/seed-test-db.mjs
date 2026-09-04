@@ -59,14 +59,6 @@ function hashPassword(pw) {
   return `${salt}:${hash}`;
 }
 
-function makeInviteCode() {
-  return randomBytes(6)
-    .toString("base64url")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 8)
-    .toUpperCase();
-}
-
 async function getOrCreateOrg() {
   const existing = await prisma.organization.findUnique({
     where: { slug: ORG_SLUG },
@@ -80,7 +72,6 @@ async function getOrCreateOrg() {
     data: {
       name: ORG_NAME,
       slug: ORG_SLUG,
-      inviteCode: makeInviteCode(),
       workspace: { create: { name: `${ORG_NAME} Workspace` } },
     },
     include: { workspace: true },
@@ -112,6 +103,19 @@ async function main() {
   }
 
   const org = await getOrCreateOrg();
+  // Feature QA runs on the developer's DB clone (since 2026-09-03), where the
+  // QA org may be a real org with live Jira / Google Drive connections. The
+  // suite assumes "not connected" (ideas-jira-push.spec PJ2/PJ3), and the
+  // test env has no OAuth creds to refresh tokens with — drop them.
+  if (org.workspace) {
+    const [{ count: jira }, { count: drive }] = await Promise.all([
+      prisma.jiraConnection.deleteMany({ where: { workspaceId: org.workspace.id } }),
+      prisma.googleDriveConnection.deleteMany({ where: { workspaceId: org.workspace.id } }),
+    ]);
+    if (jira + drive > 0) {
+      console.log(`• Removed ${jira} Jira / ${drive} Google Drive connection(s) from the QA workspace.`);
+    }
+  }
   // Reset per-org feature overrides: all-pages.spec.ts asserts the ideas
   // routes 404 under the env default, and admin.spec.ts sets/clears the
   // override itself.

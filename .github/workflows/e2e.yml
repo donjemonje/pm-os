@@ -46,14 +46,17 @@ jobs:
       SESSION_SECRET: ci-e2e-not-a-secret
       NEXT_PUBLIC_APP_URL: http://localhost:3200
       DISABLE_LOGIN: "false"
-      ALLOW_SIGNUP: "false"
       DISABLE_GOOGLE_LOGIN: "true"
       # Fake Google OAuth creds: the provider must count as "configured" so
-      # google-sso.spec.ts can observe the googleSso system flag (the providers
+      # google-sso.spec.ts can observe the env switch alone (the providers
       # listing and the authorize redirect never call Google's servers).
       GOOGLE_CLIENT_ID: test-google-client-id
       GOOGLE_CLIENT_SECRET: test-google-client-secret
       IDEAS_ENABLED: "false"
+      # Off when unset since 2026-09-03; the suite asserts these surfaces render.
+      DOCS_ENABLED: "true"
+      CHAT_ENABLED: "true"
+      DASHBOARD_ENABLED: "true"
       # 2FA secret-encryption key; production-mode boot refuses to start
       # without it. Synthetic — the test DB holds only synthetic accounts.
       TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"

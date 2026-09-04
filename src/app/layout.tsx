@@ -9,6 +9,7 @@ import {
 import { brand } from "@/lib/brand";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { Shell } from "@/components/layout/Shell";
+import { APP_VERSION } from "@/lib/version";
 
 const chakraPetch = Chakra_Petch({
   subsets: ["latin"],
@@ -77,6 +78,7 @@ export default async function RootLayout({
           dashboardEnabled={dashboardEnabled}
           user={menuUser}
           organization={organization}
+          appVersion={APP_VERSION}
         >
           {children}
         </Shell>

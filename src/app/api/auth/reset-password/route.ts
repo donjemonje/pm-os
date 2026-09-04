@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  createSession,
+  sessionCookieOptions,
+  twoFactorPendingCookieOptions,
+} from "@/lib/auth";
 import { loginDisabledResponse } from "@/lib/auth-guard";
+import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "@/lib/password-policy";
 import { resetPassword } from "@/lib/password-reset";
 import { rateLimit } from "@/lib/rate-limit";
 
-/** POST { token, password } — consumes a 24h single-use reset link. */
+/**
+ * POST { token, password } — consumes a single-use set-password link (reset
+ * or invite) and signs the user in: the response sets a session cookie with
+ * the 2FA step still owed, so the client goes straight to /login/2fa (the
+ * TOTP challenge, or enrollment for a new account) and then into the app.
+ */
 export async function POST(request: NextRequest) {
   const disabled = loginDisabledResponse();
   if (disabled) return disabled;
@@ -23,11 +34,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (password.length < 8) {
-    return NextResponse.json(
-      { error: "Password must be at least 8 characters" },
-      { status: 400 }
-    );
+  if (!isPasswordValid(password)) {
+    return NextResponse.json({ error: PASSWORD_POLICY_MESSAGE }, { status: 400 });
   }
 
   if (!rateLimit(`pw-reset-consume:${token.slice(0, 16)}`, 5, 60_000)) {
@@ -37,13 +45,27 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  let userId: string;
   try {
-    await resetPassword(token, password);
+    ({ userId } = await resetPassword(token, password));
   } catch {
     return NextResponse.json(
       { error: "This reset link is invalid or has expired. Request a new one." },
       { status: 400 }
     );
   }
-  return NextResponse.json({ ok: true });
+
+  const session = await createSession(userId);
+  const response = NextResponse.json({ ok: true, twoFactorRequired: true });
+  const opts = sessionCookieOptions(session);
+  response.cookies.set(opts.name, opts.value, {
+    httpOnly: opts.httpOnly,
+    sameSite: opts.sameSite,
+    path: opts.path,
+    secure: opts.secure,
+    maxAge: opts.maxAge,
+  });
+  const pending = twoFactorPendingCookieOptions(true);
+  response.cookies.set(pending.name, pending.value, pending);
+  return response;
 }

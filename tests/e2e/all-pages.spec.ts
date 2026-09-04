@@ -8,9 +8,10 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  *
  * Route inventory (src/app/**\/page.tsx) and why some are not visited here:
  * - /                       covered: redirects a logged-in user to /dashboard.
- * - /login, /register       covered as redirects: middleware sends a
+ * - /login                  covered as a redirect: middleware sends a
  *                           logged-in user to /dashboard. The logged-out
- *                           /login render lives in auth.spec.ts.
+ *                           /login render lives in auth.spec.ts. (No
+ *                           /register: sign-up is invite-only.)
  * - /admin, /admin/users,   skipped as app pages: PM-OS Admin requires
  *   /admin/enablements,     User.role === PMOS_ADMIN; the seeded RoomLens
  *   /admin/ideas
@@ -76,7 +77,7 @@ test("root and auth routes send a logged-in user to the dashboard", async ({
 }) => {
   await loginAsRoomLens(page);
 
-  for (const path of ["/", "/login", "/register"]) {
+  for (const path of ["/", "/login"]) {
     await page.goto(path);
     await page.waitForURL("**/dashboard");
     await expect(

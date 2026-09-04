@@ -1,6 +1,6 @@
 {
   "name": "pmos",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- next dev",
@@ -29,6 +29,7 @@
     "framer-motion": "^12.40.0",
     "lucide-react": "^0.511.0",
     "next": "^16.3.2",
+    "nodemailer": "^9.1.1",
     "otpauth": "^9.5.1",
     "pg": "^8.22.0",
     "qrcode": "^1.5.4",
@@ -42,6 +43,7 @@
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.1.8",
     "@types/node": "^22.15.29",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.1.6",

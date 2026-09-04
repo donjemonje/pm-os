@@ -15,14 +15,8 @@ env:
       - BUILD
       - RUNTIME
 
-  - variable: ALLOW_SIGNUP
-    value: "false"
-    availability:
-      - BUILD
-      - RUNTIME
-
-  # Google SSO is live. This is the env DEFAULT; the admin override lives in
-  # PM-OS Admin → Enablements → System → Google SSO.
+  # Google sign-in is live (env-only switch; no admin flag). Sign-up is
+  # invite-only (PM-OS Admin → Users), so there is no ALLOW_SIGNUP anymore.
   - variable: DISABLE_GOOGLE_LOGIN
     value: "false"
     availability:
@@ -35,16 +29,22 @@ env:
       - BUILD
       - RUNTIME
 
-  # Docs/Chat are live surfaces: unset means ON (unlike IDEAS_ENABLED).
-  # Per-organization overrides live in PM-OS Admin → Enablements.
+  # Surfaces are OFF by default (2026-09-03) and opted in per organization in
+  # PM-OS Admin → Enablements. Set one to "true" only to force it on globally.
   - variable: DOCS_ENABLED
-    value: "true"
+    value: "false"
     availability:
       - BUILD
       - RUNTIME
 
   - variable: CHAT_ENABLED
-    value: "true"
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: DASHBOARD_ENABLED
+    value: "false"
     availability:
       - BUILD
       - RUNTIME
@@ -63,6 +63,41 @@ env:
   # AES-256-GCM key for TOTP secrets (2FA) — 64 hex chars, Secret Manager only.
   - variable: TOTP_ENC_KEY
     secret: pmos-totp-enc-key
+    availability:
+      - RUNTIME
+
+  # --- Email (invites, password reset) — Google Workspace SMTP ---
+  # support@pm-os.io is its own Workspace user (own profile photo, own app
+  # password in SMTP_PASSWORD). SPF + DKIM + DMARC for pm-os.io are set
+  # (2026-09-03). Both SMTP_USER and SMTP_PASSWORD unset = emails print to
+  # the server log.
+  - variable: SMTP_HOST
+    value: smtp.gmail.com
+    availability:
+      - RUNTIME
+
+  - variable: SMTP_PORT
+    value: "465"
+    availability:
+      - RUNTIME
+
+  - variable: SMTP_USER
+    value: support@pm-os.io
+    availability:
+      - RUNTIME
+
+  - variable: SMTP_PASSWORD
+    secret: pmos-smtp-password
+    availability:
+      - RUNTIME
+
+  - variable: SMTP_FROM
+    value: "PM-OS <support@pm-os.io>"
+    availability:
+      - RUNTIME
+
+  - variable: SMTP_REPLY_TO
+    value: support@pm-os.io
     availability:
       - RUNTIME
 

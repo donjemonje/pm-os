@@ -33,6 +33,7 @@ const show = (v?: string) => (v === undefined ? "<unset>" : `"${v}"`);
 export default function validateTestEnv(): void {
   const env = RESOLVED_ENV;
   const problems: string[] = [];
+  let testDbName: string | undefined;
 
   // Login must be enabled (DISABLE_LOGIN is default-closed: unset = disabled).
   if (!isFalseLike(env.DISABLE_LOGIN)) {
@@ -42,7 +43,9 @@ export default function validateTestEnv(): void {
     );
   }
 
-  // Tests may only ever run against the dedicated pmos_test database.
+  // Tests run against the dedicated pmos_test database (CI, shared local
+  // runs) or a feature's own dev clone pmos_ft_<name> (feature QA inside
+  // /feature runs on the developer's DB) — NEVER the shared dev DB "pmos".
   if (!env.DATABASE_URL?.trim()) {
     problems.push(`DATABASE_URL is not set — the app cannot reach a database; ${FIX_YAML}`);
   } else {
@@ -54,12 +57,18 @@ export default function validateTestEnv(): void {
     } catch {
       problems.push(`DATABASE_URL is not a parseable URL; ${FIX_YAML}`);
     }
-    if (dbName !== undefined && dbName !== "pmos_test") {
+    if (
+      dbName !== undefined &&
+      dbName !== "pmos_test" &&
+      !/^pmos_ft_[a-z0-9_]+$/.test(dbName)
+    ) {
       problems.push(
         `DATABASE_URL points at database "${dbName}" — tests only ever run ` +
-          `against "pmos_test" (NEVER the dev database "pmos"); ${FIX_YAML}`
+          `against "pmos_test" or a feature clone "pmos_ft_<name>" (NEVER the ` +
+          `shared dev database "pmos"); ${FIX_YAML}`
       );
     }
+    testDbName = dbName;
   }
 
   // Session cookies can't be signed without it — login would 500.
@@ -109,34 +118,34 @@ export default function validateTestEnv(): void {
     );
   }
 
-  // all-pages.spec.ts asserts /docs and /chat render, and admin.spec A2
-  // asserts chat's env default is on. Both flags are on when unset
-  // (src/lib/feature-flags.ts), so only an explicit false-like value here
-  // is a misconfiguration.
-  for (const flag of ["DOCS_ENABLED", "CHAT_ENABLED"] as const) {
-    if (isFalseLike(env[flag])) {
+  // all-pages.spec.ts asserts /docs, /chat and /dashboard render, and
+  // admin.spec A2 asserts chat's env default is on. All three flags are OFF
+  // when unset (src/lib/feature-flags.ts, since 2026-09-03), so the test env
+  // must pin them on explicitly.
+  for (const flag of ["DOCS_ENABLED", "CHAT_ENABLED", "DASHBOARD_ENABLED"] as const) {
+    if (!isTrueLike(env[flag])) {
       problems.push(
         `${flag} resolves to ${show(env[flag])} but the suite asserts that ` +
-          `surface renders (all-pages.spec.ts, admin.spec.ts A2) — unset it ` +
-          `or set it to "true", or update those specs together with this check`
+          `surface renders (all-pages.spec.ts, admin.spec.ts A2) — set it to ` +
+          `"true" in test-apphosting.yaml (and CI), or update those specs ` +
+          `together with this check`
       );
     }
   }
 
-  // google-sso.spec.ts asserts the googleSso system flag's env default is
-  // OFF ("Off (default)" badge, no google in /api/auth/oauth/providers) and
-  // then flips the admin override. The env default is NOT DISABLE_GOOGLE_LOGIN,
-  // so the pin must resolve true-like.
+  // google-sso.spec.ts G1 asserts the env-only Google switch: with
+  // DISABLE_GOOGLE_LOGIN on, google is absent from the providers list and
+  // the authorize endpoint bounces to /login?error=google_sso_disabled.
   if (!isTrueLike(env.DISABLE_GOOGLE_LOGIN)) {
     problems.push(
       `DISABLE_GOOGLE_LOGIN resolves to ${show(env.DISABLE_GOOGLE_LOGIN)} but ` +
-        `google-sso.spec.ts asserts the googleSso env default is off — set it ` +
+        `google-sso.spec.ts G1 asserts Google is hidden by env — set it ` +
         `to "true", or update that spec together with this check`
     );
   }
 
-  // google-sso.spec.ts needs Google to count as "configured" so the system
-  // flag is the only gate it observes. Fake creds are fine: the providers
+  // google-sso.spec.ts needs Google to count as "configured" so the env
+  // switch is the only gate it observes. Fake creds are fine: the providers
   // listing and the authorize redirect never call Google's servers.
   for (const cred of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] as const) {
     if (!env[cred]?.trim()) {
@@ -157,6 +166,6 @@ export default function validateTestEnv(): void {
   }
 
   console.log(
-    `[test-env] OK — login enabled, database pmos_test, app at ${LOCAL_BASE_URL}, ideas off, docs/chat on, google sso default off (fake creds set), TOTP key set`
+    `[test-env] OK — login enabled, database ${testDbName}, app at ${LOCAL_BASE_URL}, ideas off, docs/chat/dashboard pinned on, google hidden by env (fake creds set), TOTP key set`
   );
 }

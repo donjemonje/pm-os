@@ -15,7 +15,6 @@ const outPath = resolve(process.argv[3] ?? resolve(ROOT, "dev-apphosting.yaml"))
 
 const BUILD_RUNTIME = new Set([
   "DISABLE_LOGIN",
-  "ALLOW_SIGNUP",
   "DISABLE_GOOGLE_LOGIN",
   "SHOW_START_FREE_TRIAL",
   "NEXT_PUBLIC_APP_URL",

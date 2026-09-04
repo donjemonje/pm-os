@@ -32,10 +32,6 @@ function slugify(input) {
   return base || "org";
 }
 
-function makeInviteCode() {
-  return randomBytes(6).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
-}
-
 async function uniqueSlug(base) {
   let slug = base;
   let n = 1;
@@ -44,14 +40,6 @@ async function uniqueSlug(base) {
     slug = `${base}-${n}`;
   }
   return slug;
-}
-
-async function uniqueInviteCode() {
-  let code = makeInviteCode();
-  while (await prisma.organization.findUnique({ where: { inviteCode: code } })) {
-    code = makeInviteCode();
-  }
-  return code;
 }
 
 async function seedOrg({ orgName, integration, userEmail, userName, userPassword }) {
@@ -66,12 +54,10 @@ async function seedOrg({ orgName, integration, userEmail, userName, userPassword
   }
 
   const slug = await uniqueSlug(slugify(orgName));
-  const inviteCode = await uniqueInviteCode();
   const org = await prisma.organization.create({
     data: {
       name: orgName,
       slug,
-      inviteCode,
       workspace: { create: { name: `${orgName} Workspace` } },
     },
   });
@@ -87,7 +73,6 @@ async function seedOrg({ orgName, integration, userEmail, userName, userPassword
 
   console.log(`✓ Organization "${orgName}" created`);
   console.log(`    user:        ${email}  (password: ${userPassword})`);
-  console.log(`    invite code: ${inviteCode}`);
   console.log(`    next step:   sign in as this user and connect ${integration} in Settings.`);
 }
 

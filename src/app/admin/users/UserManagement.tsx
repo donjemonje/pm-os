@@ -2,15 +2,17 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   Building2,
-  Check,
-  Copy,
   Loader2,
+  Mail,
   Plus,
   RotateCcw,
+  Trash2,
   UserPlus,
   UserX,
 } from "lucide-react";
+import { ORG_DELETE_CONFIRMATION } from "@/lib/admin-guard";
 import { cn } from "@/lib/utils";
 
 type Member = {
@@ -19,6 +21,8 @@ type Member = {
   name: string;
   role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
+  providers: string[];
+  activated: boolean;
   deactivatedAt: string | null;
   createdAt: string;
 };
@@ -27,7 +31,6 @@ type Organization = {
   id: string;
   name: string;
   slug: string;
-  inviteCode: string;
   features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
@@ -47,9 +50,10 @@ export function UserManagement({
   const [organizations, setOrganizations] =
     useState<Organization[]>(initialOrganizations);
   const [showAddUser, setShowAddUser] = useState(false);
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [orgToDelete, setOrgToDelete] = useState<Organization | null>(null);
 
   const totalUsers = useMemo(
     () => organizations.reduce((sum, org) => sum + org.members.length, 0),
@@ -96,19 +100,53 @@ export function UserManagement({
     await patchMember(member, { deactivated });
   }
 
+  async function resendInvite(member: Member) {
+    setBusyUserId(member.id);
+    setActionError("");
+    setNotice("");
+    try {
+      const res = await fetch(`/api/admin/users/${member.id}/invite`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok) {
+        setNotice(inviteNotice(member.email, data?.delivered === true));
+      } else {
+        setActionError(data?.error || "Failed to send invite");
+      }
+    } finally {
+      setBusyUserId(null);
+    }
+  }
+
+  async function deleteMember(orgName: string, member: Member) {
+    if (
+      !window.confirm(
+        `Permanently delete ${member.name || member.email} (${orgName})? Their sessions and sign-in methods are removed. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusyUserId(member.id);
+    setActionError("");
+    try {
+      const res = await fetch(`/api/admin/users/${member.id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        await refresh();
+      } else {
+        const data = await res.json().catch(() => null);
+        setActionError(data?.error || "Delete failed");
+      }
+    } finally {
+      setBusyUserId(null);
+    }
+  }
+
   // Role changes are deliberately absent from this UI (and rejected by the
   // API): they happen only via scripts/set-user-role.mjs — Daniel's call,
   // 2026-08-27. The role badge below is display-only.
-
-  async function copyInvite(code: string) {
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopiedCode(code);
-      setTimeout(() => setCopiedCode((c) => (c === code ? null : c)), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -131,8 +169,19 @@ export function UserManagement({
         <AddUserForm
           organizations={organizations}
           onClose={() => setShowAddUser(false)}
-          onCreated={async () => {
+          onCreated={async (created) => {
             setShowAddUser(false);
+            setActionError("");
+            setNotice("");
+            if (created.invite === null) {
+              setNotice(`${created.email} added.`);
+            } else if (created.invite.sent) {
+              setNotice(inviteNotice(created.email, created.invite.delivered === true));
+            } else {
+              setActionError(
+                `${created.email} was added, but the invite email failed: ${created.invite.error}. Fix the SMTP settings and use "Resend invite".`
+              );
+            }
             await refresh();
           }}
         />
@@ -142,6 +191,22 @@ export function UserManagement({
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
           {actionError}
         </p>
+      )}
+      {notice && (
+        <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {notice}
+        </p>
+      )}
+
+      {orgToDelete && (
+        <DeleteOrganizationDialog
+          organization={orgToDelete}
+          onClose={() => setOrgToDelete(null)}
+          onDeleted={async () => {
+            setOrgToDelete(null);
+            await refresh();
+          }}
+        />
       )}
 
       {organizations.length === 0 ? (
@@ -171,16 +236,12 @@ export function UserManagement({
                 </div>
                 <button
                   type="button"
-                  onClick={() => copyInvite(org.inviteCode)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                  title="Copy invite code"
+                  onClick={() => setOrgToDelete(org)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                  title="Delete organization"
                 >
-                  {copiedCode === org.inviteCode ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-600" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" />
-                  )}
-                  <span className="font-mono">{org.inviteCode}</span>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete organization
                 </button>
               </div>
 
@@ -229,7 +290,7 @@ export function UserManagement({
                               "rounded-full px-2 py-0.5 text-xs font-medium",
                               member.deactivatedAt
                                 ? "bg-slate-100 text-slate-500"
-                                : member.hasPassword
+                                : member.activated
                                   ? "bg-emerald-50 text-emerald-700"
                                   : "bg-amber-50 text-amber-700"
                             )}
@@ -237,14 +298,18 @@ export function UserManagement({
                             {member.deactivatedAt
                               ? "Deactivated"
                               : member.hasPassword
-                                ? "Password set"
-                                : "Invite pending"}
+                                ? "Password"
+                                : member.providers.includes("google")
+                                  ? "Google"
+                                  : member.activated
+                                    ? "Active"
+                                    : "Invite pending"}
                           </span>
                         </td>
                         <td className="px-5 py-3 text-slate-500 whitespace-nowrap">
                           {new Date(member.createdAt).toLocaleDateString()}
                         </td>
-                        <td className="px-5 py-3 text-right">
+                        <td className="px-5 py-3 text-right whitespace-nowrap">
                           {member.deactivatedAt ? (
                             <button
                               type="button"
@@ -274,6 +339,28 @@ export function UserManagement({
                               Deactivate
                             </button>
                           )}
+                          {!member.deactivatedAt && !member.activated && (
+                            <button
+                              type="button"
+                              onClick={() => resendInvite(member)}
+                              disabled={busyUserId === member.id}
+                              className="ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                              title="Send a fresh invite email (7-day set-password link)"
+                            >
+                              <Mail className="h-3.5 w-3.5" />
+                              Resend invite
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => deleteMember(org.name, member)}
+                            disabled={busyUserId === member.id}
+                            className="ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                            title="Permanently delete this user"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -287,6 +374,137 @@ export function UserManagement({
     </div>
   );
 }
+
+/**
+ * Type-to-confirm dialog for deleting an organization. Enter = confirm (only
+ * once the word matches), Esc = cancel.
+ */
+function DeleteOrganizationDialog({
+  organization,
+  onClose,
+  onDeleted,
+}: {
+  organization: Organization;
+  onClose: () => void;
+  onDeleted: () => void | Promise<void>;
+}) {
+  const [typed, setTyped] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const confirmed = typed.trim() === ORG_DELETE_CONFIRMATION;
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!confirmed || loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/admin/organizations/${organization.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: typed.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(data?.error || "Failed to delete organization");
+        return;
+      }
+      await onDeleted();
+    } catch {
+      setError("Something went wrong. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !loading) onClose();
+      }}
+    >
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-org-title"
+        onSubmit={onSubmit}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !loading) onClose();
+        }}
+        className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl"
+      >
+        <div className="mb-3 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-red-600" />
+          <h3 id="delete-org-title" className="text-sm font-semibold">
+            Delete {organization.name}?
+          </h3>
+        </div>
+
+        <p className="text-sm text-slate-600">
+          This permanently deletes the organization, its workspace and all of
+          its data (ideas, documents, releases, integrations, chat), and{" "}
+          {organization.memberCount === 1
+            ? "its 1 user"
+            : `all ${organization.memberCount} of its users`}
+          . This cannot be undone.
+        </p>
+
+        {error && (
+          <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        )}
+
+        <label className="mt-4 block">
+          <span className="mb-1 block text-xs font-medium text-slate-500">
+            Type <span className="font-mono font-semibold text-slate-900">{ORG_DELETE_CONFIRMATION}</span> to confirm
+          </span>
+          <input
+            autoFocus
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={ORG_DELETE_CONFIRMATION}
+            autoComplete="off"
+            spellCheck={false}
+            className={inputClass}
+          />
+        </label>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!confirmed || loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+            {loading ? "Deleting…" : "Delete organization"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function inviteNotice(email: string, delivered: boolean): string {
+  return delivered
+    ? `Invite sent to ${email}.`
+    : `Invite for ${email} was printed to the server console — no SMTP transport is configured in this environment.`;
+}
+
+type CreatedUser = {
+  email: string;
+  invite: { sent: boolean; delivered?: boolean; error?: string } | null;
+};
 
 function StatCard({ label, value }: { label: string; value: number }) {
   return (
@@ -304,11 +522,10 @@ function AddUserForm({
 }: {
   organizations: Organization[];
   onClose: () => void;
-  onCreated: () => void | Promise<void>;
+  onCreated: (created: CreatedUser) => void | Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [orgChoice, setOrgChoice] = useState(
     organizations[0]?.id ?? NEW_ORG
   );
@@ -329,7 +546,6 @@ function AddUserForm({
         body: JSON.stringify({
           name,
           email,
-          password: password || undefined,
           organizationId: creatingNewOrg ? undefined : orgChoice,
           organizationName: creatingNewOrg ? newOrgName : undefined,
         }),
@@ -339,7 +555,7 @@ function AddUserForm({
         setError(data.error || "Failed to add user");
         return;
       }
-      await onCreated();
+      await onCreated({ email: data.user.email, invite: data.invite ?? null });
     } catch {
       setError("Something went wrong. Try again.");
     } finally {
@@ -402,7 +618,7 @@ function AddUserForm({
           </select>
         </Field>
 
-        {creatingNewOrg ? (
+        {creatingNewOrg && (
           <Field label="New organization name">
             <input
               required
@@ -412,34 +628,13 @@ function AddUserForm({
               className={inputClass}
             />
           </Field>
-        ) : (
-          <Field label="Temporary password (optional)">
-            <input
-              type="text"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Leave blank to send invite"
-              className={inputClass}
-            />
-          </Field>
-        )}
-
-        {creatingNewOrg && (
-          <Field label="Temporary password (optional)">
-            <input
-              type="text"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Leave blank to send invite"
-              className={inputClass}
-            />
-          </Field>
         )}
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
-        Passwords must be at least 8 characters. Leave it blank to create the
-        user with an invite-pending status.
+        The user gets an invite email with a link to set their password (valid
+        7 days). Until then they show as “Invite pending”; use “Resend invite”
+        if the link expires.
       </p>
 
       <div className="mt-5 flex justify-end gap-2">

@@ -1,61 +1,60 @@
-import { createHash, randomBytes } from "crypto";
 import { db } from "./db";
 import { hashPassword } from "./auth";
+import { renderBrandedEmail } from "./email-templates";
 import { sendEmail } from "./mailer";
+import { hashResetToken, issuePasswordToken } from "./password-tokens";
+
+export { issuePasswordToken, lookupPasswordToken } from "./password-tokens";
 
 const RESET_TTL_MS = 24 * 60 * 60 * 1000;
 
-function hashResetToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+export function appBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000";
 }
 
 /**
  * Create a reset token and email the link. Silently does nothing when the
- * email has no account, the account is deactivated, or it is an SSO account
- * (no passwordHash) — the caller must answer identically either way, so the
- * endpoint never reveals which emails exist or how they sign in.
+ * email has no account, the account is deactivated, or it has no password
+ * yet (SSO account, or an invite that was never accepted — the admin resends
+ * the invite instead) — the caller must answer identically either way, so
+ * the endpoint never reveals which emails exist or how they sign in.
  */
 export async function requestPasswordReset(emailRaw: string): Promise<void> {
   const email = emailRaw.trim().toLowerCase();
   const user = await db.user.findUnique({ where: { email } });
   if (!user || user.deactivatedAt || !user.passwordHash) return;
 
-  const token = randomBytes(32).toString("base64url");
-  // One outstanding link per user: a new request invalidates older ones.
-  await db.passwordResetToken.deleteMany({
-    where: { userId: user.id, usedAt: null },
+  const token = await issuePasswordToken(user.id, RESET_TTL_MS);
+  const link = `${appBaseUrl()}/reset-password?token=${token}`;
+  const { html, text } = renderBrandedEmail({
+    preheader: "Set a new password for your PM-OS account",
+    heading: "Reset your password",
+    paragraphs: [
+      `Hi ${user.name},`,
+      "Someone requested a password reset for your PM-OS account. Use the button below to set a new password.",
+    ],
+    cta: { label: "Set a new password", url: link },
+    note:
+      "The link expires in 24 hours and can be used once. If this wasn't you, you can ignore this email — your password is unchanged.",
   });
-  await db.passwordResetToken.create({
-    data: {
-      userId: user.id,
-      tokenHash: hashResetToken(token),
-      expiresAt: new Date(Date.now() + RESET_TTL_MS),
-    },
-  });
-
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const link = `${base}/reset-password?token=${token}`;
   await sendEmail({
     to: email,
     subject: "Reset your PM-OS password",
-    text:
-      `Hi ${user.name},\n\n` +
-      `Someone requested a password reset for your PM-OS account. ` +
-      `Open this link to set a new password:\n\n${link}\n\n` +
-      `The link expires in 24 hours and can be used once.\n\n` +
-      `If this wasn't you, you can ignore this email — your password is unchanged.`,
+    text,
+    html,
   });
 }
 
 /**
- * Consume a reset link: set the new password, mark the token used, and revoke
- * every active session (the standard post-reset lockout). Throws
- * "reset_invalid" for unknown, expired, or already-used tokens.
+ * Consume a set-password link (reset or invite): set the new password, mark
+ * the token used, and revoke every active session (the standard post-reset
+ * lockout). Returns the user id so the caller can start a fresh session.
+ * Throws "reset_invalid" for unknown, expired, or already-used tokens.
  */
 export async function resetPassword(
   token: string,
   newPassword: string
-): Promise<void> {
+): Promise<{ userId: string }> {
   const row = await db.passwordResetToken.findUnique({
     where: { tokenHash: hashResetToken(token) },
     include: { user: true },
@@ -73,6 +72,12 @@ export async function resetPassword(
       where: { id: row.id },
       data: { usedAt: new Date() },
     }),
+    // Sibling links (e.g. an older invite kept alive across a resend) die
+    // with the consumed one — same contract as the Google path.
+    db.passwordResetToken.deleteMany({
+      where: { userId: row.userId, usedAt: null },
+    }),
     db.session.deleteMany({ where: { userId: row.userId } }),
   ]);
+  return { userId: row.userId };
 }
