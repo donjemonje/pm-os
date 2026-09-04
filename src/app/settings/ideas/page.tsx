@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { MyProductLinesPanel } from "@/components/ideas/MyProductLinesPanel";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { db } from "@/lib/db";
+import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 
@@ -21,6 +22,9 @@ export default async function IdeasSettingsPage() {
   const user = await requireUserPage("/settings/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
+  // Components (platforms) off in Admin → Ideas hides the whole platforms
+  // concept here, not just the Jira mapping.
+  const platformsEnabled = mergeIdeasJiraConfig(workspace.ideasConfig).fields.platforms.enabled;
   const [productLines, platforms, customers, dbUser] = await Promise.all([
     db.productLine.findMany(LIST_QUERY(workspace.id)),
     db.platform.findMany(LIST_QUERY(workspace.id)),
@@ -53,15 +57,17 @@ export default async function IdeasSettingsPage() {
           options={productLines.map((l) => l.name)}
           initialSelected={myProductLines}
         />
-        <SettingsListPanel
-          title="Platforms"
-          blurb="The platforms ideas can target, e.g. iOS, Android, Web."
-          endpoint="/api/ideas/lists/platforms"
-          namePlaceholder="e.g. iOS"
-          descriptionPlaceholder="What does this platform cover? (optional)"
-          emptyLabel="No platforms yet. Add the first one above."
-          initialItems={platforms}
-        />
+        {platformsEnabled && (
+          <SettingsListPanel
+            title="Platforms"
+            blurb="The platforms ideas can target, e.g. iOS, Android, Web."
+            endpoint="/api/ideas/lists/platforms"
+            namePlaceholder="e.g. iOS"
+            descriptionPlaceholder="What does this platform cover? (optional)"
+            emptyLabel="No platforms yet. Add the first one above."
+            initialItems={platforms}
+          />
+        )}
         <SettingsListPanel
           title="Customers"
           blurb="The customers tickets can affect. PMOS AI tags ideas with customers from this list and suggests new names it finds in tickets — approving a suggestion adds it here."
