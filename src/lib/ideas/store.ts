@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { catalogTickets } from "./catalog";
+import { getJiraConnectionStatus } from "../jira";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { matchTickets } from "./match";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
@@ -17,6 +18,8 @@ export interface IdeasState {
   ideas: Idea[];
   /** Customer catalog names — the client tells confirmed from suggested with this. */
   customerCatalog: string[];
+  /** Jira integration is set up for the workspace — gates Export to Jira. */
+  jiraConnected: boolean;
 }
 
 /** A parsed CSV row plus the original record verbatim (the raw store). */
@@ -128,7 +131,7 @@ function toClientIdea(row: IdeaRow): Idea {
 }
 
 export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
-  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows] = await Promise.all([
+  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows, jiraStatus] = await Promise.all([
     db.zendeskTicketRaw.findMany({
       where: { workspaceId },
       orderBy: [{ importedAt: "asc" }, { id: "asc" }],
@@ -144,6 +147,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       where: { workspaceId },
       select: { ideaId: true, action: true, jiraKey: true },
     }),
+    getJiraConnectionStatus(workspaceId),
   ]);
 
   const undoByIdea = new Map(
@@ -151,6 +155,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
   );
 
   return {
+    jiraConnected: Boolean(jiraStatus?.connected),
     tickets: ticketRows.map(toClientTicket),
     jiraSources: snapshotRows.map((s) => ({
       key: s.key,

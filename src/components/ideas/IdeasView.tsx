@@ -26,6 +26,7 @@ interface ServerState {
   jiraSources: JiraSource[];
   ideas: Idea[];
   customerCatalog?: string[];
+  jiraConnected?: boolean;
 }
 
 interface ImportSummary {
@@ -69,6 +70,7 @@ export function IdeasView({
   // Server state carries the live customer catalog so approving a suggested
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
+  const [jiraConnected, setJiraConnected] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -107,6 +109,7 @@ export function IdeasView({
     setJiraSources(state.jiraSources);
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
+    if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
   };
 
   useEffect(() => {
@@ -381,15 +384,17 @@ export function IdeasView({
     unchanged: ideas.filter((i) => i.batch === "unchanged").length,
     archive: ideas.filter((i) => i.batch === "archive").length,
   };
-  // Partial merge: the button opens as soon as anything is approved — the
+  // Partial export: the button opens as soon as anything is approved — the
   // all-reviewed gate applies per selected product line inside the modal.
-  const injectDisabled = reviewed === 0;
-  const injectHint =
-    reviewed === 0
+  // No Jira integration → no export, whatever the review state.
+  const injectDisabled = !jiraConnected || reviewed === 0;
+  const injectHint = !jiraConnected
+    ? "Connect Jira in Settings → Integrations to export"
+    : reviewed === 0
       ? pending > 0
-        ? `Approve ideas to enable merging — ${pending} awaiting review`
-        : "All changes already merged to Jira"
-      : `Merge approved changes to Jira`;
+        ? `Approve ideas to enable exporting — ${pending} awaiting review`
+        : "All changes already exported to Jira"
+      : `Export approved changes to Jira`;
 
   const matches = (i: Idea): boolean => {
     if (i.batch === "deleted") return false;
@@ -522,7 +527,7 @@ export function IdeasView({
       setNote(
         failCount === 0
           ? `${okCount} change${okCount === 1 ? "" : "s"} merged to Jira`
-          : `${okCount} merged, ${failCount} failed — reopen Merge to Jira to retry`
+          : `${okCount} exported, ${failCount} failed — reopen Export to Jira to retry`
       );
     } catch {
       setMergeError("Merge failed — is the dev server running?");
@@ -678,7 +683,7 @@ export function IdeasView({
           <div className="mb-5 flex items-center gap-6 rounded-xl border border-border bg-white px-5 py-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex flex-wrap items-baseline gap-2.5">
-                <span className="font-title text-[15px] font-semibold">Import in Progress</span>
+                <span className="font-title text-[15px] font-semibold">Merge in Progress</span>
                 <span className="text-[13px] text-[#4a5b74]">
                   {counts.new} new · {counts.updated} updated · {counts.unchanged} unchanged ·{" "}
                   {counts.archive} archive proposed
@@ -701,7 +706,7 @@ export function IdeasView({
                   onClick={openMerge}
                   className="inline-flex h-8 items-center whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  Merge to Jira
+                  Export to Jira
                 </button>
               </span>
             </div>
@@ -1202,7 +1207,7 @@ export function IdeasView({
                   <div className="mt-1 text-[13px] text-muted">
                     {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
                     {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
-                    run Merge to Jira again to retry just those.
+                    run Export to Jira again to retry just those.
                   </div>
                 </div>
                 <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
@@ -1256,7 +1261,7 @@ export function IdeasView({
             ) : (
               <>
                 <div>
-                  <div className="font-title text-lg font-semibold">Merge to Jira</div>
+                  <div className="font-title text-lg font-semibold">Export to Jira</div>
                   <div className="mt-1 text-[13px] text-muted">
                     Pick the product lines to merge. Only approved ideas are written — anything
                     still pending stays here for a later merge.
