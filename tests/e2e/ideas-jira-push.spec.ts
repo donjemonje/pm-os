@@ -121,11 +121,28 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       // Ideas on for the org via the per-org override (env default stays off).
       await db.organization.update({
         where: { id: org.id },
-        data: { features: { ideas: true } },
+        data: { features: { ideas: true, myProductLines: true } },
       });
 
       await deleteFixtures(db);
       await resetSharedState(db);
+
+      // The Export to Jira button is gated on a Jira integration existing
+      // (feature/ui_facelift_v1). A token-less row satisfies the gate; live
+      // flows treat it as not-connected (no OAuth creds in the test env).
+      await db.jiraConnection.upsert({
+        where: { workspaceId: org.workspace.id },
+        create: {
+          workspaceId: org.workspace.id,
+          cloudId: "qa-pj-cloud",
+          siteUrl: "https://qa-pj.atlassian.net",
+          accessToken: "",
+          refreshToken: "",
+          expiresAt: new Date(0),
+          projectKeys: JSON.stringify(["QAPJ"]),
+        },
+        update: {},
+      });
 
       for (const name of [LINE_A, LINE_B]) {
         await db.productLine.create({ data: { workspaceId, name } });
@@ -193,6 +210,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
 
   test.afterAll(async () => {
     await withDb(async (db) => {
+      await db.jiraConnection.deleteMany({
+        where: { workspaceId, cloudId: "qa-pj-cloud" },
+      });
       await deleteFixtures(db);
       await resetSharedState(db);
       // Back to the env default (ideas off) — all-pages.spec.ts depends on it.
@@ -438,7 +458,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       await withDb((db) =>
         db.organization.update({
           where: { slug: ROOMLENS_SLUG },
-          data: { features: { ideas: true } },
+          data: { features: { ideas: true, myProductLines: true } },
         })
       );
     }

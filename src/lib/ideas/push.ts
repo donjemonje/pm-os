@@ -7,6 +7,7 @@ import {
   getCreateMetaFields,
   getEditMetaFields,
   getJiraConnectionStatus,
+  hasValidJiraConnection,
   listAllFields,
   textToAdf,
   updateJiraIssue,
@@ -303,8 +304,10 @@ async function derivePlan(
   const writes: PushWrites = { creates: new Map(), updates: new Map() };
   const config = await getIdeasJiraConfig(workspaceId);
 
+  // Row-existence gates the button; writing needs a usable token too, so the
+  // preview blocker also covers a configured-but-dead connection.
   const status = await getJiraConnectionStatus(workspaceId);
-  if (!status?.connected) {
+  if (!status?.connected || !(await hasValidJiraConnection(workspaceId))) {
     return {
       plan: {
         target: null,
