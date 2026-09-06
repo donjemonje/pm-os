@@ -86,14 +86,18 @@ In CI there is no yaml — the guard validates the workflow job env the same
 way. Most failures mean: copy `test-apphosting.example.yaml` to
 `test-apphosting.yaml`.
 
-## Scheduled runs
+## CI flows (GitHub Actions)
 
-`.github/workflows/e2e.yml` runs the full suite on Sun, Tue, Thu at
-02:00 UTC, and on manual dispatch (Actions tab → e2e → Run workflow). It
-needs no GitHub secrets.
+`.github/workflows/e2e.yml` is one workflow with an independent flow per
+branch: every push to `development` tests development, every push to
+`main` tests main, and the scheduled runs (Sun, Tue, Thu at 02:00 UTC,
+fired from main) test main. Manual dispatch (Actions tab → e2e → Run
+workflow) tests whichever branch you pick. Each run checks out the branch
+it was triggered on, so a branch's tests, code, and CI env always come
+from the same commit. Needs no GitHub secrets.
 
-Production testing is out of scope for now — see git history when we
-revisit.
+Testing against the live production deployment is out of scope; the main
+flow tests production's *code* on an ephemeral CI database.
 
 ## Adding tests in a feature session
 

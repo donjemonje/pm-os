@@ -378,7 +378,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     expect((await badMode.json()).error).toBe("mode must be preview or execute");
     const badJson = await page.request.post("/api/ideas/push", {
       headers: { "Content-Type": "application/json" },
-      data: "{not json",
+      // A string under a JSON content-type gets JSON.stringify-ed by Playwright
+      // when it is not parsable; a Buffer goes over the wire untouched.
+      data: Buffer.from("{not json"),
     });
     expect(badJson.status()).toBe(400);
     expect((await badJson.json()).error).toBe("Invalid JSON");
