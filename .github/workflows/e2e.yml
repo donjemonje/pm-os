@@ -1,25 +1,26 @@
-# E2e runs: on every push to development, plus scheduled Sun / Tue / Thu at
-# 02:00 UTC (~05:00 Israel in summer, ~04:00 in winter — cron is UTC and does
-# not follow DST). Push runs work from development directly; scheduled runs
-# only fire once this file also exists on main (GitHub cron uses the default
-# branch), and always test development via the pinned checkout ref below.
+# E2e runs as an independent CI flow per branch:
+#   - every push to development tests development
+#   - every push to main tests main
+#   - scheduled Sun / Tue / Thu at 02:00 UTC (~05:00 Israel in summer,
+#     ~04:00 in winter — cron is UTC and does not follow DST) tests main.
+#     GitHub cron only fires from the default branch (main), and a cron
+#     run always checks out the branch it fired from, so no cross-branch
+#     checkout: each branch's tests always match that branch's code and
+#     this file's env on that branch.
 #
 # Runs the full suite against an ephemeral Postgres + local app boot.
 # Needs NO GitHub secrets — everything is synthetic test data.
-#
-# Production testing is out of scope for now — see git history when we
-# revisit.
 
 name: e2e
 
 on:
   push:
-    branches: [development]
+    branches: [main, development]
   schedule:
     - cron: "0 2 * * 0,2,4"
   workflow_dispatch:
 
-# A newer push to development supersedes an in-flight run of the same suite.
+# A newer push to the same branch supersedes an in-flight run of the same suite.
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
@@ -54,15 +55,17 @@ jobs:
       GOOGLE_CLIENT_ID: test-google-client-id
       GOOGLE_CLIENT_SECRET: test-google-client-secret
       IDEAS_ENABLED: "false"
+      # Off when unset since 2026-09-03 (development); the suite asserts these
+      # surfaces render. Harmless on branches where they are on by default.
+      DOCS_ENABLED: "true"
+      CHAT_ENABLED: "true"
+      DASHBOARD_ENABLED: "true"
       # 2FA secret-encryption key; production-mode boot refuses to start
       # without it. Synthetic — the test DB holds only synthetic accounts.
       TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"
     steps:
-      # Scheduled workflows only fire from the default branch (main), so this
-      # file must exist on main — but the suite always tests development.
+      # No ref: test the branch this run was triggered on (push or cron).
       - uses: actions/checkout@v4
-        with:
-          ref: development
 
       - uses: actions/setup-node@v4
         with:
