@@ -39,7 +39,7 @@ export default async function AdminIdeasPage() {
           {
             id: "match",
             title: `Jira backlog matching (${MATCH_PROMPT_VERSION})`,
-            note: "Runs per feature request when Jira is connected: does this request match an existing backlog idea?",
+            note: "Runs per feature request: does it duplicate an idea already in the ideas list (Jira-born, an earlier import, or an earlier ticket of this import)? Unmatched requests join the candidate list, so similar tickets in one import consolidate. Jira disconnected just means fewer candidates.",
             text: MATCH_SYSTEM_PROMPT,
           },
         ]}

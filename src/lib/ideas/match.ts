@@ -1,27 +1,28 @@
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
-import type { JiraSource } from "./types";
 
 /**
  * Match stage: decide, for each cataloged feature request, whether it is the
- * same idea as one already in the Jira ideas backlog (PRD step 3). A matched
- * FR merges into the existing idea as evidence instead of becoming a new
- * idea; the model may also propose an enriched summary when the FR adds real
- * context. Like the catalog stage, every judgment is appended to the ledger —
- * nothing is replayed or forced.
+ * same idea as one already in the product's ideas list — however that idea
+ * was born (synced from Jira, or created from earlier Zendesk imports, or
+ * earlier tickets of THIS import). A matched FR merges into the existing
+ * idea as evidence instead of becoming a new idea; the model may also
+ * propose an enriched summary when the FR adds real context. Jira being
+ * disconnected just means a shorter candidate list. Like the catalog stage,
+ * every judgment is appended to the ledger — nothing is replayed or forced.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v1";
+export const MATCH_PROMPT_VERSION = "match-v2";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 function getMatchModel(): string {
   return process.env.IDEAS_MATCH_MODEL?.trim() || "claude-opus-5";
 }
 
-export const MATCH_SYSTEM_PROMPT = `You match an incoming feature request against a product team's existing Jira ideas backlog.
+export const MATCH_SYSTEM_PROMPT = `You match an incoming feature request against a product team's existing ideas list.
 
-You are given ONE feature request (a product-voiced title and summary, plus the original support-ticket text) and the full list of existing backlog ideas, each with a key, title, and description.
+You are given ONE feature request (a product-voiced title and summary, plus the original support-ticket text) and the full list of existing ideas, each with a key, title, and description. The list can contain ideas synced from the team's Jira backlog, ideas created from earlier support tickets, and ideas created from earlier tickets of this same import.
 
 Decide whether the request asks for the same capability as one existing idea:
 - A match means the same underlying capability and need — a customer voting for something already in the backlog. Different wording, narrower phrasing, or extra detail do not prevent a match when the capability is the same.
@@ -34,14 +35,14 @@ Return the matched idea's key EXACTLY as listed, or an empty string for no match
 
 const MATCH_TOOL = {
   name: "match_feature_request",
-  description: "Record the match verdict for one feature request against the ideas backlog.",
+  description: "Record the match verdict for one feature request against the ideas list.",
   input_schema: {
     type: "object" as const,
     properties: {
       matched_key: {
         type: "string",
         description:
-          "Key of the single backlog idea this request duplicates, exactly as listed. Empty string when no idea matches.",
+          "Key of the single existing idea this request duplicates, exactly as listed. Empty string when no idea matches.",
       },
       enriched_summary: {
         type: "string",
@@ -92,16 +93,23 @@ function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-function renderBacklog(ideas: JiraSource[]): string {
+export interface MatchCandidate {
+  /** Opaque key the model echoes back — an idea id, "jira:<KEY>", or "new:<ticket>". */
+  key: string;
+  title: string;
+  body: string;
+}
+
+function renderCandidates(ideas: MatchCandidate[]): string {
   const lines = ideas.map((s) =>
     [`[${s.key}] ${s.title}`, clip(s.body || "(no description)", 800)].join("\n")
   );
-  return `EXISTING IDEAS BACKLOG:\n\n${lines.join("\n\n")}`;
+  return `EXISTING IDEAS:\n\n${lines.join("\n\n")}`;
 }
 
-function renderUserMessage(input: MatchInput, backlog: string): string {
+function renderUserMessage(input: MatchInput, candidates: string): string {
   return [
-    backlog,
+    candidates,
     [
       "FEATURE REQUEST",
       `Title: ${input.productTitle || input.subject}`,
@@ -122,32 +130,41 @@ export interface MatchBatchResult {
 }
 
 /**
- * Match a batch of feature requests against the live Jira ideas backlog.
- * With an empty backlog no model is called — every FR is a non-match.
- * Backlog order is pinned by key so identical inputs render identical asks.
+ * Match a batch of feature requests against the existing ideas list. The
+ * candidate list GROWS as the batch runs: an unmatched FR joins it as
+ * "new:<ticket key>", so later tickets of the same import consolidate into
+ * it instead of spawning near-duplicates. With no candidates at all the
+ * first FR is a non-match without a model call. Initial candidates are
+ * sorted by key so identical inputs render identical asks.
  */
 export async function matchTickets(
   workspaceId: string,
   inputs: MatchInput[],
-  backlog: JiraSource[]
+  initialCandidates: MatchCandidate[]
 ): Promise<MatchBatchResult> {
   const model = getMatchModel();
-  if (inputs.length === 0 || backlog.length === 0) {
-    return {
-      results: inputs.map((i) => ({ key: i.key, matchedKey: null, enrichedSummary: "", reason: "" })),
-      model,
-      promptVersion: MATCH_PROMPT_VERSION,
-      called: 0,
-    };
+  if (inputs.length === 0) {
+    return { results: [], model, promptVersion: MATCH_PROMPT_VERSION, called: 0 };
   }
 
-  const sorted = [...backlog].sort((a, b) => a.key.localeCompare(b.key));
-  const backlogKeys = new Set(sorted.map((s) => s.key));
-  const rendered = renderBacklog(sorted);
+  const candidates = [...initialCandidates].sort((a, b) => a.key.localeCompare(b.key));
+  let called = 0;
 
   const results: MatchResult[] = [];
   for (const input of inputs) {
-    const userMessage = renderUserMessage(input, rendered);
+    const asCandidate = (): MatchCandidate => ({
+      key: `new:${input.key}`,
+      title: input.productTitle || input.subject,
+      body: input.productSummary || input.body,
+    });
+    if (candidates.length === 0) {
+      results.push({ key: input.key, matchedKey: null, enrichedSummary: "", reason: "" });
+      candidates.push(asCandidate());
+      continue;
+    }
+    const candidateKeys = new Set(candidates.map((c) => c.key));
+    const userMessage = renderUserMessage(input, renderCandidates(candidates));
+    called++;
     const message = await getClient().messages.create({
       model,
       max_tokens: 1000,
@@ -185,14 +202,16 @@ export async function matchTickets(
       }
     );
     // The ledger keeps the verdict as returned; the pipeline only acts on
-    // keys that exist in the backlog it was shown.
+    // keys that exist in the candidate list the model was shown.
+    const matchedKey = candidateKeys.has(verdict.matchedKey) ? verdict.matchedKey : null;
     results.push({
       key: input.key,
-      matchedKey: backlogKeys.has(verdict.matchedKey) ? verdict.matchedKey : null,
+      matchedKey,
       enrichedSummary: verdict.enrichedSummary,
       reason: verdict.reason,
     });
+    if (!matchedKey) candidates.push(asCandidate());
   }
 
-  return { results, model, promptVersion: MATCH_PROMPT_VERSION, called: inputs.length };
+  return { results, model, promptVersion: MATCH_PROMPT_VERSION, called };
 }

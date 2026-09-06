@@ -236,6 +236,25 @@ export async function importBatch(
   );
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
 
+  // Match candidates are the CURRENT ideas list — however each idea was born
+  // — plus live Jira issues not yet represented as ideas (they become ideas
+  // later in this import). Jira disconnected just means fewer candidates.
+  const existingIdeas = await db.idea.findMany({
+    where: { workspaceId, batchStatus: { not: "deleted" } },
+    select: { id: true, title: true, details: true, sources: { select: { kind: true, jiraKey: true } } },
+  });
+  const representedJiraKeys = new Set(
+    existingIdeas.flatMap((i) =>
+      i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [src.jiraKey] : []))
+    )
+  );
+  const matchCandidates = [
+    ...existingIdeas.map((i) => ({ key: i.id, title: i.title, body: i.details })),
+    ...(jira.connected ? jira.sources : [])
+      .filter((src) => !representedJiraKeys.has(src.key))
+      .map((src) => ({ key: `jira:${src.key}`, title: src.title, body: src.body })),
+  ];
+
   const match = await matchTickets(
     workspaceId,
     catalog.results
@@ -250,7 +269,7 @@ export async function importBatch(
           productSummary: v.productSummary,
         };
       }),
-    jira.connected ? jira.sources : []
+    matchCandidates
   );
   const matchByKey = new Map(match.results.map((m) => [m.key, m]));
 
@@ -374,6 +393,9 @@ export async function importBatch(
   let matched = 0;
   let bugs = 0;
   let needsDetails = 0;
+  /** "new:<ticket key>" → idea created for that ticket earlier in this loop. */
+  const createdByMatchKey = new Map<string, string>();
+  const createdThisBatch = new Set<string>();
   for (const input of fresh) {
     const verdict = verdictByKey.get(input.key);
     const ticket = await db.zendeskTicketRaw.create({
@@ -409,14 +431,27 @@ export async function importBatch(
     else if (verdict?.kind === "fr") {
       frs++;
       const m = matchByKey.get(input.key);
+      // The matched key can be an idea id, "jira:<KEY>" (an issue that only
+      // became an idea during this import's snapshot sync), or "new:<ticket>"
+      // (an idea created from an earlier ticket of this same import).
+      const targetId = m?.matchedKey
+        ? m.matchedKey.startsWith("new:")
+          ? (createdByMatchKey.get(m.matchedKey) ?? null)
+          : null
+        : null;
       const target = m?.matchedKey
-        ? await db.idea.findFirst({
-            where: {
-              workspaceId,
-              origin: "jira",
-              sources: { some: { kind: "jira", jiraKey: m.matchedKey } },
-            },
-          })
+        ? m.matchedKey.startsWith("new:")
+          ? targetId
+            ? await db.idea.findFirst({ where: { workspaceId, id: targetId } })
+            : null
+          : m.matchedKey.startsWith("jira:")
+            ? await db.idea.findFirst({
+                where: {
+                  workspaceId,
+                  sources: { some: { kind: "jira", jiraKey: m.matchedKey.slice(5) } },
+                },
+              })
+            : await db.idea.findFirst({ where: { workspaceId, id: m.matchedKey } })
         : null;
       if (target) {
         // Matched FR: evidence on the existing idea, never a new one. The
@@ -445,13 +480,17 @@ export async function importBatch(
         // (fresh tickets exist here, so rollover already reset last batch's
         // status: "updated" can only mean updated in THIS import.)
         const prior =
-          target.batchStatus === "updated" ? ((target.batchChanges as string[]) ?? []) : [];
+          target.batchStatus === "updated" || createdThisBatch.has(target.id)
+            ? ((target.batchChanges as string[]) ?? [])
+            : [];
 
         await db.idea.update({
           where: { id: target.id },
           data: {
             newVotes: { increment: 1 },
-            batchStatus: "updated",
+            // An idea born in THIS import that absorbs another ticket is
+            // still New — Updated is for ideas that pre-date the import.
+            batchStatus: createdThisBatch.has(target.id) ? "new" : "updated",
             decision: "pending",
             products: nextProducts as Prisma.InputJsonValue,
             platforms: nextPlatforms as Prisma.InputJsonValue,
@@ -472,7 +511,7 @@ export async function importBatch(
             : ["Other"];
       // Ideas read in product voice; the customer's original wording stays
       // intact on ZendeskTicketRaw. Fallbacks guard empty model output.
-      await db.idea.create({
+      const created = await db.idea.create({
         data: {
           workspaceId,
           title: verdict.productTitle || input.subject,
@@ -486,6 +525,8 @@ export async function importBatch(
           sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
         },
       });
+      createdByMatchKey.set(`new:${input.key}`, created.id);
+      createdThisBatch.add(created.id);
     }
   }
 
