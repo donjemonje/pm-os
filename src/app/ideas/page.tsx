@@ -22,7 +22,10 @@ export default async function IdeasPage() {
     select: { name: true },
   };
   const [productLines, platforms, customers, dbUser] = await Promise.all([
-    db.productLine.findMany(listArgs),
+    db.productLine.findMany({
+      ...listArgs,
+      orderBy: [{ position: "asc" as const }, { name: "asc" as const }],
+    }),
     db.platform.findMany(listArgs),
     db.customer.findMany(listArgs),
     db.user.findUnique({

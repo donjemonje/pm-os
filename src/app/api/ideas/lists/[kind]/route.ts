@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
+import { isPmosAdmin } from "@/lib/admin-auth";
+import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 
 const ITEM_SELECT = { id: true, name: true, description: true } as const;
 const MAX_NAME = 80;
-const MAX_DESCRIPTION = 1000;
+const MAX_DESCRIPTION = 2000;
 
 export interface ListItem {
   id: string;
@@ -26,7 +28,11 @@ interface ListOps {
 const KINDS: Record<string, ListOps> = {
   "product-lines": {
     list: (workspaceId) =>
-      db.productLine.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: ITEM_SELECT }),
+      db.productLine.findMany({
+        where: { workspaceId },
+        orderBy: [{ position: "asc" }, { name: "asc" }],
+        select: ITEM_SELECT,
+      }),
     nameTaken: async (workspaceId, name, excludeId) =>
       Boolean(
         await db.productLine.findFirst({
@@ -40,8 +46,16 @@ const KINDS: Record<string, ListOps> = {
       ),
     exists: async (workspaceId, id) =>
       Boolean(await db.productLine.findFirst({ where: { id, workspaceId }, select: { id: true } })),
-    create: (workspaceId, name, description) =>
-      db.productLine.create({ data: { workspaceId, name, description } }),
+    create: async (workspaceId, name, description) => {
+      const last = await db.productLine.findFirst({
+        where: { workspaceId },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      return db.productLine.create({
+        data: { workspaceId, name, description, position: (last?.position ?? -1) + 1 },
+      });
+    },
     update: (id, name, description) =>
       db.productLine.update({ where: { id }, data: { name, description } }),
     remove: async (workspaceId, id) =>
@@ -97,15 +111,26 @@ const KINDS: Record<string, ListOps> = {
 
 type RouteContext = { params: Promise<{ kind: string }> };
 
-async function guard(context: RouteContext): Promise<{ ops: ListOps; workspaceId: string } | NextResponse> {
+async function guard(
+  context: RouteContext,
+  opts: { write?: boolean } = {}
+): Promise<{ ops: ListOps; kind: string; workspaceId: string } | NextResponse> {
   const disabled = await ideasDisabledResponse();
   if (disabled) return disabled;
   const { kind } = await context.params;
   const ops = KINDS[kind];
   if (!ops) return NextResponse.json({ error: "Unknown list" }, { status: 404 });
+  // Product lines are the AI's ground truth: readable by everyone in the
+  // workspace, changed only by a PM-OS admin.
+  if (opts.write && kind === "product-lines" && !isPmosAdmin(await getCurrentUser())) {
+    return NextResponse.json(
+      { error: "Only a PM-OS admin can change product lines" },
+      { status: 403 }
+    );
+  }
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
-  return { ops, workspaceId: workspaceResult };
+  return { ops, kind, workspaceId: workspaceResult };
 }
 
 async function readJson(request: NextRequest): Promise<Record<string, unknown> | NextResponse> {
@@ -141,7 +166,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
 }
 
 export async function POST(request: NextRequest, context: RouteContext) {
-  const auth = await guard(context);
+  const auth = await guard(context, { write: true });
   if (auth instanceof NextResponse) return auth;
   const { ops, workspaceId } = auth;
 
@@ -159,7 +184,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
-  const auth = await guard(context);
+  const auth = await guard(context, { write: true });
   if (auth instanceof NextResponse) return auth;
   const { ops, workspaceId } = auth;
 
@@ -181,7 +206,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 }
 
 export async function DELETE(request: NextRequest, context: RouteContext) {
-  const auth = await guard(context);
+  const auth = await guard(context, { write: true });
   if (auth instanceof NextResponse) return auth;
   const { ops, workspaceId } = auth;
 
@@ -192,5 +217,30 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
   if (count === 0) {
     return NextResponse.json({ error: "Item not found" }, { status: 404 });
   }
+  return NextResponse.json({ items: await ops.list(workspaceId) });
+}
+
+/** Reorder — product lines only: body { order: [id, …] } sets positions by index. */
+export async function PUT(request: NextRequest, context: RouteContext) {
+  const auth = await guard(context, { write: true });
+  if (auth instanceof NextResponse) return auth;
+  const { ops, kind, workspaceId } = auth;
+  if (kind !== "product-lines") {
+    return NextResponse.json({ error: "This list has no manual order" }, { status: 400 });
+  }
+
+  const body = await readJson(request);
+  if (body instanceof NextResponse) return body;
+  const order = Array.isArray(body.order) ? body.order.filter((x) => typeof x === "string") : [];
+  const rows = await db.productLine.findMany({ where: { workspaceId }, select: { id: true } });
+  const known = new Set(rows.map((r) => r.id));
+  if (order.length !== rows.length || !order.every((id) => known.has(id as string))) {
+    return NextResponse.json({ error: "Order must list every product line once" }, { status: 400 });
+  }
+  await db.$transaction(
+    order.map((id, index) =>
+      db.productLine.update({ where: { id: id as string }, data: { position: index } })
+    )
+  );
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }

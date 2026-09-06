@@ -150,14 +150,24 @@ export function IdeasView({
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
   const jiraByKey = useMemo(() => new Map(jiraSources.map((s) => [s.key, s])), [jiraSources]);
-  // Catalog names first so their casing wins over idea-derived duplicates.
+  // Catalog names first, in the admin's manual order (their casing also wins
+  // over idea-derived duplicates); names only found on ideas trail after,
+  // alphabetically.
   const allProducts = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const name of [...catalogProducts, ...ideas.flatMap((i) => i.products)]) {
+    for (const name of catalogProducts) {
       const key = name.toLowerCase();
       if (!seen.has(key)) seen.set(key, name);
     }
-    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+    const extras = new Map<string, string>();
+    for (const name of ideas.flatMap((i) => i.products)) {
+      const key = name.toLowerCase();
+      if (!seen.has(key) && !extras.has(key)) extras.set(key, name);
+    }
+    return [
+      ...seen.values(),
+      ...Array.from(extras.values()).sort((a, b) => a.localeCompare(b)),
+    ];
   }, [catalogProducts, ideas]);
   const allCustomers = useMemo(() => {
     const seen = new Map<string, string>();
