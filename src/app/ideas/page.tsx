@@ -14,6 +14,7 @@ export default async function IdeasPage() {
   const user = await requireUserPage("/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const undoEnabled = await featureEnabledForCurrentUser("ideasUndo");
+  const myLinesEnabled = await featureEnabledForCurrentUser("myProductLines");
   const workspace = await getOrCreateWorkspace();
   const listArgs = {
     where: { workspaceId: workspace.id },
@@ -31,9 +32,11 @@ export default async function IdeasPage() {
   ]);
   // The user's own lines (Settings → Ideas → My Product Lines) pre-filter the
   // screen; names that left the catalog are dropped, not shown as ghosts.
-  const defaultProducts = ((dbUser?.defaultProductLines as string[]) ?? []).filter((p) =>
-    productLines.some((l) => l.name.toLowerCase() === p.toLowerCase())
-  );
+  const defaultProducts = myLinesEnabled
+    ? ((dbUser?.defaultProductLines as string[]) ?? []).filter((p) =>
+        productLines.some((l) => l.name.toLowerCase() === p.toLowerCase())
+      )
+    : [];
 
   return (
     <AppShell>

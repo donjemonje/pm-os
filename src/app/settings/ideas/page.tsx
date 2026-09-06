@@ -4,7 +4,7 @@ import { MyProductLinesPanel } from "@/components/ideas/MyProductLinesPanel";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { db } from "@/lib/db";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
-import { ideasEnabledForCurrentUser } from "@/lib/org-features";
+import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 
 export const metadata: Metadata = {
@@ -22,6 +22,7 @@ export default async function IdeasSettingsPage() {
   const user = await requireUserPage("/settings/ideas");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
+  const myLinesEnabled = await featureEnabledForCurrentUser("myProductLines");
   // Components (platforms) off in Admin → Ideas hides the whole platforms
   // concept here, not just the Jira mapping.
   const platformsEnabled = mergeIdeasJiraConfig(workspace.ideasConfig).fields.platforms.enabled;
@@ -53,7 +54,7 @@ export default async function IdeasSettingsPage() {
           emptyLabel="No product lines yet. Add the first one above."
           initialItems={productLines}
         />
-        {productLines.length > 0 && (
+        {myLinesEnabled && productLines.length > 0 && (
           <MyProductLinesPanel
             options={productLines.map((l) => l.name)}
             initialSelected={myProductLines}

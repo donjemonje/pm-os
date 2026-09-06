@@ -50,6 +50,19 @@ export function isSsoSkips2faDefault(): boolean {
   return !(value === "false" || value === "0");
 }
 
+/**
+ * "My Product Lines" gate — env default. Off when unset: the personal
+ * product-line pre-filter (Settings → Ideas → My Product Lines + the /ideas
+ * default filter) is opt-in per org via MY_PRODUCT_LINES_ENABLED=true or
+ * Admin → Enablements.
+ */
+export function isMyProductLinesEnabled(): boolean {
+  const raw = process.env.MY_PRODUCT_LINES_ENABLED;
+  if (!raw?.trim()) return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "1";
+}
+
 /** Dashboard feature gate — env default. Off when unset; DASHBOARD_ENABLED=true turns it on globally. */
 export function isDashboardEnabled(): boolean {
   const raw = process.env.DASHBOARD_ENABLED;
@@ -71,6 +84,7 @@ export const ORG_FEATURE_KEYS = [
   "chat",
   "dashboard",
   "ideasUndo",
+  "myProductLines",
   "ssoSkips2fa",
 ] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
@@ -88,6 +102,8 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDashboardEnabled();
     case "ideasUndo":
       return isIdeasUndoEnabled();
+    case "myProductLines":
+      return isMyProductLinesEnabled();
     case "ssoSkips2fa":
       return isSsoSkips2faDefault();
   }

@@ -8,6 +8,8 @@ type BrandLockupProps = {
   height?: number;
   priority?: boolean;
   showSubtitle?: boolean;
+  /** Hide the brain mark + divider (e.g. the sidebar hamburger stands in for it). */
+  showLogo?: boolean;
   className?: string;
   href?: string;
 };
@@ -16,6 +18,7 @@ export function BrandLockup({
   height = BASE_HEIGHT,
   priority,
   showSubtitle = true,
+  showLogo = true,
   className,
   href,
 }: BrandLockupProps) {
@@ -27,14 +30,16 @@ export function BrandLockup({
 
   const content = (
     <div className={cn("flex items-center", className)} style={{ gap }}>
-      <div className="flex shrink-0 items-center">
-        <BrandLogo height={height} priority={priority} variant="withWordmark" />
-        <div
-          className="bg-[#d9d9d9]"
-          style={{ marginLeft: gap, width: 1, height: dividerHeight }}
-          aria-hidden
-        />
-      </div>
+      {showLogo && (
+        <div className="flex shrink-0 items-center">
+          <BrandLogo height={height} priority={priority} variant="withWordmark" />
+          <div
+            className="bg-[#d9d9d9]"
+            style={{ marginLeft: gap, width: 1, height: dividerHeight }}
+            aria-hidden
+          />
+        </div>
+      )}
       <div className="min-w-0">
         <div
           className="font-brand font-bold tracking-tight"

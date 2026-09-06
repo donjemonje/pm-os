@@ -110,7 +110,7 @@ export function Sidebar({
           <Menu size={18} />
         </button>
         <Curtain collapsed={collapsed} width={150}>
-          <BrandLockup height={SIDEBAR_LOGO_HEIGHT} priority href="/" />
+          <BrandLockup height={SIDEBAR_LOGO_HEIGHT} priority showLogo={false} href="/" />
         </Curtain>
       </div>
       <nav className="flex-1 space-y-1 p-3">
