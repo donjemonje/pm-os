@@ -2,6 +2,8 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { catalogTickets } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
+import { type CsvMapping } from "./csv-mapping";
+import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { matchTickets } from "./match";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
@@ -20,6 +22,8 @@ export interface IdeasState {
   customerCatalog: string[];
   /** Jira integration is set up for the workspace — gates Export to Jira. */
   jiraConnected: boolean;
+  /** The org's CSV import mapping — the client parses uploads with it. */
+  csvMapping: CsvMapping;
 }
 
 /** A parsed CSV row plus the original record verbatim (the raw store). */
@@ -33,6 +37,13 @@ export interface ImportTicketInput {
   affectedCustomers?: string[];
   createdAt?: string;
   productLine?: string;
+  module?: string;
+  customerName?: string;
+  whyBuild?: string;
+  insights?: string;
+  dealRelated?: string;
+  customerType?: string;
+  url?: string;
   raw: Record<string, string>;
 }
 
@@ -91,6 +102,13 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
     tags: (row.tags as string[]) ?? [],
     createdAt: row.sourceCreatedAt ?? undefined,
     productLine: row.productLine ?? undefined,
+    module: row.module ?? undefined,
+    customerName: row.customerName ?? undefined,
+    whyBuild: row.whyBuild ?? undefined,
+    insights: row.insights ?? undefined,
+    dealRelated: row.dealRelated ?? undefined,
+    customerType: row.customerType ?? undefined,
+    url: row.url ?? undefined,
     catalog: row.catalogKind
       ? { kind: row.catalogKind as CatalogKind, reason: row.catalogReason ?? "" }
       : null,
@@ -131,7 +149,8 @@ function toClientIdea(row: IdeaRow): Idea {
 }
 
 export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
-  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows, jiraStatus] = await Promise.all([
+  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows, jiraStatus, wsRow] =
+    await Promise.all([
     db.zendeskTicketRaw.findMany({
       where: { workspaceId },
       orderBy: [{ importedAt: "asc" }, { id: "asc" }],
@@ -148,6 +167,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       select: { ideaId: true, action: true, jiraKey: true },
     }),
     getJiraConnectionStatus(workspaceId),
+    db.workspace.findUnique({ where: { id: workspaceId }, select: { ideasConfig: true } }),
   ]);
 
   const undoByIdea = new Map(
@@ -156,6 +176,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
 
   return {
     jiraConnected: Boolean(jiraStatus?.connected),
+    csvMapping: mergeIdeasJiraConfig(wsRow?.ideasConfig).csv,
     tickets: ticketRows.map(toClientTicket),
     jiraSources: snapshotRows.map((s) => ({
       key: s.key,
@@ -202,7 +223,16 @@ export async function importBatch(
   // verdict as it lands, so a failure here loses nothing.
   const catalog = await catalogTickets(
     workspaceId,
-    fresh.map(({ key, subject, body, requester, tags }) => ({ key, subject, body, requester, tags }))
+    fresh.map(({ key, subject, body, requester, tags, module, whyBuild, insights }) => ({
+      key,
+      subject,
+      body,
+      requester,
+      tags,
+      module,
+      whyBuild,
+      insights,
+    }))
   );
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
 
@@ -227,9 +257,33 @@ export async function importBatch(
   // Catalog casing wins wherever a name (from the model or the CSV's
   // dedicated field) matches a cataloged customer; unmatched names stay
   // verbatim and surface as suggestions.
-  const customerNames = (
+  // The dedicated Customer Name column is truth: names it carries that are
+  // not in the catalog yet are added to Settings → Ideas → Customers now, so
+  // they canonicalize as confirmed customers rather than suggestions.
+  const existingNames = (
     await db.customer.findMany({ where: { workspaceId }, select: { name: true } })
   ).map((c) => c.name);
+  const truthNames = new Map<string, string>();
+  for (const t of fresh) {
+    // The column can carry a list ("A, B / C") — each entry is a customer.
+    for (const name of (t.customerName ?? "").split(/[,;/]+/).map((n) => n.trim())) {
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (!existingNames.some((c) => c.toLowerCase() === key) && !truthNames.has(key)) {
+        truthNames.set(key, name);
+      }
+    }
+  }
+  if (truthNames.size > 0) {
+    await db.customer.createMany({
+      data: Array.from(truthNames.values()).map((name) => ({
+        workspaceId,
+        name,
+        description: "",
+      })),
+    });
+  }
+  const customerNames = [...existingNames, ...truthNames.values()];
   const canonicalCustomer = (name: string): string =>
     customerNames.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
 
@@ -336,6 +390,13 @@ export async function importBatch(
         ) as Prisma.InputJsonValue,
         tags: input.tags as Prisma.InputJsonValue,
         productLine: input.productLine ?? null,
+        module: input.module ?? null,
+        customerName: input.customerName ?? null,
+        whyBuild: input.whyBuild ?? null,
+        insights: input.insights ?? null,
+        dealRelated: input.dealRelated ?? null,
+        customerType: input.customerType ?? null,
+        url: input.url ?? null,
         sourceCreatedAt: input.createdAt ?? null,
         raw: input.raw as Prisma.InputJsonValue,
         batchId: batch.id,

@@ -13,7 +13,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v5";
+export const CATALOG_PROMPT_VERSION = "catalog-v6";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -23,7 +23,7 @@ function getCatalogModel(): string {
   return process.env.IDEAS_CATALOG_MODEL?.trim() || "claude-opus-5";
 }
 
-const SYSTEM_PROMPT = `You catalog incoming customer-support tickets for a product team's discovery pipeline.
+export const CATALOG_SYSTEM_PROMPT = `You catalog incoming customer-support tickets for a product team's discovery pipeline.
 
 First, classify the ticket into exactly one kind:
 - "fr" — a feature request: the customer asks for a capability or behavior the product does not currently offer. Requests for timelines on known planned work also count as feature requests.
@@ -41,7 +41,9 @@ Third, ONLY if the ticket is a feature request, rewrite it in product voice:
 
 For bugs and needs_details, return empty lists and empty strings for all of the above.
 
-Tickets may carry tags. Tags are entered by support agents and customers — humans who are not product managers and who make mistakes — so treat them as weak hints at most. Base your judgment on the subject and body; never let a tag override what the ticket content itself says.
+Everything in the ticket was written or relayed by an organization representative (support, CS, sales) — including passages quoted as the customer's words and any "why we should build this" or "insights" fields. Treat all of it as that person's interpretation of a customer interaction: one grade of information, read with the same grain of salt. Evaluate what the underlying need actually is rather than inheriting the reporter's framing or justification as fact.
+
+Tickets may carry tags and a reporter-chosen module. Both are entered by humans who are not product managers and who make mistakes — treat them as hints at most: the module usually points at the right product line, but never let it or a tag override what the ticket content itself says.
 
 Judge only from the ticket content and the catalogs provided. Do not consider priority or importance — only what kind of item this is and where it belongs. Give a single short sentence of reasoning covering the classification and, for feature requests, the assignment.`;
 
@@ -104,6 +106,12 @@ export interface CatalogInput {
   /** Who filed the ticket — shown to the model so it never confuses the filer with an affected customer. */
   requester?: string;
   tags: string[];
+  /** Reporter-chosen module — a hint, never an override. */
+  module?: string;
+  /** Reporter's "why should we build this" — interpretation, same grain of salt. */
+  whyBuild?: string;
+  /** Reporter's "what insights do we have" — interpretation. */
+  insights?: string;
 }
 
 export interface CatalogResult extends CatalogVerdict {
@@ -166,9 +174,14 @@ function renderUserMessage(
       `Subject: ${input.subject}`,
       `Requester: ${input.requester || "(unknown)"}`,
       `Tags: ${input.tags.length > 0 ? input.tags.join(", ") : "(none)"}`,
+      `Module (reporter's hint): ${input.module || "(none)"}`,
       "",
       "Body:",
       input.body || "(empty)",
+      ...(input.whyBuild
+        ? ["", "Reporter's \"why should we build this\":", input.whyBuild]
+        : []),
+      ...(input.insights ? ["", "Reporter's \"what insights do we have\":", input.insights] : []),
     ].join("\n"),
   ].join("\n\n");
 }
@@ -182,7 +195,7 @@ async function judgeTicket(
   const message = await getClient().messages.create({
     model,
     max_tokens: 1000,
-    system: SYSTEM_PROMPT,
+    system: CATALOG_SYSTEM_PROMPT,
     tools: [CATALOG_TOOL],
     tool_choice: { type: "tool", name: "catalog_ticket" },
     messages: [{ role: "user", content: userMessage }],
@@ -258,7 +271,7 @@ export async function catalogTickets(
   for (const ticket of tickets) {
     const userMessage = renderUserMessage(ticket, productLines, platforms, customers);
     const verdict = await judgeTicket(model, userMessage);
-    const input = { system: SYSTEM_PROMPT, user: userMessage };
+    const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
     await recordVerdict(
       workspaceId,
       ledgerKey("catalog", CATALOG_PROMPT_VERSION, model, input),

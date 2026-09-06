@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Search, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
+import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import { badgeOf, needsApproval, scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
@@ -27,6 +28,7 @@ interface ServerState {
   ideas: Idea[];
   customerCatalog?: string[];
   jiraConnected?: boolean;
+  csvMapping?: CsvMapping;
 }
 
 interface ImportSummary {
@@ -71,6 +73,7 @@ export function IdeasView({
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
   const [hydrated, setHydrated] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -110,6 +113,7 @@ export function IdeasView({
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
+    if (state.csvMapping) setCsvMapping(state.csvMapping);
   };
 
   useEffect(() => {
@@ -191,7 +195,7 @@ export function IdeasView({
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
       const text = await file.text();
-      const result = ticketsFromCsv(text);
+      const result = ticketsFromCsv(text, csvMapping);
       if (result.errors.length > 0) {
         setError(result.errors[0]);
         return;

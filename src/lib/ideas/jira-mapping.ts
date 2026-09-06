@@ -1,3 +1,4 @@
+import { type CsvMapping, DEFAULT_CSV_MAPPING, mergeCsvMapping } from "./csv-mapping";
 /**
  * Ideas → Jira output configuration. Everything about HOW review results
  * land in the customer's Jira (field names, write policies, description
@@ -42,9 +43,12 @@ export interface IdeasJiraConfig {
     customers: FieldMapping;
     platforms: FieldMapping;
   };
+  /** Per-org CSV import mapping (see csv-mapping.ts). */
+  csv: CsvMapping;
 }
 
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
+  csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
@@ -85,6 +89,7 @@ export const MAPPED_ATTRIBUTES: MappedAttribute[] = [
  *  field entries completed from the default, so old configs never crash. */
 export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
   const stored = (raw && typeof raw === "object" ? raw : {}) as Partial<IdeasJiraConfig>;
+  const csv = mergeCsvMapping(stored.csv);
   const fields = { ...DEFAULT_IDEAS_JIRA_CONFIG.fields };
   const storedFields = (stored.fields ?? {}) as Partial<IdeasJiraConfig["fields"]>;
   for (const attr of MAPPED_ATTRIBUTES) {
@@ -94,6 +99,7 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
     }
   }
   return {
+    csv,
     descriptionMode: "overwrite",
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" && stored.descriptionGapLines >= 0

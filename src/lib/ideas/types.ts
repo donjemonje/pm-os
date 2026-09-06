@@ -25,6 +25,20 @@ export interface ZendeskTicket {
   createdAt?: string;
   /** Optional product_line column, used to pre-assign the idea's product. */
   productLine?: string;
+  /** Reporter-chosen module — a hint to PMOS AI, never an override. */
+  module?: string;
+  /** Customer named in a dedicated column — truth; auto-added to the catalog. */
+  customerName?: string;
+  /** Reporter's "why should we build this" — interpretation. */
+  whyBuild?: string;
+  /** Reporter's "what insights do we have" — interpretation. */
+  insights?: string;
+  /** Deal linkage as reported (Yes / No / Helpful …). */
+  dealRelated?: string;
+  /** Customer / POC. */
+  customerType?: string;
+  /** Direct link to the source ticket. */
+  url?: string;
   /** Catalog verdict; Bug / Needs-details tickets are parked with the label. */
   catalog?: CatalogVerdict | null;
   /** The CSV row exactly as received; sent on import, persisted in the raw store. */

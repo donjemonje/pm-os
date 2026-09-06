@@ -19,7 +19,7 @@ function getMatchModel(): string {
   return process.env.IDEAS_MATCH_MODEL?.trim() || "claude-opus-5";
 }
 
-const SYSTEM_PROMPT = `You match an incoming feature request against a product team's existing Jira ideas backlog.
+export const MATCH_SYSTEM_PROMPT = `You match an incoming feature request against a product team's existing Jira ideas backlog.
 
 You are given ONE feature request (a product-voiced title and summary, plus the original support-ticket text) and the full list of existing backlog ideas, each with a key, title, and description.
 
@@ -151,7 +151,7 @@ export async function matchTickets(
     const message = await getClient().messages.create({
       model,
       max_tokens: 1000,
-      system: SYSTEM_PROMPT,
+      system: MATCH_SYSTEM_PROMPT,
       tools: [MATCH_TOOL],
       tool_choice: { type: "tool", name: "match_feature_request" },
       messages: [{ role: "user", content: userMessage }],
@@ -172,7 +172,7 @@ export async function matchTickets(
         typeof raw.enriched_summary === "string" ? raw.enriched_summary.trim() : "",
       reason: typeof raw.reason === "string" ? raw.reason : "",
     };
-    const ledgerInput = { system: SYSTEM_PROMPT, user: userMessage };
+    const ledgerInput = { system: MATCH_SYSTEM_PROMPT, user: userMessage };
     await recordVerdict(
       workspaceId,
       ledgerKey("match", MATCH_PROMPT_VERSION, model, ledgerInput),

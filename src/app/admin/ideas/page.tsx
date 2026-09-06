@@ -1,5 +1,7 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { CATALOG_PROMPT_VERSION, CATALOG_SYSTEM_PROMPT } from "@/lib/ideas/catalog";
+import { MATCH_PROMPT_VERSION, MATCH_SYSTEM_PROMPT } from "@/lib/ideas/match";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { AdminShell } from "../AdminShell";
 import { IdeasOutputConfig } from "./IdeasOutputConfig";
@@ -27,6 +29,20 @@ export default async function AdminIdeasPage() {
       description="How review results land in each customer's Jira: field mapping, write policies, description format. Changes apply to the next merge."
     >
       <IdeasOutputConfig
+        prompts={[
+          {
+            id: "catalog",
+            title: `Classification & idea generation (${CATALOG_PROMPT_VERSION})`,
+            note: "Runs once per imported ticket: FR/bug/needs-details, product line, platforms, customers, and the product-voiced title/summary. The org's catalogs (Settings → Ideas) and the ticket's mapped fields (module hint, reporter's why-build/insights) are appended per ticket.",
+            text: CATALOG_SYSTEM_PROMPT,
+          },
+          {
+            id: "match",
+            title: `Jira backlog matching (${MATCH_PROMPT_VERSION})`,
+            note: "Runs per feature request when Jira is connected: does this request match an existing backlog idea?",
+            text: MATCH_SYSTEM_PROMPT,
+          },
+        ]}
         organizations={organizations
           .filter((org) => org.workspace)
           .map((org) => ({

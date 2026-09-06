@@ -1,3 +1,4 @@
+import { type CsvMapping, DEFAULT_CSV_MAPPING } from "./csv-mapping";
 import type { ZendeskTicket } from "./types";
 
 /** Minimal RFC 4180 parser: quoted fields, escaped quotes, embedded newlines. */
@@ -45,18 +46,6 @@ export function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((f) => f.trim() !== ""));
 }
 
-const COLUMN_ALIASES: Record<string, string[]> = {
-  id: ["external_id", "external id", "id", "ticket_id", "ticket id"],
-  subject: ["subject", "title", "summary"],
-  body: ["description", "body", "text"],
-  requester: ["requester_name", "requester name", "requester", "submitter"],
-  requesterEmail: ["requester_email", "requester email", "email"],
-  tags: ["tags"],
-  customers: ["affected_customers", "affected customers", "customers", "customer"],
-  created: ["created_at", "created at", "created", "date"],
-  product: ["product_line", "product line", "product", "products"],
-};
-
 export interface CsvImportResult {
   tickets: ZendeskTicket[];
   /** Rows dropped for having neither subject nor description. */
@@ -64,15 +53,18 @@ export interface CsvImportResult {
   errors: string[];
 }
 
-export function ticketsFromCsv(text: string): CsvImportResult {
+export function ticketsFromCsv(
+  text: string,
+  mapping: CsvMapping = DEFAULT_CSV_MAPPING
+): CsvImportResult {
   const rows = parseCsv(text);
   if (rows.length < 2) {
     return { tickets: [], skipped: 0, errors: ["CSV has no data rows."] };
   }
 
   const header = rows[0].map((h) => h.trim().toLowerCase());
-  const col = (name: keyof typeof COLUMN_ALIASES): number =>
-    header.findIndex((h) => COLUMN_ALIASES[name].includes(h));
+  const col = (name: keyof CsvMapping): number =>
+    header.findIndex((h) => mapping[name].includes(h));
 
   const iId = col("id");
   const iSubject = col("subject");
@@ -104,6 +96,13 @@ export function ticketsFromCsv(text: string): CsvImportResult {
   const iCustomers = col("customers");
   const iCreated = col("created");
   const iProduct = col("product");
+  const iModule = col("module");
+  const iCustomerName = col("customerName");
+  const iWhyBuild = col("whyBuild");
+  const iInsights = col("insights");
+  const iDealRelated = col("dealRelated");
+  const iCustomerType = col("customerType");
+  const iUrl = col("url");
 
   const cell = (r: string[], i: number) => (i >= 0 && r[i] != null ? r[i].trim() : "");
   const originalHeader = rows[0].map((h) => h.trim());
@@ -136,13 +135,29 @@ export function ticketsFromCsv(text: string): CsvImportResult {
     };
     const product = cell(r, iProduct);
     if (product) ticket.productLine = product;
+    const module_ = cell(r, iModule);
+    if (module_) ticket.module = module_;
+    const customerName = cell(r, iCustomerName);
+    if (customerName) ticket.customerName = customerName;
+    const whyBuild = cell(r, iWhyBuild);
+    if (whyBuild) ticket.whyBuild = whyBuild;
+    const insights = cell(r, iInsights);
+    if (insights) ticket.insights = insights;
+    const dealRelated = cell(r, iDealRelated);
+    if (dealRelated) ticket.dealRelated = dealRelated;
+    const customerType = cell(r, iCustomerType);
+    if (customerType) ticket.customerType = customerType;
+    const url = cell(r, iUrl);
+    if (url) ticket.url = url;
     // The dedicated Zendesk field is one signal among several — it's not
     // always filled in, so text extraction runs regardless. Names contain
     // spaces, so split only on list separators.
-    const customers = cell(r, iCustomers)
-      .split(/[,;]+/)
+    // Customer Name is truth and lists like "A, B / C" appear in the wild —
+    // split both columns on list separators, then merge deduped.
+    const customers = [...customerName.split(/[,;/]+/), ...cell(r, iCustomers).split(/[,;/]+/)]
       .map((c) => c.trim())
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((c, i, all) => all.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i);
     if (customers.length > 0) ticket.affectedCustomers = customers;
     tickets.push(ticket);
   }
