@@ -23,7 +23,7 @@ import { RESOLVED_ENV } from "./test-env";
  * - PJ3: the PM flow end to end without a Jira connection — save My
  *   Product Lines in Settings → Ideas, see them pre-applied as the Ideas
  *   filter (and removable, i.e. a default, not a hard scope), open the
- *   Merge to Jira modal with the scope pre-selected, watch the
+ *   Export to Jira modal with the scope pre-selected, watch the
  *   scope-sensitive approved/pending hints, preview into the
  *   "Jira is not connected" blocker with Confirm disabled, and prove the
  *   execute API refuses with 409 before writing anything (idea stays
@@ -476,9 +476,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(rowB).toBeVisible();
 
     // Merge modal: scope opens pre-selected to my line.
-    await page.getByRole("button", { name: "Merge to Jira" }).click();
+    await page.getByRole("button", { name: "Export to Jira" }).click();
     const modal = page.locator("div.fixed.inset-0.z-50");
-    await expect(modal.getByText("Merge to Jira", { exact: true })).toBeVisible();
+    await expect(modal.getByText("Export to Jira", { exact: true })).toBeVisible();
     await expect(modal.getByRole("button", { name: LINE_A, exact: true })).toHaveClass(
       /bg-primary/
     );

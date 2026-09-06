@@ -31,7 +31,7 @@ async function getIdeasJiraConfig(workspaceId: string): Promise<IdeasJiraConfig>
 }
 
 /**
- * Write-back of reviewed ideas to Jira ("Merge to Jira").
+ * Write-back of reviewed ideas to Jira ("Export to Jira").
  *
  * Output semantics (Daniel, 2026-09-01 — all configurable in Admin → Ideas,
  * see jira-mapping.ts):
