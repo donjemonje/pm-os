@@ -6,6 +6,7 @@ import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { matchTickets } from "./match";
+import { splitTickets, type SplitRequest } from "./split";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
 
 /**
@@ -55,6 +56,8 @@ export interface ImportSummary {
   bugs: number;
   needsDetails: number;
   duplicates: number;
+  /** Tickets broken into more than one idea by the split stage. */
+  split: number;
   called: number;
   jiraConnected: boolean;
   jiraCount: number;
@@ -110,7 +113,10 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
     customerType: row.customerType ?? undefined,
     url: row.url ?? undefined,
     catalog: row.catalogKind
-      ? { kind: row.catalogKind as CatalogKind, reason: row.catalogReason ?? "" }
+      ? {
+          kind: row.catalogKind as CatalogKind,
+          reason: row.catalogReason ?? "",
+        }
       : null,
   };
 }
@@ -119,10 +125,14 @@ function toClientIdea(row: IdeaRow): Idea {
   // Reporters and affected customers are derived from the linked tickets on
   // every read — reassigning sources keeps them correct with no stored copy
   // to go stale.
-  const ticketRows = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
+  const ticketRows = row.sources.flatMap((s) =>
+    s.kind === "zendesk" && s.ticket ? [s.ticket] : [],
+  );
   // Dismissals subtract at read time; the extraction itself is never edited,
   // so a dismissed customer can always be restored.
-  const dismissed = distinct(ticketRows.flatMap((t) => (t.dismissedCustomers as string[]) ?? []));
+  const dismissed = distinct(
+    ticketRows.flatMap((t) => (t.dismissedCustomers as string[]) ?? []),
+  );
   const dismissedKeys = new Set(dismissed.map((d) => d.toLowerCase()));
   return {
     id: row.id,
@@ -130,9 +140,11 @@ function toClientIdea(row: IdeaRow): Idea {
     details: row.details,
     products: (row.products as string[]) ?? [],
     platforms: (row.platforms as string[]) ?? [],
-    reporters: distinct(ticketRows.flatMap((t) => (t.requester ? [t.requester] : []))),
+    reporters: distinct(
+      ticketRows.flatMap((t) => (t.requester ? [t.requester] : [])),
+    ),
     customers: distinct(
-      ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? [])
+      ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
     ).filter((c) => !dismissedKeys.has(c.toLowerCase())),
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
@@ -143,35 +155,59 @@ function toClientIdea(row: IdeaRow): Idea {
     manual: row.manualScore,
     existingVotes: row.existingVotes,
     newVotes: row.newVotes,
-    zen: row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [])),
-    jira: row.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [])),
+    zen: row.sources.flatMap((s) =>
+      s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [],
+    ),
+    jira: row.sources.flatMap((s) =>
+      s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [],
+    ),
   };
 }
 
 export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
-  const [ticketRows, snapshotRows, ideaRows, customerRows, undoRows, jiraStatus, wsRow] =
-    await Promise.all([
+  const [
+    ticketRows,
+    snapshotRows,
+    ideaRows,
+    customerRows,
+    undoRows,
+    jiraStatus,
+    wsRow,
+  ] = await Promise.all([
     db.zendeskTicketRaw.findMany({
       where: { workspaceId },
       orderBy: [{ importedAt: "asc" }, { id: "asc" }],
     }),
-    db.jiraIdeaSnapshot.findMany({ where: { workspaceId }, orderBy: { key: "asc" } }),
+    db.jiraIdeaSnapshot.findMany({
+      where: { workspaceId },
+      orderBy: { key: "asc" },
+    }),
     db.idea.findMany({
       where: { workspaceId },
       include: IDEA_INCLUDE,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
-    db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: { name: true } }),
+    db.customer.findMany({
+      where: { workspaceId },
+      orderBy: { name: "asc" },
+      select: { name: true },
+    }),
     db.ideasPushUndo.findMany({
       where: { workspaceId },
       select: { ideaId: true, action: true, jiraKey: true },
     }),
     getJiraConnectionStatus(workspaceId),
-    db.workspace.findUnique({ where: { id: workspaceId }, select: { ideasConfig: true } }),
+    db.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ideasConfig: true },
+    }),
   ]);
 
   const undoByIdea = new Map(
-    undoRows.map((u) => [u.ideaId, { action: u.action as "create" | "update", jiraKey: u.jiraKey }])
+    undoRows.map((u) => [
+      u.ideaId,
+      { action: u.action as "create" | "update", jiraKey: u.jiraKey },
+    ]),
   );
 
   return {
@@ -205,7 +241,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
  */
 export async function importBatch(
   workspaceId: string,
-  inputs: ImportTicketInput[]
+  inputs: ImportTicketInput[],
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
   const existing = await db.zendeskTicketRaw.findMany({
     where: { workspaceId },
@@ -223,53 +259,138 @@ export async function importBatch(
   // verdict as it lands, so a failure here loses nothing.
   const catalog = await catalogTickets(
     workspaceId,
-    fresh.map(({ key, subject, body, requester, tags, module, whyBuild, insights }) => ({
-      key,
-      subject,
-      body,
-      requester,
-      tags,
-      module,
-      whyBuild,
-      insights,
-    }))
+    fresh.map(
+      ({
+        key,
+        subject,
+        body,
+        requester,
+        tags,
+        module,
+        whyBuild,
+        insights,
+      }) => ({
+        key,
+        subject,
+        body,
+        requester,
+        tags,
+        module,
+        whyBuild,
+        insights,
+      }),
+    ),
   );
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
+
+  // Split stage: only tickets the catalog flagged as multi-problem pay for
+  // it. A ticket's FR "units" are what flows through match and idea
+  // creation — one unit for normal tickets, one per sub-idea for split ones
+  // (unit keys "<ticket>#1..n"). A split that comes back with one request is
+  // the escape hatch: the catalog rewrite stands.
+  const flagged = catalog.results.filter(
+    (v) => v.kind === "fr" && v.requestCount > 1,
+  );
+  const split = await splitTickets(
+    workspaceId,
+    flagged.map((v) => {
+      const input = fresh.find((t) => t.key === v.key);
+      return {
+        key: v.key,
+        subject: input?.subject ?? "",
+        body: input?.body ?? "",
+        requester: input?.requester,
+        module: input?.module,
+        whyBuild: input?.whyBuild,
+        insights: input?.insights,
+      };
+    }),
+  );
+  const splitByKey = new Map(split.results.map((r) => [r.key, r]));
+  let splitTicketCount = 0;
+
+  interface FrUnit {
+    unitKey: string;
+    rewrite: SplitRequest;
+  }
+  /** Ticket key → the FR units it produces (always at least one for an FR). */
+  const unitsByTicket = new Map<string, FrUnit[]>();
+  for (const v of catalog.results) {
+    if (v.kind !== "fr") continue;
+    const sr = splitByKey.get(v.key);
+    if (sr && sr.requests.length > 1) {
+      splitTicketCount++;
+      unitsByTicket.set(
+        v.key,
+        sr.requests.map((r, i) => ({
+          unitKey: `${v.key}#${i + 1}`,
+          rewrite: r,
+        })),
+      );
+    } else {
+      unitsByTicket.set(v.key, [
+        {
+          unitKey: v.key,
+          rewrite: {
+            productTitle: v.productTitle,
+            productSummary: v.productSummary,
+            productLines: v.productLines,
+            platforms: v.platforms,
+          },
+        },
+      ]);
+    }
+  }
 
   // Match candidates are the CURRENT ideas list — however each idea was born
   // — plus live Jira issues not yet represented as ideas (they become ideas
   // later in this import). Jira disconnected just means fewer candidates.
   const existingIdeas = await db.idea.findMany({
     where: { workspaceId, batchStatus: { not: "deleted" } },
-    select: { id: true, title: true, details: true, sources: { select: { kind: true, jiraKey: true } } },
+    select: {
+      id: true,
+      title: true,
+      details: true,
+      sources: { select: { kind: true, jiraKey: true } },
+    },
   });
   const representedJiraKeys = new Set(
     existingIdeas.flatMap((i) =>
-      i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [src.jiraKey] : []))
-    )
+      i.sources.flatMap((src) =>
+        src.kind === "jira" && src.jiraKey ? [src.jiraKey] : [],
+      ),
+    ),
   );
   const matchCandidates = [
-    ...existingIdeas.map((i) => ({ key: i.id, title: i.title, body: i.details })),
+    ...existingIdeas.map((i) => ({
+      key: i.id,
+      title: i.title,
+      body: i.details,
+    })),
     ...(jira.connected ? jira.sources : [])
       .filter((src) => !representedJiraKeys.has(src.key))
-      .map((src) => ({ key: `jira:${src.key}`, title: src.title, body: src.body })),
+      .map((src) => ({
+        key: `jira:${src.key}`,
+        title: src.title,
+        body: src.body,
+      })),
   ];
 
   const match = await matchTickets(
     workspaceId,
     catalog.results
       .filter((v) => v.kind === "fr")
-      .map((v) => {
+      .flatMap((v) => {
         const input = fresh.find((t) => t.key === v.key);
-        return {
-          key: v.key,
+        return (unitsByTicket.get(v.key) ?? []).map((u) => ({
+          key: u.unitKey,
           subject: input?.subject ?? "",
           body: input?.body ?? "",
-          productTitle: v.productTitle,
-          productSummary: v.productSummary,
-        };
+          productTitle: u.rewrite.productTitle,
+          productSummary: u.rewrite.productSummary,
+        }));
       }),
-    matchCandidates
+    matchCandidates,
   );
   const matchByKey = new Map(match.results.map((m) => [m.key, m]));
 
@@ -280,15 +401,23 @@ export async function importBatch(
   // not in the catalog yet are added to Settings → Ideas → Customers now, so
   // they canonicalize as confirmed customers rather than suggestions.
   const existingNames = (
-    await db.customer.findMany({ where: { workspaceId }, select: { name: true } })
+    await db.customer.findMany({
+      where: { workspaceId },
+      select: { name: true },
+    })
   ).map((c) => c.name);
   const truthNames = new Map<string, string>();
   for (const t of fresh) {
     // The column can carry a list ("A, B / C") — each entry is a customer.
-    for (const name of (t.customerName ?? "").split(/[,;/]+/).map((n) => n.trim())) {
+    for (const name of (t.customerName ?? "")
+      .split(/[,;/]+/)
+      .map((n) => n.trim())) {
       if (!name) continue;
       const key = name.toLowerCase();
-      if (!existingNames.some((c) => c.toLowerCase() === key) && !truthNames.has(key)) {
+      if (
+        !existingNames.some((c) => c.toLowerCase() === key) &&
+        !truthNames.has(key)
+      ) {
         truthNames.set(key, name);
       }
     }
@@ -332,7 +461,7 @@ export async function importBatch(
       jiraIdeas.flatMap((i) => {
         const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
         return key ? [[key, i] as const] : [];
-      })
+      }),
     );
     const liveKeys = new Set(jira.sources.map((s) => s.key));
     const gone = jiraIdeas.filter((i) => {
@@ -340,7 +469,9 @@ export async function importBatch(
       return !key || !liveKeys.has(key);
     });
     if (gone.length > 0) {
-      await db.idea.deleteMany({ where: { id: { in: gone.map((i) => i.id) } } });
+      await db.idea.deleteMany({
+        where: { id: { in: gone.map((i) => i.id) } },
+      });
     }
 
     for (const s of jira.sources) {
@@ -406,9 +537,10 @@ export async function importBatch(
         body: input.body,
         requester: input.requester ?? null,
         affectedCustomers: distinct(
-          [...(verdict?.affectedCustomers ?? []), ...(input.affectedCustomers ?? [])].map(
-            canonicalCustomer
-          )
+          [
+            ...(verdict?.affectedCustomers ?? []),
+            ...(input.affectedCustomers ?? []),
+          ].map(canonicalCustomer),
         ) as Prisma.InputJsonValue,
         tags: input.tags as Prisma.InputJsonValue,
         productLine: input.productLine ?? null,
@@ -430,103 +562,130 @@ export async function importBatch(
     else if (verdict?.kind === "needs_details") needsDetails++;
     else if (verdict?.kind === "fr") {
       frs++;
-      const m = matchByKey.get(input.key);
-      // The matched key can be an idea id, "jira:<KEY>" (an issue that only
-      // became an idea during this import's snapshot sync), or "new:<ticket>"
-      // (an idea created from an earlier ticket of this same import).
-      const targetId = m?.matchedKey
-        ? m.matchedKey.startsWith("new:")
-          ? (createdByMatchKey.get(m.matchedKey) ?? null)
-          : null
-        : null;
-      const target = m?.matchedKey
-        ? m.matchedKey.startsWith("new:")
-          ? targetId
-            ? await db.idea.findFirst({ where: { workspaceId, id: targetId } })
+      for (const unit of unitsByTicket.get(input.key) ?? []) {
+        const m = matchByKey.get(unit.unitKey);
+        // The matched key can be an idea id, "jira:<KEY>" (an issue that only
+        // became an idea during this import's snapshot sync), or "new:<ticket>"
+        // (an idea created from an earlier ticket of this same import).
+        const targetId = m?.matchedKey
+          ? m.matchedKey.startsWith("new:")
+            ? (createdByMatchKey.get(m.matchedKey) ?? null)
             : null
-          : m.matchedKey.startsWith("jira:")
-            ? await db.idea.findFirst({
-                where: {
-                  workspaceId,
-                  sources: { some: { kind: "jira", jiraKey: m.matchedKey.slice(5) } },
-                },
-              })
-            : await db.idea.findFirst({ where: { workspaceId, id: m.matchedKey } })
-        : null;
-      if (target) {
-        // Matched FR: evidence on the existing idea, never a new one. The
-        // idea re-enters review as Updated and absorbs the new evidence's
-        // metadata (union — nothing is ever removed here). batchChanges
-        // narrates exactly what this import did, for the review UI.
-        matched++;
-        const curProducts = (target.products as string[]) ?? [];
-        const curPlatforms = (target.platforms as string[]) ?? [];
-        let nextProducts = distinct([...curProducts, ...verdict.productLines]);
-        // A real product line replaces the "Other" placeholder.
-        if (nextProducts.length > 1) nextProducts = nextProducts.filter((p) => p !== "Other");
-        const nextPlatforms = distinct([...curPlatforms, ...verdict.platforms]);
-        const addedProducts = nextProducts.filter(
-          (p) => !curProducts.some((c) => c.toLowerCase() === p.toLowerCase())
-        );
-        const addedPlatforms = nextPlatforms.filter(
-          (p) => !curPlatforms.some((c) => c.toLowerCase() === p.toLowerCase())
-        );
+          : null;
+        const target = m?.matchedKey
+          ? m.matchedKey.startsWith("new:")
+            ? targetId
+              ? await db.idea.findFirst({
+                  where: { workspaceId, id: targetId },
+                })
+              : null
+            : m.matchedKey.startsWith("jira:")
+              ? await db.idea.findFirst({
+                  where: {
+                    workspaceId,
+                    sources: {
+                      some: { kind: "jira", jiraKey: m.matchedKey.slice(5) },
+                    },
+                  },
+                })
+              : await db.idea.findFirst({
+                  where: { workspaceId, id: m.matchedKey },
+                })
+          : null;
+        if (target) {
+          // Mandatory guard (self-merge double vote): a ticket never sources
+          // the same idea twice — if a sibling sub-idea already landed here,
+          // this unit adds nothing.
+          const alreadySourced = await db.ideaSource.findFirst({
+            where: { ideaId: target.id, kind: "zendesk", ticketId: ticket.id },
+            select: { id: true },
+          });
+          if (alreadySourced) continue;
+          // Matched FR unit: evidence on the existing idea, never a new one.
+          // The idea re-enters review as Updated and absorbs the new
+          // evidence's metadata (union — nothing is ever removed here).
+          // batchChanges narrates exactly what this import did.
+          matched++;
+          const curProducts = (target.products as string[]) ?? [];
+          const curPlatforms = (target.platforms as string[]) ?? [];
+          let nextProducts = distinct([
+            ...curProducts,
+            ...unit.rewrite.productLines,
+          ]);
+          // A real product line replaces the "Other" placeholder.
+          if (nextProducts.length > 1)
+            nextProducts = nextProducts.filter((p) => p !== "Other");
+          const nextPlatforms = distinct([
+            ...curPlatforms,
+            ...unit.rewrite.platforms,
+          ]);
+          const addedProducts = nextProducts.filter(
+            (p) =>
+              !curProducts.some((c) => c.toLowerCase() === p.toLowerCase()),
+          );
+          const addedPlatforms = nextPlatforms.filter(
+            (p) =>
+              !curPlatforms.some((c) => c.toLowerCase() === p.toLowerCase()),
+          );
 
-        const changes: string[] = [`+1 vote (ticket ${input.key})`];
-        if (m?.enrichedSummary) changes.push("Summary enriched with the new ticket");
-        for (const p of addedProducts) changes.push(`Product line added: ${p}`);
-        for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
-        // Several tickets can match the same idea in one import — accumulate.
-        // (fresh tickets exist here, so rollover already reset last batch's
-        // status: "updated" can only mean updated in THIS import.)
-        const prior =
-          target.batchStatus === "updated" || createdThisBatch.has(target.id)
-            ? ((target.batchChanges as string[]) ?? [])
-            : [];
+          const changes: string[] = [`+1 vote (ticket ${input.key})`];
+          if (m?.enrichedSummary)
+            changes.push("Summary enriched with the new ticket");
+          for (const p of addedProducts)
+            changes.push(`Product line added: ${p}`);
+          for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
+          // Several tickets can match the same idea in one import — accumulate.
+          // (fresh tickets exist here, so rollover already reset last batch's
+          // status: "updated" can only mean updated in THIS import.)
+          const prior =
+            target.batchStatus === "updated" || createdThisBatch.has(target.id)
+              ? ((target.batchChanges as string[]) ?? [])
+              : [];
 
-        await db.idea.update({
-          where: { id: target.id },
+          await db.idea.update({
+            where: { id: target.id },
+            data: {
+              newVotes: { increment: 1 },
+              // An idea born in THIS import that absorbs another ticket is
+              // still New — Updated is for ideas that pre-date the import.
+              batchStatus: createdThisBatch.has(target.id) ? "new" : "updated",
+              decision: "pending",
+              products: nextProducts as Prisma.InputJsonValue,
+              platforms: nextPlatforms as Prisma.InputJsonValue,
+              batchChanges: [...prior, ...changes] as Prisma.InputJsonValue,
+              ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
+              sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
+            },
+          });
+          continue;
+        }
+        // Model assignment wins; the CSV product_line column is only a fallback
+        // when the model returned nothing at all.
+        const products =
+          unit.rewrite.productLines.length > 0
+            ? unit.rewrite.productLines
+            : input.productLine
+              ? [input.productLine]
+              : ["Other"];
+        // Ideas read in product voice; the customer's original wording stays
+        // intact on ZendeskTicketRaw. Fallbacks guard empty model output.
+        const created = await db.idea.create({
           data: {
-            newVotes: { increment: 1 },
-            // An idea born in THIS import that absorbs another ticket is
-            // still New — Updated is for ideas that pre-date the import.
-            batchStatus: createdThisBatch.has(target.id) ? "new" : "updated",
+            workspaceId,
+            title: unit.rewrite.productTitle || input.subject,
+            details: unit.rewrite.productSummary || input.body,
+            products: products as Prisma.InputJsonValue,
+            platforms: unit.rewrite.platforms as Prisma.InputJsonValue,
+            batchStatus: "new",
             decision: "pending",
-            products: nextProducts as Prisma.InputJsonValue,
-            platforms: nextPlatforms as Prisma.InputJsonValue,
-            batchChanges: [...prior, ...changes] as Prisma.InputJsonValue,
-            ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
+            origin: "zendesk",
+            newVotes: 1,
             sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
           },
         });
-        continue;
+        createdByMatchKey.set(`new:${unit.unitKey}`, created.id);
+        createdThisBatch.add(created.id);
       }
-      // Model assignment wins; the CSV product_line column is only a fallback
-      // when the model returned nothing at all.
-      const products =
-        verdict.productLines.length > 0
-          ? verdict.productLines
-          : input.productLine
-            ? [input.productLine]
-            : ["Other"];
-      // Ideas read in product voice; the customer's original wording stays
-      // intact on ZendeskTicketRaw. Fallbacks guard empty model output.
-      const created = await db.idea.create({
-        data: {
-          workspaceId,
-          title: verdict.productTitle || input.subject,
-          details: verdict.productSummary || input.body,
-          products: products as Prisma.InputJsonValue,
-          platforms: verdict.platforms as Prisma.InputJsonValue,
-          batchStatus: "new",
-          decision: "pending",
-          origin: "zendesk",
-          newVotes: 1,
-          sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
-        },
-      });
-      createdByMatchKey.set(`new:${input.key}`, created.id);
-      createdThisBatch.add(created.id);
     }
   }
 
@@ -537,13 +696,17 @@ export async function importBatch(
     bugs,
     needsDetails,
     duplicates,
-    called: catalog.called + match.called,
+    split: splitTicketCount,
+    called: catalog.called + split.called + match.called,
     jiraConnected: jira.connected,
     jiraCount: jira.sources.length,
   };
   await db.ideaBatch.update({
     where: { id: batch.id },
-    data: { completedAt: new Date(), stats: summary as unknown as Prisma.InputJsonValue },
+    data: {
+      completedAt: new Date(),
+      stats: summary as unknown as Prisma.InputJsonValue,
+    },
   });
 
   return { summary, state: await getIdeasState(workspaceId) };
@@ -553,7 +716,13 @@ export async function importBatch(
 // real write was the demo behavior. The write-back lives in ./push.ts.
 export type IdeasMutation =
   | { type: "decision"; ideaId: string; decision: "pending" | "reviewed" }
-  | { type: "edit"; ideaId: string; title: string; details: string; manual: number | null }
+  | {
+      type: "edit";
+      ideaId: string;
+      title: string;
+      details: string;
+      manual: number | null;
+    }
   | { type: "approveAll" }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
   | { type: "approveCustomer"; ideaId: string; name: string }
@@ -567,24 +736,37 @@ export type IdeasMutation =
  * unresolved suggestion cannot be approved — each one must be approved or
  * dismissed first.
  */
-function unresolvedSuggestions(row: IdeaRow, catalogLower: Set<string>): string[] {
-  const ticketRows = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
-  const dismissed = new Set(
-    ticketRows.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
+function unresolvedSuggestions(
+  row: IdeaRow,
+  catalogLower: Set<string>,
+): string[] {
+  const ticketRows = row.sources.flatMap((s) =>
+    s.kind === "zendesk" && s.ticket ? [s.ticket] : [],
   );
-  return distinct(ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? [])).filter(
-    (c) => !dismissed.has(c.toLowerCase()) && !catalogLower.has(c.toLowerCase())
+  const dismissed = new Set(
+    ticketRows.flatMap((t) =>
+      ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()),
+    ),
+  );
+  return distinct(
+    ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+  ).filter(
+    (c) =>
+      !dismissed.has(c.toLowerCase()) && !catalogLower.has(c.toLowerCase()),
   );
 }
 
 async function customerCatalogLower(workspaceId: string): Promise<Set<string>> {
-  const rows = await db.customer.findMany({ where: { workspaceId }, select: { name: true } });
+  const rows = await db.customer.findMany({
+    where: { workspaceId },
+    select: { name: true },
+  });
   return new Set(rows.map((c) => c.name.toLowerCase()));
 }
 
 async function logEvents(
   workspaceId: string,
-  events: { ideaId: string; action: string; payload?: unknown }[]
+  events: { ideaId: string; action: string; payload?: unknown }[],
 ): Promise<void> {
   if (events.length === 0) return;
   await db.reviewEvent.createMany({
@@ -599,7 +781,7 @@ async function logEvents(
 
 export async function mutateIdeas(
   workspaceId: string,
-  mutation: IdeasMutation
+  mutation: IdeasMutation,
 ): Promise<IdeasState> {
   switch (mutation.type) {
     case "decision": {
@@ -617,10 +799,13 @@ export async function mutateIdeas(
         break;
       }
       if (mutation.decision === "reviewed" && idea) {
-        const open = unresolvedSuggestions(idea, await customerCatalogLower(workspaceId));
+        const open = unresolvedSuggestions(
+          idea,
+          await customerCatalogLower(workspaceId),
+        );
         if (open.length > 0) {
           throw new Error(
-            `Review the suggested customer${open.length === 1 ? "" : "s"} first — approve or dismiss: ${open.join(", ")}`
+            `Review the suggested customer${open.length === 1 ? "" : "s"} first — approve or dismiss: ${open.join(", ")}`,
           );
         }
       }
@@ -657,8 +842,16 @@ export async function mutateIdeas(
             ideaId: idea.id,
             action: "edit",
             payload: {
-              before: { title: idea.title, details: idea.details, manual: idea.manualScore },
-              after: { title: mutation.title, details: mutation.details, manual: mutation.manual },
+              before: {
+                title: idea.title,
+                details: idea.details,
+                manual: idea.manualScore,
+              },
+              after: {
+                title: mutation.title,
+                details: mutation.details,
+                manual: mutation.manual,
+              },
             },
           },
         ]);
@@ -673,11 +866,14 @@ export async function mutateIdeas(
       const revert = approvable.every((i) => i.decision !== "pending");
       // Bulk approve skips (never fails on) ideas with unresolved suggested
       // metadata — those need a per-idea call; reverting is always allowed.
-      const catalogLower = revert ? null : await customerCatalogLower(workspaceId);
+      const catalogLower = revert
+        ? null
+        : await customerCatalogLower(workspaceId);
       const targets = approvable.filter((i) =>
         revert
           ? i.decision === "reviewed"
-          : i.decision === "pending" && unresolvedSuggestions(i, catalogLower!).length === 0
+          : i.decision === "pending" &&
+            unresolvedSuggestions(i, catalogLower!).length === 0,
       );
       await db.idea.updateMany({
         where: { id: { in: targets.map((i) => i.id) } },
@@ -689,7 +885,7 @@ export async function mutateIdeas(
           ideaId: i.id,
           action: revert ? "unapprove" : "approve",
           payload: { bulk: true },
-        }))
+        })),
       );
       break;
     }
@@ -706,8 +902,16 @@ export async function mutateIdeas(
       await db.ideaSource.deleteMany({ where: { ideaId: idea.id } });
       await db.ideaSource.createMany({
         data: [
-          ...ticketRows.map((t) => ({ ideaId: idea.id, kind: "zendesk", ticketId: t.id })),
-          ...mutation.jira.map((key) => ({ ideaId: idea.id, kind: "jira", jiraKey: key })),
+          ...ticketRows.map((t) => ({
+            ideaId: idea.id,
+            kind: "zendesk",
+            ticketId: t.id,
+          })),
+          ...mutation.jira.map((key) => ({
+            ideaId: idea.id,
+            kind: "jira",
+            jiraKey: key,
+          })),
         ],
       });
       // Votes = all merged evidence: every ticket and every merged Jira idea
@@ -717,7 +921,8 @@ export async function mutateIdeas(
       const oldZen = idea.sources.filter((s) => s.kind === "zendesk").length;
       const oldJira = idea.sources.filter((s) => s.kind === "jira").length;
       const oldEvidence = oldZen + Math.max(0, oldJira - selfJira);
-      const newEvidence = ticketRows.length + Math.max(0, mutation.jira.length - selfJira);
+      const newEvidence =
+        ticketRows.length + Math.max(0, mutation.jira.length - selfJira);
       const voteDelta = newEvidence - oldEvidence;
       if (voteDelta !== 0) {
         await db.idea.update({
@@ -730,7 +935,10 @@ export async function mutateIdeas(
           ideaId: idea.id,
           action: "reassign",
           payload: {
-            before: { zen: toClientIdea(idea).zen, jira: toClientIdea(idea).jira },
+            before: {
+              zen: toClientIdea(idea).zen,
+              jira: toClientIdea(idea).jira,
+            },
             after: { zen: mutation.zen, jira: mutation.jira },
           },
         },
@@ -748,10 +956,14 @@ export async function mutateIdeas(
         const total = i.sources.length;
         let next: string;
         if (total === 0) next = "deleted";
-        else if (i.origin === "jira") next = zenCount > 0 ? "updated" : "unchanged";
+        else if (i.origin === "jira")
+          next = zenCount > 0 ? "updated" : "unchanged";
         else next = "new";
         if (next !== i.batchStatus) {
-          await db.idea.update({ where: { id: i.id }, data: { batchStatus: next } });
+          await db.idea.update({
+            where: { id: i.id },
+            data: { batchStatus: next },
+          });
         }
       }
       break;
@@ -759,7 +971,9 @@ export async function mutateIdeas(
     // A suggested customer (extracted from ticket text, not yet in the
     // catalog) is approved into Settings → Ideas → Customers…
     case "approveCustomer": {
-      const idea = await db.idea.findFirst({ where: { id: mutation.ideaId, workspaceId } });
+      const idea = await db.idea.findFirst({
+        where: { id: mutation.ideaId, workspaceId },
+      });
       const name = mutation.name.trim();
       if (idea && name) {
         const exists = await db.customer.findFirst({
@@ -767,7 +981,9 @@ export async function mutateIdeas(
           select: { id: true },
         });
         if (!exists) {
-          await db.customer.create({ data: { workspaceId, name, description: "" } });
+          await db.customer.create({
+            data: { workspaceId, name, description: "" },
+          });
         }
         await logEvents(workspaceId, [
           { ideaId: idea.id, action: "approve_customer", payload: { name } },
@@ -784,7 +1000,13 @@ export async function mutateIdeas(
         include: {
           sources: {
             include: {
-              ticket: { select: { id: true, affectedCustomers: true, dismissedCustomers: true } },
+              ticket: {
+                select: {
+                  id: true,
+                  affectedCustomers: true,
+                  dismissedCustomers: true,
+                },
+              },
             },
           },
         },
@@ -800,7 +1022,9 @@ export async function mutateIdeas(
           if (dismissed.some((c) => c.toLowerCase() === wanted)) continue;
           await db.zendeskTicketRaw.update({
             where: { id: s.ticket.id },
-            data: { dismissedCustomers: [...dismissed, name] as Prisma.InputJsonValue },
+            data: {
+              dismissedCustomers: [...dismissed, name] as Prisma.InputJsonValue,
+            },
           });
         }
         await logEvents(workspaceId, [
@@ -814,7 +1038,11 @@ export async function mutateIdeas(
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
         include: {
-          sources: { include: { ticket: { select: { id: true, dismissedCustomers: true } } } },
+          sources: {
+            include: {
+              ticket: { select: { id: true, dismissedCustomers: true } },
+            },
+          },
         },
       });
       const wanted = mutation.name.trim().toLowerCase();
@@ -831,7 +1059,11 @@ export async function mutateIdeas(
           }
         }
         await logEvents(workspaceId, [
-          { ideaId: idea.id, action: "undismiss_customer", payload: { name: mutation.name } },
+          {
+            ideaId: idea.id,
+            action: "undismiss_customer",
+            payload: { name: mutation.name },
+          },
         ]);
       }
       break;

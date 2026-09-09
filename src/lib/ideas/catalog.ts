@@ -13,7 +13,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v7";
+export const CATALOG_PROMPT_VERSION = "catalog-v8";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -44,6 +44,8 @@ For bugs and needs_details, return empty lists and empty strings for all of the 
 Everything in the ticket was written or relayed by an organization representative (support, CS, sales) — including passages quoted as the customer's words and any "why we should build this" or "insights" fields. Treat all of it as that person's interpretation of a customer interaction: one grade of information, read with the same grain of salt. Evaluate what the underlying need actually is rather than inheriting the reporter's framing or justification as fact.
 
 Tickets may carry tags and a reporter-chosen module. Both are entered by humans who are not product managers and who make mistakes — treat them as hints at most: the module usually points at the right product line, but never let it or a tag override what the ticket content itself says.
+
+Tickets sometimes pack several DISTINCT user problems into one message (reporters are busy people). Report request_count: the number of distinct user problems a product manager would file as separate backlog items. It is 1 unless the ticket clearly contains several unrelated asks; alternative solutions or details of ONE problem are still 1. A later stage handles the actual splitting — here you only count, and your product_title/product_summary should cover the ticket as a whole either way.
 
 Judge only from the ticket content and the catalogs provided. Do not consider priority or importance — only what kind of item this is and where it belongs. Give a single short sentence of reasoning covering the classification and, for feature requests, the assignment.`;
 
@@ -82,13 +84,21 @@ const CATALOG_TOOL = {
         description:
           "For feature requests: 2-4 sentences describing the underlying need in neutral product language, without support framing. Empty string for bugs and needs_details.",
       },
+      request_count: {
+        type: "integer",
+        minimum: 1,
+        description:
+          "Distinct user problems a PM would file as separate backlog items. 1 unless the ticket clearly contains several.",
+      },
       reason: {
         type: "string",
-        description: "One short sentence explaining the classification and assignment.",
+        description:
+          "One short sentence explaining the classification and assignment.",
       },
     },
     required: [
       "kind",
+      "request_count",
       "product_lines",
       "platforms",
       "affected_customers",
@@ -116,6 +126,8 @@ export interface CatalogInput {
 
 export interface CatalogResult extends CatalogVerdict {
   key: string;
+  /** Distinct user problems the model counted; >1 flags the split stage. */
+  requestCount: number;
   productLines: string[];
   platforms: string[];
   /** Customers matched from the customer catalog; empty when none are mentioned. */
@@ -148,13 +160,15 @@ function isCatalogKind(v: unknown): v is CatalogKind {
 }
 
 function toNames(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  return Array.isArray(v)
+    ? v.filter((x): x is string => typeof x === "string")
+    : [];
 }
 
 function renderList(title: string, entries: CatalogListEntry[]): string {
   if (entries.length === 0) return `${title}:\n(none defined)`;
   const lines = entries.map((e) =>
-    e.description ? `- ${e.name} — ${e.description}` : `- ${e.name}`
+    e.description ? `- ${e.name} — ${e.description}` : `- ${e.name}`,
   );
   return `${title}:\n${lines.join("\n")}`;
 }
@@ -163,7 +177,7 @@ function renderUserMessage(
   input: CatalogInput,
   productLines: CatalogListEntry[],
   platforms: CatalogListEntry[],
-  customers: CatalogListEntry[]
+  customers: CatalogListEntry[],
 ): string {
   return [
     renderList("PRODUCT LINE CATALOG", productLines),
@@ -179,16 +193,18 @@ function renderUserMessage(
       "Body:",
       input.body || "(empty)",
       ...(input.whyBuild
-        ? ["", "Reporter's \"why should we build this\":", input.whyBuild]
+        ? ["", 'Reporter\'s "why should we build this":', input.whyBuild]
         : []),
-      ...(input.insights ? ["", "Reporter's \"what insights do we have\":", input.insights] : []),
+      ...(input.insights
+        ? ["", 'Reporter\'s "what insights do we have":', input.insights]
+        : []),
     ].join("\n"),
   ].join("\n\n");
 }
 
 async function judgeTicket(
   model: string,
-  userMessage: string
+  userMessage: string,
 ): Promise<Omit<CatalogResult, "key">> {
   // No temperature: the Claude 5 family rejects the parameter outright
   // (`temperature` is deprecated).
@@ -207,6 +223,7 @@ async function judgeTicket(
   }
   const raw = toolUse.input as {
     kind?: unknown;
+    request_count?: unknown;
     product_lines?: unknown;
     platforms?: unknown;
     affected_customers?: unknown;
@@ -222,12 +239,19 @@ async function judgeTicket(
   // actually behaves before deciding whether to constrain it.
   return {
     kind: raw.kind,
+    requestCount:
+      typeof raw.request_count === "number" &&
+      Number.isFinite(raw.request_count)
+        ? Math.max(1, Math.floor(raw.request_count))
+        : 1,
     reason: typeof raw.reason === "string" ? raw.reason : "",
     productLines: toNames(raw.product_lines),
     platforms: toNames(raw.platforms),
     affectedCustomers: toNames(raw.affected_customers),
-    productTitle: typeof raw.product_title === "string" ? raw.product_title.trim() : "",
-    productSummary: typeof raw.product_summary === "string" ? raw.product_summary.trim() : "",
+    productTitle:
+      typeof raw.product_title === "string" ? raw.product_title.trim() : "",
+    productSummary:
+      typeof raw.product_summary === "string" ? raw.product_summary.trim() : "",
   };
 }
 
@@ -246,7 +270,7 @@ export interface CatalogBatchResult {
  */
 export async function catalogTickets(
   workspaceId: string,
-  tickets: CatalogInput[]
+  tickets: CatalogInput[],
 ): Promise<CatalogBatchResult> {
   const model = getCatalogModel();
   const [productLines, platforms, customers] = await Promise.all([
@@ -269,7 +293,12 @@ export async function catalogTickets(
 
   const results: CatalogResult[] = [];
   for (const ticket of tickets) {
-    const userMessage = renderUserMessage(ticket, productLines, platforms, customers);
+    const userMessage = renderUserMessage(
+      ticket,
+      productLines,
+      platforms,
+      customers,
+    );
     const verdict = await judgeTicket(model, userMessage);
     const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
     await recordVerdict(
@@ -281,10 +310,15 @@ export async function catalogTickets(
         model,
         input,
         verdict,
-      }
+      },
     );
     results.push({ key: ticket.key, ...verdict });
   }
 
-  return { results, model, promptVersion: CATALOG_PROMPT_VERSION, called: tickets.length };
+  return {
+    results,
+    model,
+    promptVersion: CATALOG_PROMPT_VERSION,
+    called: tickets.length,
+  };
 }

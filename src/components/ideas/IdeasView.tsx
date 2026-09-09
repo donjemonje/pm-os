@@ -38,6 +38,7 @@ interface ImportSummary {
   bugs: number;
   needsDetails: number;
   duplicates: number;
+  split?: number;
   jiraConnected: boolean;
   jiraCount: number;
 }
@@ -232,6 +233,8 @@ export function IdeasView({
       if (s.needsDetails > 0)
         parts.push(`${s.needsDetails} need${s.needsDetails === 1 ? "s" : ""} more details`);
       if (s.duplicates > 0) parts.push(`${s.duplicates} already imported`);
+      if ((s.split ?? 0) > 0)
+        parts.push(`${s.split} ticket${s.split === 1 ? "" : "s"} split into multiple ideas`);
       if (result.skipped > 0)
         parts.push(`${result.skipped} empty row${result.skipped === 1 ? "" : "s"} skipped`);
       if (s.jiraConnected)

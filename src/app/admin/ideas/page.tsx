@@ -2,6 +2,7 @@ import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { CATALOG_PROMPT_VERSION, CATALOG_SYSTEM_PROMPT } from "@/lib/ideas/catalog";
 import { MATCH_PROMPT_VERSION, MATCH_SYSTEM_PROMPT } from "@/lib/ideas/match";
+import { SPLIT_PROMPT_VERSION, SPLIT_SYSTEM_PROMPT } from "@/lib/ideas/split";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { AdminShell } from "../AdminShell";
 import { IdeasOutputConfig } from "./IdeasOutputConfig";
@@ -35,6 +36,12 @@ export default async function AdminIdeasPage() {
             title: `Classification & idea generation (${CATALOG_PROMPT_VERSION})`,
             note: "Runs once per imported ticket: FR/bug/needs-details, product line, platforms, customers, and the product-voiced title/summary. The org's catalogs (Settings → Ideas) and the ticket's mapped fields (module hint, reporter's why-build/insights) are appended per ticket.",
             text: CATALOG_SYSTEM_PROMPT,
+          },
+          {
+            id: "split",
+            title: `Ticket breakdown (${SPLIT_PROMPT_VERSION})`,
+            note: "Runs only for tickets classification flags as holding more than one distinct user problem (request_count > 1) — each problem becomes its own idea, capped at 4, with an escape hatch back to a single idea. Sub-ideas then run through matching independently.",
+            text: SPLIT_SYSTEM_PROMPT,
           },
           {
             id: "match",
