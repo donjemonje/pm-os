@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Check, X } from "lucide-react";
 import { scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
@@ -114,6 +115,30 @@ export function MergePage({
       ? (finals[0]?.idea.id ?? null)
       : selectedFinalId;
 
+  // Clicking a source's N× badge highlights every idea it backs — the same
+  // green as merge-edit, view-only: no checkboxes, no save/discard.
+  const [highlightSrc, setHighlightSrc] = useState<{ kind: SourceKind; key: string } | null>(null);
+  useEffect(() => {
+    if (edit) setHighlightSrc(null);
+  }, [edit]);
+  useEffect(() => {
+    if (!highlightSrc) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHighlightSrc(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [highlightSrc]);
+  const highlightedIdeaIds = new Set(
+    highlightSrc
+      ? ideas
+          .filter((i) =>
+            (highlightSrc.kind === "zen" ? i.zen : i.jira).includes(highlightSrc.key)
+          )
+          .map((i) => i.id)
+      : []
+  );
+
   // Sources of visible finals first (in finals order), then every remaining
   // source, deduped — shared sources appear once with an N× tag.
   const buildRows = (
@@ -192,7 +217,14 @@ export function MergePage({
             }}
             className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors duration-150"
             style={{
-              background: row.checked || (row.selected && !edit) ? "#daf0e2" : "#ffffff",
+              background:
+                row.checked ||
+                (!edit &&
+                  (highlightSrc
+                    ? highlightSrc.kind === kind && highlightSrc.key === row.key
+                    : row.selected))
+                  ? "#daf0e2"
+                  : "#ffffff",
               opacity: row.orphan && !row.checked ? 0.5 : 1,
             }}
           >
@@ -243,12 +275,27 @@ export function MergePage({
               </span>
             )}
             {row.owners > 1 && (
-              <span
-                title="Used in more than one idea"
-                className="shrink-0 rounded-full border border-[rgba(122,167,255,.4)] bg-[rgba(122,167,255,.14)] px-[5px] py-px font-mono text-[9.5px] font-semibold text-[#3b6fd4]"
+              <button
+                onClick={(e) => {
+                  if (edit) return;
+                  e.stopPropagation();
+                  setHighlightSrc((cur) =>
+                    cur && cur.kind === kind && cur.key === row.key ? null : { kind, key: row.key }
+                  );
+                }}
+                title={
+                  edit
+                    ? "Used in more than one idea"
+                    : "Highlight the ideas using this source (Esc clears)"
+                }
+                className={`shrink-0 rounded-full border px-[5px] py-px font-mono text-[9.5px] font-semibold ${
+                  !edit && highlightSrc?.kind === kind && highlightSrc?.key === row.key
+                    ? "border-[#1f8a53] bg-[#daf0e2] text-[#1f8a53]"
+                    : "border-[rgba(122,167,255,.4)] bg-[rgba(122,167,255,.14)] text-[#3b6fd4] hover:border-[#3b6fd4]"
+                }`}
               >
                 {row.owners}×
-              </span>
+              </button>
             )}
           </div>
         ))}
@@ -268,7 +315,11 @@ export function MergePage({
         <div>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
-            const sel = idea.id === selId;
+            const sel = edit
+              ? idea.id === selId
+              : highlightSrc
+                ? highlightedIdeaIds.has(idea.id)
+                : idea.id === selId;
             return (
               <div
                 key={idea.id}
