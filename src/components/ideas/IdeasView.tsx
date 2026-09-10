@@ -910,7 +910,8 @@ export function IdeasView({
                     </span>
                     {(idea.products.length > 0 ||
                       (idea.platforms ?? []).length > 0 ||
-                      (idea.customers ?? []).length > 0) && (
+                      (idea.customers ?? []).length > 0 ||
+                      idea.affectsAllCustomers) && (
                       <div className="flex flex-wrap items-center gap-2">
                         {idea.products.map((p) => {
                           // Flag names the model returned that aren't in the
@@ -942,6 +943,14 @@ export function IdeasView({
                             {p}
                           </span>
                         ))}
+                        {idea.affectsAllCustomers && (
+                          <span
+                            title="A supporting ticket marks this as affecting all customers"
+                            className="rounded bg-[rgba(122,167,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#3b6fd4]"
+                          >
+                            All customers
+                          </span>
+                        )}
                         {(idea.customers ?? []).map((c) => {
                           // Off-catalog names are suggestions awaiting PM
                           // review in the drawer — flagged, never hidden.
