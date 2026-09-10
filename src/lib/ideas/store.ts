@@ -76,6 +76,7 @@ const IDEA_INCLUDE = {
           externalId: true,
           requester: true,
           affectedCustomers: true,
+          affectsAllCustomers: true,
           dismissedCustomers: true,
         },
       },
@@ -148,6 +149,7 @@ function toClientIdea(row: IdeaRow): Idea {
     customers: distinct(
       ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
     ).filter((c) => !dismissedKeys.has(c.toLowerCase())),
+    affectsAllCustomers: ticketRows.some((t) => t.affectsAllCustomers) || undefined,
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
     batchChanges: (row.batchChanges as string[]) ?? [],

@@ -72,6 +72,8 @@ export interface Idea {
   reporters?: string[];
   /** Customers the supporting tickets say are affected — union over sources, minus dismissed. */
   customers?: string[];
+  /** Any supporting ticket was marked as affecting all customers. */
+  affectsAllCustomers?: boolean;
   /** Dismissed suggestions, restorable from the drawer. */
   dismissedCustomers?: string[];
   batch: IdeaBatchStatus;
