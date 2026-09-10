@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { badgeOf, needsApproval, scoreOf, votesLabel } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
+import { UmMarkdown } from "@/components/documents/UmMarkdown";
 
 type SourceSel = { kind: "zen" | "jira"; key: string };
 
@@ -25,12 +26,19 @@ interface IdeaDrawerProps {
   /** Customer catalog names — chips for names outside it render as suggestions. */
   customerCatalog?: string[];
   /** Approve adds the suggested customer to the catalog; dismiss hides it on this idea (reversible); undismiss restores it. */
-  onCustomerAction?: (action: "approve" | "dismiss" | "undismiss", name: string) => void;
+  onCustomerAction?: (
+    action: "approve" | "dismiss" | "undismiss",
+    name: string,
+  ) => void;
   onClose: () => void;
   onToggleApprove?: () => void;
   /** Set only while this idea's last-merge write is undoable AND the ideasUndo flag is on. */
   onUndoPush?: () => void;
-  onSave?: (patch: { title: string; details: string; manual: number | null }) => void;
+  onSave?: (patch: {
+    title: string;
+    details: string;
+    manual: number | null;
+  }) => void;
   onMerge?: () => void;
 }
 
@@ -61,8 +69,10 @@ export function IdeaDrawer({
   const [editDetails, setEditDetails] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
 
-  const ticket = srcSel?.kind === "zen" ? ticketsByKey.get(srcSel.key) : undefined;
-  const jiraSrc = srcSel?.kind === "jira" ? jiraByKey.get(srcSel.key) : undefined;
+  const ticket =
+    srcSel?.kind === "zen" ? ticketsByKey.get(srcSel.key) : undefined;
+  const jiraSrc =
+    srcSel?.kind === "jira" ? jiraByKey.get(srcSel.key) : undefined;
   const viewingSource = !!ticket || !!jiraSrc;
   const badge = idea ? badgeOf(idea) : null;
   const score = idea ? scoreOf(idea) : null;
@@ -107,9 +117,18 @@ export function IdeaDrawer({
     viewingSource || !idea || !score
       ? []
       : [
-          { label: "Score", value: score.value != null ? String(score.value) : "—" },
-          { label: "PM-OS", value: idea.pmScore != null ? String(idea.pmScore) : "—" },
-          { label: "Manual", value: idea.manual != null ? String(idea.manual) : "—" },
+          {
+            label: "Score",
+            value: score.value != null ? String(score.value) : "—",
+          },
+          {
+            label: "PM-OS",
+            value: idea.pmScore != null ? String(idea.pmScore) : "—",
+          },
+          {
+            label: "Manual",
+            value: idea.manual != null ? String(idea.manual) : "—",
+          },
           { label: "Votes", value: votes ?? "—" },
         ];
 
@@ -120,13 +139,33 @@ export function IdeaDrawer({
         ...idea.zen.flatMap((key) => {
           const t = ticketsByKey.get(key);
           return t
-            ? [{ kind: "zen" as const, key, id: t.id, title: t.subject, tag: ZEN_TAG }]
+            ? [
+                {
+                  kind: "zen" as const,
+                  key,
+                  id: t.id,
+                  title: t.subject,
+                  tag: ZEN_TAG,
+                  reporter: t.requester,
+                  url: t.url,
+                },
+              ]
             : [];
         }),
         ...idea.jira.flatMap((key) => {
           const s = jiraByKey.get(key);
           return s
-            ? [{ kind: "jira" as const, key, id: s.id, title: s.title, tag: JIRA_TAG }]
+            ? [
+                {
+                  kind: "jira" as const,
+                  key,
+                  id: s.id,
+                  title: s.title,
+                  tag: JIRA_TAG,
+                  reporter: undefined as string | undefined,
+                  url: s.url,
+                },
+              ]
             : [];
         }),
       ]
@@ -177,7 +216,8 @@ export function IdeaDrawer({
                   <span
                     className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium"
                     style={{
-                      background: badge.bg === "transparent" ? "#ffffff" : badge.bg,
+                      background:
+                        badge.bg === "transparent" ? "#ffffff" : badge.bg,
                       color: badge.fg,
                       borderColor: badge.bd,
                     }}
@@ -237,7 +277,7 @@ export function IdeaDrawer({
                     cataloged, amber suggestion with approve/dismiss when not. */}
                 {(idea.customers ?? []).map((c) => {
                   const suggested = !customerCatalog.some(
-                    (k) => k.toLowerCase() === c.toLowerCase()
+                    (k) => k.toLowerCase() === c.toLowerCase(),
                   );
                   if (!suggested) {
                     return (
@@ -282,44 +322,57 @@ export function IdeaDrawer({
 
           {/* Dismissed suggestions stay reachable — a dismiss is a review
               decision, not a deletion, so it can be reversed any time. */}
-          {!viewingSource && idea && (idea.dismissedCustomers ?? []).length > 0 && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                onClick={() => setShowDismissed((v) => !v)}
-                className="font-mono text-[10.5px] font-medium text-[#9aa8be] hover:text-foreground"
-              >
-                {showDismissed ? "▾" : "▸"} {(idea.dismissedCustomers ?? []).length} dismissed
-                customer{(idea.dismissedCustomers ?? []).length === 1 ? "" : "s"}
-              </button>
-              {showDismissed &&
-                (idea.dismissedCustomers ?? []).map((c) => (
-                  <span
-                    key={`dismissed-${c}`}
-                    className="inline-flex items-center gap-1 rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496]"
-                  >
-                    <span className="line-through">{c}</span>
-                    {onCustomerAction && (
-                      <button
-                        title="Restore this customer"
-                        onClick={() => onCustomerAction("undismiss", c)}
-                        className="flex rounded-sm p-px text-[#7a8496] hover:bg-[#daf0e2] hover:text-[#1f8a53]"
-                      >
-                        <RotateCcw size={10} strokeWidth={2.5} />
-                      </button>
-                    )}
-                  </span>
-                ))}
-            </div>
-          )}
+          {!viewingSource &&
+            idea &&
+            (idea.dismissedCustomers ?? []).length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => setShowDismissed((v) => !v)}
+                  className="font-mono text-[10.5px] font-medium text-[#9aa8be] hover:text-foreground"
+                >
+                  {showDismissed ? "▾" : "▸"}{" "}
+                  {(idea.dismissedCustomers ?? []).length} dismissed customer
+                  {(idea.dismissedCustomers ?? []).length === 1 ? "" : "s"}
+                </button>
+                {showDismissed &&
+                  (idea.dismissedCustomers ?? []).map((c) => (
+                    <span
+                      key={`dismissed-${c}`}
+                      className="inline-flex items-center gap-1 rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496]"
+                    >
+                      <span className="line-through">{c}</span>
+                      {onCustomerAction && (
+                        <button
+                          title="Restore this customer"
+                          onClick={() => onCustomerAction("undismiss", c)}
+                          className="flex rounded-sm p-px text-[#7a8496] hover:bg-[#daf0e2] hover:text-[#1f8a53]"
+                        >
+                          <RotateCcw size={10} strokeWidth={2.5} />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+              </div>
+            )}
 
           {stats.length > 0 && (
-            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))" }}>
+            <div
+              className="grid gap-2"
+              style={{
+                gridTemplateColumns: "repeat(auto-fit, minmax(88px, 1fr))",
+              }}
+            >
               {stats.map((st) => (
-                <div key={st.label} className="rounded-lg bg-background px-2.5 py-2">
+                <div
+                  key={st.label}
+                  className="rounded-lg bg-background px-2.5 py-2"
+                >
                   <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-[#7a8aa3]">
                     {st.label}
                   </div>
-                  <div className="font-title text-base font-bold">{st.value}</div>
+                  <div className="font-title text-base font-bold">
+                    {st.value}
+                  </div>
                 </div>
               ))}
             </div>
@@ -335,7 +388,9 @@ export function IdeaDrawer({
             <>
               <div>
                 <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
-                <div className="text-[13.5px] leading-relaxed text-foreground">{ticket.body}</div>
+                <div className="text-[13.5px] leading-relaxed text-foreground">
+                  {ticket.body}
+                </div>
               </div>
               <div className="flex flex-col gap-1 text-xs text-muted">
                 {ticket.catalog && (
@@ -355,10 +410,10 @@ export function IdeaDrawer({
                     Affected customers:
                     {(ticket.affectedCustomers ?? []).map((c) => {
                       const dismissed = (ticket.dismissedCustomers ?? []).some(
-                        (k) => k.toLowerCase() === c.toLowerCase()
+                        (k) => k.toLowerCase() === c.toLowerCase(),
                       );
                       const suggested = !customerCatalog.some(
-                        (k) => k.toLowerCase() === c.toLowerCase()
+                        (k) => k.toLowerCase() === c.toLowerCase(),
                       );
                       return (
                         <span
@@ -385,7 +440,9 @@ export function IdeaDrawer({
                   </span>
                 )}
                 {ticket.createdAt && <span>Created: {ticket.createdAt}</span>}
-                {ticket.tags.length > 0 && <span>Tags: {ticket.tags.join(", ")}</span>}
+                {ticket.tags.length > 0 && (
+                  <span>Tags: {ticket.tags.join(", ")}</span>
+                )}
               </div>
             </>
           ) : jiraSrc ? (
@@ -425,7 +482,9 @@ export function IdeaDrawer({
                   placeholder="—"
                   className="font-title w-full rounded-lg border border-border px-2.5 py-2 text-sm font-semibold outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
                 />
-                <span className="text-[11px] text-[#9aa8be]">Overrides the displayed score</span>
+                <span className="text-[11px] text-[#9aa8be]">
+                  Overrides the displayed score
+                </span>
               </div>
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
@@ -441,41 +500,46 @@ export function IdeaDrawer({
             <>
               {/* What this import did to an Updated idea — the PM shouldn't
                   have to diff anything by eye. */}
-              {idea.batch === "updated" && (idea.batchChanges ?? []).length > 0 && (
-                <div className="rounded-lg border border-[rgba(122,167,255,.35)] bg-[rgba(122,167,255,.07)] px-3.5 py-2.5">
-                  <div className={`${MONO_LABEL} mb-1.5`}>Updated this import</div>
-                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                    {(idea.batchChanges ?? []).map((c, i) => (
-                      <li
-                        key={`${i}-${c}`}
-                        className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
-                      >
-                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#7aa7ff]" />
-                        {c}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {idea.batch === "updated" &&
+                (idea.batchChanges ?? []).length > 0 && (
+                  <div className="rounded-lg border border-[rgba(122,167,255,.35)] bg-[rgba(122,167,255,.07)] px-3.5 py-2.5">
+                    <div className={`${MONO_LABEL} mb-1.5`}>
+                      Updated this import
+                    </div>
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {(idea.batchChanges ?? []).map((c, i) => (
+                        <li
+                          key={`${i}-${c}`}
+                          className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
+                        >
+                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#7aa7ff]" />
+                          {c}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               <div>
-                <div className={`${MONO_LABEL} mb-1.5`}>Details ({idea.batch})</div>
-                <div className="whitespace-pre-line text-[13.5px] leading-relaxed text-foreground">
-                  {idea.details}
+                <div className={`${MONO_LABEL} mb-1.5`}>
+                  Details ({idea.batch})
                 </div>
+                <UmMarkdown
+                  content={idea.details}
+                  className="text-[13.5px] leading-relaxed"
+                />
               </div>
-              {(idea.reporters ?? []).length > 0 && (
-                <div className="text-xs text-muted">
-                  Reported by {(idea.reporters ?? []).join(", ")}
-                </div>
-              )}
               {sourceEntries.length > 0 && (
                 <div>
-                  <div className={`${MONO_LABEL} mb-2`}>Sources · {sourceEntries.length}</div>
+                  <div className={`${MONO_LABEL} mb-2`}>
+                    Sources · {sourceEntries.length}
+                  </div>
                   <div className="flex flex-col gap-2">
                     {sourceEntries.map((src) => (
                       <button
                         key={`${src.kind}:${src.key}`}
-                        onClick={() => setSrcSel({ kind: src.kind, key: src.key })}
+                        onClick={() =>
+                          setSrcSel({ kind: src.kind, key: src.key })
+                        }
                         className="flex w-full items-center gap-2.5 rounded-lg border border-[#e2eaf4] bg-[#f7fafd] px-3 py-2.5 text-left transition-colors hover:border-primary"
                       >
                         <span
@@ -484,10 +548,32 @@ export function IdeaDrawer({
                         >
                           {src.id}
                         </span>
-                        <span className="min-w-0 flex-1 text-[13px] leading-snug text-[#33445e]">
-                          {src.title}
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] leading-snug text-[#33445e]">
+                            {src.title}
+                          </span>
+                          {src.reporter && (
+                            <span className="block text-[11px] text-[#9aa8be]">
+                              Reported by {src.reporter}
+                            </span>
+                          )}
                         </span>
-                        <ChevronRight size={13} className="shrink-0 text-[#9aa8be]" />
+                        {src.url && (
+                          <a
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            title="Open in source system"
+                            className="shrink-0 rounded p-1 text-[#9aa8be] hover:bg-white hover:text-primary"
+                          >
+                            <ExternalLink size={12} />
+                          </a>
+                        )}
+                        <ChevronRight
+                          size={13}
+                          className="shrink-0 text-[#9aa8be]"
+                        />
                       </button>
                     ))}
                   </div>
@@ -517,32 +603,40 @@ export function IdeaDrawer({
               </>
             ) : (
               <>
-                {needsApproval(idea) && (() => {
-                  // Unresolved suggested metadata (customers outside the
-                  // catalog) blocks approval — same rule the server enforces.
-                  const blocked =
-                    idea.decision === "pending" &&
-                    (idea.customers ?? []).some(
-                      (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase())
+                {needsApproval(idea) &&
+                  (() => {
+                    // Unresolved suggested metadata (customers outside the
+                    // catalog) blocks approval — same rule the server enforces.
+                    const blocked =
+                      idea.decision === "pending" &&
+                      (idea.customers ?? []).some(
+                        (c) =>
+                          !customerCatalog.some(
+                            (n) => n.toLowerCase() === c.toLowerCase(),
+                          ),
+                      );
+                    return (
+                      <button
+                        onClick={() => onToggleApprove?.()}
+                        disabled={blocked}
+                        title={
+                          blocked
+                            ? "Approve or dismiss the suggested customers first"
+                            : undefined
+                        }
+                        className={
+                          blocked
+                            ? "inline-flex h-8 cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium opacity-40"
+                            : idea.decision === "pending"
+                              ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
+                              : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
+                        }
+                      >
+                        <Check size={13} strokeWidth={3} />
+                        {idea.decision === "pending" ? "Approve" : "Approved"}
+                      </button>
                     );
-                  return (
-                  <button
-                    onClick={() => onToggleApprove?.()}
-                    disabled={blocked}
-                    title={blocked ? "Approve or dismiss the suggested customers first" : undefined}
-                    className={
-                      blocked
-                        ? "inline-flex h-8 cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium opacity-40"
-                        : idea.decision === "pending"
-                          ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                          : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                    }
-                  >
-                    <Check size={13} strokeWidth={3} />
-                    {idea.decision === "pending" ? "Approve" : "Approved"}
-                  </button>
-                  );
-                })()}
+                  })()}
                 {onUndoPush && idea.decision === "injected" && (
                   <button
                     onClick={onUndoPush}

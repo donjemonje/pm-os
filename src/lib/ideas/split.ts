@@ -2,6 +2,7 @@ import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { mergeIdeasJiraConfig } from "./jira-mapping";
 
 /**
  * Split stage: for the few tickets the catalog stage flags as holding more
@@ -12,7 +13,7 @@ import { ledgerKey, recordVerdict } from "./ledger";
  * Every verdict is appended to the ledger like the other stages.
  */
 
-export const SPLIT_PROMPT_VERSION = "split-v1";
+export const SPLIT_PROMPT_VERSION = "split-v2";
 
 /** Hard bound on sub-ideas per ticket, enforced in schema AND code. */
 export const MAX_SPLITS = 4;
@@ -32,7 +33,7 @@ An earlier stage judged that this ticket contains more than one distinct user pr
 
 For each distinct problem return:
 - product_title: a short title naming the requested capability, as a product manager would write it in a backlog. The what, not the how — do not bake an implementation into the title unless the ticket makes the implementation itself the ask.
-- product_summary: 2-4 sentences describing the underlying need in neutral product language. No support framing, no requester or customer names, no ticket phrasing.
+- product_summary: markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's omission rules. Audience is the team's own product managers (never explain what the product does), keep it short and readable, frame it as a general product-line capability rather than a one-customer fix. No support framing, no requester or customer names, no ticket phrasing.
 - product_lines: the product line(s) THIS problem belongs to, from the catalog provided; ["Other"] when none fits.
 - platforms: platform(s) from the catalog, only when this problem states or clearly implies them; otherwise empty. Skip entirely when the platform catalog is empty.
 
@@ -133,8 +134,10 @@ function renderUserMessage(
   input: SplitInput,
   productLines: { name: string; description: string }[],
   platforms: { name: string; description: string }[],
+  ideaTemplate: string,
 ): string {
   return [
+    `IDEA TEMPLATE (each product_summary must follow these sections):\n\n${ideaTemplate}`,
     renderList("PRODUCT LINE CATALOG", productLines),
     renderList("PLATFORM CATALOG", platforms),
     [
@@ -177,7 +180,7 @@ export async function splitTickets(
     };
   }
 
-  const [productLines, platforms] = await Promise.all([
+  const [productLines, platforms, wsRow] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
@@ -188,11 +191,21 @@ export async function splitTickets(
       orderBy: { name: "asc" },
       select: { name: true, description: true },
     }),
+    db.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ideasConfig: true },
+    }),
   ]);
+  const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
 
   const results: SplitResult[] = [];
   for (const input of inputs) {
-    const userMessage = renderUserMessage(input, productLines, platforms);
+    const userMessage = renderUserMessage(
+      input,
+      productLines,
+      platforms,
+      ideaTemplate,
+    );
     const message = await getClient().messages.create({
       model,
       max_tokens: 2000,

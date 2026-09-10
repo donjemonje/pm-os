@@ -1,6 +1,8 @@
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
+import { db } from "../db";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { mergeIdeasJiraConfig } from "./jira-mapping";
 
 /**
  * Match stage: decide, for each cataloged feature request, whether it is the
@@ -13,7 +15,7 @@ import { ledgerKey, recordVerdict } from "./ledger";
  * every judgment is appended to the ledger — nothing is replayed or forced.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v2";
+export const MATCH_PROMPT_VERSION = "match-v3";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 function getMatchModel(): string {
@@ -29,13 +31,14 @@ Decide whether the request asks for the same capability as one existing idea:
 - Related is NOT matched: same product area but a different capability, a complement, or a prerequisite is not a match.
 - When torn between two ideas, pick the single best one; when no idea clearly fits, return no match. Never force a match.
 
-If (and only if) the request matches, also judge enrichment: does the request add real context the idea's description lacks (a concrete use case, a constraint, a sharper articulation of the need)? If yes, write enriched_summary — 2-4 sentences of neutral product language: the existing idea's description, sharpened with the new context. It replaces the description, so it must stand alone and keep everything still true from the original. If the request adds nothing beyond a vote, return an empty enriched_summary.
+If (and only if) the request matches, also judge enrichment: does the request add real context the idea's description lacks (a concrete use case, a constraint, a sharper articulation of the need)? If yes, write enriched_summary: the existing idea's description, sharpened with the new context, in neutral product language. It replaces the description, so it must stand alone, keep everything still true from the original, and keep (or adopt) the IDEA TEMPLATE structure provided in the message — sections in order with their exact "##" headings, honoring their omission rules. Audience is the team's own product managers; keep it short and readable; frame a general product-line capability, not a one-customer fix. If the request adds nothing beyond a vote, return an empty enriched_summary.
 
 Return the matched idea's key EXACTLY as listed, or an empty string for no match. Give a single short sentence of reasoning.`;
 
 const MATCH_TOOL = {
   name: "match_feature_request",
-  description: "Record the match verdict for one feature request against the ideas list.",
+  description:
+    "Record the match verdict for one feature request against the ideas list.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -102,13 +105,20 @@ export interface MatchCandidate {
 
 function renderCandidates(ideas: MatchCandidate[]): string {
   const lines = ideas.map((s) =>
-    [`[${s.key}] ${s.title}`, clip(s.body || "(no description)", 800)].join("\n")
+    [`[${s.key}] ${s.title}`, clip(s.body || "(no description)", 800)].join(
+      "\n",
+    ),
   );
   return `EXISTING IDEAS:\n\n${lines.join("\n\n")}`;
 }
 
-function renderUserMessage(input: MatchInput, candidates: string): string {
+function renderUserMessage(
+  input: MatchInput,
+  candidates: string,
+  ideaTemplate: string,
+): string {
   return [
+    `IDEA TEMPLATE (enriched_summary, when written, must follow these sections):\n\n${ideaTemplate}`,
     candidates,
     [
       "FEATURE REQUEST",
@@ -140,14 +150,26 @@ export interface MatchBatchResult {
 export async function matchTickets(
   workspaceId: string,
   inputs: MatchInput[],
-  initialCandidates: MatchCandidate[]
+  initialCandidates: MatchCandidate[],
 ): Promise<MatchBatchResult> {
   const model = getMatchModel();
   if (inputs.length === 0) {
-    return { results: [], model, promptVersion: MATCH_PROMPT_VERSION, called: 0 };
+    return {
+      results: [],
+      model,
+      promptVersion: MATCH_PROMPT_VERSION,
+      called: 0,
+    };
   }
 
-  const candidates = [...initialCandidates].sort((a, b) => a.key.localeCompare(b.key));
+  const wsRow = await db.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { ideasConfig: true },
+  });
+  const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
+  const candidates = [...initialCandidates].sort((a, b) =>
+    a.key.localeCompare(b.key),
+  );
   let called = 0;
 
   const results: MatchResult[] = [];
@@ -158,12 +180,21 @@ export async function matchTickets(
       body: input.productSummary || input.body,
     });
     if (candidates.length === 0) {
-      results.push({ key: input.key, matchedKey: null, enrichedSummary: "", reason: "" });
+      results.push({
+        key: input.key,
+        matchedKey: null,
+        enrichedSummary: "",
+        reason: "",
+      });
       candidates.push(asCandidate());
       continue;
     }
     const candidateKeys = new Set(candidates.map((c) => c.key));
-    const userMessage = renderUserMessage(input, renderCandidates(candidates));
+    const userMessage = renderUserMessage(
+      input,
+      renderCandidates(candidates),
+      ideaTemplate,
+    );
     called++;
     const message = await getClient().messages.create({
       model,
@@ -184,9 +215,12 @@ export async function matchTickets(
       reason?: unknown;
     };
     const verdict = {
-      matchedKey: typeof raw.matched_key === "string" ? raw.matched_key.trim() : "",
+      matchedKey:
+        typeof raw.matched_key === "string" ? raw.matched_key.trim() : "",
       enrichedSummary:
-        typeof raw.enriched_summary === "string" ? raw.enriched_summary.trim() : "",
+        typeof raw.enriched_summary === "string"
+          ? raw.enriched_summary.trim()
+          : "",
       reason: typeof raw.reason === "string" ? raw.reason : "",
     };
     const ledgerInput = { system: MATCH_SYSTEM_PROMPT, user: userMessage };
@@ -199,11 +233,13 @@ export async function matchTickets(
         model,
         input: ledgerInput,
         verdict,
-      }
+      },
     );
     // The ledger keeps the verdict as returned; the pipeline only acts on
     // keys that exist in the candidate list the model was shown.
-    const matchedKey = candidateKeys.has(verdict.matchedKey) ? verdict.matchedKey : null;
+    const matchedKey = candidateKeys.has(verdict.matchedKey)
+      ? verdict.matchedKey
+      : null;
     results.push({
       key: input.key,
       matchedKey,

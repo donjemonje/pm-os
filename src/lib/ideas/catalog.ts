@@ -1,5 +1,6 @@
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
+import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
 import type { CatalogKind, CatalogVerdict } from "./types";
@@ -13,7 +14,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v8";
+export const CATALOG_PROMPT_VERSION = "catalog-v9";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -36,8 +37,12 @@ Second, ONLY if the ticket is a feature request, assign it within the product:
 - affected_customers: every customer the ticket content says is affected by or asking for this. When a mentioned customer matches an entry in the customer catalog, return the catalog's exact name; when the ticket clearly names a customer that is not in the catalog, return the name as written — it is surfaced to the product team as a suggestion. Only list customers the ticket itself names or clearly references; an empty list is the correct answer when none are mentioned. The requester is whoever filed the ticket — often a support or staff member filing on a customer's behalf — so never treat the requester as an affected customer unless the ticket content itself says they are one.
 
 Third, ONLY if the ticket is a feature request, rewrite it in product voice:
-- product_title: a short title naming the requested capability, written the way a product manager would put it in a backlog. Name the capability, not the customer's complaint or question.
-- product_summary: 2-4 sentences describing the underlying need and the requested capability in neutral product language. No support framing ("customer says...", "user is asking..."), no requester or customer names (those are captured separately), no ticket phrasing — it should read as if the product team wrote the idea themselves.
+- product_title: a short title naming the requested capability, written the way a product manager would put it in a backlog. Name the capability, not the customer's complaint or question — and the what, not the how: never bake an implementation into the title unless the ticket makes the implementation itself the ask.
+- product_summary: markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's own rules about when to omit it. Writing rules:
+  - The audience is the team's own product managers: never explain what the product or a module does — they know (the rare exception is when the ask itself only makes sense with that context).
+  - Short and easy to read. Prefer fewer words wherever nothing important is lost.
+  - Frame it as a general product capability that belongs in its product line, not a fix for one customer's situation — features should correlate into a coherent product, not accumulate as standalone patches.
+  - No support framing ("customer says...", "user is asking..."), no requester or customer names (captured separately), no ticket phrasing — it should read as if the product team wrote the idea themselves.
 
 For bugs and needs_details, return empty lists and empty strings for all of the above.
 
@@ -82,7 +87,7 @@ const CATALOG_TOOL = {
       product_summary: {
         type: "string",
         description:
-          "For feature requests: 2-4 sentences describing the underlying need in neutral product language, without support framing. Empty string for bugs and needs_details.",
+          "For feature requests: markdown following the IDEA TEMPLATE sections and rules from the message. Empty string for bugs and needs_details.",
       },
       request_count: {
         type: "integer",
@@ -178,8 +183,10 @@ function renderUserMessage(
   productLines: CatalogListEntry[],
   platforms: CatalogListEntry[],
   customers: CatalogListEntry[],
+  ideaTemplate: string,
 ): string {
   return [
+    `IDEA TEMPLATE (product_summary must follow these sections):\n\n${ideaTemplate}`,
     renderList("PRODUCT LINE CATALOG", productLines),
     renderList("PLATFORM CATALOG", platforms),
     renderList("CUSTOMER CATALOG", customers),
@@ -273,7 +280,7 @@ export async function catalogTickets(
   tickets: CatalogInput[],
 ): Promise<CatalogBatchResult> {
   const model = getCatalogModel();
-  const [productLines, platforms, customers] = await Promise.all([
+  const [productLines, platforms, customers, wsRow] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },
@@ -289,7 +296,12 @@ export async function catalogTickets(
       orderBy: { name: "asc" },
       select: { name: true, description: true },
     }),
+    db.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ideasConfig: true },
+    }),
   ]);
+  const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
 
   const results: CatalogResult[] = [];
   for (const ticket of tickets) {
@@ -298,6 +310,7 @@ export async function catalogTickets(
       productLines,
       platforms,
       customers,
+      ideaTemplate,
     );
     const verdict = await judgeTicket(model, userMessage);
     const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
