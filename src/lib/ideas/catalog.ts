@@ -1,5 +1,6 @@
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
+import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
@@ -306,9 +307,13 @@ export async function catalogTickets(
   // project's Vertex QPM/TPM quotas; -1 = unlimited, every ticket at once).
   // Results keep input order; the first failure aborts the import before any
   // DB write, same as the serial loop.
-  const rawConcurrency = parseInt(process.env.IDEAS_CATALOG_CONCURRENCY ?? "", 10);
-  const concurrency =
-    rawConcurrency === -1
+  const rawConcurrency = parseInt(
+    process.env.IDEAS_CATALOG_CONCURRENCY ?? "",
+    10,
+  );
+  const concurrency = !aiThrottleOn()
+    ? tickets.length
+    : rawConcurrency === -1
       ? tickets.length
       : Number.isFinite(rawConcurrency) && rawConcurrency > 0
         ? rawConcurrency

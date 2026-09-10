@@ -1,6 +1,7 @@
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
+import { aiThrottleOn } from "./ai-throttle";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
@@ -200,66 +201,80 @@ export async function splitTickets(
   ]);
   const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
 
-  const results: SplitResult[] = [];
-  for (const input of inputs) {
-    const userMessage = renderUserMessage(
-      input,
-      productLines,
-      platforms,
-      ideaTemplate,
-    );
-    const message = await getClient().messages.create({
-      model,
-      max_tokens: 2000,
-      system: SPLIT_SYSTEM_PROMPT,
-      tools: [SPLIT_TOOL],
-      tool_choice: { type: "tool", name: "split_ticket" },
-      messages: [{ role: "user", content: userMessage }],
-    });
-
-    const toolUse = message.content.find((block) => block.type === "tool_use");
-    if (!toolUse || toolUse.type !== "tool_use") {
-      throw new Error("Split model returned no verdict");
-    }
-    const raw = toolUse.input as { requests?: unknown; reason?: unknown };
-    const requests: SplitRequest[] = (
-      Array.isArray(raw.requests) ? raw.requests : []
-    )
-      .slice(0, MAX_SPLITS)
-      .map((r) => {
-        const req = (r ?? {}) as Record<string, unknown>;
-        return {
-          productTitle:
-            typeof req.product_title === "string"
-              ? req.product_title.trim()
-              : "",
-          productSummary:
-            typeof req.product_summary === "string"
-              ? req.product_summary.trim()
-              : "",
-          productLines: toNames(req.product_lines),
-          platforms: toNames(req.platforms),
-        };
-      })
-      .filter((r) => r.productTitle || r.productSummary);
-    const verdict = {
-      requests,
-      reason: typeof raw.reason === "string" ? raw.reason : "",
-    };
-    const ledgerInput = { system: SPLIT_SYSTEM_PROMPT, user: userMessage };
-    await recordVerdict(
-      workspaceId,
-      ledgerKey("split", SPLIT_PROMPT_VERSION, model, ledgerInput),
-      {
-        stage: "split",
-        promptVersion: SPLIT_PROMPT_VERSION,
+  // Split calls are independent per flagged ticket — serial only ever out of
+  // cost caution, so the throttle switch governs it like catalog.
+  const poolSize = aiThrottleOn() ? 1 : inputs.length;
+  const results: SplitResult[] = new Array<SplitResult>(inputs.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = nextIndex++;
+      if (i >= inputs.length) return;
+      const input = inputs[i];
+      const userMessage = renderUserMessage(
+        input,
+        productLines,
+        platforms,
+        ideaTemplate,
+      );
+      const message = await getClient().messages.create({
         model,
-        input: ledgerInput,
-        verdict,
-      },
-    );
-    results.push({ key: input.key, ...verdict });
-  }
+        max_tokens: 2000,
+        system: SPLIT_SYSTEM_PROMPT,
+        tools: [SPLIT_TOOL],
+        tool_choice: { type: "tool", name: "split_ticket" },
+        messages: [{ role: "user", content: userMessage }],
+      });
+
+      const toolUse = message.content.find(
+        (block) => block.type === "tool_use",
+      );
+      if (!toolUse || toolUse.type !== "tool_use") {
+        throw new Error("Split model returned no verdict");
+      }
+      const raw = toolUse.input as { requests?: unknown; reason?: unknown };
+      const requests: SplitRequest[] = (
+        Array.isArray(raw.requests) ? raw.requests : []
+      )
+        .slice(0, MAX_SPLITS)
+        .map((r) => {
+          const req = (r ?? {}) as Record<string, unknown>;
+          return {
+            productTitle:
+              typeof req.product_title === "string"
+                ? req.product_title.trim()
+                : "",
+            productSummary:
+              typeof req.product_summary === "string"
+                ? req.product_summary.trim()
+                : "",
+            productLines: toNames(req.product_lines),
+            platforms: toNames(req.platforms),
+          };
+        })
+        .filter((r) => r.productTitle || r.productSummary);
+      const verdict = {
+        requests,
+        reason: typeof raw.reason === "string" ? raw.reason : "",
+      };
+      const ledgerInput = { system: SPLIT_SYSTEM_PROMPT, user: userMessage };
+      await recordVerdict(
+        workspaceId,
+        ledgerKey("split", SPLIT_PROMPT_VERSION, model, ledgerInput),
+        {
+          stage: "split",
+          promptVersion: SPLIT_PROMPT_VERSION,
+          model,
+          input: ledgerInput,
+          verdict,
+        },
+      );
+      results[i] = { key: input.key, ...verdict };
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(poolSize, inputs.length) }, worker),
+  );
 
   return {
     results,
