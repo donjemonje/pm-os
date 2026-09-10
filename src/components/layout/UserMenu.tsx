@@ -66,7 +66,10 @@ export function UserMenu({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors",
+          // px-0.5 puts the 36px avatar at x=14 inside the 64px collapsed
+          // rail — dead center — while keeping a constant x when expanded
+          // (the curtain rule: nothing shifts, only the rail width moves).
+          "flex w-full items-center gap-3 rounded-lg px-0.5 py-2 text-left transition-colors",
           open ? "bg-white/10" : "hover:bg-white/5"
         )}
         aria-expanded={open}
