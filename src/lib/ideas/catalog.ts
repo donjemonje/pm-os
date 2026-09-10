@@ -301,30 +301,47 @@ export async function catalogTickets(
   ]);
   const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
 
-  const results: CatalogResult[] = [];
-  for (const ticket of tickets) {
-    const userMessage = renderUserMessage(
-      ticket,
-      productLines,
-      platforms,
-      customers,
-      ideaTemplate,
-    );
-    const verdict = await judgeTicket(model, userMessage);
-    const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
-    await recordVerdict(
-      workspaceId,
-      ledgerKey("catalog", CATALOG_PROMPT_VERSION, model, input),
-      {
-        stage: "catalog",
-        promptVersion: CATALOG_PROMPT_VERSION,
-        model,
-        input,
-        verdict,
-      },
-    );
-    results.push({ key: ticket.key, ...verdict });
-  }
+  // Classification calls are independent per ticket, so they run in a
+  // bounded pool (IDEAS_CATALOG_CONCURRENCY, default 10 — a fraction of the
+  // project's Vertex QPM/TPM quotas). Results keep input order; the first
+  // failure aborts the import before any DB write, same as the serial loop.
+  const concurrency = Math.max(
+    1,
+    parseInt(process.env.IDEAS_CATALOG_CONCURRENCY ?? "", 10) || 10,
+  );
+  const results: CatalogResult[] = new Array<CatalogResult>(tickets.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = nextIndex++;
+      if (i >= tickets.length) return;
+      const ticket = tickets[i];
+      const userMessage = renderUserMessage(
+        ticket,
+        productLines,
+        platforms,
+        customers,
+        ideaTemplate,
+      );
+      const verdict = await judgeTicket(model, userMessage);
+      const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
+      await recordVerdict(
+        workspaceId,
+        ledgerKey("catalog", CATALOG_PROMPT_VERSION, model, input),
+        {
+          stage: "catalog",
+          promptVersion: CATALOG_PROMPT_VERSION,
+          model,
+          input,
+          verdict,
+        },
+      );
+      results[i] = { key: ticket.key, ...verdict };
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tickets.length) }, worker),
+  );
 
   return {
     results,
