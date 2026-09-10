@@ -2,6 +2,7 @@ import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 
 /**
@@ -13,7 +14,7 @@ import { mergeIdeasJiraConfig } from "./jira-mapping";
  * Every verdict is appended to the ledger like the other stages.
  */
 
-export const SPLIT_PROMPT_VERSION = "split-v2";
+export const SPLIT_PROMPT_VERSION = "split-v3";
 
 /** Hard bound on sub-ideas per ticket, enforced in schema AND code. */
 export const MAX_SPLITS = 4;
@@ -33,7 +34,8 @@ An earlier stage judged that this ticket contains more than one distinct user pr
 
 For each distinct problem return:
 - product_title: a short title naming the requested capability, as a product manager would write it in a backlog. The what, not the how — do not bake an implementation into the title unless the ticket makes the implementation itself the ask.
-- product_summary: markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's omission rules. Audience is the team's own product managers (never explain what the product does), keep it short and readable, frame it as a general product-line capability rather than a one-customer fix. No support framing, no requester or customer names, no ticket phrasing.
+- product_summary: markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's omission rules. Writing rules:
+${IDEA_WRITING_RULES}
 - product_lines: the product line(s) THIS problem belongs to, from the catalog provided; ["Other"] when none fits.
 - platforms: platform(s) from the catalog, only when this problem states or clearly implies them; otherwise empty. Skip entirely when the platform catalog is empty.
 

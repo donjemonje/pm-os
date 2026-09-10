@@ -2,6 +2,7 @@ import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { db } from "../db";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 
 /**
@@ -15,7 +16,7 @@ import { mergeIdeasJiraConfig } from "./jira-mapping";
  * every judgment is appended to the ledger — nothing is replayed or forced.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v3";
+export const MATCH_PROMPT_VERSION = "match-v4";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 function getMatchModel(): string {
@@ -31,7 +32,9 @@ Decide whether the request asks for the same capability as one existing idea:
 - Related is NOT matched: same product area but a different capability, a complement, or a prerequisite is not a match.
 - When torn between two ideas, pick the single best one; when no idea clearly fits, return no match. Never force a match.
 
-If (and only if) the request matches, also judge enrichment: does the request add real context the idea's description lacks (a concrete use case, a constraint, a sharper articulation of the need)? If yes, write enriched_summary: the existing idea's description, sharpened with the new context, in neutral product language. It replaces the description, so it must stand alone, keep everything still true from the original, and keep (or adopt) the IDEA TEMPLATE structure provided in the message — sections in order with their exact "##" headings, honoring their omission rules. Audience is the team's own product managers; keep it short and readable; frame a general product-line capability, not a one-customer fix. If the request adds nothing beyond a vote, return an empty enriched_summary.
+If (and only if) the request matches, also judge enrichment: does the request add real context the idea's description lacks (a concrete use case, a constraint, a sharper articulation of the need)? If yes, write enriched_summary: the existing idea's description, sharpened with the new context, in neutral product language. It replaces the description, so it must stand alone, keep everything still true from the original, and keep (or adopt) the IDEA TEMPLATE structure provided in the message — sections in order with their exact "##" headings, honoring their omission rules. Writing rules:
+${IDEA_WRITING_RULES}
+If the request adds nothing beyond a vote, return an empty enriched_summary.
 
 Return the matched idea's key EXACTLY as listed, or an empty string for no match. Give a single short sentence of reasoning.`;
 

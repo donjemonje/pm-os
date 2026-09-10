@@ -60,7 +60,7 @@ The user problem and who it affects — the main stakeholders (customers and int
 Only when the ticket implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how.
 
 ## Additional Info
-Other important related context. Omit this section when there is none.`;
+Other important related context. When the ticket describes a concrete example that adds real evidence to the need (a specific case or scenario), include a short summary of it here. Omit this section when there is none.`;
 
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   ideaTemplate: DEFAULT_IDEA_TEMPLATE,

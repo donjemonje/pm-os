@@ -1,5 +1,6 @@
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
+import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
@@ -14,7 +15,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v9";
+export const CATALOG_PROMPT_VERSION = "catalog-v10";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -39,10 +40,7 @@ Second, ONLY if the ticket is a feature request, assign it within the product:
 Third, ONLY if the ticket is a feature request, rewrite it in product voice:
 - product_title: a short title naming the requested capability, written the way a product manager would put it in a backlog. Name the capability, not the customer's complaint or question — and the what, not the how: never bake an implementation into the title unless the ticket makes the implementation itself the ask.
 - product_summary: markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's own rules about when to omit it. Writing rules:
-  - The audience is the team's own product managers: never explain what the product or a module does — they know (the rare exception is when the ask itself only makes sense with that context).
-  - Short and easy to read. Prefer fewer words wherever nothing important is lost.
-  - Frame it as a general product capability that belongs in its product line, not a fix for one customer's situation — features should correlate into a coherent product, not accumulate as standalone patches.
-  - No support framing ("customer says...", "user is asking..."), no requester or customer names (captured separately), no ticket phrasing — it should read as if the product team wrote the idea themselves.
+${IDEA_WRITING_RULES}
 
 For bugs and needs_details, return empty lists and empty strings for all of the above.
 
