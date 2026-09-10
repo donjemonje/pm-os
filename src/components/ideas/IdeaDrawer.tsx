@@ -330,7 +330,7 @@ export function IdeaDrawer({
         </div>
 
         {/* Body */}
-        <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-6 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-4">
           {ticket ? (
             <>
               <div>
