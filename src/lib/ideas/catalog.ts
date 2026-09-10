@@ -303,12 +303,16 @@ export async function catalogTickets(
 
   // Classification calls are independent per ticket, so they run in a
   // bounded pool (IDEAS_CATALOG_CONCURRENCY, default 10 — a fraction of the
-  // project's Vertex QPM/TPM quotas). Results keep input order; the first
-  // failure aborts the import before any DB write, same as the serial loop.
-  const concurrency = Math.max(
-    1,
-    parseInt(process.env.IDEAS_CATALOG_CONCURRENCY ?? "", 10) || 10,
-  );
+  // project's Vertex QPM/TPM quotas; -1 = unlimited, every ticket at once).
+  // Results keep input order; the first failure aborts the import before any
+  // DB write, same as the serial loop.
+  const rawConcurrency = parseInt(process.env.IDEAS_CATALOG_CONCURRENCY ?? "", 10);
+  const concurrency =
+    rawConcurrency === -1
+      ? tickets.length
+      : Number.isFinite(rawConcurrency) && rawConcurrency > 0
+        ? rawConcurrency
+        : 10;
   const results: CatalogResult[] = new Array<CatalogResult>(tickets.length);
   let nextIndex = 0;
   const worker = async (): Promise<void> => {
