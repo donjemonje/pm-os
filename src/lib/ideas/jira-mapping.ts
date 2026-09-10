@@ -60,7 +60,7 @@ The user problem and who it affects — the main stakeholders (customers and int
 Only when the ticket implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how.
 
 ## Additional Info
-Other important related context. When the ticket describes a concrete example that adds real evidence to the need (a specific case or scenario), include a short summary of it here. Omit this section when there is none.`;
+Other important related context. When the ticket describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Omit this section when there is none.`;
 
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   ideaTemplate: DEFAULT_IDEA_TEMPLATE,
