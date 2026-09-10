@@ -327,6 +327,9 @@ model ZendeskTicketRaw {
   module          String?
   /// Customer named by the reporter in a dedicated field — treated as truth.
   customerName    String?
+  /// The reporter marked the ticket as affecting all customers (parsed from
+  /// values like "All customers" in the customer fields).
+  affectsAllCustomers Boolean @default(false)
   /// Reporter's "why should we build this" text — interpretation, same
   /// grain of salt as the rest of the ticket.
   whyBuild        String?

@@ -29,6 +29,8 @@ export interface ZendeskTicket {
   module?: string;
   /** Customer named in a dedicated column — truth; auto-added to the catalog. */
   customerName?: string;
+  /** The reporter marked the ticket as affecting all customers. */
+  affectsAllCustomers?: boolean;
   /** Reporter's "why should we build this" — interpretation. */
   whyBuild?: string;
   /** Reporter's "what insights do we have" — interpretation. */

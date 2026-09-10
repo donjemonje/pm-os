@@ -393,6 +393,9 @@ export function IdeaDrawer({
                 </div>
               </div>
               <div className="flex flex-col gap-1 text-xs text-muted">
+                {ticket.affectsAllCustomers && (
+                  <span className="font-medium text-[#4a6fd6]">Affects: All customers</span>
+                )}
                 {ticket.catalog && (
                   <span>
                     Catalog:{" "}

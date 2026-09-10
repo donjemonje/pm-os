@@ -383,6 +383,35 @@ export function IdeasOutputConfig({
         </div>
       </section>
 
+      {/* AI field parsing */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-sm font-bold">Field parsing (AI)</h2>
+        <p className="mb-3 mt-0.5 text-xs text-slate-500">
+          Customer fields in support exports are free text — lists, qualifiers
+          (&quot;submitted by X&quot;, &quot;and prospect Y&quot;), and
+          all-customers markers. With parsing on, one Gemini call per import
+          turns the raw values into clean names and an &quot;affects all
+          customers&quot; flag. Default is ON for every organization; off falls
+          back to naive separator splitting.
+        </p>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input
+            type="checkbox"
+            checked={config.fieldParsing.customers}
+            onChange={(e) =>
+              patch({
+                fieldParsing: {
+                  ...config.fieldParsing,
+                  customers: e.target.checked,
+                },
+              })
+            }
+            className="rounded"
+          />
+          Customers
+        </label>
+      </section>
+
       {/* Idea template */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Idea template</h2>

@@ -6,6 +6,7 @@ import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { matchTickets } from "./match";
+import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import { splitTickets, type SplitRequest } from "./split";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
 
@@ -107,6 +108,7 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
     productLine: row.productLine ?? undefined,
     module: row.module ?? undefined,
     customerName: row.customerName ?? undefined,
+    affectsAllCustomers: row.affectsAllCustomers || undefined,
     whyBuild: row.whyBuild ?? undefined,
     insights: row.insights ?? undefined,
     dealRelated: row.dealRelated ?? undefined,
@@ -257,6 +259,43 @@ export async function importBatch(
 
   // LLM judgments happen before any DB writes — the ledger records each
   // verdict as it lands, so a failure here loses nothing.
+  // AI field parsing (Gemini, one call): clean customer names + all-customers
+  // flags from the raw field values. Off per org → the legacy split below.
+  const importCfg = mergeIdeasJiraConfig(
+    (
+      await db.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { ideasConfig: true },
+      })
+    )?.ideasConfig,
+  );
+  const parseOn = importCfg.fieldParsing.customers;
+  const parse = parseOn
+    ? await parseCustomerCells(
+        workspaceId,
+        fresh.flatMap((t) => [
+          t.customerName ?? "",
+          ...(t.affectedCustomers ?? []),
+        ]),
+      )
+    : {
+        byRaw: new Map<string, ParsedCell>(),
+        model: "",
+        promptVersion: "",
+        called: 0,
+      };
+  const parsedOf = (value: string | undefined | null): ParsedCell | null =>
+    value ? (parse.byRaw.get(value.trim().toLowerCase()) ?? null) : null;
+  /** Names a field value contributes — parsed when on, legacy split when off. */
+  const namesOf = (value: string | undefined | null): string[] => {
+    if (!value) return [];
+    if (parseOn) return parsedOf(value)?.names ?? [];
+    return value
+      .split(/[,;/]+/)
+      .map((n) => n.trim())
+      .filter(Boolean);
+  };
+
   const catalog = await catalogTickets(
     workspaceId,
     fresh.map(
@@ -409,9 +448,7 @@ export async function importBatch(
   const truthNames = new Map<string, string>();
   for (const t of fresh) {
     // The column can carry a list ("A, B / C") — each entry is a customer.
-    for (const name of (t.customerName ?? "")
-      .split(/[,;/]+/)
-      .map((n) => n.trim())) {
+    for (const name of namesOf(t.customerName)) {
       if (!name) continue;
       const key = name.toLowerCase();
       if (
@@ -539,9 +576,14 @@ export async function importBatch(
         affectedCustomers: distinct(
           [
             ...(verdict?.affectedCustomers ?? []),
-            ...(input.affectedCustomers ?? []),
+            ...(input.affectedCustomers ?? []).flatMap((v) => namesOf(v)),
           ].map(canonicalCustomer),
         ) as Prisma.InputJsonValue,
+        affectsAllCustomers:
+          parseOn &&
+          [input.customerName ?? "", ...(input.affectedCustomers ?? [])].some(
+            (v) => parsedOf(v)?.all === true,
+          ),
         tags: input.tags as Prisma.InputJsonValue,
         productLine: input.productLine ?? null,
         module: input.module ?? null,
@@ -697,7 +739,7 @@ export async function importBatch(
     needsDetails,
     duplicates,
     split: splitTicketCount,
-    called: catalog.called + split.called + match.called,
+    called: catalog.called + split.called + match.called + parse.called,
     jiraConnected: jira.connected,
     jiraCount: jira.sources.length,
   };

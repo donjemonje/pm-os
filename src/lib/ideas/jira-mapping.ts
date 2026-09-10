@@ -51,6 +51,9 @@ export interface IdeasJiraConfig {
   csv: CsvMapping;
   /** Sections PMOS AI writes for every idea (markdown ## headings + rules). */
   ideaTemplate: string;
+  /** AI field parsing at import (Gemini). Default ON so production can never
+   *  silently fall back to naive separator-splitting. */
+  fieldParsing: { customers: boolean };
 }
 
 export const DEFAULT_IDEA_TEMPLATE = `## The Problem
@@ -64,6 +67,7 @@ Other important related context. When the ticket describes a REAL case that actu
 
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   ideaTemplate: DEFAULT_IDEA_TEMPLATE,
+  fieldParsing: { customers: true },
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   descriptionGapLines: 2,
@@ -122,6 +126,15 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
     typeof stored.ideaTemplate === "string" && stored.ideaTemplate.trim()
       ? stored.ideaTemplate
       : DEFAULT_IDEA_TEMPLATE;
+  const storedParsing = (stored.fieldParsing ?? {}) as Partial<{
+    customers: boolean;
+  }>;
+  const fieldParsing = {
+    customers:
+      typeof storedParsing.customers === "boolean"
+        ? storedParsing.customers
+        : true,
+  };
   const fields = { ...DEFAULT_IDEAS_JIRA_CONFIG.fields };
   const storedFields = (stored.fields ?? {}) as Partial<
     IdeasJiraConfig["fields"]
@@ -135,6 +148,7 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
   return {
     csv,
     ideaTemplate,
+    fieldParsing,
     descriptionMode: "overwrite",
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&

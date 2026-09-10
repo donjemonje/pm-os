@@ -2,6 +2,7 @@ import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { CATALOG_PROMPT_VERSION, CATALOG_SYSTEM_PROMPT } from "@/lib/ideas/catalog";
 import { MATCH_PROMPT_VERSION, MATCH_SYSTEM_PROMPT } from "@/lib/ideas/match";
+import { PARSE_PROMPT_VERSION, PARSE_SYSTEM_PROMPT } from "@/lib/ideas/field-parse";
 import { SPLIT_PROMPT_VERSION, SPLIT_SYSTEM_PROMPT } from "@/lib/ideas/split";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { AdminShell } from "../AdminShell";
@@ -31,6 +32,12 @@ export default async function AdminIdeasPage() {
     >
       <IdeasOutputConfig
         prompts={[
+          {
+            id: "parse",
+            title: `Customer field parsing (${PARSE_PROMPT_VERSION}, Gemini)`,
+            note: "One call per import over the unique raw customer-field values: clean names out of lists and qualifiers, plus the all-customers flag. Gated per org by Field parsing (AI); runs on the Gemini model (IDEAS_PARSE_MODEL / GEMINI_MODEL env).",
+            text: PARSE_SYSTEM_PROMPT,
+          },
           {
             id: "catalog",
             title: `Classification & idea generation (${CATALOG_PROMPT_VERSION})`,
