@@ -5,6 +5,7 @@ import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { anthropicUsage, type StageHooks } from "./trace";
 import type { CatalogKind, CatalogVerdict } from "./types";
 
 /**
@@ -222,9 +223,14 @@ function renderUserMessage(
 async function judgeTicket(
   model: string,
   userMessage: string,
-): Promise<Omit<CatalogResult, "key">> {
+): Promise<{
+  verdict: Omit<CatalogResult, "key">;
+  aiMs: number;
+  usage: unknown;
+}> {
   // No temperature: the Claude 5 family rejects the parameter outright
   // (`temperature` is deprecated).
+  const aiStart = performance.now();
   const message = await getClient().messages.create({
     model,
     max_tokens: 1000,
@@ -233,6 +239,7 @@ async function judgeTicket(
     tool_choice: { type: "tool", name: "catalog_ticket" },
     messages: [{ role: "user", content: userMessage }],
   });
+  const aiMs = performance.now() - aiStart;
 
   const toolUse = message.content.find((block) => block.type === "tool_use");
   if (!toolUse || toolUse.type !== "tool_use") {
@@ -255,20 +262,26 @@ async function judgeTicket(
   // review UI flags anything outside the catalog so we can see how the model
   // actually behaves before deciding whether to constrain it.
   return {
-    kind: raw.kind,
-    requestCount:
-      typeof raw.request_count === "number" &&
-      Number.isFinite(raw.request_count)
-        ? Math.max(1, Math.floor(raw.request_count))
-        : 1,
-    reason: typeof raw.reason === "string" ? raw.reason : "",
-    productLines: toNames(raw.product_lines),
-    platforms: toNames(raw.platforms),
-    affectedCustomers: toNames(raw.affected_customers),
-    productTitle:
-      typeof raw.product_title === "string" ? raw.product_title.trim() : "",
-    productSummary:
-      typeof raw.product_summary === "string" ? raw.product_summary.trim() : "",
+    verdict: {
+      kind: raw.kind,
+      requestCount:
+        typeof raw.request_count === "number" &&
+        Number.isFinite(raw.request_count)
+          ? Math.max(1, Math.floor(raw.request_count))
+          : 1,
+      reason: typeof raw.reason === "string" ? raw.reason : "",
+      productLines: toNames(raw.product_lines),
+      platforms: toNames(raw.platforms),
+      affectedCustomers: toNames(raw.affected_customers),
+      productTitle:
+        typeof raw.product_title === "string" ? raw.product_title.trim() : "",
+      productSummary:
+        typeof raw.product_summary === "string"
+          ? raw.product_summary.trim()
+          : "",
+    },
+    aiMs,
+    usage: message.usage,
   };
 }
 
@@ -288,6 +301,7 @@ export interface CatalogBatchResult {
 export async function catalogTickets(
   workspaceId: string,
   tickets: CatalogInput[],
+  hooks?: StageHooks,
 ): Promise<CatalogBatchResult> {
   const model = getCatalogModel();
   const [productLines, platforms, customers, wsRow] = await Promise.all([
@@ -343,8 +357,9 @@ export async function catalogTickets(
         customers,
         ideaTemplate,
       );
-      const verdict = await judgeTicket(model, userMessage);
+      const { verdict, aiMs, usage } = await judgeTicket(model, userMessage);
       const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
+      const dbStart = performance.now();
       await recordVerdict(
         workspaceId,
         ledgerKey("catalog", CATALOG_PROMPT_VERSION, model, input),
@@ -356,6 +371,11 @@ export async function catalogTickets(
           verdict,
         },
       );
+      hooks?.call({
+        aiMs,
+        dbMs: performance.now() - dbStart,
+        tokens: anthropicUsage(usage),
+      });
       results[i] = { key: ticket.key, ...verdict };
     }
   };

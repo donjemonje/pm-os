@@ -43,6 +43,12 @@ interface ImportSummary {
   split?: number;
   jiraConnected: boolean;
   jiraCount: number;
+  durationMs?: number;
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
 function chipClass(active: boolean): string {
@@ -226,7 +232,9 @@ export function IdeasView({
       const s = data.summary as ImportSummary;
 
       const parts = [
-        `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}`,
+        `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}${
+          s.durationMs ? ` in ${formatDuration(s.durationMs)}` : ""
+        }`,
       ];
       if (s.imported > 0) parts.push(`${s.frs} FR${s.frs === 1 ? "" : "s"} → ideas`);
       if (s.matched > 0)

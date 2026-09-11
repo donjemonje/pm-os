@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { geminiUsage, type StageHooks } from "./trace";
 
 /**
  * AI field parsing (Gemini): the customer columns of a support export are
@@ -85,6 +86,7 @@ const RESPONSE_SCHEMA = {
 export async function parseCustomerCells(
   workspaceId: string,
   cells: string[],
+  hooks?: StageHooks,
 ): Promise<ParseBatchResult> {
   const model = getParseModel();
   const unique = Array.from(
@@ -103,6 +105,7 @@ export async function parseCustomerCells(
   }
 
   const userMessage = `VALUES:\n${unique.map((v, i) => `${i + 1}. ${v}`).join("\n")}`;
+  const aiStart = performance.now();
   const response = await getClient().models.generateContent({
     model,
     contents: userMessage,
@@ -114,6 +117,7 @@ export async function parseCustomerCells(
       responseSchema: RESPONSE_SCHEMA,
     },
   });
+  const aiMs = performance.now() - aiStart;
   let parsed: { results?: unknown };
   try {
     parsed = JSON.parse(response.text ?? "");
@@ -136,6 +140,7 @@ export async function parseCustomerCells(
   });
 
   const ledgerInput = { system: PARSE_SYSTEM_PROMPT, user: userMessage };
+  const dbStart = performance.now();
   await recordVerdict(
     workspaceId,
     ledgerKey("parse", PARSE_PROMPT_VERSION, model, ledgerInput),
@@ -147,6 +152,11 @@ export async function parseCustomerCells(
       verdict: { results },
     },
   );
+  hooks?.call({
+    aiMs,
+    dbMs: performance.now() - dbStart,
+    tokens: geminiUsage(response.usageMetadata),
+  });
 
   const byRaw = new Map<string, ParsedCell>();
   for (const r of results) {

@@ -383,6 +383,13 @@ model IdeaBatch {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
   stats       Json?
+  /** running | completed | failed | aborted (server stopped mid-import). */
+  status      String    @default("running")
+  error       String?
+  /** Touched after every model call and stage; a stale beat on a running batch = dead run. */
+  heartbeatAt DateTime  @default(now())
+  /** Per-stage timings, call counts, token usage — see src/lib/ideas/trace.ts. */
+  trace       Json?
 
   tickets ZendeskTicketRaw[]
 

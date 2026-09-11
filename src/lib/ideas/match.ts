@@ -5,6 +5,13 @@ import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { ledgerKey, recordVerdict } from "./ledger";
+import { anthropicUsage, type StageHooks } from "./trace";
+
+/** Match reports per-call samples like every stage, plus the phase switch. */
+export interface MatchHooks extends StageHooks {
+  /** Called once, before the reconciliation calls, with the group count. */
+  groupPhase(groups: number, meta: { model: string; promptVersion: string }): void;
+}
 
 /**
  * Match stage, v5 — two phases, both parallel:
@@ -233,6 +240,7 @@ export async function matchTickets(
   workspaceId: string,
   inputs: MatchInput[],
   initialCandidates: MatchCandidate[],
+  hooks?: MatchHooks,
 ): Promise<MatchBatchResult> {
   const model = getMatchModel();
   if (inputs.length === 0) {
@@ -306,6 +314,7 @@ export async function matchTickets(
       renderRequest(input),
     ].join("\n\n");
     called++;
+    const aiStart = performance.now();
     const message = await getClient().messages.create({
       model,
       max_tokens: 1500,
@@ -314,6 +323,7 @@ export async function matchTickets(
       tool_choice: { type: "tool", name: "match_feature_request" },
       messages: [{ role: "user", content: userMessage }],
     });
+    const aiMs = performance.now() - aiStart;
     const toolUse = message.content.find((block) => block.type === "tool_use");
     if (!toolUse || toolUse.type !== "tool_use")
       throw new Error("Match model returned no verdict");
@@ -332,6 +342,7 @@ export async function matchTickets(
       reason: typeof raw.reason === "string" ? raw.reason : "",
     };
     const ledgerInput = { system: MATCH_SYSTEM_PROMPT, user: userMessage };
+    const dbStart = performance.now();
     await recordVerdict(
       workspaceId,
       ledgerKey("match", MATCH_PROMPT_VERSION, model, ledgerInput),
@@ -343,6 +354,11 @@ export async function matchTickets(
         verdict,
       },
     );
+    hooks?.call({
+      aiMs,
+      dbMs: performance.now() - dbStart,
+      tokens: anthropicUsage(message.usage),
+    });
     // The ledger keeps the verdict as returned; the pipeline only acts on
     // keys that were actually offered.
     pairwise[i] = {
@@ -404,6 +420,10 @@ export async function matchTickets(
     groupJobs.push({ terminal: t, members });
   }
 
+  hooks?.groupPhase(groupJobs.length, {
+    model,
+    promptVersion: MATCH_PROMPT_VERSION,
+  });
   await runPool(groupJobs, poolSize, async (job) => {
     const anchor = anchorKeys.has(job.terminal)
       ? (anchors.find((a) => a.key === job.terminal) ?? null)
@@ -420,6 +440,7 @@ export async function matchTickets(
         .join("\n\n")}`,
     ].join("\n\n");
     called++;
+    const aiStart = performance.now();
     const message = await getClient().messages.create({
       model,
       max_tokens: 3000,
@@ -428,6 +449,7 @@ export async function matchTickets(
       tool_choice: { type: "tool", name: "reconcile_group" },
       messages: [{ role: "user", content: userMessage }],
     });
+    const aiMs = performance.now() - aiStart;
     const toolUse = message.content.find((block) => block.type === "tool_use");
     if (!toolUse || toolUse.type !== "tool_use")
       throw new Error("Group model returned no verdict");
@@ -456,6 +478,7 @@ export async function matchTickets(
       system: MATCH_GROUP_SYSTEM_PROMPT,
       user: userMessage,
     };
+    const dbStart = performance.now();
     await recordVerdict(
       workspaceId,
       ledgerKey("match-group", MATCH_PROMPT_VERSION, model, ledgerInput),
@@ -470,6 +493,11 @@ export async function matchTickets(
         },
       },
     );
+    hooks?.call({
+      aiMs,
+      dbMs: performance.now() - dbStart,
+      tokens: anthropicUsage(message.usage),
+    });
 
     // Members the model dropped stay with the first group that has the
     // anchor (or the first group) — nothing is ever lost.

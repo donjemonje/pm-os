@@ -5,6 +5,7 @@ import { aiThrottleOn } from "./ai-throttle";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { anthropicUsage, type StageHooks } from "./trace";
 
 /**
  * Split stage: for the few tickets the catalog stage flags as holding more
@@ -172,6 +173,7 @@ export interface SplitBatchResult {
 export async function splitTickets(
   workspaceId: string,
   inputs: SplitInput[],
+  hooks?: StageHooks,
 ): Promise<SplitBatchResult> {
   const model = getSplitModel();
   if (inputs.length === 0) {
@@ -217,6 +219,7 @@ export async function splitTickets(
         platforms,
         ideaTemplate,
       );
+      const aiStart = performance.now();
       const message = await getClient().messages.create({
         model,
         max_tokens: 2000,
@@ -225,6 +228,7 @@ export async function splitTickets(
         tool_choice: { type: "tool", name: "split_ticket" },
         messages: [{ role: "user", content: userMessage }],
       });
+      const aiMs = performance.now() - aiStart;
 
       const toolUse = message.content.find(
         (block) => block.type === "tool_use",
@@ -258,6 +262,7 @@ export async function splitTickets(
         reason: typeof raw.reason === "string" ? raw.reason : "",
       };
       const ledgerInput = { system: SPLIT_SYSTEM_PROMPT, user: userMessage };
+      const dbStart = performance.now();
       await recordVerdict(
         workspaceId,
         ledgerKey("split", SPLIT_PROMPT_VERSION, model, ledgerInput),
@@ -269,6 +274,11 @@ export async function splitTickets(
           verdict,
         },
       );
+      hooks?.call({
+        aiMs,
+        dbMs: performance.now() - dbStart,
+        tokens: anthropicUsage(message.usage),
+      });
       results[i] = { key: input.key, ...verdict };
     }
   };

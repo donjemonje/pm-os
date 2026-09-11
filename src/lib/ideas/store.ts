@@ -8,6 +8,7 @@ import { fetchJiraLiveSources } from "./jira-sync";
 import { matchTickets } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import { splitTickets, type SplitRequest } from "./split";
+import { ImportTrace, markAbandonedImports } from "./trace";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
 
 /**
@@ -65,6 +66,10 @@ export interface ImportSummary {
   called: number;
   jiraConnected: boolean;
   jiraCount: number;
+  /** The batch row holding this run's trace (Admin/monitoring). */
+  batchId: string;
+  /** Server-side wall time of the whole import. */
+  durationMs: number;
 }
 
 const APPROVAL_EXEMPT = ["deleted", "unchanged"];
@@ -246,11 +251,38 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
  * live Jira ideas (PRD step 3). A matched FR merges into the existing idea
  * as evidence — a vote, an Updated status, optional enrichment — instead of
  * becoming a new idea.
+ *
+ * The batch row exists from the first moment and carries the run trace
+ * (stage timings, calls, tokens, errors) — a run that dies is recorded as
+ * such, never silently missing.
  */
 export async function importBatch(
   workspaceId: string,
   inputs: ImportTicketInput[],
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
+  await markAbandonedImports("stale heartbeat");
+  const batch = await db.ideaBatch.create({ data: { workspaceId } });
+  const trace = new ImportTrace(batch.id);
+  trace.uploaded = inputs.length;
+  console.log(
+    `[ideas:import ${batch.id.slice(0, 8)}] start · ${inputs.length} tickets uploaded · workspace ${workspaceId}`,
+  );
+  try {
+    return await runImport(workspaceId, inputs, batch.id, trace);
+  } catch (err) {
+    const message = trace.fail(err);
+    await trace.flush({ status: "failed", error: message });
+    throw new Error(message);
+  }
+}
+
+async function runImport(
+  workspaceId: string,
+  inputs: ImportTicketInput[],
+  batchId: string,
+  trace: ImportTrace,
+): Promise<{ summary: ImportSummary; state: IdeasState }> {
+  trace.begin("dedupe", "db", inputs.length);
   const existing = await db.zendeskTicketRaw.findMany({
     where: { workspaceId },
     select: { externalId: true },
@@ -258,10 +290,18 @@ export async function importBatch(
   const known = new Set(existing.map((t) => t.externalId));
   const fresh = inputs.filter((t) => !known.has(t.key));
   const duplicates = inputs.length - fresh.length;
+  trace.fresh = fresh.length;
+  trace.end({ note: `${fresh.length} new, ${duplicates} already imported` });
 
   // Jira live state is fetched before any judgment: FRs are matched against
   // the same backlog this batch will display.
+  trace.begin("jira-fetch", "http");
   const jira = await fetchJiraLiveSources(workspaceId);
+  trace.end({
+    note: jira.connected
+      ? `${jira.sources.length} live issues`
+      : "Jira not connected",
+  });
 
   // LLM judgments happen before any DB writes — the ledger records each
   // verdict as it lands, so a failure here loses nothing.
@@ -276,20 +316,24 @@ export async function importBatch(
     )?.ideasConfig,
   );
   const parseOn = importCfg.fieldParsing.customers;
+  const parseCells = fresh.flatMap((t) => [
+    t.customerName ?? "",
+    ...(t.affectedCustomers ?? []),
+  ]);
+  trace.begin("parse", "ai", parseCells.filter((c) => c.trim()).length);
   const parse = parseOn
-    ? await parseCustomerCells(
-        workspaceId,
-        fresh.flatMap((t) => [
-          t.customerName ?? "",
-          ...(t.affectedCustomers ?? []),
-        ]),
-      )
+    ? await parseCustomerCells(workspaceId, parseCells, trace)
     : {
         byRaw: new Map<string, ParsedCell>(),
         model: "",
         promptVersion: "",
         called: 0,
       };
+  trace.end({
+    model: parse.model,
+    promptVersion: parse.promptVersion,
+    ...(parseOn ? {} : { note: "field parsing off for this org" }),
+  });
   const parsedOf = (value: string | undefined | null): ParsedCell | null =>
     value ? (parse.byRaw.get(value.trim().toLowerCase()) ?? null) : null;
   /** Names a field value contributes — parsed when on, legacy split when off. */
@@ -302,6 +346,7 @@ export async function importBatch(
       .filter(Boolean);
   };
 
+  trace.begin("classify", "ai", fresh.length);
   const catalog = await catalogTickets(
     workspaceId,
     fresh.map(
@@ -325,7 +370,16 @@ export async function importBatch(
         insights,
       }),
     ),
+    trace,
   );
+  const kindCounts = new Map<string, number>();
+  for (const v of catalog.results)
+    kindCounts.set(v.kind, (kindCounts.get(v.kind) ?? 0) + 1);
+  trace.end({
+    model: catalog.model,
+    promptVersion: catalog.promptVersion,
+    note: Array.from(kindCounts, ([k, n]) => `${n} ${k}`).join(", "),
+  });
   const verdictByKey = new Map(catalog.results.map((v) => [v.key, v]));
 
   // Split stage: only tickets the catalog flagged as multi-problem pay for
@@ -336,6 +390,7 @@ export async function importBatch(
   const flagged = catalog.results.filter(
     (v) => v.kind === "fr" && v.requestCount > 1,
   );
+  trace.begin("split", "ai", flagged.length);
   const split = await splitTickets(
     workspaceId,
     flagged.map((v) => {
@@ -350,7 +405,13 @@ export async function importBatch(
         insights: input?.insights,
       };
     }),
+    trace,
   );
+  trace.end({
+    model: split.model,
+    promptVersion: split.promptVersion,
+    note: `${split.results.filter((r) => r.requests.length > 1).length} actually split`,
+  });
   const splitByKey = new Map(split.results.map((r) => [r.key, r]));
   let splitTicketCount = 0;
 
@@ -421,22 +482,31 @@ export async function importBatch(
       })),
   ];
 
-  const match = await matchTickets(
-    workspaceId,
-    catalog.results
-      .filter((v) => v.kind === "fr")
-      .flatMap((v) => {
-        const input = fresh.find((t) => t.key === v.key);
-        return (unitsByTicket.get(v.key) ?? []).map((u) => ({
-          key: u.unitKey,
-          subject: input?.subject ?? "",
-          body: input?.body ?? "",
-          productTitle: u.rewrite.productTitle,
-          productSummary: u.rewrite.productSummary,
-        }));
-      }),
-    matchCandidates,
-  );
+  const matchInputs = catalog.results
+    .filter((v) => v.kind === "fr")
+    .flatMap((v) => {
+      const input = fresh.find((t) => t.key === v.key);
+      return (unitsByTicket.get(v.key) ?? []).map((u) => ({
+        key: u.unitKey,
+        subject: input?.subject ?? "",
+        body: input?.body ?? "",
+        productTitle: u.rewrite.productTitle,
+        productSummary: u.rewrite.productSummary,
+      }));
+    });
+  trace.begin("match", "ai", matchInputs.length);
+  const match = await matchTickets(workspaceId, matchInputs, matchCandidates, {
+    call: (s) => trace.call(s),
+    groupPhase: (groups, meta) => {
+      trace.end({ ...meta, note: `${matchCandidates.length} existing candidates` });
+      trace.begin("match-group", "ai", groups);
+    },
+  });
+  trace.end({
+    model: match.model,
+    promptVersion: match.promptVersion,
+    note: `${match.results.filter((m) => m.matchedKey).length} units merged`,
+  });
   const matchByKey = new Map(match.results.map((m) => [m.key, m]));
 
   // Catalog casing wins wherever a name (from the model or the CSV's
@@ -445,6 +515,7 @@ export async function importBatch(
   // The dedicated Customer Name column is truth: names it carries that are
   // not in the catalog yet are added to Settings → Ideas → Customers now, so
   // they canonicalize as confirmed customers rather than suggestions.
+  trace.begin("customers", "db");
   const existingNames = (
     await db.customer.findMany({
       where: { workspaceId },
@@ -477,11 +548,11 @@ export async function importBatch(
   const customerNames = [...existingNames, ...truthNames.values()];
   const canonicalCustomer = (name: string): string =>
     customerNames.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
-
-  const batch = await db.ideaBatch.create({ data: { workspaceId } });
+  trace.end({ note: `${truthNames.size} added to the catalog` });
 
   // Snapshots are replaced wholesale; Jira-origin ideas are upserted by key
   // so evidence matched in earlier batches survives the resync.
+  trace.begin("jira-sync", "db", jira.connected ? jira.sources.length : 0);
   if (jira.connected) {
     await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
     await db.jiraIdeaSnapshot.createMany({
@@ -563,6 +634,9 @@ export async function importBatch(
     }
   }
 
+  trace.end(jira.connected ? {} : { note: "skipped" });
+
+  trace.begin("write", "db", fresh.length);
   let frs = 0;
   let matched = 0;
   let bugs = 0;
@@ -603,7 +677,7 @@ export async function importBatch(
         url: input.url ?? null,
         sourceCreatedAt: input.createdAt ?? null,
         raw: input.raw as Prisma.InputJsonValue,
-        batchId: batch.id,
+        batchId,
         catalogKind: verdict?.kind ?? null,
         catalogReason: verdict?.reason ?? null,
       },
@@ -757,16 +831,20 @@ export async function importBatch(
     called: catalog.called + split.called + match.called + parse.called,
     jiraConnected: jira.connected,
     jiraCount: jira.sources.length,
+    batchId,
+    durationMs: 0,
   };
-  await db.ideaBatch.update({
-    where: { id: batch.id },
-    data: {
-      completedAt: new Date(),
-      stats: summary as unknown as Prisma.InputJsonValue,
-    },
+  trace.end({
+    note: `${frs} FRs, ${matched} merged, ${createdThisBatch.size} ideas created`,
   });
 
-  return { summary, state: await getIdeasState(workspaceId) };
+  trace.begin("state", "db");
+  const state = await getIdeasState(workspaceId);
+  trace.end();
+  summary.durationMs = trace.elapsedMs;
+  await trace.flush({ status: "completed", stats: summary });
+
+  return { summary, state };
 }
 
 // "inject" is not a mutation anymore — marking an idea as In Jira without a
@@ -1130,12 +1208,11 @@ export async function mutateIdeas(
   return getIdeasState(workspaceId);
 }
 
-/** Clear imported data. The ledger is deliberately kept — it's the append-only
- *  audit trail and the raw material for determinism statistics. */
+/** Clear imported data. The ledger and the batch rows are deliberately kept —
+ *  the append-only audit trail and the run history (traces) of every import. */
 export async function clearIdeas(workspaceId: string): Promise<IdeasState> {
   await db.idea.deleteMany({ where: { workspaceId } });
   await db.zendeskTicketRaw.deleteMany({ where: { workspaceId } });
   await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
-  await db.ideaBatch.deleteMany({ where: { workspaceId } });
   return getIdeasState(workspaceId);
 }
