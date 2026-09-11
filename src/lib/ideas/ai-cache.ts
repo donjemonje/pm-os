@@ -10,13 +10,14 @@ import { anthropicUsage, type StageHooks } from "./trace";
  * cached read on every call but the first.
  *
  * Measured on Vertex (2026-09-11, claude-opus-5): a cache entry becomes
- * readable a few seconds AFTER the writing request completes — ~3-6s on
- * the "us" multi-region endpoint, ~30s on "global"; single regions have no
- * quota for the model. So the Ideas stages use "us", each prefix is warmed
- * by one tiny request, and a wave only fires once the entry has settled.
- * Prefixes known at import start (template + catalogs) are warmed while
- * the Gemini parse runs, at no latency cost; the match prefix (it includes
- * every unit of the import) can only be warmed after split, ~8s.
+ * readable a few seconds AFTER the writing request completes — ~6s on the
+ * "us" multi-region endpoint, ~9s on "eu", ~30s on "global"; single regions
+ * have no quota for the model. So the Ideas stages use a multi-region
+ * endpoint ("eu" by default — the design partner is in Israel), each prefix
+ * is warmed by one tiny request, and a wave only fires once the entry has
+ * settled. Prefixes known at import start (template + catalogs) are warmed
+ * while the Gemini parse runs, at no latency cost; the match prefix (it
+ * includes every unit of the import) can only be warmed after split.
  *
  * IDEAS_PROMPT_CACHE=off sends plain blocks and skips warm-ups (A/B, or if
  * the provider misbehaves); IDEAS_VERTEX_LOCATION overrides the region.
@@ -26,17 +27,22 @@ type CreateParams = Parameters<AnthropicVertex["messages"]["create"]>[0];
 
 const EPHEMERAL = { type: "ephemeral" as const };
 
-/** Time between a warm-up completing and its cache entry being readable. */
-export const CACHE_SETTLE_MS = 6000;
+/** Measured time between a warm-up completing and its entry being readable. */
+const SETTLE_MS_BY_REGION: Record<string, number> = { us: 6000, eu: 9000 };
+const SETTLE_MS_DEFAULT = 30000;
+
+export function cacheSettleMs(): number {
+  return SETTLE_MS_BY_REGION[getIdeasVertexLocation()] ?? SETTLE_MS_DEFAULT;
+}
 
 export function promptCacheOn(): boolean {
   const v = process.env.IDEAS_PROMPT_CACHE?.trim().toLowerCase();
   return !(v === "off" || v === "false" || v === "0");
 }
 
-/** Region for the Ideas stages — "us" propagates cache entries fast. */
+/** Region for the Ideas stages — a multi-region endpoint with fast cache propagation. */
 export function getIdeasVertexLocation(): string {
-  return process.env.IDEAS_VERTEX_LOCATION?.trim() || "us";
+  return process.env.IDEAS_VERTEX_LOCATION?.trim() || "eu";
 }
 
 let client: AnthropicVertex | null = null;
@@ -127,7 +133,7 @@ export class PrefixWarmer {
     const p = this.entries.get(key);
     if (!p) return;
     const completedAt = await p;
-    const wait = CACHE_SETTLE_MS - (Date.now() - completedAt);
+    const wait = cacheSettleMs() - (Date.now() - completedAt);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }
 }
