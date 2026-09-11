@@ -1,8 +1,18 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
-import { CATALOG_PROMPT_VERSION, CATALOG_SYSTEM_PROMPT } from "@/lib/ideas/catalog";
-import { MATCH_PROMPT_VERSION, MATCH_SYSTEM_PROMPT } from "@/lib/ideas/match";
-import { PARSE_PROMPT_VERSION, PARSE_SYSTEM_PROMPT } from "@/lib/ideas/field-parse";
+import {
+  CATALOG_PROMPT_VERSION,
+  CATALOG_SYSTEM_PROMPT,
+} from "@/lib/ideas/catalog";
+import {
+  MATCH_GROUP_SYSTEM_PROMPT,
+  MATCH_PROMPT_VERSION,
+  MATCH_SYSTEM_PROMPT,
+} from "@/lib/ideas/match";
+import {
+  PARSE_PROMPT_VERSION,
+  PARSE_SYSTEM_PROMPT,
+} from "@/lib/ideas/field-parse";
 import { SPLIT_PROMPT_VERSION, SPLIT_SYSTEM_PROMPT } from "@/lib/ideas/split";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { AdminShell } from "../AdminShell";
@@ -51,9 +61,15 @@ export default async function AdminIdeasPage() {
             text: SPLIT_SYSTEM_PROMPT,
           },
           {
+            id: "match-group",
+            title: `Merge group reconciliation (${MATCH_PROMPT_VERSION})`,
+            note: "Phase 2, one call per group of two or more requests judged to be one idea (parallel): confirm or split the grouping and write the merged idea from the template — with the existing idea's text when the group merges into one.",
+            text: MATCH_GROUP_SYSTEM_PROMPT,
+          },
+          {
             id: "match",
             title: `Jira backlog matching (${MATCH_PROMPT_VERSION})`,
-            note: "Runs per feature request: does it duplicate an idea already in the ideas list (Jira-born, an earlier import, or an earlier ticket of this import)? Unmatched requests join the candidate list, so similar tickets in one import consolidate. Jira disconnected just means fewer candidates.",
+            note: "Phase 1, all at once: every feature request is matched against existing ideas, unrepresented Jira issues, and every other request of the same import. The answers are folded into groups deterministically; groups of two or more then get the reconciliation prompt below.",
             text: MATCH_SYSTEM_PROMPT,
           },
         ]}
@@ -65,7 +81,8 @@ export default async function AdminIdeasPage() {
             slug: org.slug,
             config: mergeIdeasJiraConfig(org.workspace?.ideasConfig),
             // null = no Jira connection yet; the issue-type control is hidden.
-            ideasIssueType: org.workspace?.jiraConnection?.ideasIssueType ?? null,
+            ideasIssueType:
+              org.workspace?.jiraConnection?.ideasIssueType ?? null,
           }))}
       />
     </AdminShell>

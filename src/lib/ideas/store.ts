@@ -152,7 +152,8 @@ function toClientIdea(row: IdeaRow): Idea {
     customers: distinct(
       ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
     ).filter((c) => !dismissedKeys.has(c.toLowerCase())),
-    affectsAllCustomers: ticketRows.some((t) => t.affectsAllCustomers) || undefined,
+    affectsAllCustomers:
+      ticketRows.some((t) => t.affectsAllCustomers) || undefined,
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
     batchChanges: (row.batchChanges as string[]) ?? [],
@@ -712,9 +713,12 @@ export async function importBatch(
         }
         // Model assignment wins; the CSV product_line column is only a fallback
         // when the model returned nothing at all.
+        // A group-reconciled rewrite (match stage) wins over the unit's own
+        // catalog text: it was written with every member ticket in view.
+        const finalRewrite = m?.rewrite ?? unit.rewrite;
         const products =
-          unit.rewrite.productLines.length > 0
-            ? unit.rewrite.productLines
+          finalRewrite.productLines.length > 0
+            ? finalRewrite.productLines
             : input.productLine
               ? [input.productLine]
               : ["Other"];
@@ -723,10 +727,10 @@ export async function importBatch(
         const created = await db.idea.create({
           data: {
             workspaceId,
-            title: unit.rewrite.productTitle || input.subject,
-            details: unit.rewrite.productSummary || input.body,
+            title: finalRewrite.productTitle || input.subject,
+            details: finalRewrite.productSummary || input.body,
             products: products as Prisma.InputJsonValue,
-            platforms: unit.rewrite.platforms as Prisma.InputJsonValue,
+            platforms: finalRewrite.platforms as Prisma.InputJsonValue,
             batchStatus: "new",
             decision: "pending",
             origin: "zendesk",
