@@ -173,7 +173,15 @@ export function IdeaDrawer({
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      {/* Fixed elements chain wheel events to the viewport, not to the app's
+          scroll container — forward them so the list keeps scrolling. */}
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+        onWheel={(e) => {
+          document.querySelector("main")?.scrollBy({ top: e.deltaY, left: e.deltaX });
+        }}
+      />
       <div
         className="fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border bg-white shadow-[-24px_0_48px_rgba(10,22,40,.14)]"
         style={{ width }}
