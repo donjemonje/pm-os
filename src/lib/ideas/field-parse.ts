@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { getVertexLocation, getVertexProjectId } from "../vertex-config";
+import { getGeminiLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { geminiUsage, type StageHooks } from "./trace";
 
@@ -51,7 +51,7 @@ let client: GoogleGenAI | null = null;
 let clientKey = "";
 function getClient(): GoogleGenAI {
   const project = getVertexProjectId();
-  const location = getVertexLocation();
+  const location = getGeminiLocation();
   const key = `${project}|${location}`;
   if (!client || clientKey !== key) {
     client = new GoogleGenAI({ vertexai: true, project, location });

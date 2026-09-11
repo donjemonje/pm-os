@@ -9,6 +9,7 @@ import {
   toAiQuotaError,
 } from "../ai-config";
 import {
+  getGeminiLocation,
   getVertexLocation,
   getVertexModel,
   getVertexProjectId,
@@ -55,7 +56,7 @@ function getAnthropicClient(): AnthropicVertex {
 
 function getGeminiClient(): GoogleGenAI {
   const project = getVertexProjectId();
-  const location = getVertexLocation();
+  const location = getGeminiLocation();
   const key = `${project}|${location}`;
   if (!geminiClient || geminiKey !== key) {
     geminiClient = new GoogleGenAI({ vertexai: true, project, location });

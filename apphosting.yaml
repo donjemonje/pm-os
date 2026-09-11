@@ -103,7 +103,7 @@ env:
       - RUNTIME
 
   - variable: VERTEX_LOCATION
-    value: global
+    value: eu
     availability:
       - RUNTIME
 

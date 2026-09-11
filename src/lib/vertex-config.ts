@@ -12,13 +12,26 @@
 export const DEFAULT_VERTEX_PROJECT_ID = "pm-os-9d992";
 
 /**
- * Vertex location. claude-opus-4-8 is NOT served regionally (us-east5 stops
- * at opus-4-6); it is only available on the "global" endpoint and the "us"/"eu"
- * multi-region endpoints, where it draws from the shared anthropic-claude-opus
- * lineage quota bucket. Override via VERTEX_LOCATION (use "us" if US data
- * residency is required).
+ * Vertex location for the Anthropic models. They are not served in single
+ * regions for this project (us-east5 & co. return 429 — no quota); they run
+ * on the "global", "us" and "eu" multi-region endpoints, all drawing from the
+ * shared anthropic-claude-opus lineage quota bucket. "eu" is the default:
+ * every customer is in Israel/EU for now (a US customer would get "us"), and
+ * prompt-cache entries become readable in seconds there vs ~30s on "global".
+ * Override via VERTEX_LOCATION.
  */
-export const DEFAULT_VERTEX_LOCATION = "global";
+export const DEFAULT_VERTEX_LOCATION = "eu";
+
+/**
+ * Vertex region for the Gemini models. Gemini has no "eu" alias — it is
+ * served per region; europe-west1 (Belgium) is the EU default. Override via
+ * GEMINI_LOCATION.
+ */
+export const DEFAULT_GEMINI_LOCATION = "europe-west1";
+
+export function getGeminiLocation(): string {
+  return process.env.GEMINI_LOCATION?.trim() || DEFAULT_GEMINI_LOCATION;
+}
 
 /**
  * Enabled module "claude-opus-4-8", version "claude-opus-4-8@default".
