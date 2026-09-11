@@ -2,7 +2,7 @@ export type IdeaBatchStatus = "new" | "updated" | "unchanged" | "archive" | "del
 export type IdeaDecision = "pending" | "reviewed" | "injected";
 
 /** Catalog stage: what a raw Zendesk ticket is. Only FRs become ideas. */
-export type CatalogKind = "fr" | "bug" | "needs_details";
+export type CatalogKind = "fr" | "bug" | "needs_details" | "ops_task" | "question";
 
 export interface CatalogVerdict {
   kind: CatalogKind;

@@ -2,8 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { Check, X } from "lucide-react";
-import { scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
-import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
+import {
+  CATALOG_KIND_LABELS,
+  scoreOf,
+  STATUS_CHIP_TO_BATCH,
+} from "@/lib/ideas/idea";
+import type {
+  Idea,
+  JiraSource,
+  MergeEdit,
+  ZendeskTicket,
+} from "@/lib/ideas/types";
 
 type SourceKind = "zen" | "jira";
 
@@ -40,7 +49,7 @@ interface SourceRow {
   orphan: boolean;
   owners: number;
   ownerId: string | null;
-  /** Catalog label for parked tickets (Bug / Needs details). */
+  /** Catalog label for parked tickets (Bug / Needs details / Ops task / Question). */
   parkLabel?: string;
 }
 
@@ -75,15 +84,28 @@ export function MergePage({
       if (i.batch !== "unchanged") return false;
     } else {
       if (i.batch === "unchanged") return false;
-      if (statusFilter.length > 0 && !statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch))
+      if (
+        statusFilter.length > 0 &&
+        !statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)
+      )
         return false;
     }
     const q = query.trim().toLowerCase();
     if (q && !i.title.toLowerCase().includes(q)) return false;
-    if (productFilter.length > 0 && !i.products.some((p) => productFilter.includes(p))) return false;
-    if (platformFilter.length > 0 && !(i.platforms ?? []).some((p) => platformFilter.includes(p)))
+    if (
+      productFilter.length > 0 &&
+      !i.products.some((p) => productFilter.includes(p))
+    )
       return false;
-    if (customerFilter.length > 0 && !(i.customers ?? []).some((c) => customerFilter.includes(c)))
+    if (
+      platformFilter.length > 0 &&
+      !(i.platforms ?? []).some((p) => platformFilter.includes(p))
+    )
+      return false;
+    if (
+      customerFilter.length > 0 &&
+      !(i.customers ?? []).some((c) => customerFilter.includes(c))
+    )
       return false;
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
@@ -117,7 +139,10 @@ export function MergePage({
 
   // Clicking a source's N× badge highlights every idea it backs — the same
   // green as merge-edit, view-only: no checkboxes, no save/discard.
-  const [highlightSrc, setHighlightSrc] = useState<{ kind: SourceKind; key: string } | null>(null);
+  const [highlightSrc, setHighlightSrc] = useState<{
+    kind: SourceKind;
+    key: string;
+  } | null>(null);
   useEffect(() => {
     if (edit) setHighlightSrc(null);
   }, [edit]);
@@ -133,21 +158,24 @@ export function MergePage({
     highlightSrc
       ? ideas
           .filter((i) =>
-            (highlightSrc.kind === "zen" ? i.zen : i.jira).includes(highlightSrc.key)
+            (highlightSrc.kind === "zen" ? i.zen : i.jira).includes(
+              highlightSrc.key,
+            ),
           )
           .map((i) => i.id)
-      : []
+      : [],
   );
 
   // Sources of visible finals first (in finals order), then every remaining
   // source, deduped — shared sources appear once with an N× tag.
   const buildRows = (
     kind: SourceKind,
-    all: Array<{ key: string; id: string; title: string; parkLabel?: string }>
+    all: Array<{ key: string; id: string; title: string; parkLabel?: string }>,
   ): SourceRow[] => {
     const refs = (i: Idea) => (kind === "zen" ? i.zen : i.jira);
     const editRefs = edit ? (kind === "zen" ? edit.zen : edit.jira) : null;
-    const ownersOf = (key: string) => ideas.filter((i) => refs(i).includes(key));
+    const ownersOf = (key: string) =>
+      ideas.filter((i) => refs(i).includes(key));
     const rows: SourceRow[] = [];
     const seen = new Set<string>();
     const push = (key: string) => {
@@ -191,18 +219,21 @@ export function MergePage({
       title: t.subject,
       parkLabel:
         t.catalog && t.catalog.kind !== "fr"
-          ? t.catalog.kind === "bug"
-            ? "Bug"
-            : "Needs details"
+          ? CATALOG_KIND_LABELS[t.catalog.kind]
           : undefined,
-    }))
+    })),
   );
   const jiraRows = buildRows(
     "jira",
-    jiraSources.map((s) => ({ key: s.key, id: s.id, title: s.title }))
+    jiraSources.map((s) => ({ key: s.key, id: s.id, title: s.title })),
   );
 
-  const renderColumn = (kind: SourceKind, label: string, rows: SourceRow[], emptyText: string) => (
+  const renderColumn = (
+    kind: SourceKind,
+    label: string,
+    rows: SourceRow[],
+    emptyText: string,
+  ) => (
     <div className="overflow-hidden rounded-xl border border-border bg-white">
       <div className={COL_HEADER}>
         {label} · {rows.length}
@@ -280,7 +311,9 @@ export function MergePage({
                   if (edit) return;
                   e.stopPropagation();
                   setHighlightSrc((cur) =>
-                    cur && cur.kind === kind && cur.key === row.key ? null : { kind, key: row.key }
+                    cur && cur.kind === kind && cur.key === row.key
+                      ? null
+                      : { kind, key: row.key },
                   );
                 }}
                 title={
@@ -289,7 +322,9 @@ export function MergePage({
                     : "Highlight the ideas using this source (Esc clears)"
                 }
                 className={`shrink-0 rounded-full border px-[5px] py-px font-mono text-[9.5px] font-semibold ${
-                  !edit && highlightSrc?.kind === kind && highlightSrc?.key === row.key
+                  !edit &&
+                  highlightSrc?.kind === kind &&
+                  highlightSrc?.key === row.key
                     ? "border-[#1f8a53] bg-[#daf0e2] text-[#1f8a53]"
                     : "border-[rgba(122,167,255,.4)] bg-[rgba(122,167,255,.14)] text-[#3b6fd4] hover:border-[#3b6fd4]"
                 }`}
@@ -299,7 +334,9 @@ export function MergePage({
             )}
           </div>
         ))}
-        {rows.length === 0 && <div className="p-4 text-xs text-muted">{emptyText}</div>}
+        {rows.length === 0 && (
+          <div className="p-4 text-xs text-muted">{emptyText}</div>
+        )}
       </div>
     </div>
   );
@@ -377,7 +414,9 @@ export function MergePage({
               </div>
             );
           })}
-          {finals.length === 0 && <div className="p-4 text-xs text-muted">No ideas match</div>}
+          {finals.length === 0 && (
+            <div className="p-4 text-xs text-muted">No ideas match</div>
+          )}
         </div>
       </div>
     </div>

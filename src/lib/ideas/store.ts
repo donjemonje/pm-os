@@ -56,6 +56,9 @@ export interface ImportSummary {
   matched: number;
   bugs: number;
   needsDetails: number;
+  /** Parked kinds beyond bugs: requests for someone to act, and product questions. */
+  opsTasks: number;
+  questions: number;
   duplicates: number;
   /** Tickets broken into more than one idea by the split stage. */
   split: number;
@@ -563,6 +566,8 @@ export async function importBatch(
   let matched = 0;
   let bugs = 0;
   let needsDetails = 0;
+  let opsTasks = 0;
+  let questions = 0;
   /** "new:<ticket key>" → idea created for that ticket earlier in this loop. */
   const createdByMatchKey = new Map<string, string>();
   const createdThisBatch = new Set<string>();
@@ -604,6 +609,8 @@ export async function importBatch(
     });
     if (verdict?.kind === "bug") bugs++;
     else if (verdict?.kind === "needs_details") needsDetails++;
+    else if (verdict?.kind === "ops_task") opsTasks++;
+    else if (verdict?.kind === "question") questions++;
     else if (verdict?.kind === "fr") {
       frs++;
       for (const unit of unitsByTicket.get(input.key) ?? []) {
@@ -739,6 +746,8 @@ export async function importBatch(
     matched,
     bugs,
     needsDetails,
+    opsTasks,
+    questions,
     duplicates,
     split: splitTicketCount,
     called: catalog.called + split.called + match.called + parse.called,

@@ -37,6 +37,8 @@ interface ImportSummary {
   matched: number;
   bugs: number;
   needsDetails: number;
+  opsTasks?: number;
+  questions?: number;
   duplicates: number;
   split?: number;
   jiraConnected: boolean;
@@ -230,6 +232,10 @@ export function IdeasView({
       if (s.matched > 0)
         parts.push(`${s.matched} matched to existing Jira idea${s.matched === 1 ? "" : "s"}`);
       if (s.bugs > 0) parts.push(`${s.bugs} bug${s.bugs === 1 ? "" : "s"} parked`);
+      if ((s.opsTasks ?? 0) > 0)
+        parts.push(`${s.opsTasks} ops task${s.opsTasks === 1 ? "" : "s"} parked`);
+      if ((s.questions ?? 0) > 0)
+        parts.push(`${s.questions} question${s.questions === 1 ? "" : "s"} parked`);
       if (s.needsDetails > 0)
         parts.push(`${s.needsDetails} need${s.needsDetails === 1 ? "s" : ""} more details`);
       if (s.duplicates > 0) parts.push(`${s.duplicates} already imported`);

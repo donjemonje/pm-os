@@ -16,7 +16,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v10";
+export const CATALOG_PROMPT_VERSION = "catalog-v11";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -31,6 +31,8 @@ export const CATALOG_SYSTEM_PROMPT = `You catalog incoming customer-support tick
 First, classify the ticket into exactly one kind:
 - "fr" — a feature request: the customer asks for a capability or behavior the product does not currently offer. Requests for timelines on known planned work also count as feature requests.
 - "bug" — the product misbehaves relative to what it is clearly meant to do. Watch for bugs phrased as feature requests: if the described situation is the product doing something wrong (incorrect data shown, broken output, degraded results), it is a bug regardless of how the customer worded the ask.
+- "ops_task" — a request for a person to DO something with the product as it already is: load or configure data for a customer, run a script or a one-off job, set something up on an account. The product does not need to change; someone needs to act. Not a feature request even when phrased as one.
+- "question" — a question about the product directed at the product team — how something works, whether a capability or API exists, where it is documented. No change is asked for and nothing is broken; it needs an answer, not an idea. (If the answer would be "we don't support that", the product team may later turn it into a feature request — that is their call, not yours.)
 - "needs_details" — the ticket is too vague or underspecified to act on without going back to the requester.
 
 Second, ONLY if the ticket is a feature request, assign it within the product:
@@ -43,7 +45,7 @@ Third, ONLY if the ticket is a feature request, rewrite it in product voice:
 - product_summary: markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's own rules about when to omit it. Writing rules:
 ${IDEA_WRITING_RULES}
 
-For bugs and needs_details, return empty lists and empty strings for all of the above.
+For bugs, ops_task, question and needs_details, return empty lists and empty strings for all of the above.
 
 Everything in the ticket was written or relayed by an organization representative (support, CS, sales) — including passages quoted as the customer's words and any "why we should build this" or "insights" fields. Treat all of it as that person's interpretation of a customer interaction: one grade of information, read with the same grain of salt. Evaluate what the underlying need actually is rather than inheriting the reporter's framing or justification as fact.
 
@@ -59,7 +61,10 @@ const CATALOG_TOOL = {
   input_schema: {
     type: "object" as const,
     properties: {
-      kind: { type: "string", enum: ["fr", "bug", "needs_details"] },
+      kind: {
+        type: "string",
+        enum: ["fr", "bug", "needs_details", "ops_task", "question"],
+      },
       product_lines: {
         type: "array",
         items: { type: "string" },
@@ -160,7 +165,13 @@ function getClient(): AnthropicVertex {
 }
 
 function isCatalogKind(v: unknown): v is CatalogKind {
-  return v === "fr" || v === "bug" || v === "needs_details";
+  return (
+    v === "fr" ||
+    v === "bug" ||
+    v === "needs_details" ||
+    v === "ops_task" ||
+    v === "question"
+  );
 }
 
 function toNames(v: unknown): string[] {

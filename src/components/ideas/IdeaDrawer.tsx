@@ -10,7 +10,13 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import { badgeOf, needsApproval, scoreOf, votesLabel } from "@/lib/ideas/idea";
+import {
+  badgeOf,
+  needsApproval,
+  scoreOf,
+  votesLabel,
+  CATALOG_KIND_LABELS,
+} from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 
@@ -179,7 +185,9 @@ export function IdeaDrawer({
         className="fixed inset-0 z-40"
         onClick={onClose}
         onWheel={(e) => {
-          document.querySelector("main")?.scrollBy({ top: e.deltaY, left: e.deltaX });
+          document
+            .querySelector("main")
+            ?.scrollBy({ top: e.deltaY, left: e.deltaX });
         }}
       />
       <div
@@ -411,16 +419,13 @@ export function IdeaDrawer({
               </div>
               <div className="flex flex-col gap-1 text-xs text-muted">
                 {ticket.affectsAllCustomers && (
-                  <span className="font-medium text-[#4a6fd6]">Affects: All customers</span>
+                  <span className="font-medium text-[#4a6fd6]">
+                    Affects: All customers
+                  </span>
                 )}
                 {ticket.catalog && (
                   <span>
-                    Catalog:{" "}
-                    {ticket.catalog.kind === "fr"
-                      ? "Feature request"
-                      : ticket.catalog.kind === "bug"
-                        ? "Bug"
-                        : "Needs more details"}
+                    Catalog: {CATALOG_KIND_LABELS[ticket.catalog.kind]}
                     {ticket.catalog.reason ? ` — ${ticket.catalog.reason}` : ""}
                   </span>
                 )}
