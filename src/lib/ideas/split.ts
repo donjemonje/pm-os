@@ -1,11 +1,15 @@
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
-import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { aiThrottleOn } from "./ai-throttle";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { anthropicUsage, type StageHooks } from "./trace";
+import {
+  getIdeasClient,
+  prefixedUserMessage,
+  PrefixWarmer,
+  type PrefixParams,
+} from "./ai-cache";
 
 /**
  * Split stage: for the few tickets the catalog stage flags as holding more
@@ -104,19 +108,6 @@ export interface SplitResult {
   reason: string;
 }
 
-let client: AnthropicVertex | null = null;
-let clientKey = "";
-function getClient(): AnthropicVertex {
-  const projectId = getVertexProjectId();
-  const region = getVertexLocation();
-  const key = `${projectId}|${region}`;
-  if (!client || clientKey !== key) {
-    client = new AnthropicVertex({ projectId, region });
-    clientKey = key;
-  }
-  return client;
-}
-
 function toNames(v: unknown): string[] {
   return Array.isArray(v)
     ? v.filter((x): x is string => typeof x === "string")
@@ -134,8 +125,8 @@ function renderList(
   return `${title}:\n${lines.join("\n")}`;
 }
 
-function renderUserMessage(
-  input: SplitInput,
+/** The part of the user turn shared by every call of one import — cached. */
+function renderShared(
   productLines: { name: string; description: string }[],
   platforms: { name: string; description: string }[],
   ideaTemplate: string,
@@ -144,23 +135,28 @@ function renderUserMessage(
     `IDEA TEMPLATE (each product_summary must follow these sections):\n\n${ideaTemplate}`,
     renderList("PRODUCT LINE CATALOG", productLines),
     renderList("PLATFORM CATALOG", platforms),
-    [
-      "TICKET",
-      `Subject: ${input.subject}`,
-      `Requester: ${input.requester || "(unknown)"}`,
-      `Module (reporter's hint): ${input.module || "(none)"}`,
-      "",
-      "Body:",
-      input.body || "(empty)",
-      ...(input.whyBuild
-        ? ["", 'Reporter\'s "why should we build this":', input.whyBuild]
-        : []),
-      ...(input.insights
-        ? ["", 'Reporter\'s "what insights do we have":', input.insights]
-        : []),
-    ].join("\n"),
   ].join("\n\n");
 }
+
+function renderTicket(input: SplitInput): string {
+  return [
+    "TICKET",
+    `Subject: ${input.subject}`,
+    `Requester: ${input.requester || "(unknown)"}`,
+    `Module (reporter's hint): ${input.module || "(none)"}`,
+    "",
+    "Body:",
+    input.body || "(empty)",
+    ...(input.whyBuild
+      ? ["", 'Reporter\'s "why should we build this":', input.whyBuild]
+      : []),
+    ...(input.insights
+      ? ["", 'Reporter\'s "what insights do we have":', input.insights]
+      : []),
+  ].join("\n");
+}
+
+const SPLIT_TOOL_CHOICE = { type: "tool" as const, name: "split_ticket" };
 
 export interface SplitBatchResult {
   results: SplitResult[];
@@ -169,22 +165,17 @@ export interface SplitBatchResult {
   called: number;
 }
 
-/** Split the flagged tickets; one call and one ledger row per ticket. */
-export async function splitTickets(
-  workspaceId: string,
-  inputs: SplitInput[],
-  hooks?: StageHooks,
-): Promise<SplitBatchResult> {
-  const model = getSplitModel();
-  if (inputs.length === 0) {
-    return {
-      results: [],
-      model,
-      promptVersion: SPLIT_PROMPT_VERSION,
-      called: 0,
-    };
-  }
+export interface SplitContext {
+  model: string;
+  shared: string;
+  prefix: PrefixParams;
+}
 
+export const SPLIT_PREFIX_KEY = "split";
+
+/** Catalogs + template once; called at import start so the prefix warms early. */
+export async function prepareSplit(workspaceId: string): Promise<SplitContext> {
+  const model = getSplitModel();
   const [productLines, platforms, wsRow] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId },
@@ -202,10 +193,53 @@ export async function splitTickets(
     }),
   ]);
   const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
+  const shared = renderShared(productLines, platforms, ideaTemplate);
+  return {
+    model,
+    shared,
+    prefix: {
+      model,
+      system: SPLIT_SYSTEM_PROMPT,
+      tools: [SPLIT_TOOL],
+      tool_choice: SPLIT_TOOL_CHOICE,
+      shared,
+    },
+  };
+}
+
+export interface SplitRunOptions {
+  hooks?: StageHooks;
+  warmer?: PrefixWarmer;
+  ctx?: SplitContext;
+}
+
+/** Split the flagged tickets; one call and one ledger row per ticket. */
+export async function splitTickets(
+  workspaceId: string,
+  inputs: SplitInput[],
+  options: SplitRunOptions = {},
+): Promise<SplitBatchResult> {
+  const { hooks } = options;
+  const model = options.ctx?.model ?? getSplitModel();
+  if (inputs.length === 0) {
+    return {
+      results: [],
+      model,
+      promptVersion: SPLIT_PROMPT_VERSION,
+      called: 0,
+    };
+  }
+  const ctx = options.ctx ?? (await prepareSplit(workspaceId));
+  const { shared } = ctx;
 
   // Split calls are independent per flagged ticket — serial only ever out of
   // cost caution, so the throttle switch governs it like catalog.
   const poolSize = aiThrottleOn() ? 1 : inputs.length;
+  if (inputs.length > 1) {
+    const warmer = options.warmer ?? new PrefixWarmer(hooks);
+    warmer.ensure(SPLIT_PREFIX_KEY, ctx.prefix, hooks);
+    await warmer.ready(SPLIT_PREFIX_KEY);
+  }
   const results: SplitResult[] = new Array<SplitResult>(inputs.length);
   let nextIndex = 0;
   const worker = async (): Promise<void> => {
@@ -213,20 +247,16 @@ export async function splitTickets(
       const i = nextIndex++;
       if (i >= inputs.length) return;
       const input = inputs[i];
-      const userMessage = renderUserMessage(
-        input,
-        productLines,
-        platforms,
-        ideaTemplate,
-      );
+      const ticketBlock = renderTicket(input);
+      const userMessage = `${shared}\n\n${ticketBlock}`;
       const aiStart = performance.now();
-      const message = await getClient().messages.create({
+      const message = await getIdeasClient().messages.create({
         model,
         max_tokens: 2000,
         system: SPLIT_SYSTEM_PROMPT,
         tools: [SPLIT_TOOL],
-        tool_choice: { type: "tool", name: "split_ticket" },
-        messages: [{ role: "user", content: userMessage }],
+        tool_choice: SPLIT_TOOL_CHOICE,
+        messages: prefixedUserMessage(shared, ticketBlock),
       });
       const aiMs = performance.now() - aiStart;
 

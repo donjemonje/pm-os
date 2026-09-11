@@ -1,11 +1,15 @@
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
 import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
-import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { anthropicUsage, type StageHooks } from "./trace";
+import {
+  getIdeasClient,
+  prefixedUserMessage,
+  PrefixWarmer,
+  type PrefixParams,
+} from "./ai-cache";
 import type { CatalogKind, CatalogVerdict } from "./types";
 
 /**
@@ -152,19 +156,6 @@ interface CatalogListEntry {
   description: string;
 }
 
-let client: AnthropicVertex | null = null;
-let clientKey = "";
-function getClient(): AnthropicVertex {
-  const projectId = getVertexProjectId();
-  const region = getVertexLocation();
-  const key = `${projectId}|${region}`;
-  if (!client || clientKey !== key) {
-    client = new AnthropicVertex({ projectId, region });
-    clientKey = key;
-  }
-  return client;
-}
-
 function isCatalogKind(v: unknown): v is CatalogKind {
   return (
     v === "fr" ||
@@ -189,8 +180,8 @@ function renderList(title: string, entries: CatalogListEntry[]): string {
   return `${title}:\n${lines.join("\n")}`;
 }
 
-function renderUserMessage(
-  input: CatalogInput,
+/** The part of the user turn shared by every call of one import — cached. */
+function renderShared(
   productLines: CatalogListEntry[],
   platforms: CatalogListEntry[],
   customers: CatalogListEntry[],
@@ -201,28 +192,34 @@ function renderUserMessage(
     renderList("PRODUCT LINE CATALOG", productLines),
     renderList("PLATFORM CATALOG", platforms),
     renderList("CUSTOMER CATALOG", customers),
-    [
-      "TICKET",
-      `Subject: ${input.subject}`,
-      `Requester: ${input.requester || "(unknown)"}`,
-      `Tags: ${input.tags.length > 0 ? input.tags.join(", ") : "(none)"}`,
-      `Module (reporter's hint): ${input.module || "(none)"}`,
-      "",
-      "Body:",
-      input.body || "(empty)",
-      ...(input.whyBuild
-        ? ["", 'Reporter\'s "why should we build this":', input.whyBuild]
-        : []),
-      ...(input.insights
-        ? ["", 'Reporter\'s "what insights do we have":', input.insights]
-        : []),
-    ].join("\n"),
   ].join("\n\n");
 }
 
+function renderTicket(input: CatalogInput): string {
+  return [
+    "TICKET",
+    `Subject: ${input.subject}`,
+    `Requester: ${input.requester || "(unknown)"}`,
+    `Tags: ${input.tags.length > 0 ? input.tags.join(", ") : "(none)"}`,
+    `Module (reporter's hint): ${input.module || "(none)"}`,
+    "",
+    "Body:",
+    input.body || "(empty)",
+    ...(input.whyBuild
+      ? ["", 'Reporter\'s "why should we build this":', input.whyBuild]
+      : []),
+    ...(input.insights
+      ? ["", 'Reporter\'s "what insights do we have":', input.insights]
+      : []),
+  ].join("\n");
+}
+
+const CATALOG_TOOL_CHOICE = { type: "tool" as const, name: "catalog_ticket" };
+
 async function judgeTicket(
   model: string,
-  userMessage: string,
+  shared: string,
+  ticket: string,
 ): Promise<{
   verdict: Omit<CatalogResult, "key">;
   aiMs: number;
@@ -231,13 +228,13 @@ async function judgeTicket(
   // No temperature: the Claude 5 family rejects the parameter outright
   // (`temperature` is deprecated).
   const aiStart = performance.now();
-  const message = await getClient().messages.create({
+  const message = await getIdeasClient().messages.create({
     model,
     max_tokens: 1000,
     system: CATALOG_SYSTEM_PROMPT,
     tools: [CATALOG_TOOL],
-    tool_choice: { type: "tool", name: "catalog_ticket" },
-    messages: [{ role: "user", content: userMessage }],
+    tool_choice: CATALOG_TOOL_CHOICE,
+    messages: prefixedUserMessage(shared, ticket),
   });
   const aiMs = performance.now() - aiStart;
 
@@ -292,17 +289,22 @@ export interface CatalogBatchResult {
   called: number;
 }
 
+/** Everything a classify wave shares: model + the cached prefix. */
+export interface CatalogContext {
+  model: string;
+  shared: string;
+  prefix: PrefixParams;
+}
+
+export const CATALOG_PREFIX_KEY = "classify";
+
 /**
- * Catalog a batch of tickets for one workspace. Every ticket is judged fresh
- * against the current Settings → Ideas catalogs; each verdict is appended to
- * the ledger as soon as it lands (with the exact rendered input), so a
- * failure mid-batch never loses the judgments already paid for.
+ * Load the catalogs and template once; the store calls this at import
+ * start so the prefix can be warmed while earlier stages run.
  */
-export async function catalogTickets(
+export async function prepareCatalog(
   workspaceId: string,
-  tickets: CatalogInput[],
-  hooks?: StageHooks,
-): Promise<CatalogBatchResult> {
+): Promise<CatalogContext> {
   const model = getCatalogModel();
   const [productLines, platforms, customers, wsRow] = await Promise.all([
     db.productLine.findMany({
@@ -326,6 +328,40 @@ export async function catalogTickets(
     }),
   ]);
   const ideaTemplate = mergeIdeasJiraConfig(wsRow?.ideasConfig).ideaTemplate;
+  const shared = renderShared(productLines, platforms, customers, ideaTemplate);
+  return {
+    model,
+    shared,
+    prefix: {
+      model,
+      system: CATALOG_SYSTEM_PROMPT,
+      tools: [CATALOG_TOOL],
+      tool_choice: CATALOG_TOOL_CHOICE,
+      shared,
+    },
+  };
+}
+
+export interface CatalogRunOptions {
+  hooks?: StageHooks;
+  warmer?: PrefixWarmer;
+  ctx?: CatalogContext;
+}
+
+/**
+ * Catalog a batch of tickets for one workspace. Every ticket is judged fresh
+ * against the current Settings → Ideas catalogs; each verdict is appended to
+ * the ledger as soon as it lands (with the exact rendered input), so a
+ * failure mid-batch never loses the judgments already paid for.
+ */
+export async function catalogTickets(
+  workspaceId: string,
+  tickets: CatalogInput[],
+  options: CatalogRunOptions = {},
+): Promise<CatalogBatchResult> {
+  const { hooks } = options;
+  const ctx = options.ctx ?? (await prepareCatalog(workspaceId));
+  const { model, shared } = ctx;
 
   // Classification calls are independent per ticket, so they run in a
   // bounded pool (IDEAS_CATALOG_CONCURRENCY, default 10 — a fraction of the
@@ -343,6 +379,13 @@ export async function catalogTickets(
       : Number.isFinite(rawConcurrency) && rawConcurrency > 0
         ? rawConcurrency
         : 10;
+  // The cached prefix must be readable before the wave fires (a no-op when
+  // the store warmed it earlier).
+  if (tickets.length > 1) {
+    const warmer = options.warmer ?? new PrefixWarmer(hooks);
+    warmer.ensure(CATALOG_PREFIX_KEY, ctx.prefix, hooks);
+    await warmer.ready(CATALOG_PREFIX_KEY);
+  }
   const results: CatalogResult[] = new Array<CatalogResult>(tickets.length);
   let nextIndex = 0;
   const worker = async (): Promise<void> => {
@@ -350,14 +393,14 @@ export async function catalogTickets(
       const i = nextIndex++;
       if (i >= tickets.length) return;
       const ticket = tickets[i];
-      const userMessage = renderUserMessage(
-        ticket,
-        productLines,
-        platforms,
-        customers,
-        ideaTemplate,
+      const ticketBlock = renderTicket(ticket);
+      const { verdict, aiMs, usage } = await judgeTicket(
+        model,
+        shared,
+        ticketBlock,
       );
-      const { verdict, aiMs, usage } = await judgeTicket(model, userMessage);
+      // The ledger records the rendered text exactly as the model saw it.
+      const userMessage = `${shared}\n\n${ticketBlock}`;
       const input = { system: CATALOG_SYSTEM_PROMPT, user: userMessage };
       const dbStart = performance.now();
       await recordVerdict(

@@ -17,6 +17,8 @@ export interface TokenUsage {
   output: number;
   /** Prompt tokens served from the provider's cache (counted in `input` too). */
   cacheRead: number;
+  /** Prompt tokens written to the cache (counted in `input` too). */
+  cacheWrite: number;
   /** Gemini "thoughts" tokens — reasoning the model spent before answering. */
   thinking: number;
 }
@@ -27,6 +29,8 @@ export interface CallSample {
   /** DB time spent on this call's bookkeeping (the ledger row). */
   dbMs?: number;
   tokens?: Partial<TokenUsage>;
+  /** A cache warm-up, not a judgment — counted separately. */
+  warmup?: boolean;
 }
 
 /** What a stage module reports back to the trace — one sample per model call. */
@@ -45,6 +49,8 @@ export interface StageTrace {
   /** Units the stage worked on (tickets, FR units, groups…). */
   items?: number;
   calls?: number;
+  /** Cache warm-up requests (one per stage wave), not counted in `calls`. */
+  warmups?: number;
   /** Sum of call wall times — exceeds `ms` when calls run in parallel. */
   aiMs?: number;
   aiMaxMs?: number;
@@ -89,11 +95,24 @@ function addTokens(into: TokenUsage, t: Partial<TokenUsage> | undefined): void {
   into.input += t.input ?? 0;
   into.output += t.output ?? 0;
   into.cacheRead += t.cacheRead ?? 0;
+  into.cacheWrite += t.cacheWrite ?? 0;
   into.thinking += t.thinking ?? 0;
 }
 
+function applySample(s: StageTrace, sample: CallSample): void {
+  if (sample.warmup) s.warmups = (s.warmups ?? 0) + 1;
+  else s.calls = (s.calls ?? 0) + 1;
+  s.aiMs = Math.round((s.aiMs ?? 0) + sample.aiMs);
+  s.aiMaxMs = Math.round(Math.max(s.aiMaxMs ?? 0, sample.aiMs));
+  if (sample.dbMs !== undefined) s.dbMs = Math.round((s.dbMs ?? 0) + sample.dbMs);
+  if (sample.tokens) {
+    s.tokens ??= emptyTokens();
+    addTokens(s.tokens, sample.tokens);
+  }
+}
+
 function emptyTokens(): TokenUsage {
-  return { input: 0, output: 0, cacheRead: 0, thinking: 0 };
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
 }
 
 /** Token usage from an Anthropic `message.usage` object. */
@@ -101,10 +120,12 @@ export function anthropicUsage(usage: unknown): Partial<TokenUsage> {
   const u = (usage ?? {}) as Record<string, unknown>;
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
   const cacheRead = n(u.cache_read_input_tokens);
+  const cacheWrite = n(u.cache_creation_input_tokens);
   return {
-    input: n(u.input_tokens) + cacheRead + n(u.cache_creation_input_tokens),
+    input: n(u.input_tokens) + cacheRead + cacheWrite,
     output: n(u.output_tokens),
     cacheRead,
+    cacheWrite,
   };
 }
 
@@ -123,8 +144,8 @@ export function geminiUsage(usage: unknown): Partial<TokenUsage> {
 export function describeStage(s: StageTrace): string {
   const bits = [`${s.stage} ${s.error ? "FAILED" : "done"} ${secs(s.ms)}`];
   if (s.items !== undefined) bits.push(`${s.items} items`);
-  if (s.calls) {
-    bits.push(`${s.calls} calls`);
+  if (s.calls || s.warmups) {
+    bits.push(`${s.calls ?? 0} calls${s.warmups ? ` +${s.warmups} warm-up` : ""}`);
     bits.push(`ai max ${secs(s.aiMaxMs)} / sum ${secs(s.aiMs)}`);
   }
   if (s.dbMs !== undefined && s.kind !== "db") bits.push(`db ${secs(s.dbMs)}`);
@@ -132,7 +153,8 @@ export function describeStage(s: StageTrace): string {
     const t = s.tokens;
     let tok = `tokens ${kilo(t.input)} in / ${kilo(t.output)} out`;
     if (t.thinking) tok += ` (${kilo(t.thinking)} thinking)`;
-    if (t.cacheRead) tok += ` (${kilo(t.cacheRead)} cached)`;
+    if (t.cacheRead || t.cacheWrite)
+      tok += ` (${kilo(t.cacheRead)} cached read, ${kilo(t.cacheWrite)} cache write)`;
     bits.push(tok);
   }
   if (s.model) bits.push(`${s.model}${s.promptVersion ? ` ${s.promptVersion}` : ""}`);
@@ -177,15 +199,30 @@ export class ImportTrace implements StageHooks {
   call(sample: CallSample): void {
     const s = this.current;
     if (!s) return;
-    s.calls = (s.calls ?? 0) + 1;
-    s.aiMs = Math.round((s.aiMs ?? 0) + sample.aiMs);
-    s.aiMaxMs = Math.round(Math.max(s.aiMaxMs ?? 0, sample.aiMs));
-    if (sample.dbMs !== undefined) s.dbMs = Math.round((s.dbMs ?? 0) + sample.dbMs);
-    if (sample.tokens) {
-      s.tokens ??= emptyTokens();
-      addTokens(s.tokens, sample.tokens);
-    }
+    applySample(s, sample);
     this.beat(false);
+  }
+
+  /**
+   * Hooks for calls that run beside the stage sequence (cache pre-warming
+   * during parse): they land on their own named record, never on whatever
+   * stage happens to be open when they complete.
+   */
+  side(stage: string, kind: StageKind): StageHooks {
+    const startedAt = new Date();
+    let rec: StageTrace | undefined;
+    return {
+      call: (sample) => {
+        if (!rec) {
+          rec = { stage, kind, startedAt: startedAt.toISOString() };
+          this.stages.push(rec);
+        }
+        applySample(rec, sample);
+        rec.endedAt = new Date().toISOString();
+        rec.ms = Date.now() - startedAt.getTime();
+        this.beat(false);
+      },
+    };
   }
 
   /** Close the open stage, attaching model/prompt/notes and logging its line. */
@@ -277,8 +314,11 @@ export class ImportTrace implements StageHooks {
       .filter((s) => s.kind === "ai" || (s.ms ?? 0) >= 500)
       .map((s) => `${s.stage} ${secs(s.ms)}${s.calls ? ` (${s.calls})` : ""}`)
       .join(" · ");
+    const cached = totals.input
+      ? ` (${Math.round((totals.cacheRead / totals.input) * 100)}% cached)`
+      : "";
     console.log(
-      `${this.tag} ${final.status} in ${secs(this.elapsedMs)} — ${summary} · tokens ${kilo(totals.input)} in / ${kilo(totals.output)} out${final.error ? ` · ${final.error}` : ""}`,
+      `${this.tag} ${final.status} in ${secs(this.elapsedMs)} — ${summary} · tokens ${kilo(totals.input)} in${cached} / ${kilo(totals.output)} out${final.error ? ` · ${final.error}` : ""}`,
     );
   }
 }

@@ -1,11 +1,15 @@
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { db } from "../db";
-import { getVertexLocation, getVertexProjectId } from "../vertex-config";
 import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { anthropicUsage, type StageHooks } from "./trace";
+import {
+  getIdeasClient,
+  prefixedUserMessage,
+  PrefixWarmer,
+  type PrefixParams,
+} from "./ai-cache";
 
 /** Match reports per-call samples like every stage, plus the phase switch. */
 export interface MatchHooks extends StageHooks {
@@ -31,9 +35,13 @@ export interface MatchHooks extends StageHooks {
  * Same-import consolidation therefore no longer depends on file order —
  * every unit sees every sibling — and the stage costs one wave instead of a
  * serial chain. Every verdict is appended to the ledger.
+ *
+ * v6: the candidate list is identical for every unit of the wave (each
+ * unit is listed too, and told never to match itself) so the list is one
+ * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v5";
+export const MATCH_PROMPT_VERSION = "match-v6";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 function getMatchModel(): string {
@@ -42,7 +50,7 @@ function getMatchModel(): string {
 
 export const MATCH_SYSTEM_PROMPT = `You match an incoming feature request against a product team's existing ideas list.
 
-You are given ONE feature request (a product-voiced title and summary, plus the original support-ticket text) and the full list of candidates, each with a key, title, and description. The list can contain ideas synced from the team's Jira backlog, ideas created from earlier support tickets, and OTHER REQUESTS FROM THIS SAME IMPORT (keys starting with "unit:") — those are peers being matched at the same time, and claiming one is how two tickets that ask for the same thing get merged.
+You are given ONE feature request (a product-voiced title and summary, plus the original support-ticket text) and the full list of candidates, each with a key, title, and description. The list can contain ideas synced from the team's Jira backlog, ideas created from earlier support tickets, and OTHER REQUESTS FROM THIS SAME IMPORT (keys starting with "unit:") — those are peers being matched at the same time, and claiming one is how two tickets that ask for the same thing get merged. The same list is shown to every request of the import, so it also contains THIS request under its own key (given with the request) — never match a request to itself.
 
 Decide whether the request asks for the same capability as one candidate:
 - A match means the same underlying capability and need — a customer voting for something already asked for. Different wording, narrower phrasing, or extra detail do not prevent a match when the capability is the same.
@@ -165,19 +173,6 @@ export interface MatchCandidate {
   body: string;
 }
 
-let client: AnthropicVertex | null = null;
-let clientKey = "";
-function getClient(): AnthropicVertex {
-  const projectId = getVertexProjectId();
-  const region = getVertexLocation();
-  const key = `${projectId}|${region}`;
-  if (!client || clientKey !== key) {
-    client = new AnthropicVertex({ projectId, region });
-    clientKey = key;
-  }
-  return client;
-}
-
 /** Deterministic cap on descriptions so the rendered ask stays stable. */
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
@@ -198,9 +193,10 @@ function renderCandidates(ideas: MatchCandidate[]): string {
   return `CANDIDATES:\n\n${lines.join("\n\n")}`;
 }
 
-function renderRequest(input: MatchInput): string {
+function renderRequest(input: MatchInput, ownKey?: string): string {
   return [
     "FEATURE REQUEST",
+    ...(ownKey ? [`Own key in the candidate list (never a match): ${ownKey}`] : []),
     `Title: ${input.productTitle || input.subject}`,
     `Summary: ${input.productSummary || "(none)"}`,
     "",
@@ -236,22 +232,27 @@ export interface MatchBatchResult {
   called: number;
 }
 
-export async function matchTickets(
-  workspaceId: string,
-  inputs: MatchInput[],
-  initialCandidates: MatchCandidate[],
-  hooks?: MatchHooks,
-): Promise<MatchBatchResult> {
-  const model = getMatchModel();
-  if (inputs.length === 0) {
-    return {
-      results: [],
-      model,
-      promptVersion: MATCH_PROMPT_VERSION,
-      called: 0,
-    };
-  }
+const MATCH_TOOL_CHOICE = {
+  type: "tool" as const,
+  name: "match_feature_request",
+};
+const GROUP_TOOL_CHOICE = { type: "tool" as const, name: "reconcile_group" };
 
+/** What both match phases share: model, template, catalogs, group prefix. */
+export interface MatchContext {
+  model: string;
+  templateBlock: string;
+  catalogsBlock: string;
+  /** Reconciliation prefix — known at import start, warmed early. */
+  groupPrefix: PrefixParams;
+}
+
+export const MATCH_PREFIX_KEY = "match";
+export const MATCH_GROUP_PREFIX_KEY = "match-group";
+
+/** Template + catalogs once; called at import start so the group prefix warms early. */
+export async function prepareMatch(workspaceId: string): Promise<MatchContext> {
+  const model = getMatchModel();
   const [wsRow, productLines, platforms] = await Promise.all([
     db.workspace.findUnique({
       where: { id: workspaceId },
@@ -281,6 +282,45 @@ export async function matchTickets(
     renderList("PRODUCT LINE CATALOG", productLines),
     renderList("PLATFORM CATALOG", platforms),
   ].join("\n\n");
+  return {
+    model,
+    templateBlock,
+    catalogsBlock,
+    groupPrefix: {
+      model,
+      system: MATCH_GROUP_SYSTEM_PROMPT,
+      tools: [GROUP_TOOL],
+      tool_choice: GROUP_TOOL_CHOICE,
+      shared: [templateBlock, catalogsBlock].join("\n\n"),
+    },
+  };
+}
+
+export interface MatchRunOptions {
+  hooks?: MatchHooks;
+  warmer?: PrefixWarmer;
+  ctx?: MatchContext;
+}
+
+export async function matchTickets(
+  workspaceId: string,
+  inputs: MatchInput[],
+  initialCandidates: MatchCandidate[],
+  options: MatchRunOptions = {},
+): Promise<MatchBatchResult> {
+  const { hooks } = options;
+  const model = options.ctx?.model ?? getMatchModel();
+  if (inputs.length === 0) {
+    return {
+      results: [],
+      model,
+      promptVersion: MATCH_PROMPT_VERSION,
+      called: 0,
+    };
+  }
+  const ctx = options.ctx ?? (await prepareMatch(workspaceId));
+  const { templateBlock } = ctx;
+  const warmer = options.warmer ?? new PrefixWarmer(hooks);
 
   const poolSize = aiThrottleOn() ? 1 : inputs.length;
   let called = 0;
@@ -293,35 +333,51 @@ export async function matchTickets(
   const peerKey = (u: MatchInput) => `unit:${u.key}`;
   const inputByPeerKey = new Map(inputs.map((u) => [peerKey(u), u]));
 
+  // One candidate list for the whole wave (every unit included) — the
+  // cached prefix; each call adds only its own request.
+  const peers: MatchCandidate[] = inputs.map((u) => ({
+    key: peerKey(u),
+    title: u.productTitle || u.subject,
+    body: u.productSummary || u.body,
+  }));
+  const candidates = [...anchors, ...peers];
+  const candidateKeys = new Set(candidates.map((c) => c.key));
+  const pairwiseShared = [templateBlock, renderCandidates(candidates)].join(
+    "\n\n",
+  );
+  // This prefix depends on every unit, so it can only be warmed now.
+  if (inputs.length > 1) {
+    warmer.ensure(
+      MATCH_PREFIX_KEY,
+      {
+        model,
+        system: MATCH_SYSTEM_PROMPT,
+        tools: [MATCH_TOOL],
+        tool_choice: MATCH_TOOL_CHOICE,
+        shared: pairwiseShared,
+      },
+      hooks,
+    );
+    await warmer.ready(MATCH_PREFIX_KEY);
+  }
+
   const pairwise: {
     target: string | null;
     enrichedSummary: string;
     reason: string;
   }[] = new Array(inputs.length);
   await runPool(inputs, poolSize, async (input, i) => {
-    const peers: MatchCandidate[] = inputs
-      .filter((u) => u.key !== input.key)
-      .map((u) => ({
-        key: peerKey(u),
-        title: u.productTitle || u.subject,
-        body: u.productSummary || u.body,
-      }));
-    const candidates = [...anchors, ...peers];
-    const candidateKeys = new Set(candidates.map((c) => c.key));
-    const userMessage = [
-      templateBlock,
-      renderCandidates(candidates),
-      renderRequest(input),
-    ].join("\n\n");
+    const requestBlock = renderRequest(input, peerKey(input));
+    const userMessage = `${pairwiseShared}\n\n${requestBlock}`;
     called++;
     const aiStart = performance.now();
-    const message = await getClient().messages.create({
+    const message = await getIdeasClient().messages.create({
       model,
       max_tokens: 1500,
       system: MATCH_SYSTEM_PROMPT,
       tools: [MATCH_TOOL],
-      tool_choice: { type: "tool", name: "match_feature_request" },
-      messages: [{ role: "user", content: userMessage }],
+      tool_choice: MATCH_TOOL_CHOICE,
+      messages: prefixedUserMessage(pairwiseShared, requestBlock),
     });
     const aiMs = performance.now() - aiStart;
     const toolUse = message.content.find((block) => block.type === "tool_use");
@@ -360,9 +416,13 @@ export async function matchTickets(
       tokens: anthropicUsage(message.usage),
     });
     // The ledger keeps the verdict as returned; the pipeline only acts on
-    // keys that were actually offered.
+    // keys that were actually offered — and never on the unit's own key.
     pairwise[i] = {
-      target: candidateKeys.has(verdict.matchedKey) ? verdict.matchedKey : null,
+      target:
+        candidateKeys.has(verdict.matchedKey) &&
+        verdict.matchedKey !== peerKey(input)
+          ? verdict.matchedKey
+          : null,
       enrichedSummary: verdict.enrichedSummary,
       reason: verdict.reason,
     };
@@ -424,14 +484,17 @@ export async function matchTickets(
     model,
     promptVersion: MATCH_PROMPT_VERSION,
   });
+  const groupShared = ctx.groupPrefix.shared;
+  if (groupJobs.length > 1) {
+    warmer.ensure(MATCH_GROUP_PREFIX_KEY, ctx.groupPrefix, hooks);
+    await warmer.ready(MATCH_GROUP_PREFIX_KEY);
+  }
   await runPool(groupJobs, poolSize, async (job) => {
     const anchor = anchorKeys.has(job.terminal)
       ? (anchors.find((a) => a.key === job.terminal) ?? null)
       : null;
     const memberInputs = job.members.map((i) => inputs[i]);
-    const userMessage = [
-      templateBlock,
-      catalogsBlock,
+    const groupBlock = [
       anchor
         ? `EXISTING IDEA (the group merges into it):\n[${anchor.key}] ${anchor.title}\n${clip(anchor.body || "(no description)", 1500)}`
         : "EXISTING IDEA: none — the group becomes a new idea.",
@@ -439,15 +502,16 @@ export async function matchTickets(
         .map((u) => [`[${peerKey(u)}]`, renderRequest(u)].join("\n"))
         .join("\n\n")}`,
     ].join("\n\n");
+    const userMessage = `${groupShared}\n\n${groupBlock}`;
     called++;
     const aiStart = performance.now();
-    const message = await getClient().messages.create({
+    const message = await getIdeasClient().messages.create({
       model,
       max_tokens: 3000,
       system: MATCH_GROUP_SYSTEM_PROMPT,
       tools: [GROUP_TOOL],
-      tool_choice: { type: "tool", name: "reconcile_group" },
-      messages: [{ role: "user", content: userMessage }],
+      tool_choice: GROUP_TOOL_CHOICE,
+      messages: prefixedUserMessage(groupShared, groupBlock),
     });
     const aiMs = performance.now() - aiStart;
     const toolUse = message.content.find((block) => block.type === "tool_use");

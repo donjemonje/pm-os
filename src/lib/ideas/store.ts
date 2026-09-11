@@ -1,13 +1,19 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
-import { catalogTickets } from "./catalog";
+import { PrefixWarmer } from "./ai-cache";
+import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { fetchJiraLiveSources } from "./jira-sync";
-import { matchTickets } from "./match";
+import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
-import { splitTickets, type SplitRequest } from "./split";
+import {
+  SPLIT_PREFIX_KEY,
+  splitTickets,
+  prepareSplit,
+  type SplitRequest,
+} from "./split";
 import { ImportTrace, markAbandonedImports } from "./trace";
 import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
 
@@ -303,6 +309,24 @@ async function runImport(
       : "Jira not connected",
   });
 
+  // Stage contexts (catalogs + template) are loaded once, and the prompt
+  // prefixes known now are warmed in the provider's cache while the parse
+  // runs — by the time classify fires they are readable. Split and group
+  // prefixes are only worth pre-warming for imports big enough to need them.
+  trace.begin("prepare", "db");
+  const [catalogCtx, splitCtx, matchCtx] = await Promise.all([
+    prepareCatalog(workspaceId),
+    prepareSplit(workspaceId),
+    prepareMatch(workspaceId),
+  ]);
+  const warmer = new PrefixWarmer(trace.side("prewarm", "ai"));
+  if (fresh.length > 1) warmer.ensure(CATALOG_PREFIX_KEY, catalogCtx.prefix);
+  if (fresh.length >= 10) {
+    warmer.ensure(SPLIT_PREFIX_KEY, splitCtx.prefix);
+    warmer.ensure(MATCH_GROUP_PREFIX_KEY, matchCtx.groupPrefix);
+  }
+  trace.end();
+
   // LLM judgments happen before any DB writes — the ledger records each
   // verdict as it lands, so a failure here loses nothing.
   // AI field parsing (Gemini, one call): clean customer names + all-customers
@@ -370,7 +394,7 @@ async function runImport(
         insights,
       }),
     ),
-    trace,
+    { hooks: trace, warmer, ctx: catalogCtx },
   );
   const kindCounts = new Map<string, number>();
   for (const v of catalog.results)
@@ -405,7 +429,7 @@ async function runImport(
         insights: input?.insights,
       };
     }),
-    trace,
+    { hooks: trace, warmer, ctx: splitCtx },
   );
   trace.end({
     model: split.model,
@@ -496,10 +520,17 @@ async function runImport(
     });
   trace.begin("match", "ai", matchInputs.length);
   const match = await matchTickets(workspaceId, matchInputs, matchCandidates, {
-    call: (s) => trace.call(s),
-    groupPhase: (groups, meta) => {
-      trace.end({ ...meta, note: `${matchCandidates.length} existing candidates` });
-      trace.begin("match-group", "ai", groups);
+    warmer,
+    ctx: matchCtx,
+    hooks: {
+      call: (s) => trace.call(s),
+      groupPhase: (groups, meta) => {
+        trace.end({
+          ...meta,
+          note: `${matchCandidates.length} existing candidates`,
+        });
+        trace.begin("match-group", "ai", groups);
+      },
     },
   });
   trace.end({
