@@ -1,0 +1,15 @@
+# Overrides for the App Hosting backend whose environment name is "eu"
+# (Firebase console → App Hosting → backend → Settings → Environment name).
+# Merged over apphosting.yaml by variable name; everything else is inherited.
+# Lets the EU backend (europe-west4) run against the EU database while the
+# US backend keeps serving app.pm-os.io until cutover.
+env:
+  - variable: INSTANCE_CONNECTION_NAME
+    value: pm-os-9d992:europe-west4:pmos-db-eu
+    availability:
+      - RUNTIME
+
+  - variable: VERTEX_LOCATION
+    value: eu
+    availability:
+      - RUNTIME
