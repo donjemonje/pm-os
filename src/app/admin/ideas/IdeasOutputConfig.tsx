@@ -14,6 +14,7 @@ import {
   CSV_PARAMS,
   type CsvParam,
 } from "@/lib/ideas/csv-mapping";
+import { ImportRuns } from "./ImportRuns";
 
 export interface PromptView {
   id: string;
@@ -190,6 +191,9 @@ export function IdeasOutputConfig({
           ))}
         </select>
       </label>
+
+      {/* Import run history — health and cost of the pipeline for this org */}
+      <ImportRuns orgId={orgId} />
 
       {/* Jira target */}
       {issueTypes[orgId] !== null && (
