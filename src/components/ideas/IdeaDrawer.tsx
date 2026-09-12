@@ -13,6 +13,7 @@ import {
 import {
   badgeOf,
   needsApproval,
+  SCORING_ENABLED,
   scoreOf,
   votesLabel,
   CATALOG_KIND_LABELS,
@@ -123,18 +124,22 @@ export function IdeaDrawer({
     viewingSource || !idea || !score
       ? []
       : [
-          {
-            label: "Score",
-            value: score.value != null ? String(score.value) : "—",
-          },
-          {
-            label: "PM-OS",
-            value: idea.pmScore != null ? String(idea.pmScore) : "—",
-          },
-          {
-            label: "Manual",
-            value: idea.manual != null ? String(idea.manual) : "—",
-          },
+          ...(SCORING_ENABLED
+            ? [
+                {
+                  label: "Score",
+                  value: score.value != null ? String(score.value) : "—",
+                },
+                {
+                  label: "PM-OS",
+                  value: idea.pmScore != null ? String(idea.pmScore) : "—",
+                },
+                {
+                  label: "Manual",
+                  value: idea.manual != null ? String(idea.manual) : "—",
+                },
+              ]
+            : []),
           { label: "Votes", value: votes ?? "—" },
         ];
 
@@ -402,7 +407,7 @@ export function IdeaDrawer({
               ))}
             </div>
           )}
-          {!viewingSource && score && (
+          {SCORING_ENABLED && !viewingSource && score && (
             <span className="text-[11px] text-[#9aa8be]">{score.src}</span>
           )}
         </div>
@@ -498,6 +503,7 @@ export function IdeaDrawer({
             </>
           ) : editMode ? (
             <>
+              {SCORING_ENABLED && (
               <div className="flex w-[140px] flex-col gap-1.5">
                 <span className={MONO_LABEL}>Manual score</span>
                 <input
@@ -511,6 +517,7 @@ export function IdeaDrawer({
                   Overrides the displayed score
                 </span>
               </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
                 <textarea

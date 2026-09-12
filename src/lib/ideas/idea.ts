@@ -3,15 +3,39 @@ import type { CatalogKind, Idea } from "./types";
 // Idea construction happens server-side in lib/ideas/store.ts — the helpers
 // here are pure client-side presentation logic.
 
+/**
+ * Scoring is parked until the scoring milestone: nothing computes pmScore
+ * yet, so the column, its popover, the drawer's score row and the manual
+ * override stay hidden and lists order by votes. Flip to true to bring them
+ * back — the data model and API never dropped the fields.
+ */
+export const SCORING_ENABLED = false;
+
 export function scoreOf(i: Idea): { value: number | null; src: string } {
   if (i.manual != null)
     return { value: i.manual, src: "Manual score · overrides PM-OS score" };
   if (i.pmScore != null)
     return { value: i.pmScore, src: "PM-OS score · computed this import" };
-  return {
-    value: null,
-    src: "No score yet — scoring runs in a later milestone",
-  };
+  return { value: null, src: "Not scored" };
+}
+
+/**
+ * List order: by score when scoring is on (unscored last); otherwise by
+ * evidence — votes gained this import first, then total votes.
+ */
+export function compareIdeas(a: Idea, b: Idea): number {
+  if (SCORING_ENABLED) {
+    const av = scoreOf(a).value;
+    const bv = scoreOf(b).value;
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return bv - av;
+  }
+  if (b.newVotes !== a.newVotes) return b.newVotes - a.newVotes;
+  return (
+    b.existingVotes + b.newVotes - (a.existingVotes + a.newVotes)
+  );
 }
 
 export function votesLabel(i: Idea): string | null {

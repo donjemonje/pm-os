@@ -4,7 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Search, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
-import { badgeOf, needsApproval, scoreOf, STATUS_CHIP_TO_BATCH } from "@/lib/ideas/idea";
+import {
+  badgeOf,
+  compareIdeas,
+  needsApproval,
+  SCORING_ENABLED,
+  scoreOf,
+  STATUS_CHIP_TO_BATCH,
+} from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
@@ -444,14 +451,7 @@ export function IdeasView({
     return true;
   };
 
-  const visible = ideas.filter(matches).sort((a, b) => {
-    const av = scoreOf(a).value;
-    const bv = scoreOf(b).value;
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    return bv - av;
-  });
+  const visible = ideas.filter(matches).sort(compareIdeas);
 
   const drawerIdea = drawerId ? ideas.find((i) => i.id === drawerId) : undefined;
 
@@ -898,7 +898,7 @@ export function IdeasView({
           <div className="flex flex-col gap-2">
             {visible.map((idea) => {
               const badge = badgeOf(idea);
-              const score = scoreOf(idea);
+              const score = SCORING_ENABLED ? scoreOf(idea) : null;
               const hovered = hoverId === idea.id;
               const showMark = needsApproval(idea) && (idea.decision === "reviewed" || hovered);
               return (
@@ -988,7 +988,8 @@ export function IdeasView({
                     )}
                   </div>
 
-                  {/* Score */}
+                  {/* Score — hidden until the scoring milestone */}
+                  {score && (
                   <div
                     className="relative flex w-[52px] shrink-0 flex-col items-center gap-px"
                     onMouseEnter={() => setPopId(idea.id)}
@@ -1020,6 +1021,7 @@ export function IdeasView({
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Votes — the "+N" jumps to the Merge page with this idea selected */}
                   <button

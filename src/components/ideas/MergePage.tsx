@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, X } from "lucide-react";
 import {
   CATALOG_KIND_LABELS,
-  scoreOf,
+  compareIdeas,
   STATUS_CHIP_TO_BATCH,
 } from "@/lib/ideas/idea";
 import type {
@@ -126,9 +126,7 @@ export function MergePage({
     .map((i) => ({ idea: i, count: srcCount(i) }))
     .sort((a, b) => {
       if (b.count !== a.count) return b.count - a.count;
-      const av = scoreOf(a.idea).value ?? -1;
-      const bv = scoreOf(b.idea).value ?? -1;
-      return bv - av;
+      return compareIdeas(a.idea, b.idea);
     });
 
   const selId = edit ? edit.ideaId : selectedFinalId;
