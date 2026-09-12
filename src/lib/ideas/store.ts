@@ -15,7 +15,13 @@ import {
   type SplitRequest,
 } from "./split";
 import { ImportTrace, markAbandonedImports } from "./trace";
-import type { CatalogKind, Idea, JiraSource, ZendeskTicket } from "./types";
+import type {
+  CatalogKind,
+  Idea,
+  JiraSource,
+  MatchNote,
+  ZendeskTicket,
+} from "./types";
 
 /**
  * Postgres-backed state for the Ideas feature. The DB rows are shaped back
@@ -129,6 +135,8 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
     dealRelated: row.dealRelated ?? undefined,
     customerType: row.customerType ?? undefined,
     url: row.url ?? undefined,
+    raw: (row.raw as Record<string, string>) ?? undefined,
+    matchNotes: (row.matchNotes as unknown as MatchNote[]) ?? [],
     catalog: row.catalogKind
       ? {
           kind: row.catalogKind as CatalogKind,
@@ -719,6 +727,7 @@ async function runImport(
     else if (verdict?.kind === "question") questions++;
     else if (verdict?.kind === "fr") {
       frs++;
+      const notes: MatchNote[] = [];
       for (const unit of unitsByTicket.get(input.key) ?? []) {
         const m = matchByKey.get(unit.unitKey);
         // The matched key can be an idea id, "jira:<KEY>" (an issue that only
@@ -756,6 +765,12 @@ async function runImport(
           const alreadySourced = await db.ideaSource.findFirst({
             where: { ideaId: target.id, kind: "zendesk", ticketId: ticket.id },
             select: { id: true },
+          });
+          notes.push({
+            unit: unit.unitKey,
+            ideaId: target.id,
+            merged: true,
+            reason: m?.reason ?? "",
           });
           if (alreadySourced) continue;
           // Matched FR unit: evidence on the existing idea, never a new one.
@@ -845,6 +860,18 @@ async function runImport(
         });
         createdByMatchKey.set(`new:${unit.unitKey}`, created.id);
         createdThisBatch.add(created.id);
+        notes.push({
+          unit: unit.unitKey,
+          ideaId: created.id,
+          merged: false,
+          reason: m?.reason ?? "",
+        });
+      }
+      if (notes.length > 0) {
+        await db.zendeskTicketRaw.update({
+          where: { id: ticket.id },
+          data: { matchNotes: notes as unknown as Prisma.InputJsonValue },
+        });
       }
     }
   }

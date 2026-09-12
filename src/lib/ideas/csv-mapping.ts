@@ -26,6 +26,9 @@ export const CSV_PARAMS = [
   "dealRelated",
   "customerType",
   "url",
+  "requestType",
+  "priority",
+  "severity",
 ] as const;
 export type CsvParam = (typeof CSV_PARAMS)[number];
 
@@ -67,6 +70,9 @@ export const CSV_PARAM_META: Record<CsvParam, CsvParamMeta> = {
   dealRelated: { label: "Deal related", treatment: "Stored on the ticket (scoring input later)." },
   customerType: { label: "Customer type", treatment: "Stored on the ticket (scoring input later)." },
   url: { label: "Ticket URL", treatment: "Link to the source ticket; used for Jira export links." },
+  requestType: { label: "Request type", treatment: "Shown on the ticket view (e.g. Feature Request / Enhancement); not sent to PMOS AI." },
+  priority: { label: "Priority", treatment: "Shown on the ticket view; not sent to PMOS AI." },
+  severity: { label: "Severity", treatment: "Shown on the ticket view; not sent to PMOS AI." },
 };
 
 /** Works for the historic seed corpus AND Kela's anonymized export unchanged. */
@@ -87,6 +93,9 @@ export const DEFAULT_CSV_MAPPING: CsvMapping = {
   dealRelated: ["deal related", "deal_related"],
   customerType: ["customer type", "customer_type"],
   url: ["url", "ticket url", "link"],
+  requestType: ["feature request/ feature enhancement", "feature request / feature enhancement", "request type", "type of request"],
+  priority: ["priority"],
+  severity: ["severity"],
 };
 
 function toAliasList(v: unknown): string[] | null {
@@ -125,6 +134,10 @@ export interface MappedTicketFields {
   url?: string;
   tags: string[];
   created?: string;
+  /** Display-only (ticket view); never persisted as columns, always read from raw. */
+  requestType?: string;
+  priority?: string;
+  severity?: string;
 }
 
 /**
@@ -164,5 +177,8 @@ export function extractMappedFields(
     url: get("url") || undefined,
     tags: get("tags").split(/[\s,;]+/).filter(Boolean),
     created: get("created") || undefined,
+    requestType: get("requestType") || undefined,
+    priority: get("priority") || undefined,
+    severity: get("severity") || undefined,
   };
 }

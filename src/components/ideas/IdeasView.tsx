@@ -172,6 +172,7 @@ export function IdeasView({
   };
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
+  const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
   const jiraByKey = useMemo(() => new Map(jiraSources.map((s) => [s.key, s])), [jiraSources]);
   // Catalog names first, in the admin's manual order (their casing also wins
   // over idea-derived duplicates); names only found on ideas trail after,
@@ -1129,6 +1130,8 @@ export function IdeasView({
           initialSource={drawerSrc}
           ticketsByKey={ticketsByKey}
           jiraByKey={jiraByKey}
+          csvMapping={csvMapping}
+          ideasById={ideasById}
           customerCatalog={customerCatalog}
           onCustomerAction={
             drawerIdea

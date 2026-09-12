@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   ArrowUpRight,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -19,6 +20,11 @@ import {
   CATALOG_KIND_LABELS,
 } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
+import {
+  DEFAULT_CSV_MAPPING,
+  extractMappedFields,
+  type CsvMapping,
+} from "@/lib/ideas/csv-mapping";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 
 type SourceSel = { kind: "zen" | "jira"; key: string };
@@ -30,6 +36,10 @@ interface IdeaDrawerProps {
   initialSource?: SourceSel | null;
   ticketsByKey: Map<string, ZendeskTicket>;
   jiraByKey: Map<string, JiraSource>;
+  /** The org's CSV mapping — the ticket view reads display-only fields from the raw row with it. */
+  csvMapping?: CsvMapping;
+  /** Every idea by id — the ticket view links the ideas it produced. */
+  ideasById?: Map<string, Idea>;
   /** Customer catalog names — chips for names outside it render as suggestions. */
   customerCatalog?: string[];
   /** Approve adds the suggested customer to the catalog; dismiss hides it on this idea (reversible); undismiss restores it. */
@@ -60,6 +70,8 @@ export function IdeaDrawer({
   initialSource,
   ticketsByKey,
   jiraByKey,
+  csvMapping = DEFAULT_CSV_MAPPING,
+  ideasById,
   customerCatalog = [],
   onCustomerAction,
   onClose,
@@ -224,6 +236,18 @@ export function IdeaDrawer({
                   style={ZEN_TAG}
                 >
                   Zendesk ticket <span className="font-mono">{ticket.id}</span>
+                  {ticket.url && (
+                    <a
+                      href={ticket.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open in Zendesk"
+                      className="ml-0.5 flex text-[#7a8aa3] hover:text-foreground"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink size={11} />
+                    </a>
+                  )}
                 </span>
               ) : jiraSrc ? (
                 <span
@@ -415,66 +439,12 @@ export function IdeaDrawer({
         {/* Body */}
         <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-4">
           {ticket ? (
-            <>
-              <div>
-                <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
-                <div className="text-[13.5px] leading-relaxed text-foreground">
-                  {ticket.body}
-                </div>
-              </div>
-              <div className="flex flex-col gap-1 text-xs text-muted">
-                {ticket.affectsAllCustomers && (
-                  <span className="font-medium text-[#4a6fd6]">
-                    Affects: All customers
-                  </span>
-                )}
-                {ticket.catalog && (
-                  <span>
-                    Catalog: {CATALOG_KIND_LABELS[ticket.catalog.kind]}
-                    {ticket.catalog.reason ? ` — ${ticket.catalog.reason}` : ""}
-                  </span>
-                )}
-                {ticket.requester && <span>Requester: {ticket.requester}</span>}
-                {(ticket.affectedCustomers ?? []).length > 0 && (
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    Affected customers:
-                    {(ticket.affectedCustomers ?? []).map((c) => {
-                      const dismissed = (ticket.dismissedCustomers ?? []).some(
-                        (k) => k.toLowerCase() === c.toLowerCase(),
-                      );
-                      const suggested = !customerCatalog.some(
-                        (k) => k.toLowerCase() === c.toLowerCase(),
-                      );
-                      return (
-                        <span
-                          key={`ticket-customer-${c}`}
-                          title={
-                            dismissed
-                              ? "Dismissed on the idea — restorable there"
-                              : suggested
-                                ? "Suggested customer — review on the idea"
-                                : undefined
-                          }
-                          className={
-                            dismissed
-                              ? "rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496] line-through"
-                              : suggested
-                                ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
-                          }
-                        >
-                          {c}
-                        </span>
-                      );
-                    })}
-                  </span>
-                )}
-                {ticket.createdAt && <span>Created: {ticket.createdAt}</span>}
-                {ticket.tags.length > 0 && (
-                  <span>Tags: {ticket.tags.join(", ")}</span>
-                )}
-              </div>
-            </>
+            <TicketView
+              ticket={ticket}
+              csvMapping={csvMapping}
+              ideasById={ideasById}
+              customerCatalog={customerCatalog}
+            />
           ) : jiraSrc ? (
             <>
               <div>
@@ -702,6 +672,252 @@ export function IdeaDrawer({
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+/* ───────────────────────── Zendesk ticket view ───────────────────────── */
+
+const FIELD_LABEL =
+  "font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[#9aa8be]";
+
+function formatDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function RawChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-[#dde5ef] bg-[#f6f8fb] px-2 py-0.5 text-[11.5px] text-[#3f506b]"
+      title={label}
+    >
+      <span className="text-[#9aa8be]">{label}</span>
+      <span className="font-medium">{value}</span>
+    </span>
+  );
+}
+
+/**
+ * The ticket as evidence, then PMOS AI's reading of it, then every raw
+ * column verbatim (collapsed) — so nothing an export carries is ever lost,
+ * and what the reporter wrote stays visibly apart from what the model
+ * inferred.
+ */
+function TicketView({
+  ticket,
+  csvMapping,
+  ideasById,
+  customerCatalog,
+}: {
+  ticket: ZendeskTicket;
+  csvMapping: CsvMapping;
+  ideasById?: Map<string, Idea>;
+  customerCatalog: string[];
+}) {
+  const [allOpen, setAllOpen] = useState(false);
+  const raw = ticket.raw ?? {};
+  const mapped = extractMappedFields(raw, csvMapping);
+  const created = formatDate(ticket.createdAt);
+  const chips: { label: string; value: string }[] = [
+    ...(ticket.module ? [{ label: "Module (hint)", value: ticket.module }] : []),
+    ...(mapped.requestType ? [{ label: "Type", value: mapped.requestType }] : []),
+    ...(mapped.priority ? [{ label: "Priority", value: mapped.priority }] : []),
+    ...(mapped.severity ? [{ label: "Severity", value: mapped.severity }] : []),
+    ...(ticket.dealRelated ? [{ label: "Deal related", value: ticket.dealRelated }] : []),
+  ];
+  const verbatimAffected = mapped.customers.filter(
+    (c) => c.toLowerCase() !== (ticket.customerName ?? "").toLowerCase(),
+  );
+  const notes = ticket.matchNotes ?? [];
+  const rawEntries = Object.entries(raw);
+
+  return (
+    <>
+      {/* ── Raw ticket: what the reporter wrote ── */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
+          {ticket.customerName ? (
+            <span className="font-semibold text-foreground">
+              {ticket.customerName}
+              {ticket.customerType ? (
+                <span className="font-normal text-muted"> · {ticket.customerType}</span>
+              ) : null}
+            </span>
+          ) : (
+            <span className="text-muted">No customer named</span>
+          )}
+          <span className="text-muted">
+            {ticket.requester ? `Reported by ${ticket.requester}` : "Reporter unknown"}
+            {created ? ` · ${created}` : ""}
+          </span>
+        </div>
+        {chips.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {chips.map((c) => (
+              <RawChip key={c.label} label={c.label} value={c.value} />
+            ))}
+          </div>
+        )}
+        <div>
+          <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
+          <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-foreground">
+            {ticket.body}
+          </div>
+        </div>
+        {ticket.whyBuild && (
+          <div>
+            <div className={`${MONO_LABEL} mb-1.5`}>Why should we build this?</div>
+            <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
+              {ticket.whyBuild}
+            </div>
+          </div>
+        )}
+        {ticket.insights && (
+          <div>
+            <div className={`${MONO_LABEL} mb-1.5`}>What insights do we have?</div>
+            <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
+              {ticket.insights}
+            </div>
+          </div>
+        )}
+        {verbatimAffected.length > 0 && (
+          <div className="text-xs text-muted">
+            <span className={FIELD_LABEL}>Affected customers (as written)</span>{" "}
+            {verbatimAffected.join(", ")}
+          </div>
+        )}
+        {ticket.tags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {ticket.tags.map((t) => (
+              <span
+                key={t}
+                className="rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] text-[#4a5b74]"
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── PMOS AI's reading — interpretation, kept apart from the evidence ── */}
+      <div className="flex flex-col gap-2.5 rounded-lg border border-[#e3ebf7] bg-[#f8fafd] px-4 py-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={MONO_LABEL}>PMOS AI reading</span>
+          <span className="text-[11px] text-[#9aa8be]">interpretation, not ticket data</span>
+        </div>
+        {ticket.catalog ? (
+          <div className="text-[13px] leading-relaxed">
+            <span className="font-semibold">{CATALOG_KIND_LABELS[ticket.catalog.kind]}</span>
+            {ticket.catalog.reason ? (
+              <span className="text-muted"> — {ticket.catalog.reason}</span>
+            ) : null}
+          </div>
+        ) : (
+          <div className="text-[13px] text-muted">Not classified yet.</div>
+        )}
+        {ticket.affectsAllCustomers && (
+          <div className="text-xs font-medium text-[#4a6fd6]">Affects all customers</div>
+        )}
+        {(ticket.affectedCustomers ?? []).length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+            <span className={FIELD_LABEL}>Customers</span>
+            {(ticket.affectedCustomers ?? []).map((c) => {
+              const dismissed = (ticket.dismissedCustomers ?? []).some(
+                (k) => k.toLowerCase() === c.toLowerCase(),
+              );
+              const suggested = !customerCatalog.some(
+                (k) => k.toLowerCase() === c.toLowerCase(),
+              );
+              return (
+                <span
+                  key={`ticket-customer-${c}`}
+                  title={
+                    dismissed
+                      ? "Dismissed on the idea — restorable there"
+                      : suggested
+                        ? "Suggested customer — review on the idea"
+                        : undefined
+                  }
+                  className={
+                    dismissed
+                      ? "rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496] line-through"
+                      : suggested
+                        ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                        : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                  }
+                >
+                  {c}
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {notes.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            {notes.length > 1 && (
+              <div className="text-xs text-muted">Split into {notes.length} ideas</div>
+            )}
+            {notes.map((n) => {
+              const idea = ideasById?.get(n.ideaId);
+              return (
+                <div key={n.unit} className="text-[13px] leading-relaxed">
+                  <span className="text-muted">{n.merged ? "Merged into" : "New idea"}</span>{" "}
+                  {idea ? (
+                    <span className="font-medium">{idea.title}</span>
+                  ) : n.merged ? (
+                    <span className="text-muted">(idea no longer exists)</span>
+                  ) : null}
+                  {n.reason ? <span className="text-muted"> — {n.reason}</span> : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* ── All fields: the raw row verbatim — nothing dropped ── */}
+      {rawEntries.length > 0 && (
+        <div className="border-t border-[#e8eef7] pt-3">
+          <button
+            type="button"
+            onClick={() => setAllOpen((v) => !v)}
+            className="flex items-center gap-1.5 text-xs font-medium text-[#7a8aa3] hover:text-foreground"
+            aria-expanded={allOpen}
+          >
+            {allOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            All fields ({rawEntries.length})
+          </button>
+          {allOpen && (
+            <dl className="mt-2 grid grid-cols-[minmax(120px,max-content)_1fr] gap-x-4 gap-y-1 text-xs">
+              {rawEntries.map(([k, v]) => {
+                const empty = !v || !v.trim();
+                return (
+                  <div key={k} className="contents">
+                    <dt className="truncate font-mono text-[11px] text-[#9aa8be]" title={k}>
+                      {k}
+                    </dt>
+                    <dd
+                      className={`m-0 whitespace-pre-wrap break-words ${
+                        empty ? "text-[#c3ccd8]" : "text-foreground"
+                      }`}
+                    >
+                      {empty ? "—" : v}
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+          )}
+        </div>
+      )}
     </>
   );
 }

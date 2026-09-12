@@ -45,6 +45,18 @@ export interface ZendeskTicket {
   catalog?: CatalogVerdict | null;
   /** The CSV row exactly as received; sent on import, persisted in the raw store. */
   raw?: Record<string, string>;
+  /** What the match stage decided per FR unit of this ticket. */
+  matchNotes?: MatchNote[];
+}
+
+/** One FR unit's outcome in the match stage, kept on the ticket for the PM. */
+export interface MatchNote {
+  /** "<ticket>" or "<ticket>#n" for a split sub-idea. */
+  unit: string;
+  /** The idea this unit ended up in (created or merged into). */
+  ideaId: string;
+  merged: boolean;
+  reason: string;
 }
 
 /** A Jira idea pulled at its live state on import. */

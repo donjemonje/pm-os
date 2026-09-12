@@ -342,6 +342,9 @@ model ZendeskTicketRaw {
   /// Direct link to the source ticket; preferred over the URL template.
   url             String?
   sourceCreatedAt String?
+  /// What the match stage decided per FR unit of this ticket:
+  /// [{ unit, ideaId, merged, reason }] — the PM-facing "why" next to the idea link.
+  matchNotes      Json       @default("[]")
   raw             Json
   batchId         String?
   batch           IdeaBatch? @relation(fields: [batchId], references: [id])
