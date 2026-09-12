@@ -94,7 +94,7 @@ export function IdeasView({
 
   const [page, setPage] = useState<"final" | "merge">("final");
   const [edit, setEdit] = useState<MergeEdit | null>(null);
-  const [selectedFinalId, setSelectedFinalId] = useState<string | "auto" | null>("auto");
+  const [selectedFinalId, setSelectedFinalId] = useState<string | null>(null);
 
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [popId, setPopId] = useState<string | null>(null);
@@ -280,7 +280,7 @@ export function IdeasView({
     setDrawerSrc(null);
     setPage("final");
     setEdit(null);
-    setSelectedFinalId("auto");
+    setSelectedFinalId(null);
     setNote("");
     setError("");
   };
@@ -335,18 +335,16 @@ export function IdeasView({
   };
 
   // ——— Merge page ———
-  const srcCount = (i: Idea) => i.zen.length + i.jira.length;
 
+  // Opening the merge page selects nothing unless a specific idea was asked
+  // for — the PM picks where to start.
   const gotoMerge = (id: string | null) => {
-    const withSources = [...ideas]
-      .filter((i) => srcCount(i) > 0)
-      .sort((a, b) => srcCount(b) - srcCount(a));
-    const target = (id != null ? ideas.find((i) => i.id === id) : null) ?? withSources[0] ?? null;
+    const target = id != null ? (ideas.find((i) => i.id === id) ?? null) : null;
     setPage("merge");
     setDrawerId(null);
     setDrawerSrc(null);
     setEdit(target ? { ideaId: target.id, zen: [...target.zen], jira: [...target.jira] } : null);
-    setSelectedFinalId(target ? target.id : "auto");
+    setSelectedFinalId(target ? target.id : null);
   };
 
   const startEdit = (id: string) => {

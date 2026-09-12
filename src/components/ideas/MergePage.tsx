@@ -28,7 +28,7 @@ interface MergePageProps {
   /** Shared Status filter from the toolbar (chip labels; empty = all except Unchanged). */
   statusFilter: string[];
   edit: MergeEdit | null;
-  selectedFinalId: string | "auto" | null;
+  selectedFinalId: string | null;
   onStartEdit: (id: string) => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
@@ -131,11 +131,7 @@ export function MergePage({
       return bv - av;
     });
 
-  const selId = edit
-    ? edit.ideaId
-    : selectedFinalId === "auto"
-      ? (finals[0]?.idea.id ?? null)
-      : selectedFinalId;
+  const selId = edit ? edit.ideaId : selectedFinalId;
 
   // Clicking a source's N× badge highlights every idea it backs — the same
   // green as merge-edit, view-only: no checkboxes, no save/discard.
