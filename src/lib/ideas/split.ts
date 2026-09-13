@@ -13,17 +13,17 @@ import {
 
 /**
  * Split stage: for the few tickets the catalog stage flags as holding more
- * than one distinct user problem (request_count > 1), write each problem as
- * its own product-voiced idea. Runs ONLY on flagged FR tickets — the 95%
+ * than one separately shippable capability (request_count > 1), write each
+ * capability as its own product-voiced idea. Runs ONLY on flagged FR tickets — the 95%
  * single-idea case never pays for it. Returning a single request is the
  * escape hatch for an over-flagged ticket (the catalog rewrite is kept).
  * Every verdict is appended to the ledger like the other stages.
  */
 
-export const SPLIT_PROMPT_VERSION = "split-v3";
+export const SPLIT_PROMPT_VERSION = "split-v4";
 
 /** Hard bound on sub-ideas per ticket, enforced in schema AND code. */
-export const MAX_SPLITS = 4;
+export const MAX_SPLITS = 6;
 
 /** Bump IDEAS_SPLIT_MODEL in env to change; recorded on every ledger row. */
 function getSplitModel(): string {
@@ -32,9 +32,10 @@ function getSplitModel(): string {
 
 export const SPLIT_SYSTEM_PROMPT = `You break one customer-support ticket into its distinct product ideas.
 
-An earlier stage judged that this ticket contains more than one distinct user problem. Your job is to write each problem as its own idea. Rules:
+An earlier stage judged that this ticket contains more than one capability. Your job is to write each capability as its own idea. Rules:
 
-- Split on distinct user PROBLEMS only. Alternative solutions, implementation details, or extra context for ONE problem are one idea, not several. If, reading closely, the ticket really contains a single problem, return exactly one request — that is a valid and welcome answer.
+- Split on capabilities a product manager would ship and size SEPARATELY — things that would become separate backlog items even when they serve one goal (e.g. "scan TLS certificates" and "scan email security settings" are two). Alternative solutions, implementation details, or extra context for ONE capability are one idea, not several. Each idea's text covers only its own capability — never restate a sibling's ask, and never claim a precedent or scope the ticket does not state. If, reading closely, the ticket really contains a single capability, return exactly one request — that is a valid and welcome answer.
+- A request for the product team to analyze, research, compare or decide something is context for the capabilities, not a capability of its own — never make it an idea.
 - Never invent problems the ticket does not raise, and never split beyond ${MAX_SPLITS}.
 - Everything in the ticket was written or relayed by an organization representative — treat all of it as that person's interpretation of customer interactions, one grade of information, and evaluate what each underlying need actually is.
 

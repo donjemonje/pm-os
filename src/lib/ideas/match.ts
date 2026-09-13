@@ -41,7 +41,7 @@ export interface MatchHooks extends StageHooks {
  * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v6";
+export const MATCH_PROMPT_VERSION = "match-v7";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 function getMatchModel(): string {
@@ -68,7 +68,7 @@ export const MATCH_GROUP_SYSTEM_PROMPT = `You reconcile a group of support-ticke
 
 You are given the group's requests (each with a key, product-voiced title and summary, and the original ticket text) and, when the group merges into an existing idea, that idea's current title and description. Your job:
 - Confirm which requests truly share ONE underlying capability and need. If a request does not belong (a related-but-different capability, a complement, a prerequisite), split it out into its own group. Requests that were chained together transitively may not all belong together — judge every pair on the same capability, not on topic proximity.
-- For every resulting group, write the merged idea: product_title (the what, not the how — no implementation baked in) and product_summary in markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's omission rules. Writing rules:
+- For every resulting group, write the merged idea: product_title (the what, not the how — no implementation baked in) and product_summary in markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's omission rules. The text covers only this group's capability — never fold in asks that belong to other requests of the same tickets (a sibling sub-idea stays its own idea), and never claim a precedent or scope the tickets do not state. Writing rules:
 ${IDEA_WRITING_RULES}
   When the group merges into an existing idea, product_summary is that idea's description sharpened with everything the group adds (it replaces the description and must stand alone).
 - product_lines: the group's product line(s) from the catalog; ["Other"] when none fits. platforms: only when the requests state or clearly imply them; empty when the platform catalog is empty.

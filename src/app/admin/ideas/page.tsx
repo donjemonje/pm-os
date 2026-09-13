@@ -57,7 +57,7 @@ export default async function AdminIdeasPage() {
           {
             id: "split",
             title: `Ticket breakdown (${SPLIT_PROMPT_VERSION})`,
-            note: "Runs only for tickets classification flags as holding more than one distinct user problem (request_count > 1) — each problem becomes its own idea, capped at 4, with an escape hatch back to a single idea. Sub-ideas then run through matching independently.",
+            note: "Runs only for tickets classification flags as holding more than one separately shippable capability (request_count > 1) — each capability becomes its own idea, capped at 6, with an escape hatch back to a single idea. Sub-ideas then run through matching independently.",
             text: SPLIT_SYSTEM_PROMPT,
           },
           {
