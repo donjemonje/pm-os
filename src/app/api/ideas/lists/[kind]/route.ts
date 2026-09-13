@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
 
 const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
+const CUSTOMER_SELECT = { ...ITEM_SELECT, aliases: true } as const;
 const MAX_NAME = 80;
 const MAX_DESCRIPTION = 2000;
 
@@ -71,7 +72,7 @@ const KINDS: Record<string, ListOps> = {
   },
   customers: {
     list: (workspaceId) =>
-      db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: ITEM_SELECT }),
+      db.customer.findMany({ where: { workspaceId }, orderBy: { name: "asc" }, select: CUSTOMER_SELECT }),
     nameTaken: async (workspaceId, name, excludeId) =>
       Boolean(
         await db.customer.findFirst({

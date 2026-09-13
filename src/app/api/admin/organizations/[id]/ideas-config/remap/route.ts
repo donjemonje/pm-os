@@ -3,6 +3,7 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { extractMappedFields } from "@/lib/ideas/csv-mapping";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
+import { customerKey } from "@/lib/ideas/customer-key";
 
 /**
  * Re-apply the org's current CSV mapping to every already-imported ticket,
@@ -33,10 +34,16 @@ export async function POST(
     where: { workspaceId: workspace.id },
     select: { id: true, raw: true, affectedCustomers: true },
   });
-  const existingNames = (
-    await db.customer.findMany({ where: { workspaceId: workspace.id }, select: { name: true } })
-  ).map((c) => c.name);
-  const knownLower = new Set(existingNames.map((n) => n.toLowerCase()));
+  const existingCustomers = await db.customer.findMany({
+    where: { workspaceId: workspace.id },
+    select: { name: true, aliases: true },
+  });
+  const knownLower = new Set(
+    existingCustomers.flatMap((c) => [
+      customerKey(c.name),
+      ...((c.aliases as string[]) ?? []).map(customerKey),
+    ]),
+  );
 
   const newCustomers = new Map<string, string>();
   let updated = 0;
@@ -73,8 +80,9 @@ export async function POST(
     });
     updated++;
     for (const name of (fields.customerName ?? "").split(/[,;/]+/).map((n) => n.trim())) {
-      if (name && !knownLower.has(name.toLowerCase()) && !newCustomers.has(name.toLowerCase())) {
-        newCustomers.set(name.toLowerCase(), name);
+      const key = customerKey(name);
+      if (name && key && !knownLower.has(key) && !newCustomers.has(key)) {
+        newCustomers.set(key, name);
       }
     }
   }

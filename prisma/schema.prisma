@@ -166,6 +166,9 @@ model Customer {
   description String    @default("")
   /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
   color       String?
+  /// Spellings merged into this customer (Settings → Customers → Merge);
+  /// imports map them here, and a merge can be split back out.
+  aliases     Json      @default("[]")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

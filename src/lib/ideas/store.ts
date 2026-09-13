@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { PrefixWarmer } from "./ai-cache";
 import { nextChipColor } from "./colors";
+import { buildCustomerResolver, customerKey } from "./customer-key";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
@@ -558,30 +559,32 @@ async function runImport(
   // not in the catalog yet are added to Settings → Ideas → Customers now, so
   // they canonicalize as confirmed customers rather than suggestions.
   trace.begin("customers", "db");
-  const existingNames = (
-    await db.customer.findMany({
-      where: { workspaceId },
-      select: { name: true },
-    })
-  ).map((c) => c.name);
+  const existingCustomers = await db.customer.findMany({
+    where: { workspaceId },
+    select: { name: true, aliases: true, color: true },
+  });
+  // Identity is the normalized key (case, punctuation, a leading "The", a
+  // legal suffix) plus each customer's merged aliases — so "Whitfield Group"
+  // in the column and "The Whitfield Group" in a ticket are one customer.
+  const customerCatalog = existingCustomers.map((c) => ({
+    name: c.name,
+    aliases: (c.aliases as string[]) ?? [],
+  }));
   const truthNames = new Map<string, string>();
+  const knownKeys = new Set(
+    customerCatalog.flatMap((c) => [customerKey(c.name), ...c.aliases.map(customerKey)]),
+  );
   for (const t of fresh) {
     // The column can carry a list ("A, B / C") — each entry is a customer.
     for (const name of namesOf(t.customerName)) {
       if (!name) continue;
-      const key = name.toLowerCase();
-      if (
-        !existingNames.some((c) => c.toLowerCase() === key) &&
-        !truthNames.has(key)
-      ) {
-        truthNames.set(key, name);
-      }
+      const key = customerKey(name);
+      if (!key || knownKeys.has(key) || truthNames.has(key)) continue;
+      truthNames.set(key, name);
     }
   }
   if (truthNames.size > 0) {
-    const used = (
-      await db.customer.findMany({ where: { workspaceId }, select: { color: true } })
-    ).map((c) => c.color);
+    const used = existingCustomers.map((c) => c.color);
     await db.customer.createMany({
       data: Array.from(truthNames.values()).map((name) => {
         const color = nextChipColor(used);
@@ -590,9 +593,10 @@ async function runImport(
       }),
     });
   }
-  const customerNames = [...existingNames, ...truthNames.values()];
-  const canonicalCustomer = (name: string): string =>
-    customerNames.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
+  const canonicalCustomer = buildCustomerResolver([
+    ...customerCatalog,
+    ...Array.from(truthNames.values()).map((name) => ({ name, aliases: [] })),
+  ]);
   trace.end({ note: `${truthNames.size} added to the catalog` });
 
   // Snapshots are replaced wholesale; Jira-origin ideas are upserted by key
@@ -1260,10 +1264,17 @@ export async function mutateIdeas(
       });
       const name = mutation.name.trim();
       if (idea && name) {
-        const exists = await db.customer.findFirst({
-          where: { workspaceId, name: { equals: name, mode: "insensitive" } },
-          select: { id: true },
-        });
+        const key = customerKey(name);
+        const exists = (
+          await db.customer.findMany({
+            where: { workspaceId },
+            select: { name: true, aliases: true },
+          })
+        ).some(
+          (c) =>
+            customerKey(c.name) === key ||
+            ((c.aliases as string[]) ?? []).some((a) => customerKey(a) === key),
+        );
         if (!exists) {
           const used = (
             await db.customer.findMany({ where: { workspaceId }, select: { color: true } })
