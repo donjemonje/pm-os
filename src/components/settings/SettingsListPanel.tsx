@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { CUSTOMER_CHIP_DEFAULT } from "@/lib/ideas/colors";
+import { ColorSwatch } from "./ColorSwatch";
 
 export interface SettingsListItem {
   id: string;
   name: string;
   description: string;
+  /** Palette id (lib/ideas/colors.ts); null until assigned. */
+  color?: string | null;
 }
 
 const INPUT_CLASS =
@@ -187,6 +191,15 @@ export function SettingsListPanel({
                 </>
               ) : (
                 <>
+                  <ColorSwatch
+                    color={item.color}
+                    fallback={CUSTOMER_CHIP_DEFAULT}
+                    name={item.name}
+                    canEdit={!busy}
+                    onPick={(color) =>
+                      call("PATCH", { id: item.id, name: item.name, description: item.description, color })
+                    }
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium text-foreground">{item.name}</div>
                     {item.description && (

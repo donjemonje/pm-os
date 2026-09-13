@@ -15,6 +15,11 @@ import {
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
+import {
+  chipStyle,
+  CUSTOMER_CHIP_DEFAULT,
+  PRODUCT_CHIP_DEFAULT,
+} from "@/lib/ideas/colors";
 import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
 
@@ -58,6 +63,14 @@ function formatDuration(ms: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+/** Case-insensitive lookup of a catalog color by name. */
+function colorOf(map: Record<string, string>, name: string): string | undefined {
+  if (map[name]) return map[name];
+  const key = name.toLowerCase();
+  for (const [k, v] of Object.entries(map)) if (k.toLowerCase() === key) return v;
+  return undefined;
+}
+
 function chipClass(active: boolean): string {
   return active
     ? "whitespace-nowrap rounded-full border border-transparent bg-primary px-3 py-1 text-[12.5px] font-medium text-white"
@@ -68,9 +81,14 @@ export function IdeasView({
   catalogProducts = [],
   catalogPlatforms = [],
   catalogCustomers = [],
+  productColors = {},
+  customerColors = {},
   defaultProducts = [],
   undoEnabled = false,
 }: {
+  /** Catalog chip colors (palette ids) by name — see lib/ideas/colors.ts. */
+  productColors?: Record<string, string>;
+  customerColors?: Record<string, string>;
   /** Product-line names from the settings catalog, merged into the filter options. */
   catalogProducts?: string[];
   /** Platform names from the settings catalog; the Platform filter's options. */
@@ -940,7 +958,12 @@ export function IdeasView({
                               className={
                                 offCatalog
                                   ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                  : "rounded bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-primary"
+                                  : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                              }
+                              style={
+                                offCatalog
+                                  ? undefined
+                                  : chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)
                               }
                             >
                               {p}
@@ -977,7 +1000,12 @@ export function IdeasView({
                               className={
                                 offCatalog
                                   ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                  : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                                  : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                              }
+                              style={
+                                offCatalog
+                                  ? undefined
+                                  : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)
                               }
                             >
                               {c}
@@ -1132,6 +1160,8 @@ export function IdeasView({
           jiraByKey={jiraByKey}
           csvMapping={csvMapping}
           ideasById={ideasById}
+          productColors={productColors}
+          customerColors={customerColors}
           customerCatalog={customerCatalog}
           onCustomerAction={
             drawerIdea

@@ -5,6 +5,8 @@ import { Check, ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2, X } from 
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { cn } from "@/lib/utils";
 import type { SettingsListItem } from "./SettingsListPanel";
+import { PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
+import { ColorSwatch } from "./ColorSwatch";
 
 const ENDPOINT = "/api/ideas/lists/product-lines";
 const MAX_DESCRIPTION = 2000;
@@ -205,7 +207,18 @@ export function ProductLinesPanel({
             ) : (
               <>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="font-title text-[14px] font-semibold">{item.name}</span>
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <ColorSwatch
+                      color={item.color}
+                      fallback={PRODUCT_CHIP_DEFAULT}
+                      name={item.name}
+                      canEdit={canEdit && !busy}
+                      onPick={(color) =>
+                        call("PATCH", { id: item.id, name: item.name, description: item.description, color })
+                      }
+                    />
+                    <span className="font-title text-[14px] font-semibold">{item.name}</span>
+                  </span>
                   {canEdit && (
                     <span className="flex shrink-0 items-center gap-1">
                       <button

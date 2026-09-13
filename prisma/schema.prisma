@@ -146,6 +146,8 @@ model ProductLine {
   description String    @default("")
   /// Manual sort order (Settings → Ideas → Product Lines); ties break by name.
   position    Int       @default(0)
+  /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
+  color       String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -162,6 +164,8 @@ model Customer {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
   description String    @default("")
+  /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
+  color       String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

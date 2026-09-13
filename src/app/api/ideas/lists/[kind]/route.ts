@@ -3,8 +3,9 @@ import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
 import { isPmosAdmin } from "@/lib/admin-auth";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
 
-const ITEM_SELECT = { id: true, name: true, description: true } as const;
+const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
 const MAX_NAME = 80;
 const MAX_DESCRIPTION = 2000;
 
@@ -20,8 +21,11 @@ interface ListOps {
   /** Case-insensitive duplicate check within the workspace, optionally excluding one row. */
   nameTaken(workspaceId: string, name: string, excludeId?: string): Promise<boolean>;
   exists(workspaceId: string, id: string): Promise<boolean>;
-  create(workspaceId: string, name: string, description: string): Promise<unknown>;
-  update(id: string, name: string, description: string): Promise<unknown>;
+  /** All colors in use — the next new row gets the least-used palette color. */
+  colors(workspaceId: string): Promise<(string | null)[]>;
+  create(workspaceId: string, name: string, description: string, color: string): Promise<unknown>;
+  /** `color` undefined = unchanged. */
+  update(id: string, name: string, description: string, color?: string): Promise<unknown>;
   remove(workspaceId: string, id: string): Promise<number>;
 }
 
@@ -46,18 +50,20 @@ const KINDS: Record<string, ListOps> = {
       ),
     exists: async (workspaceId, id) =>
       Boolean(await db.productLine.findFirst({ where: { id, workspaceId }, select: { id: true } })),
-    create: async (workspaceId, name, description) => {
+    colors: async (workspaceId) =>
+      (await db.productLine.findMany({ where: { workspaceId }, select: { color: true } })).map((r) => r.color),
+    create: async (workspaceId, name, description, color) => {
       const last = await db.productLine.findFirst({
         where: { workspaceId },
         orderBy: { position: "desc" },
         select: { position: true },
       });
       return db.productLine.create({
-        data: { workspaceId, name, description, position: (last?.position ?? -1) + 1 },
+        data: { workspaceId, name, description, color, position: (last?.position ?? -1) + 1 },
       });
     },
-    update: (id, name, description) =>
-      db.productLine.update({ where: { id }, data: { name, description } }),
+    update: (id, name, description, color) =>
+      db.productLine.update({ where: { id }, data: { name, description, ...(color ? { color } : {}) } }),
     remove: async (workspaceId, id) =>
       (await db.productLine.deleteMany({ where: { id, workspaceId } })).count,
   },
@@ -77,10 +83,12 @@ const KINDS: Record<string, ListOps> = {
       ),
     exists: async (workspaceId, id) =>
       Boolean(await db.customer.findFirst({ where: { id, workspaceId }, select: { id: true } })),
-    create: (workspaceId, name, description) =>
-      db.customer.create({ data: { workspaceId, name, description } }),
-    update: (id, name, description) =>
-      db.customer.update({ where: { id }, data: { name, description } }),
+    colors: async (workspaceId) =>
+      (await db.customer.findMany({ where: { workspaceId }, select: { color: true } })).map((r) => r.color),
+    create: (workspaceId, name, description, color) =>
+      db.customer.create({ data: { workspaceId, name, description, color } }),
+    update: (id, name, description, color) =>
+      db.customer.update({ where: { id }, data: { name, description, ...(color ? { color } : {}) } }),
     remove: async (workspaceId, id) =>
       (await db.customer.deleteMany({ where: { id, workspaceId } })).count,
   },
@@ -100,6 +108,7 @@ const KINDS: Record<string, ListOps> = {
       ),
     exists: async (workspaceId, id) =>
       Boolean(await db.platform.findFirst({ where: { id, workspaceId }, select: { id: true } })),
+    colors: async () => [],
     create: (workspaceId, name, description) =>
       db.platform.create({ data: { workspaceId, name, description } }),
     update: (id, name, description) =>
@@ -179,7 +188,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
   }
 
-  await ops.create(workspaceId, name, cleanDescription(body.description));
+  const color = isChipColorId(body.color)
+    ? body.color
+    : nextChipColor(await ops.colors(workspaceId));
+  await ops.create(workspaceId, name, cleanDescription(body.description), color);
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }
 
@@ -201,7 +213,12 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
   }
 
-  await ops.update(id, name, cleanDescription(body.description));
+  await ops.update(
+    id,
+    name,
+    cleanDescription(body.description),
+    isChipColorId(body.color) ? body.color : undefined,
+  );
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }
 

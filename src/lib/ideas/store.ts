@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { PrefixWarmer } from "./ai-cache";
+import { nextChipColor } from "./colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
@@ -576,12 +577,15 @@ async function runImport(
     }
   }
   if (truthNames.size > 0) {
+    const used = (
+      await db.customer.findMany({ where: { workspaceId }, select: { color: true } })
+    ).map((c) => c.color);
     await db.customer.createMany({
-      data: Array.from(truthNames.values()).map((name) => ({
-        workspaceId,
-        name,
-        description: "",
-      })),
+      data: Array.from(truthNames.values()).map((name) => {
+        const color = nextChipColor(used);
+        used.push(color);
+        return { workspaceId, name, description: "", color };
+      }),
     });
   }
   const customerNames = [...existingNames, ...truthNames.values()];
@@ -1174,8 +1178,11 @@ export async function mutateIdeas(
           select: { id: true },
         });
         if (!exists) {
+          const used = (
+            await db.customer.findMany({ where: { workspaceId }, select: { color: true } })
+          ).map((c) => c.color);
           await db.customer.create({
-            data: { workspaceId, name, description: "" },
+            data: { workspaceId, name, description: "", color: nextChipColor(used) },
           });
         }
         await logEvents(workspaceId, [

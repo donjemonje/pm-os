@@ -4,6 +4,7 @@ import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { db } from "@/lib/db";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
+import { ensureCatalogColors } from "@/lib/ideas/catalog-colors";
 
 export const metadata: Metadata = {
   title: "Customers — PM-OS",
@@ -13,10 +14,11 @@ export default async function CustomersSettingsPage() {
   await requireUserPage("/settings/ideas/customers");
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
+  await ensureCatalogColors(workspace.id);
   const customers = await db.customer.findMany({
     where: { workspaceId: workspace.id },
     orderBy: { name: "asc" },
-    select: { id: true, name: true, description: true },
+    select: { id: true, name: true, description: true, color: true },
   });
 
   return (
