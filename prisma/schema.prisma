@@ -417,6 +417,9 @@ model Idea {
   /// Human-readable narration of what this import did to an Updated idea
   /// (votes, enrichment, added product lines/platforms). Cleared on rollover.
   batchChanges  Json      @default("[]")
+  /// Customers a PM added by hand (names). Ticket-derived customers are
+  /// never stored here; removing one of those is a dismissal on its tickets.
+  addedCustomers Json     @default("[]")
   pmScore       Int?
   manualScore   Int?
   existingVotes Int       @default(0)

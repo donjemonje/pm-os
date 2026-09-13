@@ -56,6 +56,9 @@ interface IdeaDrawerProps {
   /** Catalog chip colors (palette ids) by name. */
   productColors?: Record<string, string>;
   customerColors?: Record<string, string>;
+  /** Settings catalogs — the edit form's pick lists. */
+  catalogProducts?: string[];
+  catalogPlatforms?: string[];
   /** Customer catalog names — chips for names outside it render as suggestions. */
   customerCatalog?: string[];
   /** Approve adds the suggested customer to the catalog; dismiss hides it on this idea (reversible); undismiss restores it. */
@@ -71,6 +74,10 @@ interface IdeaDrawerProps {
     title: string;
     details: string;
     manual: number | null;
+    products: string[];
+    platforms: string[];
+    addedCustomers: string[];
+    removeCustomers: string[];
   }) => void;
   onMerge?: () => void;
 }
@@ -90,6 +97,8 @@ export function IdeaDrawer({
   ideasById,
   productColors = {},
   customerColors = {},
+  catalogProducts = [],
+  catalogPlatforms = [],
   customerCatalog = [],
   onCustomerAction,
   onClose,
@@ -104,6 +113,13 @@ export function IdeaDrawer({
   const [editTitle, setEditTitle] = useState("");
   const [editManual, setEditManual] = useState("");
   const [editDetails, setEditDetails] = useState("");
+  const [editProducts, setEditProducts] = useState<string[]>([]);
+  const [editPlatforms, setEditPlatforms] = useState<string[]>([]);
+  /** Customers as shown while editing (ticket-derived + manual, minus removed). */
+  const [editCustomers, setEditCustomers] = useState<string[]>([]);
+  const [editAdded, setEditAdded] = useState<string[]>([]);
+  const [editRemoved, setEditRemoved] = useState<string[]>([]);
+  const [newCustomer, setNewCustomer] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
 
   const ticket =
@@ -120,6 +136,12 @@ export function IdeaDrawer({
     setEditTitle(idea.title);
     setEditManual(idea.manual != null ? String(idea.manual) : "");
     setEditDetails(idea.details);
+    setEditProducts([...idea.products]);
+    setEditPlatforms([...(idea.platforms ?? [])]);
+    setEditCustomers([...(idea.customers ?? [])]);
+    setEditAdded([...(idea.addedCustomers ?? [])]);
+    setEditRemoved([]);
+    setNewCustomer("");
     setEditMode(true);
   };
   const saveEdit = () => {
@@ -130,8 +152,38 @@ export function IdeaDrawer({
       title: editTitle.trim() || idea.title,
       details: editDetails,
       manual: parsed != null && Number.isNaN(parsed) ? idea.manual : parsed,
+      products: editProducts,
+      platforms: editPlatforms,
+      addedCustomers: editAdded,
+      removeCustomers: editRemoved,
     });
     setEditMode(false);
+  };
+  const sameName = (a: string, b: string) => a.toLowerCase() === b.trim().toLowerCase();
+  const toggleIn = (list: string[], name: string) =>
+    list.some((x) => sameName(x, name)) ? list.filter((x) => !sameName(x, name)) : [...list, name];
+  const addCustomer = (name: string) => {
+    const n = name.trim();
+    if (!n || editCustomers.some((c) => sameName(c, n))) {
+      setNewCustomer("");
+      return;
+    }
+    setEditCustomers((l) => [...l, n]);
+    // Re-adding a name removed in this same edit just cancels the removal.
+    if (editRemoved.some((c) => sameName(c, n))) {
+      setEditRemoved((l) => l.filter((c) => !sameName(c, n)));
+    } else {
+      setEditAdded((l) => [...l, n]);
+    }
+    setNewCustomer("");
+  };
+  const removeCustomer = (name: string) => {
+    setEditCustomers((l) => l.filter((c) => !sameName(c, name)));
+    if (editAdded.some((c) => sameName(c, name))) {
+      setEditAdded((l) => l.filter((c) => !sameName(c, name)));
+    } else {
+      setEditRemoved((l) => [...l, name]);
+    }
   };
 
   const startResize = (e: React.MouseEvent) => {
@@ -509,6 +561,110 @@ export function IdeaDrawer({
                 </span>
               </div>
               )}
+              {/* Product lines — catalog names plus "Other"; PMOS AI's pick is a starting point, not a verdict. */}
+              <div className="flex flex-col gap-1.5">
+                <span className={MONO_LABEL}>Product lines</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
+                    const on = editProducts.some((x) => sameName(x, p));
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setEditProducts((l) => toggleIn(l, p))}
+                        aria-pressed={on}
+                        className={
+                          on
+                            ? "rounded border border-transparent px-2 py-0.5 font-mono text-[11px] font-medium ring-1 ring-black/10"
+                            : "rounded border border-dashed border-[#c9d3e0] px-2 py-0.5 font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
+                        }
+                        style={on ? chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) : undefined}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              {(catalogPlatforms.length > 0 || editPlatforms.length > 0) && (
+                <div className="flex flex-col gap-1.5">
+                  <span className={MONO_LABEL}>Platforms</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[...new Set([...catalogPlatforms, ...editPlatforms])].map((p) => {
+                      const on = editPlatforms.some((x) => sameName(x, p));
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setEditPlatforms((l) => toggleIn(l, p))}
+                          aria-pressed={on}
+                          className={
+                            on
+                              ? "rounded bg-[rgba(169,140,255,.16)] px-2 py-0.5 font-mono text-[11px] font-medium text-[#6b4bd0] ring-1 ring-black/10"
+                              : "rounded border border-dashed border-[#c9d3e0] px-2 py-0.5 font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
+                          }
+                        >
+                          {p}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {/* Customers — any name, from the catalog or typed; removing a ticket-derived one dismisses it (restorable). */}
+              <div className="flex flex-col gap-1.5">
+                <span className={MONO_LABEL}>Customers</span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {editCustomers.map((c) => {
+                    const suggested = !customerCatalog.some((k) => sameName(k, c));
+                    return (
+                      <span
+                        key={`edit-customer-${c}`}
+                        className={
+                          suggested
+                            ? "inline-flex items-center gap-1 rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                            : "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                        }
+                        style={suggested ? undefined : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
+                      >
+                        {c}
+                        <button
+                          type="button"
+                          title="Remove from this idea"
+                          onClick={() => removeCustomer(c)}
+                          className="flex rounded-sm p-px opacity-70 hover:bg-black/10 hover:opacity-100"
+                        >
+                          <X size={11} strokeWidth={3} />
+                        </button>
+                      </span>
+                    );
+                  })}
+                  <input
+                    type="text"
+                    list="idea-customer-options"
+                    value={newCustomer}
+                    onChange={(e) => setNewCustomer(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addCustomer(newCustomer);
+                      }
+                    }}
+                    placeholder="Add customer…"
+                    className="min-w-[140px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
+                  />
+                  <datalist id="idea-customer-options">
+                    {customerCatalog
+                      .filter((k) => !editCustomers.some((c) => sameName(c, k)))
+                      .map((k) => (
+                        <option key={k} value={k} />
+                      ))}
+                  </datalist>
+                </div>
+                <span className="text-[11px] text-[#9aa8be]">
+                  Enter adds. A name outside the catalog is kept as a suggestion until approved.
+                </span>
+              </div>
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
                 <textarea

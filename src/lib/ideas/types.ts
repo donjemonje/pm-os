@@ -88,6 +88,8 @@ export interface Idea {
   affectsAllCustomers?: boolean;
   /** Dismissed suggestions, restorable from the drawer. */
   dismissedCustomers?: string[];
+  /** Customers a PM added by hand (subset of `customers`); removing one deletes it, not a dismissal. */
+  addedCustomers?: string[];
   batch: IdeaBatchStatus;
   /** For Updated ideas: what this import did (votes, enrichment, added metadata). */
   batchChanges?: string[];

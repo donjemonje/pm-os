@@ -565,7 +565,7 @@ export function IdeasView({
       setNote(
         failCount === 0
           ? `${okCount} change${okCount === 1 ? "" : "s"} merged to Jira`
-          : `${okCount} exported, ${failCount} failed — reopen Export to Jira to retry`
+          : `${okCount} merged, ${failCount} failed — reopen Jira Merge to retry`
       );
     } catch {
       setMergeError("Merge failed — is the dev server running?");
@@ -744,7 +744,7 @@ export function IdeasView({
                   onClick={openMerge}
                   className="inline-flex h-8 items-center whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  Export to Jira
+                  Jira Merge
                 </button>
               </span>
             </div>
@@ -1160,6 +1160,8 @@ export function IdeasView({
           jiraByKey={jiraByKey}
           csvMapping={csvMapping}
           ideasById={ideasById}
+          catalogProducts={catalogProducts}
+          catalogPlatforms={catalogPlatforms}
           productColors={productColors}
           customerColors={customerColors}
           customerCatalog={customerCatalog}
@@ -1270,7 +1272,7 @@ export function IdeasView({
                   <div className="mt-1 text-[13px] text-muted">
                     {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
                     {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
-                    run Export to Jira again to retry just those.
+                    run Jira Merge again to retry just those.
                   </div>
                 </div>
                 <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
@@ -1324,7 +1326,7 @@ export function IdeasView({
             ) : (
               <>
                 <div>
-                  <div className="font-title text-lg font-semibold">Export to Jira</div>
+                  <div className="font-title text-lg font-semibold">Jira Merge</div>
                   <div className="mt-1 text-[13px] text-muted">
                     Pick the product lines to merge. Only approved ideas are written — anything
                     still pending stays here for a later merge.

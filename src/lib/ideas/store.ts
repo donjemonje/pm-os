@@ -36,7 +36,7 @@ export interface IdeasState {
   ideas: Idea[];
   /** Customer catalog names — the client tells confirmed from suggested with this. */
   customerCatalog: string[];
-  /** Jira integration is set up for the workspace — gates Export to Jira. */
+  /** Jira integration is set up for the workspace — gates Jira Merge. */
   jiraConnected: boolean;
   /** The org's CSV import mapping — the client parses uploads with it. */
   csvMapping: CsvMapping;
@@ -169,9 +169,11 @@ function toClientIdea(row: IdeaRow): Idea {
     reporters: distinct(
       ticketRows.flatMap((t) => (t.requester ? [t.requester] : [])),
     ),
-    customers: distinct(
-      ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
-    ).filter((c) => !dismissedKeys.has(c.toLowerCase())),
+    customers: distinct([
+      ...ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+      ...((row.addedCustomers as string[]) ?? []),
+    ]).filter((c) => !dismissedKeys.has(c.toLowerCase())),
+    addedCustomers: (row.addedCustomers as string[]) ?? [],
     affectsAllCustomers:
       ticketRows.some((t) => t.affectsAllCustomers) || undefined,
     dismissedCustomers: dismissed,
@@ -919,6 +921,12 @@ export type IdeasMutation =
       title: string;
       details: string;
       manual: number | null;
+      /** Full lists as edited; omitted = unchanged. */
+      products?: string[];
+      platforms?: string[];
+      addedCustomers?: string[];
+      /** Ticket-derived names the PM removed — dismissed on their tickets (reversible). */
+      removeCustomers?: string[];
     }
   | { type: "approveAll" }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
@@ -1024,16 +1032,54 @@ export async function mutateIdeas(
     case "edit": {
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
+        include: {
+          sources: {
+            include: {
+              ticket: {
+                select: { id: true, affectedCustomers: true, dismissedCustomers: true },
+              },
+            },
+          },
+        },
       });
       if (idea) {
+        const clean = (v: string[] | undefined) =>
+          v === undefined ? undefined : distinct(v.map((x) => x.trim()).filter(Boolean));
+        const products = clean(mutation.products);
+        const platforms = clean(mutation.platforms);
+        const addedCustomers = clean(mutation.addedCustomers);
         await db.idea.update({
           where: { id: idea.id },
           data: {
             title: mutation.title,
             details: mutation.details,
             manualScore: mutation.manual,
+            ...(products ? { products: products as Prisma.InputJsonValue } : {}),
+            ...(platforms ? { platforms: platforms as Prisma.InputJsonValue } : {}),
+            ...(addedCustomers
+              ? { addedCustomers: addedCustomers as Prisma.InputJsonValue }
+              : {}),
           },
         });
+        // A removed ticket-derived customer is a dismissal on the tickets
+        // that named it — never a deletion, so "show dismissed" restores it.
+        for (const name of mutation.removeCustomers ?? []) {
+          const wanted = name.trim().toLowerCase();
+          if (!wanted) continue;
+          for (const s of idea.sources) {
+            if (s.kind !== "zendesk" || !s.ticket) continue;
+            const affected = (s.ticket.affectedCustomers as string[]) ?? [];
+            const dismissed = (s.ticket.dismissedCustomers as string[]) ?? [];
+            if (!affected.some((c) => c.toLowerCase() === wanted)) continue;
+            if (dismissed.some((c) => c.toLowerCase() === wanted)) continue;
+            await db.zendeskTicketRaw.update({
+              where: { id: s.ticket.id },
+              data: {
+                dismissedCustomers: [...dismissed, name.trim()] as Prisma.InputJsonValue,
+              },
+            });
+          }
+        }
         await logEvents(workspaceId, [
           {
             ideaId: idea.id,
@@ -1043,11 +1089,18 @@ export async function mutateIdeas(
                 title: idea.title,
                 details: idea.details,
                 manual: idea.manualScore,
+                products: idea.products,
+                platforms: idea.platforms,
+                addedCustomers: idea.addedCustomers,
               },
               after: {
                 title: mutation.title,
                 details: mutation.details,
                 manual: mutation.manual,
+                products: products ?? idea.products,
+                platforms: platforms ?? idea.platforms,
+                addedCustomers: addedCustomers ?? idea.addedCustomers,
+                removedCustomers: mutation.removeCustomers ?? [],
               },
             },
           },
