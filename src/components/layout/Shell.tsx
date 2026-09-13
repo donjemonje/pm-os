@@ -20,6 +20,7 @@ export function Shell({
   children,
   sidebarDefaultCollapsed,
   ideasEnabled,
+  ideasPending = 0,
   docsEnabled,
   chatEnabled,
   dashboardEnabled,
@@ -31,6 +32,8 @@ export function Shell({
   /** Server-read cookie state so the rail renders collapsed without a flash. */
   sidebarDefaultCollapsed: boolean;
   ideasEnabled: boolean;
+  /** Ideas awaiting review — the badge on the Ideas nav item. */
+  ideasPending?: number;
   docsEnabled: boolean;
   chatEnabled: boolean;
   dashboardEnabled: boolean;
@@ -57,6 +60,7 @@ export function Shell({
         <Sidebar
           defaultCollapsed={sidebarDefaultCollapsed}
           ideasEnabled={ideasEnabled}
+          ideasPending={ideasPending}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
           dashboardEnabled={dashboardEnabled}

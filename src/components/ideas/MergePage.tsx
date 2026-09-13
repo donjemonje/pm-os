@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, X } from "lucide-react";
+import { Check, Layers, LifeBuoy, Sparkles, X } from "lucide-react";
+import { ApproveMark } from "@/components/ui/ApproveMark";
+import { Chip } from "@/components/ui/Chip";
+import { chipStyle, PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import {
   CATALOG_KIND_LABELS,
   compareIdeas,
@@ -35,10 +38,26 @@ interface MergePageProps {
   onToggleSrc: (kind: SourceKind, key: string) => void;
   onOpenIdea: (id: string) => void;
   onOpenSource: (kind: SourceKind, key: string) => void;
+  /** Catalog chip colors (palette ids) by product-line name. */
+  productColors?: Record<string, string>;
 }
 
-const COL_HEADER =
-  "border-b border-[#e8eef7] px-3.5 py-2.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.16em] text-[#7a8aa3]";
+/** Case-insensitive lookup of a catalog color by name. */
+function colorOf(map: Record<string, string>, name: string): string | undefined {
+  if (map[name]) return map[name];
+  const key = name.toLowerCase();
+  for (const [k, v] of Object.entries(map)) if (k.toLowerCase() === key) return v;
+  return undefined;
+}
+
+/** Selected / checked row: green wash with an inset bar on the left. */
+const SELECTED_ROW = {
+  background: "linear-gradient(90deg, rgba(23,178,106,.18), rgba(23,178,106,.06))",
+  boxShadow: "inset 3px 0 0 #17b26a",
+};
+
+const ROW =
+  "flex h-[44px] cursor-pointer items-center gap-2.5 border-b border-hairline px-3 transition-colors duration-150 last:border-b-0";
 
 interface SourceRow {
   key: string;
@@ -71,6 +90,7 @@ export function MergePage({
   onToggleSrc,
   onOpenIdea,
   onOpenSource,
+  productColors = {},
 }: MergePageProps) {
   // The mostly-unchanged Jira backlog is noise: unchanged ideas show only
   // when the Status filter says Unchanged, same as the Final page.
@@ -222,128 +242,153 @@ export function MergePage({
     jiraSources.map((s) => ({ key: s.key, id: s.id, title: s.title })),
   );
 
-  const renderColumn = (
-    kind: SourceKind,
+  const columnFrame = (
     label: string,
-    rows: SourceRow[],
-    emptyText: string,
+    count: number,
+    Icon: typeof Layers,
+    children: React.ReactNode,
   ) => (
-    <div className="overflow-hidden rounded-xl border border-border bg-white">
-      <div className={COL_HEADER}>
-        {label} · {rows.length}
+    <div className="glass overflow-hidden rounded-card">
+      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-fg-3">
+        <Icon size={13} strokeWidth={2.25} className="text-primary" />
+        <span>{label}</span>
+        <span className="ml-auto rounded-full bg-[rgba(12,25,41,.06)] px-[7px] py-px tracking-normal">
+          {count}
+        </span>
       </div>
-      <div>
-        {rows.map((row) => (
-          <div
-            key={row.key}
-            onClick={() => {
-              if (edit) onToggleSrc(kind, row.key);
-              else if (row.ownerId) onStartEdit(row.ownerId);
-            }}
-            className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors duration-150"
-            style={{
-              background:
-                row.checked ||
-                (!edit &&
-                  (highlightSrc
-                    ? highlightSrc.kind === kind && highlightSrc.key === row.key
-                    : row.selected))
-                  ? "#daf0e2"
-                  : "#ffffff",
-              opacity: row.orphan && !row.checked ? 0.5 : 1,
-            }}
-          >
-            <span
-              className="shrink-0 overflow-hidden transition-[width,margin,opacity] duration-200 ease-out"
-              style={{
-                width: edit ? 15 : 0,
-                marginRight: edit ? 0 : -8,
-                opacity: edit ? 1 : 0,
-              }}
-            >
-              <span
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (edit) onToggleSrc(kind, row.key);
-                }}
-                className="flex h-[15px] w-[15px] cursor-pointer items-center justify-center rounded border text-white"
-                style={{
-                  background: row.checked ? "#1f8a53" : "#ffffff",
-                  borderColor: row.checked ? "#1f8a53" : "#c8d4e3",
-                }}
-              >
-                {row.checked && <Check size={9} strokeWidth={3.5} />}
-              </span>
-            </span>
-            <div
-              className={`flex min-w-0 flex-1 items-center gap-2 transition-transform duration-150 ease-out ${
-                row.checked ? "translate-x-1" : ""
-              }`}
-            >
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenSource(kind, row.key);
-                }}
-                title={kind === "zen" ? "Open ticket" : "Open Jira idea"}
-                className="shrink-0 font-mono text-[10.5px] font-semibold text-primary hover:text-primary-hover hover:underline"
-              >
-                {row.id}
-              </button>
-              <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-[#33445e]">
-                {row.text}
-              </span>
-            </div>
-            {row.parkLabel && (
-              <span className="shrink-0 rounded-full border border-[#dde5ef] bg-[#eef1f6] px-[5px] py-px font-mono text-[9.5px] font-semibold text-[#7a8496]">
-                {row.parkLabel}
-              </span>
-            )}
-            {row.owners > 1 && (
-              <button
-                onClick={(e) => {
-                  if (edit) return;
-                  e.stopPropagation();
-                  setHighlightSrc((cur) =>
-                    cur && cur.kind === kind && cur.key === row.key
-                      ? null
-                      : { kind, key: row.key },
-                  );
-                }}
-                title={
-                  edit
-                    ? "Used in more than one idea"
-                    : "Highlight the ideas using this source (Esc clears)"
-                }
-                className={`shrink-0 rounded-full border px-[5px] py-px font-mono text-[9.5px] font-semibold ${
-                  !edit &&
-                  highlightSrc?.kind === kind &&
-                  highlightSrc?.key === row.key
-                    ? "border-[#1f8a53] bg-[#daf0e2] text-[#1f8a53]"
-                    : "border-[rgba(122,167,255,.4)] bg-[rgba(122,167,255,.14)] text-[#3b6fd4] hover:border-[#3b6fd4]"
-                }`}
-              >
-                {row.owners}×
-              </button>
-            )}
-          </div>
-        ))}
-        {rows.length === 0 && (
-          <div className="p-4 text-xs text-muted">{emptyText}</div>
-        )}
-      </div>
+      <div>{children}</div>
     </div>
   );
 
+  const tag = (text: string, accent?: boolean, active?: boolean, extra?: React.ButtonHTMLAttributes<HTMLButtonElement>) => {
+    const cls = active
+      ? "border-[#17b26a] bg-[rgba(23,178,106,.16)] text-[#0f7a47]"
+      : accent
+        ? "border-[rgba(36,87,245,.4)] bg-[var(--app-accent-soft)] text-[#2a5fd0] hover:border-primary"
+        : "border-[#dde5ef] bg-[#eef1f6] text-[#7a8496]";
+    const base = `shrink-0 rounded-full border px-[6px] py-px font-mono text-[9.5px] font-semibold ${cls}`;
+    return extra ? (
+      <button {...extra} className={base}>
+        {text}
+      </button>
+    ) : (
+      <span className={base}>{text}</span>
+    );
+  };
+
+  const renderColumn = (
+    kind: SourceKind,
+    label: string,
+    Icon: typeof Layers,
+    rows: SourceRow[],
+    emptyText: string,
+  ) =>
+    columnFrame(
+      label,
+      rows.length,
+      Icon,
+      <>
+        {rows.map((row) => {
+          const lit =
+            row.checked ||
+            (!edit &&
+              (highlightSrc
+                ? highlightSrc.kind === kind && highlightSrc.key === row.key
+                : row.selected));
+          return (
+            <div
+              key={row.key}
+              onClick={() => {
+                if (edit) onToggleSrc(kind, row.key);
+                else if (row.ownerId) onStartEdit(row.ownerId);
+              }}
+              className={`${ROW} hover:bg-white/60`}
+              style={{
+                ...(lit ? SELECTED_ROW : {}),
+                opacity: row.orphan && !row.checked ? 0.55 : 1,
+              }}
+            >
+              <span
+                className="shrink-0 overflow-hidden transition-[width,margin,opacity] duration-200 ease-out"
+                style={{
+                  width: edit ? 15 : 0,
+                  marginRight: edit ? 0 : -10,
+                  opacity: edit ? 1 : 0,
+                }}
+              >
+                <ApproveMark
+                  on={row.checked}
+                  round={false}
+                  size={15}
+                  title={row.checked ? "Detach from this idea" : "Attach to this idea"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (edit) onToggleSrc(kind, row.key);
+                  }}
+                />
+              </span>
+              <div
+                className={`flex min-w-0 flex-1 items-center gap-2 transition-transform duration-150 ease-out ${
+                  row.checked ? "translate-x-1" : ""
+                }`}
+              >
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenSource(kind, row.key);
+                  }}
+                  title={kind === "zen" ? "Open ticket" : "Open Jira idea"}
+                  className="shrink-0 font-mono text-[10.5px] font-bold text-primary hover:text-primary-hover hover:underline"
+                >
+                  {row.id}
+                </button>
+                <span
+                  className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-fg-2 ${
+                    row.checked ? "font-semibold" : ""
+                  }`}
+                >
+                  {row.text}
+                </span>
+              </div>
+              {row.parkLabel && tag(row.parkLabel)}
+              {row.owners > 1 &&
+                tag(
+                  `${row.owners}×`,
+                  true,
+                  !edit && highlightSrc?.kind === kind && highlightSrc?.key === row.key,
+                  {
+                    onClick: (e) => {
+                      if (edit) return;
+                      e.stopPropagation();
+                      setHighlightSrc((cur) =>
+                        cur && cur.kind === kind && cur.key === row.key
+                          ? null
+                          : { kind, key: row.key },
+                      );
+                    },
+                    title: edit
+                      ? "Used in more than one idea"
+                      : "Highlight the ideas using this source (Esc clears)",
+                  },
+                )}
+            </div>
+          );
+        })}
+        {rows.length === 0 && <div className="p-4 text-xs text-fg-3">{emptyText}</div>}
+      </>,
+    );
+
   return (
-    <div className="grid grid-cols-[1fr_1fr_1.15fr] items-start gap-5">
-      {renderColumn("zen", "Zendesk", zenRows, "No Zendesk sources")}
-      {renderColumn("jira", "Jira", jiraRows, "No Jira sources")}
+    <div className="grid grid-cols-[1fr_1fr_1.15fr] items-start gap-4">
+      {renderColumn("zen", "Zendesk", LifeBuoy, zenRows, "No Zendesk sources")}
+      {renderColumn("jira", "Jira", Layers, jiraRows, "No Jira sources")}
 
       {/* Final column */}
-      <div className="overflow-hidden rounded-xl border border-border bg-white">
-        <div className={COL_HEADER}>Final · {finals.length}</div>
-        <div>
+      {columnFrame(
+        "Final",
+        finals.length,
+        Sparkles,
+        <>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
             const sel = edit
@@ -351,17 +396,18 @@ export function MergePage({
               : highlightSrc
                 ? highlightedIdeaIds.has(idea.id)
                 : idea.id === selId;
+            const editing = edit != null && idea.id === edit.ideaId;
             return (
               <div
                 key={idea.id}
                 onClick={() => onStartEdit(idea.id)}
-                className="flex cursor-pointer items-center gap-2 border-b border-[#eef3f9] px-3 py-2 transition-colors duration-150"
+                className={`${ROW} hover:bg-white/60`}
                 style={{
-                  background: sel && !gone ? "#daf0e2" : "#ffffff",
+                  ...(sel && !gone ? SELECTED_ROW : {}),
                   opacity: gone ? 0.55 : 1,
                 }}
               >
-                {edit && idea.id === edit.ideaId && (
+                {editing && (
                   <span className="flex shrink-0 items-center gap-1">
                     <button
                       onClick={(e) => {
@@ -369,7 +415,7 @@ export function MergePage({
                         onCancelEdit();
                       }}
                       title="Discard source changes (Esc)"
-                      className="flex h-5 w-5 items-center justify-center rounded-full border border-[#c8d4e3] bg-white text-[#7a8aa3] hover:border-[#a3556b] hover:text-[#a3556b]"
+                      className="flex h-5 w-5 items-center justify-center rounded-full border border-[#c8d4e3] bg-white text-fg-muted hover:border-[#c23767] hover:text-[#c23767]"
                     >
                       <X size={11} strokeWidth={2.5} />
                     </button>
@@ -380,27 +426,44 @@ export function MergePage({
                           onSaveEdit();
                         }}
                         title="Save source changes"
-                        className="flex h-5 w-5 items-center justify-center rounded-full border border-[#1f8a53] bg-[#1f8a53] text-white hover:bg-[#187647]"
+                        className="flex h-5 w-5 items-center justify-center rounded-full border border-[#17b26a] bg-[linear-gradient(180deg,#22c57a,#17b26a)] text-white shadow-[0_0_0_3px_rgba(23,178,106,.18)] hover:brightness-95"
                       >
                         <Check size={11} strokeWidth={3} />
                       </button>
                     )}
                   </span>
                 )}
-                <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px]">
+                <span
+                  className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-fg-2 ${
+                    sel && !gone ? "font-semibold" : ""
+                  }`}
+                >
                   {idea.title}
                 </span>
+                {idea.products[0] && (
+                  <Chip
+                    className="hidden 2xl:inline-flex"
+                    style={chipStyle(colorOf(productColors, idea.products[0]), PRODUCT_CHIP_DEFAULT)}
+                  >
+                    {idea.products[0]}
+                  </Chip>
+                )}
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onOpenIdea(idea.id);
                   }}
                   title="Open idea"
-                  className="shrink-0 whitespace-nowrap rounded-full border px-[7px] py-px font-mono text-[10px] font-semibold hover:border-primary hover:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                  className="shrink-0 whitespace-nowrap rounded-full px-[7px] py-[2px] font-mono text-[10px] font-semibold hover:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                   style={{
-                    background: gone ? "#f7eef1" : sel ? "#c4e8d2" : "#f0f4fa",
-                    color: gone ? "#a3556b" : sel ? "#1f8a53" : "#4a5b74",
-                    borderColor: gone ? "#ecd6dd" : sel ? "#a9dcbd" : "#e2eaf4",
+                    background: gone
+                      ? "#f7eef1"
+                      : sel
+                        ? "#17b26a"
+                        : count > 1
+                          ? "var(--app-accent-soft)"
+                          : "rgba(12,25,41,.06)",
+                    color: gone ? "#a3556b" : sel ? "#ffffff" : count > 1 ? "#2a5fd0" : "#4a5b74",
                   }}
                 >
                   {gone ? "Deleted" : `${count} src`}
@@ -408,11 +471,9 @@ export function MergePage({
               </div>
             );
           })}
-          {finals.length === 0 && (
-            <div className="p-4 text-xs text-muted">No ideas match</div>
-          )}
-        </div>
-      </div>
+          {finals.length === 0 && <div className="p-4 text-xs text-fg-3">No ideas match</div>}
+        </>,
+      )}
     </div>
   );
 }

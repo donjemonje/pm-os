@@ -1,7 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Check, Search, ThumbsUp, Trash2, Upload } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  GitMerge,
+  Layers,
+  PlusCircle,
+  RefreshCw,
+  Search,
+  ThumbsUp,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
@@ -11,10 +24,18 @@ import {
   SCORING_ENABLED,
   scoreOf,
   STATUS_CHIP_TO_BATCH,
+  STATUS_TONES,
 } from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
+import { ApproveMark } from "@/components/ui/ApproveMark";
+import { Avatar } from "@/components/ui/Avatar";
+import { Button } from "@/components/ui/Button";
+import { Chip } from "@/components/ui/Chip";
+import { Pill } from "@/components/ui/Pill";
+import { Ring } from "@/components/ui/Ring";
+import { VoteBar } from "@/components/ui/VoteBar";
 import {
   chipStyle,
   CUSTOMER_CHIP_DEFAULT,
@@ -71,10 +92,11 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
   return undefined;
 }
 
+/** Toggle pill (scope / Pending Review): accent-filled with a glow when on. */
 function chipClass(active: boolean): string {
   return active
-    ? "whitespace-nowrap rounded-full border border-transparent bg-primary px-3 py-1 text-[12.5px] font-medium text-white"
-    : "whitespace-nowrap rounded-full border border-border bg-white px-3 py-1 text-[12.5px] font-medium text-[#3f506b] hover:border-primary/55";
+    ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-transparent bg-primary px-3 text-[12.5px] font-semibold text-white shadow-[0_6px_16px_-6px_var(--app-accent)]"
+    : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-[var(--app-glass)] px-3 text-[12.5px] font-semibold text-[#3f506b] shadow-sm hover:border-primary/55 hover:bg-white";
 }
 
 export function IdeasView({
@@ -121,8 +143,8 @@ export function IdeasView({
   const [edit, setEdit] = useState<MergeEdit | null>(null);
   const [selectedFinalId, setSelectedFinalId] = useState<string | null>(null);
 
-  const [hoverId, setHoverId] = useState<string | null>(null);
-  const [popId, setPopId] = useState<string | null>(null);
+  /** Product-line groups the PM folded shut on the Final page ("" = unassigned). */
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -633,530 +655,688 @@ export function IdeasView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edit, confirmOpen, drawerId, drawerSrc]);
 
-  return (
-    <div className="mx-auto max-w-[1120px] px-10 pb-24 pt-8">
-      <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFile} />
+  // ——— Direction B view data ———
+  const parked = tickets.filter((t) => t.catalog && t.catalog.kind !== "fr").length;
+  const reviewedPct = total ? Math.round(((total - pending) / total) * 100) : 0;
+  const allReviewed = total > 0 && pending === 0;
+  const newVotesTotal = live.reduce((a, i) => a + i.newVotes, 0);
+  const pendingIn = (batch: Idea["batch"]) =>
+    approvable.filter((i) => i.batch === batch && i.decision === "pending").length;
+  // Who asks for the most: ideas per customer, top three, bars relative to the leader.
+  const topCustomers = (() => {
+    const m = new Map<string, number>();
+    for (const i of live) for (const c of i.customers ?? []) m.set(c, (m.get(c) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
+  })();
+  const maxVotes = Math.max(1, ...visible.map((i) => i.existingVotes + i.newVotes));
+  // Rows grouped by first product line, in the catalog's manual order;
+  // names outside the catalog follow alphabetically, "Unassigned" last.
+  const groups = (() => {
+    const m = new Map<string, Idea[]>();
+    for (const i of visible) {
+      const k = i.products[0] ?? "";
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(i);
+    }
+    const rank = (name: string) => {
+      if (!name) return Number.MAX_SAFE_INTEGER;
+      const idx = allProducts.findIndex((p) => p.toLowerCase() === name.toLowerCase());
+      return idx === -1 ? Number.MAX_SAFE_INTEGER - 1 : idx;
+    };
+    return [...m.entries()].sort(
+      (a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0])
+    );
+  })();
+  const editedIdea = edit ? ideas.find((i) => i.id === edit.ideaId) : undefined;
+  const sameSet = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((x) => b.includes(x));
+  const editDirty =
+    edit != null &&
+    editedIdea != null &&
+    !(sameSet(edit.zen, editedIdea.zen) && sameSet(edit.jira, editedIdea.jira));
+  const editCount = edit ? edit.zen.length + edit.jira.length : 0;
 
-      {/* Header */}
-      <div className="mb-3 flex items-center justify-between gap-4">
-        <h1 className="font-title m-0 text-2xl font-bold tracking-tight">Ideas</h1>
-        <div className="flex items-center gap-2">
-          {tickets.length > 0 && (
-            <button
-              onClick={clearAll}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] text-muted hover:bg-white hover:text-foreground"
-            >
-              <Trash2 size={13} />
-              Clear import
-            </button>
-          )}
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={importing}
-            className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
-          >
-            <Upload size={13} />
-            {importing ? "Importing…" : "Upload Zendesk CSV"}
-          </button>
-        </div>
+  const productChip = (p: string, dot?: boolean) => {
+    // Flag names the model returned that aren't in the Settings → Ideas
+    // catalog ("Other" is a reserved value, not a miss) — observed, not corrected.
+    const offCatalog =
+      p !== "Other" && !catalogProducts.some((c) => c.toLowerCase() === p.toLowerCase());
+    return offCatalog ? (
+      <Chip key={p} kind="suggested" title="Not in the product-line catalog">
+        {p} ⚑
+      </Chip>
+    ) : (
+      <Chip key={p} dot={dot} style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}>
+        {p}
+      </Chip>
+    );
+  };
+  const customerChip = (c: string) => {
+    // Off-catalog names are suggestions awaiting PM review in the drawer —
+    // flagged, never hidden.
+    const offCatalog = !customerCatalog.some((k) => k.toLowerCase() === c.toLowerCase());
+    return offCatalog ? (
+      <Chip key={`customer-${c}`} kind="suggested" title="Suggested customer — review in the idea">
+        {c} ⚑
+      </Chip>
+    ) : (
+      <Chip
+        key={`customer-${c}`}
+        kind="customer"
+        style={chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
+      >
+        {c}
+      </Chip>
+    );
+  };
+
+  const segment = (label: "Merge" | "Final", on: boolean, onClick: () => void) => (
+    <button
+      onClick={onClick}
+      className={`font-title inline-flex h-8 items-center whitespace-nowrap rounded-control border px-4 text-[13px] font-semibold transition-[background,box-shadow] ${
+        on
+          ? "border-transparent bg-primary text-white shadow-[0_6px_18px_-6px_rgba(36,87,245,.8)]"
+          : "border-border bg-[var(--app-glass)] text-fg-3 shadow-sm hover:border-primary/55 hover:bg-white"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  const statCard = (key: "new" | "updated" | "archive", n: number, sub: string) => {
+    const tone = STATUS_TONES[key];
+    const label = key === "new" ? "New" : key === "updated" ? "Updated" : "Archive";
+    return (
+      <div className="relative flex flex-1 flex-col gap-0.5 overflow-hidden rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
+        <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: tone.solid }} />
+        <span className="flex items-baseline gap-2">
+          <span className="font-title text-2xl font-bold leading-none">{n}</span>
+          <span className="eyebrow text-[9.5px]" style={{ color: tone.fg }}>
+            {label}
+          </span>
+        </span>
+        <span className="mt-1 text-[11.5px] text-fg-muted">{sub}</span>
       </div>
+    );
+  };
 
-      {ideas.length > 0 && (
-        <div className="mb-5 flex items-center gap-2">
-          <button
-            onClick={() => gotoMerge(null)}
-            className={`font-title whitespace-nowrap rounded-full border px-4 py-1.5 text-[13px] font-semibold hover:border-primary/55 ${
-              page === "merge"
-                ? "border-transparent bg-primary text-white"
-                : "border-border bg-white text-[#3f506b]"
-            }`}
-          >
-            Merge
-          </button>
-          <ArrowRight size={14} className="text-[#7a8aa3]" />
-          <button
-            onClick={() => {
-              setPage("final");
-              cancelEdit();
-            }}
-            className={`font-title whitespace-nowrap rounded-full border px-4 py-1.5 text-[13px] font-semibold hover:border-primary/55 ${
-              page === "final"
-                ? "border-transparent bg-primary text-white"
-                : "border-border bg-white text-[#3f506b]"
-            }`}
-          >
-            Final
-          </button>
-        </div>
-      )}
+  const votesOf = (idea: Idea, size = 13) =>
+    idea.existingVotes === 0 && idea.newVotes === 0 ? (
+      <span className="text-fg-disabled" style={{ fontSize: size }}>
+        —
+      </span>
+    ) : (
+      <span
+        className="inline-flex items-center gap-1 font-semibold text-fg-2"
+        style={{ fontSize: size }}
+      >
+        <ThumbsUp size={size} className="text-fg-faint" />
+        {idea.existingVotes > 0 && <span>{idea.existingVotes}</span>}
+        {idea.newVotes > 0 && (
+          <span className="text-success">
+            {idea.existingVotes > 0 ? `(+${idea.newVotes})` : `+${idea.newVotes}`}
+          </span>
+        )}
+      </span>
+    );
 
-      {error && (
-        <div className="mb-4 rounded-lg border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">
-          {error}
-        </div>
-      )}
-      {note && (
-        <div className="mb-4 inline-flex items-center gap-1.5 text-xs text-[#1f8a53]">
-          <Check size={12} strokeWidth={2.5} />
-          {note}
-        </div>
-      )}
+  return (
+    <div className="app-canvas min-h-full">
+      <div className="mx-auto w-full max-w-[1680px] px-7 pb-24 pt-6">
+        <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFile} />
 
-      {!hydrated ? null : ideas.length === 0 ? (
-        /* Empty state */
-        <div className="rounded-xl border border-dashed border-border bg-white px-10 py-16 text-center">
-          <div className="font-title mb-1 text-[15px] font-semibold">No ideas yet</div>
-          <div className="mx-auto mb-5 max-w-[440px] text-[13px] leading-relaxed text-muted">
-            Upload a Zendesk ticket export (CSV) to create the first idea batch. Each ticket
-            becomes a New idea you can review, edit and approve.
+        {/* Header */}
+        <div className="mb-4 flex items-center gap-3.5">
+          <div>
+            <div className="eyebrow mb-1 text-primary">Zendesk → Ideas → Jira</div>
+            <h1 className="font-title m-0 text-[26px] font-bold leading-none tracking-[-0.02em]">
+              Ideas
+            </h1>
           </div>
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={importing}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-wait disabled:opacity-60"
-          >
-            <Upload size={14} />
-            {importing ? "Importing…" : "Upload Zendesk CSV"}
-          </button>
-          <div className="mt-5 font-mono text-[10.5px] text-[#9aa8be]">
-            Expected columns: external_id, subject, description · optional: requester_name, tags,
-            created_at, product_line, affected_customers
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* Batch status card */}
-          <div className="mb-5 flex items-center gap-6 rounded-xl border border-border bg-white px-5 py-[18px]">
-            <div className="flex min-w-0 flex-1 flex-col gap-2">
-              <div className="flex flex-wrap items-baseline gap-2.5">
-                <span className="font-title text-[15px] font-semibold">Review in Progress</span>
-                <span className="text-[13px] text-[#4a5b74]">
-                  {counts.new} new · {counts.updated} updated · {counts.unchanged} unchanged ·{" "}
-                  {counts.archive} archive proposed
-                </span>
-              </div>
-              <div className="h-1.5 max-w-[420px] overflow-hidden rounded-full bg-[#e4ecf6]">
-                <div
-                  className="h-full rounded-full bg-primary"
-                  style={{ width: `${total ? Math.round(((total - pending) / total) * 100) : 0}%` }}
-                />
-              </div>
-              <span className="text-xs text-muted">
-                {pending} of {total} awaiting review
-              </span>
+          {ideas.length > 0 && (
+            <div className="ml-5 flex items-center gap-1.5">
+              {segment("Merge", page === "merge", () => gotoMerge(null))}
+              <ArrowRight size={13} className="text-fg-faint" />
+              {segment("Final", page === "final", () => {
+                setPage("final");
+                cancelEdit();
+              })}
             </div>
-            <div className="flex shrink-0 flex-col items-end gap-1.5">
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {tickets.length > 0 && (
+              <Button variant="ghost" onClick={clearAll}>
+                <Trash2 size={13} />
+                Clear import
+              </Button>
+            )}
+            <Button onClick={() => fileRef.current?.click()} disabled={importing}>
+              <Upload size={13} />
+              {importing ? "Importing…" : "Upload Zendesk CSV"}
+            </Button>
+            {ideas.length > 0 && (
               <span title={injectHint} className="inline-flex">
-                <button
-                  disabled={injectDisabled}
-                  onClick={openMerge}
-                  className="inline-flex h-8 items-center whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
-                >
+                <Button variant="primary" glow disabled={injectDisabled} onClick={openMerge}>
+                  <GitMerge size={13} strokeWidth={2.25} />
                   Jira Merge
-                </button>
+                </Button>
               </span>
-            </div>
-          </div>
-
-          {/* Filters — one toolbar row; active-value chips appear below only when set */}
-          <div className="mb-5 flex flex-col gap-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative w-[240px]">
-                <Search
-                  size={14}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7a8aa3]"
-                />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search ideas…"
-                  className="h-8 w-full rounded-lg border border-border bg-white pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
-                />
-              </div>
-
-              {allProducts.length > 0 && (
-                <FilterPopover
-                  label="Product Line"
-                  options={allProducts}
-                  selected={productFilter}
-                  onToggle={(o) =>
-                    setProductFilter((prev) =>
-                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
-                    )
-                  }
-                  emptyText="No matching product line"
-                />
-              )}
-              {catalogPlatforms.length > 0 && (
-                <FilterPopover
-                  label="Platform"
-                  accent="platform"
-                  options={catalogPlatforms}
-                  selected={platformFilter}
-                  onToggle={(o) =>
-                    setPlatformFilter((prev) =>
-                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
-                    )
-                  }
-                  emptyText="No matching platform"
-                />
-              )}
-              {allCustomers.length > 0 && (
-                <FilterPopover
-                  label="Customer"
-                  accent="customer"
-                  options={allCustomers}
-                  selected={customerFilter}
-                  onToggle={(o) =>
-                    setCustomerFilter((prev) =>
-                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
-                    )
-                  }
-                  emptyText="No matching customer"
-                />
-              )}
-              <FilterPopover
-                single
-                label="Status"
-                accent="status"
-                options={["All", ...Object.keys(STATUS_CHIP_TO_BATCH)]}
-                selected={statusFilter}
-                onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
-              />
-              <span className="h-5 w-px bg-[#d5dfec]" />
-              <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
-                Pending Review
-              </button>
-
-              <div className="ml-auto flex shrink-0 items-center gap-2.5">
-                {page === "final" && (
-                  <span title={pending > 0 ? `${pending} awaiting review` : "All approved"}>
-                    <button
-                      onClick={() => {
-                        setNote("");
-                        void callMutate({ type: "approveAll" });
-                      }}
-                      className="inline-flex h-8 items-center whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                    >
-                      {pending > 0 ? "Approve all" : "Undo approve all"}
-                    </button>
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {hasChipRow && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className={`${MONO_LABEL} mr-1`}>Filters</span>
-                {productFilter.map((option) => (
-                  <button
-                    key={`p-${option}`}
-                    onClick={() => setProductFilter((prev) => prev.filter((x) => x !== option))}
-                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.product.chip}`}
-                  >
-                    {option} ✕
-                  </button>
-                ))}
-                {platformFilter.map((option) => (
-                  <button
-                    key={`pl-${option}`}
-                    onClick={() => setPlatformFilter((prev) => prev.filter((x) => x !== option))}
-                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.platform.chip}`}
-                  >
-                    {option} ✕
-                  </button>
-                ))}
-                {customerFilter.map((option) => (
-                  <button
-                    key={`c-${option}`}
-                    onClick={() => setCustomerFilter((prev) => prev.filter((x) => x !== option))}
-                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.customer.chip}`}
-                  >
-                    {option} ✕
-                  </button>
-                ))}
-                {pendingOnly && (
-                  <button
-                    onClick={() => setPendingOnly(false)}
-                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.status.chip}`}
-                  >
-                    Pending Review ✕
-                  </button>
-                )}
-                <button
-                  onClick={clearAllFilters}
-                  className="ml-1 text-[12px] font-medium text-primary hover:underline"
-                >
-                  Clear all
-                </button>
-              </div>
             )}
           </div>
+        </div>
 
-          {/* Body: merge board or idea rows */}
-          {page === "merge" ? (
-            <MergePage
-              ideas={ideas}
-              tickets={tickets}
-              jiraSources={jiraSources}
-              query={query}
-              productFilter={productFilter}
-              platformFilter={platformFilter}
-              customerFilter={customerFilter}
-              pendingOnly={pendingOnly}
-              statusFilter={statusFilter}
-              edit={edit}
-              selectedFinalId={selectedFinalId}
-              onStartEdit={startEdit}
-              onSaveEdit={saveEdit}
-              onCancelEdit={cancelEdit}
-              onToggleSrc={toggleSrc}
-              onOpenIdea={(id) => {
-                setDrawerId(id);
-                setDrawerSrc(null);
-              }}
-              onOpenSource={(kind, key) => {
-                setDrawerSrc({ kind, key });
-                setDrawerId(null);
-              }}
-            />
-          ) : (
-          <div className="flex flex-col gap-2">
-            {visible.map((idea) => {
-              const badge = badgeOf(idea);
-              const score = SCORING_ENABLED ? scoreOf(idea) : null;
-              const hovered = hoverId === idea.id;
-              const showMark = needsApproval(idea) && (idea.decision === "reviewed" || hovered);
-              return (
-                <div
-                  key={idea.id}
-                  onClick={() => setDrawerId(idea.id)}
-                  onMouseEnter={() => setHoverId(idea.id)}
-                  onMouseLeave={() => {
-                    setHoverId((h) => (h === idea.id ? null : h));
-                    setPopId((p) => (p === idea.id ? null : p));
-                  }}
-                  className="relative flex cursor-pointer items-center gap-4 rounded-lg border bg-white px-4 py-3"
-                  style={{
-                    borderColor: hovered ? "rgba(122,167,255,.5)" : "var(--border)",
-                    boxShadow: hovered ? "0 4px 14px rgba(10,22,40,.08)" : "none",
-                  }}
-                >
-                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <span className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-medium">
-                      {idea.title}
-                    </span>
-                    {(idea.products.length > 0 ||
-                      (idea.platforms ?? []).length > 0 ||
-                      (idea.customers ?? []).length > 0 ||
-                      idea.affectsAllCustomers) && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        {idea.products.map((p) => {
-                          // Flag names the model returned that aren't in the
-                          // Settings → Ideas catalog ("Other" is a reserved
-                          // value, not a miss) — observed, not corrected.
-                          const offCatalog =
-                            p !== "Other" &&
-                            !catalogProducts.some((c) => c.toLowerCase() === p.toLowerCase());
-                          return (
-                            <span
-                              key={p}
-                              title={offCatalog ? "Not in the product-line catalog" : undefined}
-                              className={
-                                offCatalog
-                                  ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                  : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
-                              }
-                              style={
-                                offCatalog
-                                  ? undefined
-                                  : chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)
-                              }
-                            >
-                              {p}
-                              {offCatalog ? " ⚑" : ""}
-                            </span>
-                          );
-                        })}
-                        {(idea.platforms ?? []).map((p) => (
-                          <span
-                            key={`platform-${p}`}
-                            className="rounded bg-[rgba(169,140,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#6b4bd0]"
-                          >
-                            {p}
-                          </span>
-                        ))}
-                        {idea.affectsAllCustomers && (
-                          <span
-                            title="A supporting ticket marks this as affecting all customers"
-                            className="rounded bg-[rgba(122,167,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#3b6fd4]"
-                          >
-                            All customers
-                          </span>
-                        )}
-                        {(idea.customers ?? []).map((c) => {
-                          // Off-catalog names are suggestions awaiting PM
-                          // review in the drawer — flagged, never hidden.
-                          const offCatalog = !customerCatalog.some(
-                            (k) => k.toLowerCase() === c.toLowerCase()
-                          );
-                          return (
-                            <span
-                              key={`customer-${c}`}
-                              title={offCatalog ? "Suggested customer — review in the idea" : undefined}
-                              className={
-                                offCatalog
-                                  ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                  : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
-                              }
-                              style={
-                                offCatalog
-                                  ? undefined
-                                  : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)
-                              }
-                            >
-                              {c}
-                              {offCatalog ? " ⚑" : ""}
-                            </span>
-                          );
-                        })}
-                      </div>
+        {error && (
+          <div className="mb-4 rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">
+            {error}
+          </div>
+        )}
+        {note && (
+          <div className="mb-4 inline-flex items-center gap-1.5 text-xs font-medium text-[#0f7a47]">
+            <Check size={12} strokeWidth={2.5} />
+            {note}
+          </div>
+        )}
+
+        {!hydrated ? null : ideas.length === 0 ? (
+          /* Empty state */
+          <div className="glass rounded-card px-10 py-16 text-center">
+            <div className="font-title mb-1 text-[16px] font-bold">No ideas yet</div>
+            <div className="mx-auto mb-5 max-w-[440px] text-[13px] leading-relaxed text-fg-3">
+              Upload a Zendesk ticket export (CSV) to create the first idea batch. Each ticket
+              becomes a New idea you can review, edit and approve.
+            </div>
+            <Button variant="primary" glow onClick={() => fileRef.current?.click()} disabled={importing}>
+              <Upload size={14} />
+              {importing ? "Importing…" : "Upload Zendesk CSV"}
+            </Button>
+            <div className="mt-5 font-mono text-[10.5px] text-fg-faint">
+              Expected columns: external_id, subject, description · optional: requester_name, tags,
+              created_at, product_line, affected_customers
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* KPI panel: review ring, batch stat cards, most-requested-by */}
+            <div className="glass-weak mb-4 flex items-stretch gap-3 rounded-card p-3">
+              <div className="flex min-w-[280px] items-center gap-3.5 py-1.5 pl-1.5 pr-3.5">
+                <Ring value={reviewedPct} color={allReviewed ? "#17b26a" : "var(--app-accent)"} />
+                <div>
+                  <div className="font-title text-[15px] font-bold">
+                    {allReviewed ? "Review complete" : "Review in Progress"}
+                  </div>
+                  <div className="mt-0.5 text-[12.5px] text-fg-3">
+                    {allReviewed ? (
+                      <span className="font-semibold text-[#0f7a47]">
+                        All {total} idea{total === 1 ? "" : "s"} approved
+                      </span>
+                    ) : (
+                      `${pending} of ${total} awaiting review`
                     )}
                   </div>
-
-                  {/* Score — hidden until the scoring milestone */}
-                  {score && (
-                  <div
-                    className="relative flex w-[52px] shrink-0 flex-col items-center gap-px"
-                    onMouseEnter={() => setPopId(idea.id)}
-                    onMouseLeave={() => setPopId((p) => (p === idea.id ? null : p))}
-                  >
-                    <span className="font-title text-base font-bold">
-                      {score.value != null ? score.value : "—"}
-                    </span>
-                    <span className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-[#9aa8be]">
-                      score
-                    </span>
-                    {popId === idea.id && (
-                      <div className="absolute bottom-[calc(100%+8px)] left-1/2 z-20 w-44 -translate-x-1/2 rounded-lg border border-border bg-white px-3.5 py-2.5 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
-                        <div className="flex justify-between gap-3 py-0.5 text-[12.5px]">
-                          <span className="text-muted">PM-OS score</span>
-                          <span className="font-semibold">
-                            {idea.pmScore != null ? idea.pmScore : "—"}
-                          </span>
-                        </div>
-                        <div className="flex justify-between gap-3 py-0.5 text-[12.5px]">
-                          <span className="text-muted">Manual score</span>
-                          <span className="font-semibold">
-                            {idea.manual != null ? idea.manual : "—"}
-                          </span>
-                        </div>
-                        <div className="mt-1.5 border-t border-[#e8eef7] pt-1.5 text-[11px] leading-snug text-[#9aa8be]">
-                          {score.src}
-                        </div>
-                      </div>
-                    )}
+                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">
+                    {tickets.length} ticket{tickets.length === 1 ? "" : "s"} · {parked} parked ·{" "}
+                    {counts.unchanged} unchanged
                   </div>
-                  )}
-
-                  {/* Votes — the "+N" jumps to the Merge page with this idea selected */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (idea.newVotes > 0) gotoMerge(idea.id);
-                    }}
-                    title={idea.newVotes > 0 ? "Show merge sources" : undefined}
-                    className={`flex w-[72px] shrink-0 items-center gap-1 rounded-full border border-transparent px-2 py-0.5 ${
-                      idea.newVotes > 0
-                        ? "cursor-pointer hover:border-[#d7e3f2] hover:bg-[#f2f7fd]"
-                        : "cursor-default"
-                    }`}
-                  >
-                    {(idea.existingVotes > 0 || idea.newVotes > 0) && (
-                      <ThumbsUp size={13} className="shrink-0 text-[#9aa8be]" />
-                    )}
-                    {idea.existingVotes > 0 && (
-                      <span className="text-xs font-semibold">{idea.existingVotes}</span>
-                    )}
-                    {idea.newVotes > 0 && (
-                      <span className="text-xs font-semibold text-[#1f8a53]">
-                        {idea.existingVotes > 0 ? `(+${idea.newVotes})` : `+${idea.newVotes}`}
-                      </span>
-                    )}
-                  </button>
-
-                  {/* Status pill — Updated carries the what-changed narration on hover */}
-                  <span className="flex w-[124px] shrink-0 items-center justify-center">
-                    {badge && (
-                      <span
-                        title={
-                          idea.batch === "updated" && (idea.batchChanges ?? []).length > 0
-                            ? (idea.batchChanges ?? []).join("\n")
-                            : undefined
-                        }
-                        className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium"
-                        style={{ background: badge.bg, color: badge.fg, borderColor: badge.bd }}
-                      >
-                        {badge.check && <Check size={11} strokeWidth={3} />}
-                        {badge.label}
-                      </span>
-                    )}
-                  </span>
-
-                  {/* Hover approve mark */}
-                  {showMark && (() => {
-                    const blocked =
-                      idea.decision === "pending" && unresolvedSuggested(idea).length > 0;
-                    return (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleApprove(idea.id);
-                      }}
-                      disabled={blocked}
-                      title={
-                        blocked
-                          ? "Approve or dismiss the suggested customers first"
-                          : idea.decision === "pending"
-                            ? "Mark reviewed"
-                            : "Mark unreviewed"
-                      }
-                      className={
-                        blocked
-                          ? "absolute right-2 top-1.5 flex h-4 w-4 cursor-not-allowed items-center justify-center rounded-full border p-0 opacity-40"
-                          : "absolute right-2 top-1.5 flex h-4 w-4 items-center justify-center rounded-full border p-0 hover:border-[#bfe3cf] hover:bg-[#e9f7ef] hover:text-[#1f8a53]"
-                      }
-                      style={{
-                        background: idea.decision === "reviewed" ? "#e9f7ef" : "#ffffff",
-                        borderColor: idea.decision === "reviewed" ? "#bfe3cf" : "#c8d4e3",
-                        color: idea.decision === "reviewed" ? "#1f8a53" : "#b3bfd0",
-                      }}
-                    >
-                      <Check size={9} strokeWidth={3.5} />
-                    </button>
-                    );
-                  })()}
                 </div>
-              );
-            })}
-            {visible.length === 0 && (
-              <div className="rounded-xl border border-dashed border-border bg-white p-10 text-center text-sm text-muted">
-                No ideas match.{" "}
-                {hasFilters && (
+              </div>
+              {statCard(
+                "new",
+                counts.new,
+                pendingIn("new") > 0 ? `${pendingIn("new")} pending` : counts.new > 0 ? "All reviewed" : "None this import"
+              )}
+              {statCard(
+                "updated",
+                counts.updated,
+                newVotesTotal > 0
+                  ? `+${newVotesTotal} vote${newVotesTotal === 1 ? "" : "s"} this import`
+                  : counts.updated > 0
+                    ? "Details enriched"
+                    : "None this import"
+              )}
+              {statCard(
+                "archive",
+                counts.archive,
+                pendingIn("archive") > 0 ? `${pendingIn("archive")} to decide` : counts.archive > 0 ? "All reviewed" : "Nothing proposed"
+              )}
+              <div className="flex flex-[1.1] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
+                <span className="eyebrow text-[9.5px]">Most requested by</span>
+                {topCustomers.length === 0 ? (
+                  <span className="text-[12px] text-fg-faint">No customers named yet</span>
+                ) : (
+                  topCustomers.map(([name, n]) => (
+                    <span key={name} className="flex items-center gap-2 text-[12px]">
+                      <Avatar
+                        name={name}
+                        size={16}
+                        style={chipStyle(colorOf(customerColors, name), CUSTOMER_CHIP_DEFAULT)}
+                      />
+                      <span className="min-w-0 flex-1 truncate text-fg-2">{name}</span>
+                      <span className="inline-flex h-1 w-[54px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+                        <span
+                          className="block h-full bg-primary"
+                          style={{ width: `${Math.round((n / topCustomers[0][1]) * 100)}%` }}
+                        />
+                      </span>
+                      <span className="w-4 text-right font-mono text-[10.5px] text-fg-muted">{n}</span>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Filters — one toolbar row; active-value chips appear below only when set */}
+            <div className="mb-3.5 flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative w-[250px]">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search ideas…"
+                    className="h-8 w-full rounded-control border border-border bg-[var(--app-glass)] pl-9 pr-3 text-[13px] shadow-sm outline-none placeholder:text-fg-faint focus:border-primary focus:bg-white focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
+                  />
+                </div>
+
+                {allProducts.length > 0 && (
+                  <FilterPopover
+                    label="Product Line"
+                    options={allProducts}
+                    selected={productFilter}
+                    onToggle={(o) =>
+                      setProductFilter((prev) =>
+                        prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                      )
+                    }
+                    emptyText="No matching product line"
+                  />
+                )}
+                {catalogPlatforms.length > 0 && (
+                  <FilterPopover
+                    label="Platform"
+                    accent="platform"
+                    options={catalogPlatforms}
+                    selected={platformFilter}
+                    onToggle={(o) =>
+                      setPlatformFilter((prev) =>
+                        prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                      )
+                    }
+                    emptyText="No matching platform"
+                  />
+                )}
+                {allCustomers.length > 0 && (
+                  <FilterPopover
+                    label="Customer"
+                    accent="customer"
+                    options={allCustomers}
+                    selected={customerFilter}
+                    onToggle={(o) =>
+                      setCustomerFilter((prev) =>
+                        prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                      )
+                    }
+                    emptyText="No matching customer"
+                  />
+                )}
+                <FilterPopover
+                  single
+                  label="Status"
+                  accent="status"
+                  options={["All", ...Object.keys(STATUS_CHIP_TO_BATCH)]}
+                  selected={statusFilter}
+                  onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
+                />
+                <span className="mx-1 h-5 w-px bg-border" />
+                <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
+                  Pending Review
+                  {pendingOnly && <Check size={12} strokeWidth={3} />}
+                </button>
+
+                <div className="ml-auto flex shrink-0 items-center gap-2.5">
+                  {page === "final" && (
+                    <span className="inline-flex items-center gap-1.5 text-[12.5px] text-fg-3">
+                      <Layers size={13} className="text-primary" />
+                      Grouped by <b className="font-semibold text-fg-2">Product line</b>
+                    </span>
+                  )}
+                  {page === "final" && (
+                    <span title={pending > 0 ? `${pending} awaiting review` : "All approved"}>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setNote("");
+                          void callMutate({ type: "approveAll" });
+                        }}
+                      >
+                        <CheckCheck size={13} strokeWidth={2.25} />
+                        {pending > 0 ? "Approve all" : "Undo approve all"}
+                      </Button>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {hasChipRow && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className={`${MONO_LABEL} mr-1`}>Filters</span>
+                  {productFilter.map((option) => (
+                    <button
+                      key={`p-${option}`}
+                      onClick={() => setProductFilter((prev) => prev.filter((x) => x !== option))}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.product.chip}`}
+                    >
+                      {option} ✕
+                    </button>
+                  ))}
+                  {platformFilter.map((option) => (
+                    <button
+                      key={`pl-${option}`}
+                      onClick={() => setPlatformFilter((prev) => prev.filter((x) => x !== option))}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.platform.chip}`}
+                    >
+                      {option} ✕
+                    </button>
+                  ))}
+                  {customerFilter.map((option) => (
+                    <button
+                      key={`c-${option}`}
+                      onClick={() => setCustomerFilter((prev) => prev.filter((x) => x !== option))}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.customer.chip}`}
+                    >
+                      {option} ✕
+                    </button>
+                  ))}
+                  {pendingOnly && (
+                    <button
+                      onClick={() => setPendingOnly(false)}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.status.chip}`}
+                    >
+                      Pending Review ✕
+                    </button>
+                  )}
                   <button
                     onClick={clearAllFilters}
-                    className="text-primary hover:underline"
+                    className="ml-1 text-[12px] font-semibold text-primary hover:underline"
                   >
-                    Clear filters
+                    Clear all
                   </button>
+                </div>
+              )}
+            </div>
+
+            {/* Body: merge board or grouped idea rows */}
+            {page === "merge" ? (
+              <div className="flex flex-col gap-3">
+                {edit && editedIdea ? (
+                  <div className="flex items-center gap-2.5 rounded-inner border border-[rgba(23,178,106,.35)] bg-[rgba(23,178,106,.12)] px-3.5 py-2.5 text-[13px] text-[#0f7a47]">
+                    <GitMerge size={15} strokeWidth={2.25} className="shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">
+                      Editing <b className="font-semibold">{editedIdea.title}</b> —{" "}
+                      {editCount} source{editCount === 1 ? "" : "s"} selected. Tick a Zendesk or Jira
+                      row to attach it.
+                    </span>
+                    <span className="hidden font-mono text-[11px] text-[#0f7a47]/70 xl:inline">
+                      Esc discards
+                    </span>
+                    <Button size="sm" onClick={cancelEdit}>
+                      Discard
+                    </Button>
+                    <Button size="sm" variant="success" glow disabled={!editDirty} onClick={saveEdit}>
+                      <Check size={13} strokeWidth={3} />
+                      Save sources
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">
+                    <GitMerge size={14} className="text-primary" />
+                    Pick an idea in Final to edit its sources · a source's N× shows every idea it backs
+                  </div>
+                )}
+                <MergePage
+                  ideas={ideas}
+                  tickets={tickets}
+                  jiraSources={jiraSources}
+                  query={query}
+                  productFilter={productFilter}
+                  platformFilter={platformFilter}
+                  customerFilter={customerFilter}
+                  pendingOnly={pendingOnly}
+                  statusFilter={statusFilter}
+                  productColors={productColors}
+                  edit={edit}
+                  selectedFinalId={selectedFinalId}
+                  onStartEdit={startEdit}
+                  onSaveEdit={saveEdit}
+                  onCancelEdit={cancelEdit}
+                  onToggleSrc={toggleSrc}
+                  onOpenIdea={(id) => {
+                    setDrawerId(id);
+                    setDrawerSrc(null);
+                  }}
+                  onOpenSource={(kind, key) => {
+                    setDrawerSrc({ kind, key });
+                    setDrawerId(null);
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3.5">
+                {groups.map(([groupName, list]) => {
+                  const name = groupName || "Unassigned";
+                  const color = groupName
+                    ? chipStyle(colorOf(productColors, groupName), PRODUCT_CHIP_DEFAULT)
+                    : { background: "var(--app-hairline)", color: "var(--app-fg-muted)" };
+                  const votes = list.reduce((a, i) => a + i.existingVotes + i.newVotes, 0);
+                  const groupPending = list.filter(
+                    (i) => needsApproval(i) && i.decision === "pending"
+                  ).length;
+                  const open = !collapsedGroups.includes(groupName);
+                  return (
+                    <section key={groupName || "__unassigned"} className="glass overflow-hidden rounded-card">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedGroups((prev) =>
+                            prev.includes(groupName)
+                              ? prev.filter((g) => g !== groupName)
+                              : [...prev, groupName]
+                          )
+                        }
+                        aria-expanded={open}
+                        className="flex w-full items-center gap-3 px-4 py-2.5 text-left"
+                        style={{
+                          borderBottom: open ? "1px solid var(--app-hairline)" : "none",
+                          background: `linear-gradient(90deg, color-mix(in srgb, ${color.color} 14%, white), rgba(255,255,255,0) 60%)`,
+                        }}
+                      >
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
+                          style={{
+                            background: color.color,
+                            boxShadow: `0 0 10px color-mix(in srgb, ${color.color} 60%, transparent)`,
+                          }}
+                        />
+                        <span className="font-title text-[14px] font-bold">{name}</span>
+                        <span className="font-mono text-[11px] text-fg-muted">
+                          {list.length} idea{list.length === 1 ? "" : "s"}
+                        </span>
+                        <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
+                          <span className="inline-flex items-center gap-1.5">
+                            <ThumbsUp size={12} className="text-fg-faint" />
+                            <b className="font-title font-bold text-foreground">{votes}</b> votes
+                          </span>
+                          {groupPending > 0 ? (
+                            <span className="font-semibold text-[#c98a00]">{groupPending} pending</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 font-semibold text-[#0f7a47]">
+                              <Check size={12} strokeWidth={3} />
+                              All reviewed
+                            </span>
+                          )}
+                          <ChevronDown
+                            size={14}
+                            className={`text-fg-faint transition-transform ${open ? "" : "-rotate-90"}`}
+                          />
+                        </span>
+                      </button>
+                      {open &&
+                        list.map((idea) => {
+                          const badge = badgeOf(idea);
+                          const score = SCORING_ENABLED ? scoreOf(idea) : null;
+                          const isOpen = drawerId === idea.id;
+                          const blocked =
+                            idea.decision === "pending" && unresolvedSuggested(idea).length > 0;
+                          const firstTicket = idea.zen[0] ? ticketsByKey.get(idea.zen[0]) : undefined;
+                          const customers = idea.customers ?? [];
+                          return (
+                            <div
+                              key={idea.id}
+                              onClick={() => setDrawerId(idea.id)}
+                              className="flex h-[58px] cursor-pointer items-center gap-3.5 border-b border-hairline px-4 transition-colors last:border-b-0 hover:bg-white/70"
+                              style={
+                                isOpen
+                                  ? {
+                                      background: "var(--app-accent-soft)",
+                                      boxShadow: "inset 3px 0 0 var(--app-accent)",
+                                    }
+                                  : undefined
+                              }
+                            >
+                              {needsApproval(idea) ? (
+                                <ApproveMark
+                                  on={idea.decision !== "pending"}
+                                  blocked={blocked}
+                                  title={
+                                    blocked
+                                      ? "Approve or dismiss the suggested customers first"
+                                      : idea.decision === "pending"
+                                        ? "Mark reviewed"
+                                        : "Mark unreviewed"
+                                  }
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleApprove(idea.id);
+                                  }}
+                                />
+                              ) : (
+                                <span className="h-5 w-5 shrink-0" aria-hidden />
+                              )}
+                              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                                <span className="flex items-center gap-2">
+                                  <span className="truncate text-[13.5px] font-semibold text-foreground">
+                                    {idea.title}
+                                  </span>
+                                  {score && score.value != null && (
+                                    <span className="font-mono text-[10.5px] font-semibold text-fg-muted">
+                                      {score.value}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="flex items-center gap-1.5 overflow-hidden text-[11.5px] text-fg-muted">
+                                  {firstTicket ? (
+                                    <span className="shrink-0 font-mono font-semibold">
+                                      {firstTicket.id}
+                                      {idea.zen.length > 1 ? ` +${idea.zen.length - 1}` : ""}
+                                    </span>
+                                  ) : null}
+                                  {idea.jira[0] && (
+                                    <span className="shrink-0 font-mono font-semibold text-[#2a5fd0]">
+                                      {idea.jira[0]}
+                                    </span>
+                                  )}
+                                  {(firstTicket || idea.jira[0]) &&
+                                    (idea.products.length > 1 ||
+                                      (idea.platforms ?? []).length > 0 ||
+                                      customers.length > 0 ||
+                                      idea.affectsAllCustomers) && <span>·</span>}
+                                  {idea.products.slice(1).map((p) => productChip(p))}
+                                  {(idea.platforms ?? []).map((p) => (
+                                    <Chip key={`platform-${p}`} kind="platform">
+                                      {p}
+                                    </Chip>
+                                  ))}
+                                  {idea.affectsAllCustomers && (
+                                    <Chip
+                                      kind="all"
+                                      title="A supporting ticket marks this as affecting all customers"
+                                    >
+                                      All customers
+                                    </Chip>
+                                  )}
+                                  {customers.slice(0, 2).map(customerChip)}
+                                  {customers.length > 2 && (
+                                    <span className="shrink-0">+{customers.length - 2}</span>
+                                  )}
+                                </span>
+                              </div>
+                              <span className="flex w-24 shrink-0 items-center">
+                                {customers.slice(0, 3).map((c, k) => (
+                                  <Avatar
+                                    key={c}
+                                    name={c}
+                                    size={26}
+                                    className={k ? "-ml-2" : ""}
+                                    style={chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
+                                  />
+                                ))}
+                                {customers.length === 0 && (
+                                  <span className="text-[11.5px] text-fg-disabled">Internal</span>
+                                )}
+                              </span>
+                              {/* Votes — the "+N" jumps to the Merge page with this idea selected */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (idea.newVotes > 0) gotoMerge(idea.id);
+                                }}
+                                title={idea.newVotes > 0 ? "Show merge sources" : undefined}
+                                className={`flex w-[84px] shrink-0 flex-col items-end gap-[3px] rounded-control border border-transparent px-1.5 py-1 ${
+                                  idea.newVotes > 0
+                                    ? "cursor-pointer hover:border-border hover:bg-white"
+                                    : "cursor-default"
+                                }`}
+                              >
+                                {votesOf(idea)}
+                                <VoteBar
+                                  existing={idea.existingVotes}
+                                  added={idea.newVotes}
+                                  max={maxVotes}
+                                />
+                              </button>
+                              <span className="flex w-[84px] shrink-0 justify-end">
+                                {badge && (
+                                  <Pill
+                                    badge={badge}
+                                    title={
+                                      idea.batch === "updated" && (idea.batchChanges ?? []).length > 0
+                                        ? (idea.batchChanges ?? []).join("\n")
+                                        : undefined
+                                    }
+                                  />
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                    </section>
+                  );
+                })}
+                {visible.length === 0 && (
+                  <div className="glass rounded-card p-10 text-center text-sm text-fg-3">
+                    No ideas match.{" "}
+                    {hasFilters && (
+                      <button onClick={clearAllFilters} className="font-semibold text-primary hover:underline">
+                        Clear filters
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             )}
-          </div>
-          )}
-        </>
-      )}
+          </>
+        )}
+      </div>
 
       {/* Item details drawer */}
       {(drawerIdea || drawerSrc) && (
@@ -1208,7 +1388,7 @@ export function IdeasView({
       {toast && (
         <div
           role="status"
-          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-border bg-[#101828] px-4 py-2.5 text-[13px] font-medium text-white shadow-[0_12px_32px_rgba(10,22,40,.25)]"
+          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-inner bg-[#0b1430] px-4 py-2.5 text-[13px] font-medium text-white shadow-[0_12px_32px_rgba(10,22,40,.3)]"
         >
           {toast}
         </div>
@@ -1216,55 +1396,53 @@ export function IdeasView({
 
       {/* Import progress overlay */}
       {importStep !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,22,40,.35)] p-10">
-          <div className="flex w-[420px] max-w-full flex-col gap-5 rounded-xl border border-border bg-white p-6 shadow-[0_16px_48px_rgba(10,22,40,.18)]">
-            <div>
-              <div className="font-title text-lg font-semibold">Importing tickets</div>
-              <div className="mt-1 text-[13px] text-muted">
-                Turning your Zendesk export into ideas — this can take a minute.
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,25,41,.42)] p-10 backdrop-blur-[6px]">
+          <div className="glass-strong flex w-[440px] max-w-full flex-col gap-5 overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]">
+            <div className="h-[3px] bg-[linear-gradient(90deg,var(--app-accent),#17b26a)]" />
+            <div className="flex flex-col gap-5 px-6 pb-6">
+              <div>
+                <div className="eyebrow mb-1.5 text-primary">Zendesk → Ideas</div>
+                <div className="font-title text-[20px] font-bold">Importing tickets</div>
+                <div className="mt-1 text-[13px] text-fg-3">
+                  Turning your Zendesk export into ideas — this can take a minute.
+                </div>
               </div>
-            </div>
-            <div className="flex flex-col gap-1">
-              {IMPORT_STEPS.map((step, i) => {
-                const done = i < importStep;
-                const active = i === importStep;
-                return (
-                  <div
-                    key={step.label}
-                    className={`flex items-start gap-3 rounded-lg px-2.5 py-2 transition-colors ${
-                      active ? "bg-background" : ""
-                    }`}
-                  >
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center pt-px">
-                      {done ? (
-                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#e7f6ee]">
-                          <Check size={12} strokeWidth={3} className="text-[#1e9e5a]" />
-                        </span>
-                      ) : active ? (
-                        <span className="h-[18px] w-[18px] animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                      ) : (
-                        <span className="h-1.5 w-1.5 rounded-full bg-[#c9d4e4]" />
-                      )}
-                    </span>
-                    <span className="flex min-w-0 flex-col">
-                      <span
-                        className={`text-[13px] ${
-                          active
-                            ? "font-medium"
-                            : done
-                              ? "text-muted"
-                              : "text-[#9aa8be]"
-                        }`}
-                      >
-                        {step.label}
+              <div className="flex flex-col gap-1">
+                {IMPORT_STEPS.map((step, i) => {
+                  const done = i < importStep;
+                  const active = i === importStep;
+                  return (
+                    <div
+                      key={step.label}
+                      className={`flex items-start gap-3 rounded-control px-2.5 py-2 transition-colors ${
+                        active ? "bg-[var(--app-accent-soft)]" : ""
+                      }`}
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center pt-px">
+                        {done ? (
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[rgba(23,178,106,.16)]">
+                            <Check size={12} strokeWidth={3} className="text-[#0f7a47]" />
+                          </span>
+                        ) : active ? (
+                          <span className="h-[18px] w-[18px] animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                        ) : (
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#c9d4e4]" />
+                        )}
                       </span>
-                      {active && (
-                        <span className="text-[11.5px] text-muted">{step.hint}</span>
-                      )}
-                    </span>
-                  </div>
-                );
-              })}
+                      <span className="flex min-w-0 flex-col">
+                        <span
+                          className={`text-[13px] ${
+                            active ? "font-semibold text-foreground" : done ? "text-fg-3" : "text-fg-faint"
+                          }`}
+                        >
+                          {step.label}
+                        </span>
+                        {active && <span className="text-[11.5px] text-fg-3">{step.hint}</span>}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -1273,190 +1451,218 @@ export function IdeasView({
       {/* Merge-to-Jira modal: scope → preview → execute → results */}
       {confirmOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,22,40,.35)] p-10"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,25,41,.42)] p-10 backdrop-blur-[6px]"
           onClick={closeMerge}
         >
           <div
-            className="flex w-[640px] max-w-full flex-col gap-4 rounded-xl border border-border bg-white p-6"
+            className="glass-strong flex w-[640px] max-w-full flex-col overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]"
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="h-[3px] bg-[linear-gradient(90deg,var(--app-accent),#17b26a)]" />
             {pushResults ? (
               <>
-                <div>
-                  <div className="font-title text-lg font-semibold">
-                    {pushResults.every((r) => r.ok) ? "Merged to Jira" : "Merge finished with errors"}
+                <div className="flex flex-col gap-4 px-[26px] pb-5 pt-[22px]">
+                  <div>
+                    <div className="eyebrow mb-1.5 text-primary">Jira Merge · Result</div>
+                    <h2 className="font-title m-0 text-[22px] font-bold">
+                      {pushResults.every((r) => r.ok) ? "Merged to Jira" : "Merge finished with errors"}
+                    </h2>
+                    <p className="mb-0 mt-1.5 text-[13.5px] leading-relaxed text-fg-3">
+                      {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
+                      {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
+                      run Jira Merge again to retry just those.
+                    </p>
                   </div>
-                  <div className="mt-1 text-[13px] text-muted">
-                    {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
-                    {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
-                    run Jira Merge again to retry just those.
-                  </div>
-                </div>
-                <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
-                  {pushResults.map((r) => (
-                    <div
-                      key={r.ideaId}
-                      className="flex items-start gap-3 rounded-lg border border-[#e8eef7] bg-background px-3 py-2"
-                    >
-                      <span
-                        className={`mt-0.5 shrink-0 text-[13px] font-semibold ${r.ok ? "text-[#1f8a53]" : "text-[#c94266]"}`}
+                  <div className="flex max-h-80 flex-col overflow-y-auto rounded-inner border border-border">
+                    {pushResults.map((r, k) => (
+                      <div
+                        key={r.ideaId}
+                        className={`flex items-start gap-3 px-3 py-2 ${k ? "border-t border-hairline" : ""}`}
                       >
-                        {r.ok ? "✓" : "✕"}
-                      </span>
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-[13px] font-medium">{r.title}</span>
-                        {r.ok ? (
-                          <span className="text-[11.5px] text-muted">
-                            {r.action === "create"
-                              ? `Created ${r.jiraKey}`
-                              : r.action === "update"
-                                ? `Updated ${r.jiraKey}`
-                                : `${r.jiraKey} already up to date`}
-                          </span>
-                        ) : (
-                          <span className="text-[11.5px] text-[#c94266]">{r.error}</span>
+                        <span
+                          className={`mt-0.5 shrink-0 text-[13px] font-semibold ${r.ok ? "text-[#0f7a47]" : "text-[#c23767]"}`}
+                        >
+                          {r.ok ? "✓" : "✕"}
+                        </span>
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-[13px] font-medium text-fg-2">{r.title}</span>
+                          {r.ok ? (
+                            <span className="text-[11.5px] text-fg-muted">
+                              {r.action === "create"
+                                ? `Created ${r.jiraKey}`
+                                : r.action === "update"
+                                  ? `Updated ${r.jiraKey}`
+                                  : `${r.jiraKey} already up to date`}
+                            </span>
+                          ) : (
+                            <span className="text-[11.5px] text-[#c23767]">{r.error}</span>
+                          )}
+                        </div>
+                        {r.url && (
+                          <a
+                            href={r.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="shrink-0 font-mono text-[11px] text-primary hover:underline"
+                          >
+                            {r.jiraKey}
+                          </a>
                         )}
                       </div>
-                      {r.url && (
-                        <a
-                          href={r.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="shrink-0 font-mono text-[11px] text-primary hover:underline"
-                        >
-                          {r.jiraKey}
-                        </a>
-                      )}
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-                <div className="flex justify-end">
-                  <button
-                    onClick={closeMerge}
-                    className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                  >
+                <div className="flex justify-end gap-2 border-t border-border bg-[rgba(247,250,253,.8)] px-[26px] py-3.5">
+                  <Button variant="primary" glow onClick={closeMerge}>
                     Done
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : (
               <>
-                <div>
-                  <div className="font-title text-lg font-semibold">Jira Merge</div>
-                  <div className="mt-1 text-[13px] text-muted">
-                    Pick the product lines to merge. Only approved ideas are written — anything
-                    still pending stays here for a later merge.
+                <div className="flex flex-col gap-4 px-[26px] pb-5 pt-[22px]">
+                  <div>
+                    <div className="eyebrow mb-1.5 text-primary">
+                      {plan ? "Jira Merge · Preview" : "Zendesk → Jira"}
+                    </div>
+                    <h2 className="font-title m-0 text-[22px] font-bold">Jira Merge</h2>
+                    <p className="mb-0 mt-1.5 text-[13.5px] leading-relaxed text-fg-3">
+                      Pick the product lines to merge. Only approved ideas are written — anything
+                      still pending stays here for a later merge.
+                    </p>
                   </div>
-                </div>
 
-                {/* Scope */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    onClick={() => {
-                      setScopeSel([]);
-                      setPlan(null);
-                      setMergeError("");
-                    }}
-                    className={chipClass(scopeSel.length === 0)}
-                  >
-                    All product lines
-                  </button>
-                  {allProducts.map((p) => (
-                    <button key={p} onClick={() => toggleScope(p)} className={chipClass(scopeSel.includes(p))}>
-                      {p}
+                  {/* Scope */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => {
+                        setScopeSel([]);
+                        setPlan(null);
+                        setMergeError("");
+                      }}
+                      className={chipClass(scopeSel.length === 0)}
+                    >
+                      All product lines
                     </button>
-                  ))}
-                </div>
-                <div className="text-xs text-muted">{previewHint}</div>
-
-                {/* Preview */}
-                {plan && (
-                  <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
-                    {plan.blockers.map((b) => (
-                      <div
-                        key={b}
-                        className="rounded-lg border border-[#f3c9d5] bg-[#fdeef2] px-3 py-2 text-[12.5px] text-[#c94266]"
-                      >
-                        {b}
-                      </div>
+                    {allProducts.map((p) => (
+                      <button key={p} onClick={() => toggleScope(p)} className={chipClass(scopeSel.includes(p))}>
+                        {p}
+                        {scopeSel.includes(p) && <Check size={11} strokeWidth={3} />}
+                      </button>
                     ))}
-                    {plan.items.map((item) => (
-                      <div
-                        key={item.ideaId}
-                        className="flex flex-col gap-1 rounded-lg border border-[#e8eef7] bg-background px-3 py-2"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span
-                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                              item.action === "create"
-                                ? "border-[#c4e8d2] bg-[#e9f7ef] text-[#1f8a53]"
-                                : "border-[rgba(122,167,255,.4)] bg-[rgba(122,167,255,.14)] text-[#3b6fd4]"
-                            }`}
+                  </div>
+                  <div className="text-xs text-fg-3">{previewHint}</div>
+
+                  {/* Preview */}
+                  {plan && (
+                    <>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        {(
+                          [
+                            ["Create", plan.items.filter((i) => i.action === "create").length, "#17b26a", PlusCircle],
+                            ["Update", plan.items.filter((i) => i.action !== "create").length, "#3b7cf6", RefreshCw],
+                          ] as const
+                        ).map(([label, n, c, Icon]) => (
+                          <div
+                            key={label}
+                            className="flex items-center gap-3 rounded-inner px-3.5 py-3"
+                            style={{
+                              background: `color-mix(in srgb, ${c} 10%, white)`,
+                              border: `1px solid color-mix(in srgb, ${c} 35%, white)`,
+                            }}
                           >
-                            {item.action === "create" ? "Create" : `Update ${item.jiraKey}`}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-                            {item.title}
-                          </span>
-                        </div>
-                        <span className="text-[11.5px] text-muted">
-                          {item.noop
-                            ? "Already up to date in Jira — will be marked merged"
-                            : item.changes.map((c) => c.label).join(", ")}
-                          {item.votes > 0 ? ` · ${item.votes} vote${item.votes === 1 ? "" : "s"}` : ""}
-                        </span>
+                            <Icon size={18} style={{ color: c }} />
+                            <span>
+                              <span className="font-title block text-[22px] font-bold leading-none">{n}</span>
+                              <span className="eyebrow text-[9.5px]" style={{ color: c }}>
+                                {label} in Jira
+                              </span>
+                            </span>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                    {plan.warnings.map((w) => (
-                      <div
-                        key={w}
-                        className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800"
-                      >
-                        {w}
+                      <div className="flex max-h-72 flex-col overflow-y-auto rounded-inner border border-border">
+                        {plan.blockers.map((b) => (
+                          <div
+                            key={b}
+                            className="border-b border-hairline bg-[#fdeef2] px-3 py-2 text-[12.5px] text-[#c23767]"
+                          >
+                            {b}
+                          </div>
+                        ))}
+                        {plan.items.map((item, k) => (
+                          <div
+                            key={item.ideaId}
+                            className={`flex flex-col gap-1 px-3 py-2 ${k ? "border-t border-hairline" : ""}`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <span
+                                className="w-11 shrink-0 rounded px-1.5 py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase"
+                                style={{
+                                  background: item.action === "create" ? STATUS_TONES.new.soft : STATUS_TONES.updated.soft,
+                                  color: item.action === "create" ? STATUS_TONES.new.fg : STATUS_TONES.updated.fg,
+                                }}
+                              >
+                                {item.action === "create" ? "New" : "Upd"}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg-2">
+                                {item.title}
+                              </span>
+                              <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">
+                                {item.action === "create" ? "→ new issue" : item.jiraKey}
+                              </span>
+                            </div>
+                            <span className="pl-[54px] text-[11.5px] text-fg-muted">
+                              {item.noop
+                                ? "Already up to date in Jira — will be marked merged"
+                                : item.changes.map((c) => c.label).join(", ")}
+                              {item.votes > 0 ? ` · ${item.votes} vote${item.votes === 1 ? "" : "s"}` : ""}
+                            </span>
+                          </div>
+                        ))}
+                        {plan.warnings.map((w) => (
+                          <div
+                            key={w}
+                            className="border-t border-hairline bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800"
+                          >
+                            {w}
+                          </div>
+                        ))}
+                        {plan.skipped.map((s) => (
+                          <div key={s.ideaId} className="border-t border-hairline px-3 py-1.5 text-[11.5px] text-fg-muted">
+                            Skipped “{s.title}” — {s.reason}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                    {plan.skipped.map((s) => (
-                      <div key={s.ideaId} className="px-3 py-1 text-[11.5px] text-muted">
-                        Skipped “{s.title}” — {s.reason}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                    </>
+                  )}
 
-                {mergeError && (
-                  <div className="rounded-lg border border-[#f3c9d5] bg-[#fdeef2] px-3 py-2 text-[12.5px] text-[#c94266]">
-                    {mergeError}
-                  </div>
-                )}
+                  {mergeError && (
+                    <div className="rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-3 py-2 text-[12.5px] text-[#c23767]">
+                      {mergeError}
+                    </div>
+                  )}
+                </div>
 
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    onClick={closeMerge}
-                    className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                  >
-                    Cancel
-                  </button>
+                <div className="flex items-center justify-end gap-2 border-t border-border bg-[rgba(247,250,253,.8)] px-[26px] py-3.5">
+                  <Button onClick={closeMerge}>Cancel</Button>
                   {!plan ? (
                     <span title={previewHint} className="inline-flex">
-                      <button
-                        disabled={previewDisabled || planLoading}
-                        onClick={loadPlan}
-                        className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
-                      >
+                      <Button variant="primary" glow disabled={previewDisabled || planLoading} onClick={loadPlan}>
                         {planLoading ? "Checking Jira…" : "Preview changes"}
-                      </button>
+                      </Button>
                     </span>
                   ) : (
-                    <button
+                    <Button
+                      variant="primary"
+                      glow
                       disabled={pushing || plan.blockers.length > 0 || plan.items.length === 0}
                       onClick={runPush}
-                      className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
                     >
-                      {pushing
-                        ? "Merging…"
-                        : `Confirm merge (${plan.items.length})`}
-                    </button>
+                      <GitMerge size={13} strokeWidth={2.25} />
+                      {pushing ? "Merging…" : `Confirm merge (${plan.items.length})`}
+                    </Button>
                   )}
                 </div>
               </>

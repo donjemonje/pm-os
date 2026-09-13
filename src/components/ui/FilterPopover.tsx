@@ -6,28 +6,28 @@ import { Check, ChevronDown } from "lucide-react";
 /** Shared accent styles for filter triggers, options and selected-value chips. */
 export const FILTER_ACCENTS = {
   product: {
-    trigger: "border-primary bg-[rgba(122,167,255,.10)] text-[#3b6fd4]",
+    trigger: "border-primary bg-[rgba(36,87,245,.10)] text-[#2a5fd0]",
     badge: "bg-primary text-white",
-    selected: "bg-[rgba(122,167,255,.12)] text-[#3b6fd4]",
-    chip: "bg-primary hover:bg-primary-hover",
+    selected: "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]",
+    chip: "bg-primary shadow-[0_4px_10px_-4px_var(--app-accent)] hover:bg-primary-hover",
   },
   platform: {
     trigger: "border-[#9d7ce8] bg-[rgba(169,140,255,.12)] text-[#6b4bd0]",
     badge: "bg-[#7f5be0] text-white",
     selected: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
-    chip: "bg-[#7f5be0] hover:bg-[#6c48cd]",
+    chip: "bg-[#7f5be0] shadow-[0_4px_10px_-4px_#7f5be0] hover:bg-[#6c48cd]",
   },
   customer: {
-    trigger: "border-[#3aa48f] bg-[rgba(47,160,143,.10)] text-[#0f7a6a]",
+    trigger: "border-[#3aa48f] bg-[rgba(24,145,121,.10)] text-[#0f7a6a]",
     badge: "bg-[#189179] text-white",
-    selected: "bg-[rgba(47,160,143,.14)] text-[#0f7a6a]",
-    chip: "bg-[#189179] hover:bg-[#127d67]",
+    selected: "bg-[rgba(24,145,121,.14)] text-[#0f7a6a]",
+    chip: "bg-[#189179] shadow-[0_4px_10px_-4px_#189179] hover:bg-[#127d67]",
   },
   status: {
-    trigger: "border-[#7a8aa3] bg-[rgba(122,138,163,.10)] text-[#3f506b]",
+    trigger: "border-[#7a8aa3] bg-[rgba(91,108,133,.10)] text-[#3f506b]",
     badge: "bg-[#5b6c85] text-white",
-    selected: "bg-[rgba(122,138,163,.14)] text-[#3f506b]",
-    chip: "bg-[#5b6c85] hover:bg-[#4a5b73]",
+    selected: "bg-[rgba(91,108,133,.14)] text-[#3f506b]",
+    chip: "bg-[#5b6c85] shadow-[0_4px_10px_-4px_#5b6c85] hover:bg-[#4a5b73]",
   },
 } as const;
 
@@ -110,10 +110,10 @@ export function FilterPopover({
       <button
         ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
-        className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-[12.5px] font-medium ${
+        className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-control border pl-3 pr-2.5 text-[12.5px] font-medium shadow-sm ${
           active
             ? accents.trigger
-            : "border-border bg-white text-[#3f506b] hover:border-primary/55"
+            : "border-border bg-[var(--app-glass)] text-[#3f506b] hover:border-primary/55 hover:bg-white"
         }`}
       >
         {triggerText}
@@ -131,7 +131,7 @@ export function FilterPopover({
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
           <div
             onKeyDown={onKeyDown}
-            className="absolute left-0 top-[calc(100%+4px)] z-[25] w-[250px] rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]"
+            className="glass-strong absolute left-0 top-[calc(100%+4px)] z-[25] w-[250px] rounded-inner border border-border p-1 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]"
           >
             {options.length > 6 && (
               <input
@@ -143,7 +143,7 @@ export function FilterPopover({
                   setHighlight(0);
                 }}
                 placeholder={`Search ${label.toLowerCase()}…`}
-                className="mb-1 w-full rounded-md border border-border bg-white px-2.5 py-1.5 text-[12.5px] outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                className="mb-1 w-full rounded-[7px] border border-border bg-white px-2.5 py-1.5 text-[12.5px] outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
               />
             )}
             <div className="max-h-60 overflow-y-auto">

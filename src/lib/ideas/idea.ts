@@ -54,52 +54,40 @@ export interface BadgeStyle {
   check: boolean;
 }
 
+/**
+ * Status colors (Direction B): solid pills — green New, blue Updated, pink
+ * Archive; "In Jira" stays outlined so it reads as done, not as a batch
+ * state. Deleted is only ever seen on the Merge page.
+ */
 export function badgeOf(i: Idea): BadgeStyle | null {
   if (i.decision === "injected")
     return {
       label: "In Jira",
-      bg: "transparent",
-      fg: "#3b6fd4",
-      bd: "#c8d9ec",
+      bg: "#ffffff",
+      fg: "#2a5fd0",
+      bd: "rgba(59,124,246,.55)",
       check: true,
     };
   switch (i.batch) {
     case "new":
-      return {
-        label: "New",
-        bg: "#e9f7ef",
-        fg: "#1f8a53",
-        bd: "#c4e8d2",
-        check: false,
-      };
+      return { label: "New", bg: "#17b26a", fg: "#ffffff", bd: "transparent", check: false };
     case "updated":
-      return {
-        label: "Updated",
-        bg: "rgba(122,167,255,.14)",
-        fg: "#3b6fd4",
-        bd: "rgba(122,167,255,.4)",
-        check: false,
-      };
+      return { label: "Updated", bg: "#3b7cf6", fg: "#ffffff", bd: "transparent", check: false };
     case "deleted":
-      return {
-        label: "Deleted",
-        bg: "#f7eef1",
-        fg: "#a3556b",
-        bd: "#ecd6dd",
-        check: false,
-      };
+      return { label: "Deleted", bg: "#f7eef1", fg: "#a3556b", bd: "#ecd6dd", check: false };
     case "archive":
-      return {
-        label: "Archive",
-        bg: "#fdeef2",
-        fg: "#c94266",
-        bd: "#f3c9d5",
-        check: false,
-      };
+      return { label: "Archive", bg: "#ef5a8a", fg: "#ffffff", bd: "transparent", check: false };
     default:
       return null;
   }
 }
+
+/** Soft tint + ink of each batch status, for stat cards and accents. */
+export const STATUS_TONES: Record<"new" | "updated" | "archive", { solid: string; soft: string; fg: string }> = {
+  new: { solid: "#17b26a", soft: "rgba(23,178,106,.14)", fg: "#0f7a47" },
+  updated: { solid: "#3b7cf6", soft: "rgba(59,124,246,.15)", fg: "#2a5fd0" },
+  archive: { solid: "#ef5a8a", soft: "rgba(239,90,138,.15)", fg: "#c23767" },
+};
 
 /** PRD: unchanged and deleted ideas never need approval. */
 export function needsApproval(i: Idea): boolean {

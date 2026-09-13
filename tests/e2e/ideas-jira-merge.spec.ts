@@ -242,23 +242,24 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     return page.locator("div.cursor-pointer", { hasText: title });
   }
 
-  /** The Import Status filter row — scopes the chips away from the identically
-   * named "Merge" page-toggle button. */
-  function statusRow(page: Page) {
-    return page
-      .locator("div.flex.flex-wrap.items-start.gap-2")
-      .filter({ has: page.getByText("Import Status", { exact: true }) });
+  /**
+   * The Status filter is a single-select popover on the toolbar (facelift):
+   * open it and pick an option. Picking the active option clears the filter
+   * — "chip" keeps the old name so the test bodies read as before.
+   */
+  async function pickStatus(page: Page, label: string) {
+    await page.getByRole("button", { name: /^Status/ }).click();
+    await page.getByRole("button", { name: label, exact: true }).click();
   }
-
   function chip(page: Page, label: string) {
-    return statusRow(page).getByRole("button", { name: label, exact: true });
+    return { click: () => pickStatus(page, label) };
   }
 
-  /** A merge-board column, scoped by its "<Label> · N" header. */
+  /** A merge-board column, scoped by its header label. */
   function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "Final") {
     return page
-      .locator("div.overflow-hidden.rounded-xl")
-      .filter({ has: page.getByText(new RegExp(`^${label} · \\d+$`)) });
+      .locator("div.overflow-hidden.rounded-card")
+      .filter({ has: page.getByText(label, { exact: true }) });
   }
 
   /** The page-toggle (Merge ⇄ Final) buttons above the board. */
@@ -315,16 +316,15 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await loginAsRoomLens(page);
     await gotoIdeas(page);
 
-    // Positive control: hovering an approvable row shows the approve mark.
-    await ideaRow(page, NEW_TITLE).hover();
-    await expect(page.getByTitle("Mark reviewed")).toBeVisible();
+    // Positive control: an approvable row carries the approve mark.
+    await expect(ideaRow(page, NEW_TITLE).getByTitle("Mark reviewed")).toBeVisible();
 
-    // The unchanged row (via its chip) never grows the mark on hover.
+    // The unchanged row (via its chip) never gets the mark.
     await chip(page, "Unchanged").click();
     const rowA = ideaRow(page, UNCHANGED_A_TITLE);
     await expect(rowA).toBeVisible();
-    await rowA.hover();
-    await expect(page.getByTitle("Mark reviewed")).toHaveCount(0);
+    await expect(rowA.getByTitle("Mark reviewed")).toHaveCount(0);
+    await expect(rowA.getByTitle("Mark unreviewed")).toHaveCount(0);
 
     // Its drawer has no Approve button either (Merge/Edit still render).
     await rowA.click();
@@ -364,18 +364,18 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await loginAsRoomLens(page);
     await gotoIdeas(page);
 
-    // Entering the merge view auto-starts an edit → the full Jira pool shows,
-    // including sources that back only unchanged ideas.
+    // Editing an idea shows the full Jira pool, including sources that back
+    // only unchanged ideas.
     await pageToggle(page, "Merge").click();
     const jiraCol = mergeColumn(page, "Jira");
     const finalCol = mergeColumn(page, "Final");
-    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await finalCol.locator("div.cursor-pointer", { hasText: UPDATED_TITLE }).click();
+    await expect(page.getByRole("button", { name: "Discard", exact: true })).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
 
-    // Out of edit mode, under the Merge chip: multi-source ideas only; the
-    // unchanged backlog and its Jira keys are gone.
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await chip(page, "Merge").click();
+    // Out of edit mode, default view: the unchanged backlog and its Jira
+    // keys are gone.
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
     await expect(finalCol.getByText(UPDATED_TITLE)).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_C })).toBeVisible();
     await expect(finalCol.getByText(UNCHANGED_A_TITLE)).toHaveCount(0);
@@ -398,7 +398,6 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await loginAsRoomLens(page);
     await gotoIdeas(page);
     await pageToggle(page, "Merge").click();
-    await page.getByRole("button", { name: "Cancel" }).click(); // leave the auto-started edit
 
     const zenCol = mergeColumn(page, "Zendesk");
     const finalCol = mergeColumn(page, "Final");
@@ -412,12 +411,12 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await expect(page.getByText("1 source selected")).toBeVisible();
     await orphanRow.click();
     await expect(page.getByText("2 sources selected")).toBeVisible();
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save sources" }).click();
 
-    // Saved: now Updated, so it left the Unchanged listing and shows under
-    // Merge with both sources.
+    // Saved: now Updated, so it left the Unchanged listing and shows in the
+    // default view with both sources.
     await expect(targetRow).toHaveCount(0);
-    await chip(page, "Merge").click();
+    await chip(page, "Unchanged").click(); // re-click clears the filter
     await expect(finalCol.getByText(UNCHANGED_B_TITLE)).toBeVisible();
     await expect(
       finalCol
@@ -439,15 +438,13 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
 
     // Reverse it: detach the ticket → back to Unchanged, delta gone.
     await pageToggle(page, "Merge").click();
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await chip(page, "Merge").click();
     await finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE }).click();
     await expect(page.getByText("2 sources selected")).toBeVisible();
     await orphanRow.click();
     await expect(page.getByText("1 source selected")).toBeVisible();
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save sources" }).click();
 
-    // Unchanged again: hidden under the Merge chip, and both the vote delta
+    // Unchanged again: hidden in the default view, and both the vote delta
     // and status rolled back in the DB.
     await expect(finalCol.getByText(UNCHANGED_B_TITLE)).toHaveCount(0);
     const afterDetach = await ideaFromDb(unchangedBId);

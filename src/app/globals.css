@@ -4,17 +4,94 @@
   --brand-text: #f3f1fb;
   --brand-muted: #aaa3c4;
   --brand-accent: #7aa7ff;
-  --background: #f0f4fa;
-  --foreground: #0c1929;
+
+  /* ——— PM-OS app tokens — Direction B ("Board"), from the design handoff
+     (design_handoff_ideas_facelift_b/app-tokens.css). App-only: nothing here
+     is shared with the marketing site. ——— */
+  --app-font-title: var(--font-title), ui-sans-serif, system-ui, sans-serif;
+  --app-font-body: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  --app-font-mono: var(--font-jbmono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Accent */
+  --app-accent: #2457f5;
+  --app-accent-hover: #1a44c9;
+  --app-accent-soft: rgba(36, 87, 245, 0.12);
+  --app-accent-glow: rgba(36, 87, 245, 0.8);
+
+  /* Canvas + surfaces */
+  --app-bg: #eef1f8;
+  --app-bg-gradient: radial-gradient(900px 500px at 20% -10%, rgba(36, 87, 245, 0.16), transparent 60%),
+                     radial-gradient(700px 400px at 100% 0%, rgba(23, 178, 106, 0.10), transparent 60%), #eef1f8;
+  --app-glass: rgba(255, 255, 255, 0.74);
+  --app-glass-strong: rgba(255, 255, 255, 0.94);
+  --app-glass-weak: rgba(255, 255, 255, 0.55);
+  --app-glass-blur: 16px;
+  --app-border: rgba(200, 212, 232, 0.9);
+  --app-hairline: rgba(200, 212, 232, 0.5);
+
+  /* Text */
+  --app-fg: #0c1929;
+  --app-fg-2: #1f2f47;
+  --app-fg-3: #4a5b74;
+  --app-fg-muted: #7a8aa3;
+  --app-fg-faint: #9aa8be;
+  --app-fg-disabled: #b3bfd0;
+
+  /* Sidebar (dark) */
+  --app-side-bg: linear-gradient(180deg, #0b1430, #101c40);
+  --app-side-fg: #f3f1fb;
+  --app-side-fg-muted: rgba(243, 241, 251, 0.6);
+  --app-side-line: rgba(255, 255, 255, 0.08);
+  --app-side-active-bg: color-mix(in srgb, var(--app-accent) 28%, transparent);
+
+  /* Status (solid pills) */
+  --app-status-new: #17b26a;         --app-status-new-soft: rgba(23, 178, 106, 0.14);  --app-status-new-fg: #0f7a47;
+  --app-status-updated: #3b7cf6;     --app-status-updated-soft: rgba(59, 124, 246, 0.15); --app-status-updated-fg: #2a5fd0;
+  --app-status-archive: #ef5a8a;     --app-status-archive-soft: rgba(239, 90, 138, 0.15); --app-status-archive-fg: #c23767;
+  --app-status-injected-fg: #2a5fd0; --app-status-injected-bd: rgba(59, 124, 246, 0.55);
+  --app-success: #17b26a;
+  --app-warn: #f0b43c; --app-warn-bg: #fff7e0; --app-warn-fg: #8a5a00;
+  --app-danger: #c23767;
+
+  /* Filter accents (FilterPopover) */
+  --app-filter-product: var(--app-accent);
+  --app-filter-platform: #7f5be0;
+  --app-filter-customer: #189179;
+  --app-filter-status: #5b6c85;
+
+  /* Radii */
+  --app-r-card: 14px;
+  --app-r-inner: 12px;
+  --app-r-control: 9px;
+  --app-r-chip: 6px;
+  --app-r-pill: 999px;
+
+  /* Shadows */
+  --app-shadow-card: 0 10px 30px -14px rgba(10, 22, 40, 0.18);
+  --app-shadow-sm: 0 1px 2px rgba(10, 22, 40, 0.06);
+  --app-shadow-drawer: -24px 0 64px rgba(10, 22, 40, 0.22);
+  --app-shadow-modal: 0 40px 100px -20px rgba(10, 22, 40, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.6);
+
+  /* Row / control heights */
+  --app-row-h: 58px;
+  --app-merge-row-h: 44px;
+  --app-control-h: 32px;
+  --app-btn-h: 36px;
+  --app-btn-h-sm: 30px;
+
+  /* ——— Legacy theme names, now aliases of the app tokens so every screen
+     picks up the Direction B palette without a per-file edit. ——— */
+  --background: var(--app-bg);
+  --foreground: var(--app-fg);
   --card: #ffffff;
-  --border: #c8d9ec;
-  --primary: #7aa7ff;
-  --primary-hover: #6896f0;
-  --accent: #7aa7ff;
+  --border: var(--app-border);
+  --primary: var(--app-accent);
+  --primary-hover: var(--app-accent-hover);
+  --accent: var(--app-accent);
   /** Secondary text on light app surfaces (cards, dashboard, docs) */
-  --muted: #4a4068;
-  --sidebar: #0a1628;
-  --sidebar-fg: #f3f1fb;
+  --muted: var(--app-fg-3);
+  --sidebar: #0b1430;
+  --sidebar-fg: var(--app-side-fg);
 }
 
 @theme inline {
@@ -30,6 +107,19 @@
   --color-muted: var(--muted);
   --color-sidebar: var(--sidebar);
   --color-sidebar-fg: var(--sidebar-fg);
+  --color-fg-2: var(--app-fg-2);
+  --color-fg-3: var(--app-fg-3);
+  --color-fg-muted: var(--app-fg-muted);
+  --color-fg-faint: var(--app-fg-faint);
+  --color-hairline: var(--app-hairline);
+  --color-success: var(--app-success);
+  --color-danger: var(--app-danger);
+  --radius-card: var(--app-r-card);
+  --radius-inner: var(--app-r-inner);
+  --radius-control: var(--app-r-control);
+  --radius-chip: var(--app-r-chip);
+  --shadow-card: var(--app-shadow-card);
+  --shadow-sm: var(--app-shadow-sm);
   --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jbmono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -55,6 +145,47 @@ body {
 
 .font-subtitle {
   font-family: var(--font-body), var(--font-title), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ——— Direction B surfaces ——— */
+
+/* The tinted app canvas behind glass panels (Ideas). */
+.app-canvas {
+  background: var(--app-bg-gradient);
+  background-attachment: local;
+}
+
+/* Frosted panel: group cards, merge columns, KPI wrapper. */
+.glass {
+  background: var(--app-glass);
+  border: 1px solid var(--app-border);
+  backdrop-filter: blur(var(--app-glass-blur));
+  -webkit-backdrop-filter: blur(var(--app-glass-blur));
+  box-shadow: var(--app-shadow-card);
+}
+
+.glass-weak {
+  background: var(--app-glass-weak);
+  border: 1px solid var(--app-border);
+  backdrop-filter: blur(var(--app-glass-blur));
+  -webkit-backdrop-filter: blur(var(--app-glass-blur));
+  box-shadow: var(--app-shadow-card);
+}
+
+.glass-strong {
+  background: var(--app-glass-strong);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* Mono eyebrow label: 10px, 600, uppercase, tracked. */
+.eyebrow {
+  font-family: var(--app-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--app-fg-muted);
 }
 
 /* PM-OS chat empty state — from PM-OS Chat Empty State.dc.html */
