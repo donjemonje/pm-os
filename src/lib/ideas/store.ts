@@ -370,19 +370,22 @@ async function runImport(
     promptVersion: parse.promptVersion,
     ...(parseOn ? {} : { note: "field parsing off for this org" }),
   });
-  // Parenthetical rule (Daniel, 09-13): a cell "NAME (OTHER)" names ONE
-  // customer. If OTHER is already a customer on its own — in the catalog or
-  // on any other ticket — it is the parent/group and is dropped; otherwise
-  // the whole "NAME (OTHER)" is kept as the name. Never two customers.
+  // Parenthetical rule (Daniel, 09-13) for a cell "NAME (OTHER)":
+  //   both NAME and OTHER already customers on their own → two customers;
+  //   only NAME already a customer on its own          → NAME (OTHER dropped);
+  //   otherwise                                          → one customer "NAME (OTHER)".
+  // "On its own" = in the catalog or standing alone in another ticket's cell.
+  // The decision also filters what PMOS AI extracts from the ticket text.
+  const parenRule = new Map<string, { outer: string; inner: string; names: string[] }>();
   if (parseOn && parse.byRaw.size > 0) {
     const [catalogRows, ticketRows] = await Promise.all([
       db.customer.findMany({ where: { workspaceId }, select: { name: true, aliases: true } }),
       db.zendeskTicketRaw.findMany({
         where: { workspaceId },
-        select: { customerName: true, affectedCustomers: true },
+        select: { externalId: true, affectedCustomers: true },
       }),
     ]);
-    const standalone = new Map<string, Set<string>>(); // key → sources ("catalog", ticket keys)
+    const standalone = new Map<string, Set<string>>(); // key → sources
     const seen = (name: string, source: string) => {
       const k = customerKey(name);
       if (!k) return;
@@ -394,32 +397,49 @@ async function runImport(
       for (const a of (c.aliases as string[]) ?? []) seen(a, "catalog");
     }
     for (const t of ticketRows) {
-      for (const n of (t.affectedCustomers as string[]) ?? []) seen(n, `db:${t.customerName ?? ""}`);
+      for (const n of (t.affectedCustomers as string[]) ?? []) seen(n, `db:${t.externalId}`);
     }
     for (const t of fresh) {
       for (const cell of [t.customerName ?? "", ...(t.affectedCustomers ?? [])]) {
-        // Only names that stand alone in the cell count as "appears elsewhere".
         for (const piece of cell.split(/[,;/]+/)) {
           const bare = piece.trim().replace(/^and\s+/i, "").replace(/^prospect\s+/i, "");
           if (bare && !/[()]/.test(bare)) seen(bare, `import:${t.key}`);
         }
       }
     }
-    for (const [rawKey, cell] of parse.byRaw) {
-      const m = cell.raw.match(/^\s*(.+?)\s*\((.+?)\)\s*$/);
-      if (!m) continue;
-      const outer = m[1].trim();
-      const inner = m[2].trim();
-      const innerSources = standalone.get(customerKey(inner));
-      const innerElsewhere =
-        !!innerSources &&
-        Array.from(innerSources).some((src) => src !== `import:${rawKey}`);
-      parse.byRaw.set(rawKey, {
-        ...cell,
-        names: innerElsewhere ? [outer] : [`${outer} (${inner})`],
-      });
+    const knownElsewhere = (name: string, ownTicket: string) => {
+      const src = standalone.get(customerKey(name));
+      return !!src && Array.from(src).some((x) => x !== `import:${ownTicket}`);
+    };
+    for (const t of fresh) {
+      for (const cell of [t.customerName ?? "", ...(t.affectedCustomers ?? [])]) {
+        const m = cell.match(/^\s*(.+?)\s*\((.+?)\)\s*$/);
+        if (!m) continue;
+        const outer = m[1].trim();
+        const inner = m[2].trim();
+        const outerKnown = knownElsewhere(outer, t.key);
+        const innerKnown = knownElsewhere(inner, t.key);
+        const names =
+          outerKnown && innerKnown ? [outer, inner] : outerKnown ? [outer] : [`${outer} (${inner})`];
+        const rawKey = cell.trim().toLowerCase();
+        parenRule.set(rawKey, { outer, inner, names });
+        const prev = parse.byRaw.get(rawKey);
+        parse.byRaw.set(rawKey, { raw: cell.trim(), all: prev?.all ?? false, names });
+      }
     }
   }
+  /** Names PMOS AI may have read from the text that the cell rule already settled. */
+  const suppressedKeys = (t: ImportTicketInput): Set<string> => {
+    const out = new Set<string>();
+    for (const cell of [t.customerName ?? "", ...(t.affectedCustomers ?? [])]) {
+      const d = parenRule.get(cell.trim().toLowerCase());
+      if (!d) continue;
+      for (const n of [d.outer, d.inner]) {
+        if (!d.names.some((x) => customerKey(x) === customerKey(n))) out.add(customerKey(n));
+      }
+    }
+    return out;
+  };
   const parsedOf = (value: string | undefined | null): ParsedCell | null =>
     value ? (parse.byRaw.get(value.trim().toLowerCase()) ?? null) : null;
   /** Names a field value contributes — parsed when on, legacy split when off. */
@@ -756,7 +776,9 @@ async function runImport(
         requester: input.requester ?? null,
         affectedCustomers: distinct(
           [
-            ...(verdict?.affectedCustomers ?? []),
+            ...(verdict?.affectedCustomers ?? []).filter(
+              (n) => !suppressedKeys(input).has(customerKey(n)),
+            ),
             ...(input.affectedCustomers ?? []).flatMap((v) => namesOf(v)),
           ].map(canonicalCustomer),
         ) as Prisma.InputJsonValue,
