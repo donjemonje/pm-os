@@ -21,8 +21,8 @@ import { LOCAL_BASE_URL } from "./test-env";
  *      stored, so the spec inserts its own token the way sendInvitation
  *      does). /invite rejects a garbage token and a reset token of a user
  *      who already has a password; the real invite shows "Complete your
- *      sign-up" with NO Google button (DISABLE_GOOGLE_LOGIN=true, pinned by
- *      the env guard) → "Sign Up with Credentials" → live policy checklist
+ *      sign-up" with BOTH Google and credentials offered (Google can no
+ *      longer be disabled; fake creds configure it) → "Sign Up with Credentials" → live policy checklist
  *      + disabled submit until valid and matching → API signs the user in
  *      and the page lands on /login/2fa in enrollment mode → token replay
  *      400s and the invite link is dead → Admin row shows "Password".
@@ -355,9 +355,9 @@ test.describe("Admin delete + invites + landing (feature/admin-delete-user-org)"
     ).toBeVisible();
     await expect(invitee.getByText(`Hi ${INV_PENDING_NAME}, you've been invited to`)).toBeVisible();
     await expect(invitee.getByText(INVITE_ORG, { exact: true })).toBeVisible();
-    // Google is hidden by env in tests (DISABLE_GOOGLE_LOGIN=true); the
-    // credentials option is the only one.
-    await expect(invitee.getByRole("link", { name: "Sign Up with Google" })).toHaveCount(0);
+    // Google can never be disabled: with (fake) creds configured the invite
+    // offers both paths.
+    await expect(invitee.getByRole("link", { name: "Sign Up with Google" })).toBeVisible();
     const credentials = invitee.getByRole("link", { name: "Sign Up with Credentials" });
     await expect(credentials).toBeVisible();
     await credentials.click();

@@ -3,9 +3,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Search, ThumbsUp, Trash2, Upload } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
-import { badgeOf, needsApproval, scoreOf } from "@/lib/ideas/idea";
+import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
+import {
+  badgeOf,
+  compareIdeas,
+  needsApproval,
+  SCORING_ENABLED,
+  scoreOf,
+  STATUS_CHIP_TO_BATCH,
+} from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
+import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
+import {
+  chipStyle,
+  CUSTOMER_CHIP_DEFAULT,
+  PRODUCT_CHIP_DEFAULT,
+} from "@/lib/ideas/colors";
 import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
 
@@ -20,18 +34,13 @@ const IMPORT_STEPS: { label: string; hint: string }[] = [
   { label: "Preparing ideas for review", hint: "Almost there" },
 ];
 
-const STATUS_CHIP_TO_BATCH: Record<string, Idea["batch"]> = {
-  New: "new",
-  Updated: "updated",
-  Archive: "archive",
-  Unchanged: "unchanged",
-};
-
 interface ServerState {
   tickets: ZendeskTicket[];
   jiraSources: JiraSource[];
   ideas: Idea[];
   customerCatalog?: string[];
+  jiraConnected?: boolean;
+  csvMapping?: CsvMapping;
 }
 
 interface ImportSummary {
@@ -40,9 +49,26 @@ interface ImportSummary {
   matched: number;
   bugs: number;
   needsDetails: number;
+  opsTasks?: number;
+  questions?: number;
   duplicates: number;
+  split?: number;
   jiraConnected: boolean;
   jiraCount: number;
+  durationMs?: number;
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+/** Case-insensitive lookup of a catalog color by name. */
+function colorOf(map: Record<string, string>, name: string): string | undefined {
+  if (map[name]) return map[name];
+  const key = name.toLowerCase();
+  for (const [k, v] of Object.entries(map)) if (k.toLowerCase() === key) return v;
+  return undefined;
 }
 
 function chipClass(active: boolean): string {
@@ -51,115 +77,18 @@ function chipClass(active: boolean): string {
     : "whitespace-nowrap rounded-full border border-border bg-white px-3 py-1 text-[12.5px] font-medium text-[#3f506b] hover:border-primary/55";
 }
 
-/** Labeled multi-select filter row: searchable dropdown + selected chips. */
-function FilterRow({
-  label,
-  placeholder,
-  emptyText,
-  options,
-  selected,
-  setSelected,
-  accent = "product",
-}: {
-  label: string;
-  placeholder: string;
-  emptyText: string;
-  options: string[];
-  selected: string[];
-  setSelected: React.Dispatch<React.SetStateAction<string[]>>;
-  /** Platform rows purple, customer rows teal, product rows the primary blue — per the design. */
-  accent?: "product" | "platform" | "customer";
-}) {
-  const accents = {
-    product: {
-      focus: "focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]",
-      selected: "bg-[rgba(122,167,255,.12)] text-[#3b6fd4]",
-      chip: "bg-primary hover:bg-primary-hover",
-    },
-    platform: {
-      focus: "focus:border-[#9d7ce8] focus:shadow-[0_0_0_1px_rgba(169,140,255,.35)]",
-      selected: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
-      chip: "bg-[#7f5be0] hover:bg-[#6c48cd]",
-    },
-    customer: {
-      focus: "focus:border-[#3aa48f] focus:shadow-[0_0_0_1px_rgba(47,160,143,.3)]",
-      selected: "bg-[rgba(47,160,143,.14)] text-[#0f7a6a]",
-      chip: "bg-[#189179] hover:bg-[#127d67]",
-    },
-  }[accent];
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const shown = options.filter(
-    (o) => !query.trim() || o.toLowerCase().startsWith(query.trim().toLowerCase())
-  );
-
-  return (
-    <div className="flex items-start gap-2">
-      <span className={`${MONO_LABEL} w-24 shrink-0 pt-2`}>{label}</span>
-      <div className="relative shrink-0">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          placeholder={placeholder}
-          className={`w-[220px] rounded-lg border border-border bg-white px-3 py-1.5 text-[12.5px] outline-none ${accents.focus}`}
-        />
-        {open && (
-          <>
-            <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
-            <div className="absolute left-0 top-[calc(100%+4px)] z-[25] max-h-60 w-[250px] overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
-              {shown.map((option) => {
-                const isSelected = selected.includes(option);
-                return (
-                  <button
-                    key={option}
-                    onClick={() =>
-                      setSelected((prev) =>
-                        isSelected ? prev.filter((x) => x !== option) : [...prev, option]
-                      )
-                    }
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[11.5px] font-medium hover:bg-background ${
-                      isSelected ? accents.selected : "text-[#3f506b]"
-                    }`}
-                  >
-                    {option}
-                    {isSelected && <Check size={12} strokeWidth={2.5} />}
-                  </button>
-                );
-              })}
-              {shown.length === 0 && (
-                <div className="px-2.5 py-2 text-xs text-muted">{emptyText}</div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 pt-[3px]">
-        {selected.map((option) => (
-          <button
-            key={option}
-            onClick={() => setSelected((prev) => prev.filter((x) => x !== option))}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${accents.chip}`}
-          >
-            {option} ✕
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function IdeasView({
   catalogProducts = [],
   catalogPlatforms = [],
   catalogCustomers = [],
+  productColors = {},
+  customerColors = {},
   defaultProducts = [],
   undoEnabled = false,
 }: {
+  /** Catalog chip colors (palette ids) by name — see lib/ideas/colors.ts. */
+  productColors?: Record<string, string>;
+  customerColors?: Record<string, string>;
   /** Product-line names from the settings catalog, merged into the filter options. */
   catalogProducts?: string[];
   /** Platform names from the settings catalog; the Platform filter's options. */
@@ -177,6 +106,8 @@ export function IdeasView({
   // Server state carries the live customer catalog so approving a suggested
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
+  const [jiraConnected, setJiraConnected] = useState(false);
+  const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
   const [hydrated, setHydrated] = useState(false);
 
   const [query, setQuery] = useState("");
@@ -185,13 +116,10 @@ export function IdeasView({
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
-  /** Bumped by "Clear filters" to remount the FilterRows, wiping their local search text. */
-  const [filterResetKey, setFilterResetKey] = useState(0);
 
   const [page, setPage] = useState<"final" | "merge">("final");
-  const [mergeFilter, setMergeFilter] = useState<"Merge" | "Single" | "Unchanged">("Merge");
   const [edit, setEdit] = useState<MergeEdit | null>(null);
-  const [selectedFinalId, setSelectedFinalId] = useState<string | "auto" | null>("auto");
+  const [selectedFinalId, setSelectedFinalId] = useState<string | null>(null);
 
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [popId, setPopId] = useState<string | null>(null);
@@ -207,6 +135,13 @@ export function IdeasView({
   const [pushResults, setPushResults] = useState<PushResult[] | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+  /** Transient confirmation of an action (auto-dismisses). */
+  const [toast, setToast] = useState("");
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
   const [importing, setImporting] = useState(false);
   /** Index into IMPORT_STEPS while the import overlay is up; null = closed. */
   const [importStep, setImportStep] = useState<number | null>(null);
@@ -218,6 +153,8 @@ export function IdeasView({
     setJiraSources(state.jiraSources);
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
+    if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
+    if (state.csvMapping) setCsvMapping(state.csvMapping);
   };
 
   useEffect(() => {
@@ -252,6 +189,7 @@ export function IdeasView({
         return false;
       }
       applyState(data.state);
+      if (typeof data.notice === "string" && data.notice) setToast(data.notice);
       return true;
     } catch {
       setError("Update failed — is the dev server running?");
@@ -260,15 +198,26 @@ export function IdeasView({
   };
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
+  const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
   const jiraByKey = useMemo(() => new Map(jiraSources.map((s) => [s.key, s])), [jiraSources]);
-  // Catalog names first so their casing wins over idea-derived duplicates.
+  // Catalog names first, in the admin's manual order (their casing also wins
+  // over idea-derived duplicates); names only found on ideas trail after,
+  // alphabetically.
   const allProducts = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const name of [...catalogProducts, ...ideas.flatMap((i) => i.products)]) {
+    for (const name of catalogProducts) {
       const key = name.toLowerCase();
       if (!seen.has(key)) seen.set(key, name);
     }
-    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+    const extras = new Map<string, string>();
+    for (const name of ideas.flatMap((i) => i.products)) {
+      const key = name.toLowerCase();
+      if (!seen.has(key) && !extras.has(key)) extras.set(key, name);
+    }
+    return [
+      ...seen.values(),
+      ...Array.from(extras.values()).sort((a, b) => a.localeCompare(b)),
+    ];
   }, [catalogProducts, ideas]);
   const allCustomers = useMemo(() => {
     const seen = new Map<string, string>();
@@ -289,7 +238,7 @@ export function IdeasView({
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
       const text = await file.text();
-      const result = ticketsFromCsv(text);
+      const result = ticketsFromCsv(text, csvMapping);
       if (result.errors.length > 0) {
         setError(result.errors[0]);
         return;
@@ -317,15 +266,23 @@ export function IdeasView({
       const s = data.summary as ImportSummary;
 
       const parts = [
-        `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}`,
+        `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}${
+          s.durationMs ? ` in ${formatDuration(s.durationMs)}` : ""
+        }`,
       ];
       if (s.imported > 0) parts.push(`${s.frs} FR${s.frs === 1 ? "" : "s"} → ideas`);
       if (s.matched > 0)
         parts.push(`${s.matched} matched to existing Jira idea${s.matched === 1 ? "" : "s"}`);
       if (s.bugs > 0) parts.push(`${s.bugs} bug${s.bugs === 1 ? "" : "s"} parked`);
+      if ((s.opsTasks ?? 0) > 0)
+        parts.push(`${s.opsTasks} ops task${s.opsTasks === 1 ? "" : "s"} parked`);
+      if ((s.questions ?? 0) > 0)
+        parts.push(`${s.questions} question${s.questions === 1 ? "" : "s"} parked`);
       if (s.needsDetails > 0)
         parts.push(`${s.needsDetails} need${s.needsDetails === 1 ? "s" : ""} more details`);
       if (s.duplicates > 0) parts.push(`${s.duplicates} already imported`);
+      if ((s.split ?? 0) > 0)
+        parts.push(`${s.split} ticket${s.split === 1 ? "" : "s"} split into multiple ideas`);
       if (result.skipped > 0)
         parts.push(`${result.skipped} empty row${result.skipped === 1 ? "" : "s"} skipped`);
       if (s.jiraConnected)
@@ -357,7 +314,7 @@ export function IdeasView({
     setDrawerSrc(null);
     setPage("final");
     setEdit(null);
-    setSelectedFinalId("auto");
+    setSelectedFinalId(null);
     setNote("");
     setError("");
   };
@@ -412,19 +369,16 @@ export function IdeasView({
   };
 
   // ——— Merge page ———
-  const srcCount = (i: Idea) => i.zen.length + i.jira.length;
 
+  // Opening the merge page selects nothing unless a specific idea was asked
+  // for — the PM picks where to start.
   const gotoMerge = (id: string | null) => {
-    const withSources = [...ideas]
-      .filter((i) => srcCount(i) > 0)
-      .sort((a, b) => srcCount(b) - srcCount(a));
-    const target = (id != null ? ideas.find((i) => i.id === id) : null) ?? withSources[0] ?? null;
+    const target = id != null ? (ideas.find((i) => i.id === id) ?? null) : null;
     setPage("merge");
     setDrawerId(null);
     setDrawerSrc(null);
-    setMergeFilter(target && srcCount(target) === 1 ? "Single" : "Merge");
     setEdit(target ? { ideaId: target.id, zen: [...target.zen], jira: [...target.jira] } : null);
-    setSelectedFinalId(target ? target.id : "auto");
+    setSelectedFinalId(target ? target.id : null);
   };
 
   const startEdit = (id: string) => {
@@ -483,15 +437,17 @@ export function IdeasView({
     unchanged: ideas.filter((i) => i.batch === "unchanged").length,
     archive: ideas.filter((i) => i.batch === "archive").length,
   };
-  // Partial merge: the button opens as soon as anything is approved — the
+  // Partial export: the button opens as soon as anything is approved — the
   // all-reviewed gate applies per selected product line inside the modal.
-  const injectDisabled = reviewed === 0;
-  const injectHint =
-    reviewed === 0
+  // No Jira integration → no export, whatever the review state.
+  const injectDisabled = !jiraConnected || reviewed === 0;
+  const injectHint = !jiraConnected
+    ? "Connect Jira in Settings → Integrations to export"
+    : reviewed === 0
       ? pending > 0
-        ? `Approve ideas to enable merging — ${pending} awaiting review`
-        : "All changes already merged to Jira"
-      : `Merge approved changes to Jira`;
+        ? `Approve ideas to enable exporting — ${pending} awaiting review`
+        : "All changes already exported to Jira"
+      : `Export approved changes to Jira`;
 
   const matches = (i: Idea): boolean => {
     if (i.batch === "deleted") return false;
@@ -509,7 +465,9 @@ export function IdeasView({
       const wanted = customerFilter.map((c) => c.toLowerCase());
       if (!(i.customers ?? []).some((c) => wanted.includes(c.toLowerCase()))) return false;
     }
-    if (statusFilter.length > 0) {
+    if (statusFilter.includes("All")) {
+      // "All" shows every idea, the unchanged Jira backlog included.
+    } else if (statusFilter.length > 0) {
       if (!statusFilter.some((s) => STATUS_CHIP_TO_BATCH[s] === i.batch)) return false;
     } else if (i.batch === "unchanged") {
       // The Jira backlog dwarfs a Zendesk batch and is mostly unchanged —
@@ -520,14 +478,7 @@ export function IdeasView({
     return true;
   };
 
-  const visible = ideas.filter(matches).sort((a, b) => {
-    const av = scoreOf(a).value;
-    const bv = scoreOf(b).value;
-    if (av == null && bv == null) return 0;
-    if (av == null) return 1;
-    if (bv == null) return -1;
-    return bv - av;
-  });
+  const visible = ideas.filter(matches).sort(compareIdeas);
 
   const drawerIdea = drawerId ? ideas.find((i) => i.id === drawerId) : undefined;
 
@@ -622,7 +573,7 @@ export function IdeasView({
       setNote(
         failCount === 0
           ? `${okCount} change${okCount === 1 ? "" : "s"} merged to Jira`
-          : `${okCount} merged, ${failCount} failed — reopen Merge to Jira to retry`
+          : `${okCount} merged, ${failCount} failed — reopen Jira Merge to retry`
       );
     } catch {
       setMergeError("Merge failed — is the dev server running?");
@@ -630,6 +581,21 @@ export function IdeasView({
       setPushing(false);
     }
   };
+
+  const clearAllFilters = () => {
+    setQuery("");
+    setProductFilter([]);
+    setPlatformFilter([]);
+    setCustomerFilter([]);
+    setStatusFilter([]);
+    setPendingOnly(false);
+  };
+
+  const hasChipRow =
+    productFilter.length > 0 ||
+    platformFilter.length > 0 ||
+    customerFilter.length > 0 ||
+    pendingOnly;
 
   const hasFilters =
     query !== "" ||
@@ -654,6 +620,18 @@ export function IdeasView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [confirmOpen, pushing]);
+
+  // Esc discards the merge edit (standing rule: Esc = cancel). The merge
+  // modal's own Esc handler wins while it is open.
+  useEffect(() => {
+    if (!edit || confirmOpen || drawerId || drawerSrc) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") cancelEdit();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit, confirmOpen, drawerId, drawerSrc]);
 
   return (
     <div className="mx-auto max-w-[1120px] px-10 pb-24 pt-8">
@@ -751,7 +729,7 @@ export function IdeasView({
           <div className="mb-5 flex items-center gap-6 rounded-xl border border-border bg-white px-5 py-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex flex-wrap items-baseline gap-2.5">
-                <span className="font-title text-[15px] font-semibold">Import in Progress</span>
+                <span className="font-title text-[15px] font-semibold">Review in Progress</span>
                 <span className="text-[13px] text-[#4a5b74]">
                   {counts.new} new · {counts.updated} updated · {counts.unchanged} unchanged ·{" "}
                   {counts.archive} archive proposed
@@ -774,119 +752,85 @@ export function IdeasView({
                   onClick={openMerge}
                   className="inline-flex h-8 items-center whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  Merge to Jira
+                  Jira Merge
                 </button>
               </span>
             </div>
           </div>
 
-          {/* Search + filters */}
-          <div className="mb-5 flex flex-col gap-3">
-            <div className="relative max-w-[360px]">
-              <Search
-                size={15}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7a8aa3]"
-              />
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search ideas…"
-                className="w-full rounded-lg border border-border bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
-              />
-            </div>
-
-            {allProducts.length > 0 && (
-              <FilterRow
-                key={`products-${filterResetKey}`}
-                label="Product Line"
-                placeholder="All products"
-                emptyText="No matching product line"
-                options={allProducts}
-                selected={productFilter}
-                setSelected={setProductFilter}
-              />
-            )}
-
-            {catalogPlatforms.length > 0 && (
-              <FilterRow
-                key={`platforms-${filterResetKey}`}
-                label="Platform"
-                placeholder="All platforms"
-                emptyText="No matching platform"
-                options={catalogPlatforms}
-                selected={platformFilter}
-                setSelected={setPlatformFilter}
-                accent="platform"
-              />
-            )}
-
-            {allCustomers.length > 0 && (
-              <FilterRow
-                key={`customers-${filterResetKey}`}
-                label="Customer"
-                placeholder="All customers"
-                emptyText="No matching customer"
-                options={allCustomers}
-                selected={customerFilter}
-                setSelected={setCustomerFilter}
-                accent="customer"
-              />
-            )}
-
-            <div className="flex flex-wrap items-start gap-2">
-              <span className={`${MONO_LABEL} w-[99px] shrink-0 pt-1.5`}>Import Status</span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {page === "merge"
-                  ? (["Merge", "Single", "Unchanged"] as const).map((label) => (
-                      <button
-                        key={label}
-                        onClick={() => {
-                          setMergeFilter(label);
-                          setSelectedFinalId("auto");
-                        }}
-                        className={chipClass(mergeFilter === label)}
-                      >
-                        {label}
-                      </button>
-                    ))
-                  : Object.keys(STATUS_CHIP_TO_BATCH).map((label) => (
-                      <button
-                        key={label}
-                        onClick={() =>
-                          setStatusFilter((prev) => (prev.includes(label) ? [] : [label]))
-                        }
-                        className={chipClass(statusFilter.includes(label))}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                <span className="mx-1.5 w-px self-stretch bg-[#d5dfec]" />
-                <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
-                  Pending Review
-                </button>
+          {/* Filters — one toolbar row; active-value chips appear below only when set */}
+          <div className="mb-5 flex flex-col gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-[240px]">
+                <Search
+                  size={14}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7a8aa3]"
+                />
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search ideas…"
+                  className="h-8 w-full rounded-lg border border-border bg-white pl-9 pr-3 text-[13px] outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                />
               </div>
+
+              {allProducts.length > 0 && (
+                <FilterPopover
+                  label="Product Line"
+                  options={allProducts}
+                  selected={productFilter}
+                  onToggle={(o) =>
+                    setProductFilter((prev) =>
+                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                    )
+                  }
+                  emptyText="No matching product line"
+                />
+              )}
+              {catalogPlatforms.length > 0 && (
+                <FilterPopover
+                  label="Platform"
+                  accent="platform"
+                  options={catalogPlatforms}
+                  selected={platformFilter}
+                  onToggle={(o) =>
+                    setPlatformFilter((prev) =>
+                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                    )
+                  }
+                  emptyText="No matching platform"
+                />
+              )}
+              {allCustomers.length > 0 && (
+                <FilterPopover
+                  label="Customer"
+                  accent="customer"
+                  options={allCustomers}
+                  selected={customerFilter}
+                  onToggle={(o) =>
+                    setCustomerFilter((prev) =>
+                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                    )
+                  }
+                  emptyText="No matching customer"
+                />
+              )}
+              <FilterPopover
+                single
+                label="Status"
+                accent="status"
+                options={["All", ...Object.keys(STATUS_CHIP_TO_BATCH)]}
+                selected={statusFilter}
+                onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
+              />
+              <span className="h-5 w-px bg-[#d5dfec]" />
+              <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
+                Pending Review
+              </button>
+
               <div className="ml-auto flex shrink-0 items-center gap-2.5">
-                {page === "merge" && edit ? (
-                  <>
-                    <span className="whitespace-nowrap text-xs text-muted">
-                      {edit.zen.length + edit.jira.length} source
-                      {edit.zen.length + edit.jira.length === 1 ? "" : "s"} selected
-                    </span>
-                    <button
-                      onClick={cancelEdit}
-                      className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={saveEdit}
-                      className="inline-flex h-8 items-center rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                    >
-                      Save
-                    </button>
-                  </>
-                ) : page === "final" ? (
+                {page === "final" && (
                   <span title={pending > 0 ? `${pending} awaiting review` : "All approved"}>
                     <button
                       onClick={() => {
@@ -898,9 +842,56 @@ export function IdeasView({
                       {pending > 0 ? "Approve all" : "Undo approve all"}
                     </button>
                   </span>
-                ) : null}
+                )}
               </div>
             </div>
+
+            {hasChipRow && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className={`${MONO_LABEL} mr-1`}>Filters</span>
+                {productFilter.map((option) => (
+                  <button
+                    key={`p-${option}`}
+                    onClick={() => setProductFilter((prev) => prev.filter((x) => x !== option))}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.product.chip}`}
+                  >
+                    {option} ✕
+                  </button>
+                ))}
+                {platformFilter.map((option) => (
+                  <button
+                    key={`pl-${option}`}
+                    onClick={() => setPlatformFilter((prev) => prev.filter((x) => x !== option))}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.platform.chip}`}
+                  >
+                    {option} ✕
+                  </button>
+                ))}
+                {customerFilter.map((option) => (
+                  <button
+                    key={`c-${option}`}
+                    onClick={() => setCustomerFilter((prev) => prev.filter((x) => x !== option))}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.customer.chip}`}
+                  >
+                    {option} ✕
+                  </button>
+                ))}
+                {pendingOnly && (
+                  <button
+                    onClick={() => setPendingOnly(false)}
+                    className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-medium text-white ${FILTER_ACCENTS.status.chip}`}
+                  >
+                    Pending Review ✕
+                  </button>
+                )}
+                <button
+                  onClick={clearAllFilters}
+                  className="ml-1 text-[12px] font-medium text-primary hover:underline"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Body: merge board or idea rows */}
@@ -914,10 +905,12 @@ export function IdeasView({
               platformFilter={platformFilter}
               customerFilter={customerFilter}
               pendingOnly={pendingOnly}
-              mergeFilter={mergeFilter}
+              statusFilter={statusFilter}
               edit={edit}
               selectedFinalId={selectedFinalId}
               onStartEdit={startEdit}
+              onSaveEdit={saveEdit}
+              onCancelEdit={cancelEdit}
               onToggleSrc={toggleSrc}
               onOpenIdea={(id) => {
                 setDrawerId(id);
@@ -932,7 +925,7 @@ export function IdeasView({
           <div className="flex flex-col gap-2">
             {visible.map((idea) => {
               const badge = badgeOf(idea);
-              const score = scoreOf(idea);
+              const score = SCORING_ENABLED ? scoreOf(idea) : null;
               const hovered = hoverId === idea.id;
               const showMark = needsApproval(idea) && (idea.decision === "reviewed" || hovered);
               return (
@@ -956,7 +949,8 @@ export function IdeasView({
                     </span>
                     {(idea.products.length > 0 ||
                       (idea.platforms ?? []).length > 0 ||
-                      (idea.customers ?? []).length > 0) && (
+                      (idea.customers ?? []).length > 0 ||
+                      idea.affectsAllCustomers) && (
                       <div className="flex flex-wrap items-center gap-2">
                         {idea.products.map((p) => {
                           // Flag names the model returned that aren't in the
@@ -972,7 +966,12 @@ export function IdeasView({
                               className={
                                 offCatalog
                                   ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                  : "rounded bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-primary"
+                                  : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                              }
+                              style={
+                                offCatalog
+                                  ? undefined
+                                  : chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)
                               }
                             >
                               {p}
@@ -988,6 +987,14 @@ export function IdeasView({
                             {p}
                           </span>
                         ))}
+                        {idea.affectsAllCustomers && (
+                          <span
+                            title="A supporting ticket marks this as affecting all customers"
+                            className="rounded bg-[rgba(122,167,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#3b6fd4]"
+                          >
+                            All customers
+                          </span>
+                        )}
                         {(idea.customers ?? []).map((c) => {
                           // Off-catalog names are suggestions awaiting PM
                           // review in the drawer — flagged, never hidden.
@@ -1001,7 +1008,12 @@ export function IdeasView({
                               className={
                                 offCatalog
                                   ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                                  : "rounded bg-[rgba(47,160,143,.14)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#0f7a6a]"
+                                  : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                              }
+                              style={
+                                offCatalog
+                                  ? undefined
+                                  : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)
                               }
                             >
                               {c}
@@ -1013,7 +1025,8 @@ export function IdeasView({
                     )}
                   </div>
 
-                  {/* Score */}
+                  {/* Score — hidden until the scoring milestone */}
+                  {score && (
                   <div
                     className="relative flex w-[52px] shrink-0 flex-col items-center gap-px"
                     onMouseEnter={() => setPopId(idea.id)}
@@ -1045,6 +1058,7 @@ export function IdeasView({
                       </div>
                     )}
                   </div>
+                  )}
 
                   {/* Votes — the "+N" jumps to the Merge page with this idea selected */}
                   <button
@@ -1131,15 +1145,7 @@ export function IdeasView({
                 No ideas match.{" "}
                 {hasFilters && (
                   <button
-                    onClick={() => {
-                      setQuery("");
-                      setProductFilter([]);
-                      setPlatformFilter([]);
-                      setCustomerFilter([]);
-                      setStatusFilter([]);
-                      setPendingOnly(false);
-                      setFilterResetKey((k) => k + 1);
-                    }}
+                    onClick={clearAllFilters}
                     className="text-primary hover:underline"
                   >
                     Clear filters
@@ -1160,6 +1166,12 @@ export function IdeasView({
           initialSource={drawerSrc}
           ticketsByKey={ticketsByKey}
           jiraByKey={jiraByKey}
+          csvMapping={csvMapping}
+          ideasById={ideasById}
+          catalogProducts={catalogProducts}
+          catalogPlatforms={catalogPlatforms}
+          productColors={productColors}
+          customerColors={customerColors}
           customerCatalog={customerCatalog}
           onCustomerAction={
             drawerIdea
@@ -1191,6 +1203,15 @@ export function IdeasView({
           }
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}
         />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-border bg-[#101828] px-4 py-2.5 text-[13px] font-medium text-white shadow-[0_12px_32px_rgba(10,22,40,.25)]"
+        >
+          {toast}
+        </div>
       )}
 
       {/* Import progress overlay */}
@@ -1268,7 +1289,7 @@ export function IdeasView({
                   <div className="mt-1 text-[13px] text-muted">
                     {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
                     {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
-                    run Merge to Jira again to retry just those.
+                    run Jira Merge again to retry just those.
                   </div>
                 </div>
                 <div className="flex max-h-80 flex-col gap-1.5 overflow-y-auto">
@@ -1322,7 +1343,7 @@ export function IdeasView({
             ) : (
               <>
                 <div>
-                  <div className="font-title text-lg font-semibold">Merge to Jira</div>
+                  <div className="font-title text-lg font-semibold">Jira Merge</div>
                   <div className="mt-1 text-[13px] text-muted">
                     Pick the product lines to merge. Only approved ideas are written — anything
                     still pending stays here for a later merge.

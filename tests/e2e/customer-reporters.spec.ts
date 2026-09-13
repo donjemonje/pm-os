@@ -254,7 +254,9 @@ test.describe("Ideas — customers & reporters", () => {
     page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLens(page);
-    await page.goto("/settings/ideas");
+    // Since feature/ui_facelift_v1 the Customers panel lives on its own
+    // sub-page (/settings/ideas redirects to product-lines).
+    await page.goto("/settings/ideas/customers");
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
     const panel = customersPanel(page);
@@ -293,22 +295,25 @@ test.describe("Ideas — customers & reporters", () => {
     await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toHaveCount(0);
   });
 
-  test("CR2 idea drawer derives reporters and customers; approving a suggested customer flips it teal and adds it to the catalog", async ({
+  test("CR2 idea drawer derives reporters and customers; approving a suggested customer flips it to a catalog-colored chip and adds it to the catalog", async ({
     page,
   }) => {
     await loginAsRoomLens(page);
     const drawer = await openIdeaDrawer(page, IDEA_TITLE);
 
-    // Reporters: distinct requesters of the linked tickets.
-    const reported = drawer.getByText(/Reported by /);
-    await expect(reported).toBeVisible();
-    await expect(reported).toContainText(REPORTER_1);
-    await expect(reported).toContainText(REPORTER_2);
+    // Reporters: since feature/ui_facelift_v1 the drawer lists the sources
+    // one per ticket, each with its own "Reported by" line.
+    await expect(drawer.getByText(/^Reported by /)).toHaveCount(2);
+    await expect(drawer.getByText(`Reported by ${REPORTER_1}`)).toBeVisible();
+    await expect(drawer.getByText(`Reported by ${REPORTER_2}`)).toBeVisible();
 
-    // Cataloged customer renders as a plain teal chip (no suggestion title).
+    // Cataloged customer renders as a plain chip in its catalog color
+    // (inline palette style since feature/ui_facelift_v1 — no amber
+    // suggestion styling, no suggestion title).
     const catChip = drawer.getByText(CATALOGED, { exact: true });
     await expect(catChip).toBeVisible();
-    await expect(catChip).toHaveClass(/47,160,143/);
+    await expect(catChip).not.toHaveClass(/border-amber-400/);
+    await expect(catChip).toHaveAttribute("style", /background/);
     await expect(
       drawer.locator(`span[title="${SUGGESTED_TITLE}"]`, { hasText: CATALOGED })
     ).toHaveCount(0);
@@ -320,21 +325,25 @@ test.describe("Ideas — customers & reporters", () => {
     await expect(suggested).toBeVisible();
     await expect(suggested).toHaveClass(/border-amber-400/);
 
-    // ✓ approve → catalog gains the name and the chip flips teal live (the
-    // customer catalog rides on the /api/ideas state refresh — no reload).
+    // ✓ approve → catalog gains the name and the chip flips from the amber
+    // suggestion to a palette-colored catalog chip live (the customer
+    // catalog rides on the /api/ideas state refresh — no reload).
     await suggested.getByTitle("Add to the Customers catalog").click();
     await expect(
       drawer.locator(`span[title="${SUGGESTED_TITLE}"]`, { hasText: SUGGESTED_APPROVE })
     ).toHaveCount(0);
     const approvedChip = drawer.getByText(SUGGESTED_APPROVE, { exact: true });
     await expect(approvedChip).toBeVisible();
-    await expect(approvedChip).toHaveClass(/47,160,143/);
+    await expect(approvedChip).not.toHaveClass(/border-amber-400/);
+    await expect(approvedChip).toHaveAttribute("style", /background/);
 
-    // The name is really in the Customers catalog (same session's cookies).
+    // The name is really in the Customers catalog (same session's cookies),
+    // with a palette color auto-assigned on approval.
     const res = await page.request.get("/api/ideas/lists/customers");
     expect(res.status()).toBe(200);
-    const { items } = (await res.json()) as { items: { name: string }[] };
+    const { items } = (await res.json()) as { items: { name: string; color: string | null }[] };
     expect(items.map((i) => i.name)).toContain(SUGGESTED_APPROVE);
+    expect(items.find((i) => i.name === SUGGESTED_APPROVE)?.color).toBeTruthy();
 
     // The review decision is on the ledger.
     expect(await eventCount("approve_customer", SUGGESTED_APPROVE)).toBeGreaterThan(0);
@@ -392,12 +401,15 @@ test.describe("Ideas — customers & reporters", () => {
     await expect(row1.getByText(CATALOGED, { exact: true })).toBeVisible();
     await expect(row2.getByText(`${SUGGESTED_SOLO} ⚑`)).toBeVisible();
 
-    // Customer filter: select the cataloged name → only the idea whose
-    // tickets name it stays visible.
-    await page.getByPlaceholder("All customers").click();
-    await page.getByRole("button", { name: CATALOGED, exact: true }).click();
-    // Close the dropdown via its backdrop before asserting.
+    // Customer filter (a toolbar popover since feature/ui_facelift_v1):
+    // select the cataloged name → only the idea whose tickets name it stays
+    // visible.
+    await page.getByRole("button", { name: /^Customer/ }).click();
+    const popover = page.locator("div.z-\\[25\\]");
+    await popover.getByRole("button", { name: CATALOGED, exact: true }).click();
+    // Multi-select stays open — close via the backdrop before asserting.
     await page.locator("div.z-\\[24\\]").click();
+    await expect(popover).toHaveCount(0);
     await expect(row1).toBeVisible();
     await expect(row2).toHaveCount(0);
 

@@ -45,6 +45,12 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         description: "Ideas pipeline: page, settings, and import APIs.",
       },
       {
+        key: "myProductLines",
+        label: "My Product Lines",
+        description:
+          "Personal product-line pre-filter: the My Product Lines picker in Settings → Ideas and the default filter it applies on the Ideas page.",
+      },
+      {
         key: "ideasUndo",
         label: "Ideas undo",
         description:

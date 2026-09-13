@@ -5,11 +5,8 @@ import {
   sessionCookieOptions,
   twoFactorPendingCookieOptions,
 } from "@/lib/auth";
-import { loginDisabledResponse } from "@/lib/auth-guard";
 
 export async function POST(request: NextRequest) {
-  const disabled = loginDisabledResponse();
-  if (disabled) return disabled;
   let body: { email?: string; password?: string };
   try {
     body = await request.json();

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { Chakra_Petch, Inter, Space_Grotesk } from "next/font/google";
+import { Chakra_Petch, Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 import {
   getCurrentUser,
@@ -21,6 +22,12 @@ const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
   variable: "--font-title",
   weight: ["400", "500", "600", "700"],
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-jbmono",
+  weight: ["400", "500", "600"],
 });
 
 const inter = Inter({
@@ -65,13 +72,16 @@ export default async function RootLayout({
       }
     : null;
 
+  const sidebarCollapsed = (await cookies()).get("pmos_sidebar")?.value === "collapsed";
+
   return (
     <html
       lang="en"
-      className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable}`}
+      className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}
     >
       <body className="font-body antialiased">
         <Shell
+          sidebarDefaultCollapsed={sidebarCollapsed}
           ideasEnabled={ideasEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}

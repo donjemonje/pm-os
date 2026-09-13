@@ -6,14 +6,19 @@ import { RESOLVED_ENV } from "./test-env";
 /**
  * Ideas ↔ Jira match stage (feature/ideas-jira-merge):
  * - The Jira backlog re-enters each batch as Unchanged ideas. They need no
- *   review, so the Final page hides them unless the Unchanged chip is active,
- *   and the Import Status chips are single-select (a click replaces the
- *   selection; clicking the active chip clears it).
+ *   review, so the Final page hides them unless the Status filter says
+ *   Unchanged (or All). Since feature/ui_facelift_v1 the Status filter is a
+ *   single-select toolbar popover shared by the Final and Merge views
+ *   (All / New / Updated / Archive / Unchanged): a pick replaces the
+ *   selection and closes the popover; picking the active value clears it.
  * - Unchanged (and Deleted) ideas are approval-exempt: no approve controls
  *   render for them, and the server refuses decision "reviewed" outright.
- * - The Merge view chips are Merge/Single/Unchanged: unchanged ideas and the
- *   Jira sources backing only unchanged ideas hide under Merge/Single and
- *   show under Unchanged; edit mode always shows the full source pool.
+ * - Merge view (the Merge/Single chips are gone since the facelift; the
+ *   shared Status filter is the only scope): unchanged ideas and the Jira
+ *   sources backing only unchanged ideas hide by default and show under
+ *   Unchanged / All; edit mode always shows the full source pool. Entering
+ *   the view no longer auto-starts an edit — clicking a Final row does, and
+ *   that row grows discard (×) / save (✓) icon buttons.
  * - A manual reassign on the merge page recomputes status and votes: adding
  *   ticket evidence to a Jira-origin idea flips it to Updated and moves
  *   newVotes by the zendesk-source delta; removing it flips it back.
@@ -242,17 +247,25 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     return page.locator("div.cursor-pointer", { hasText: title });
   }
 
-  /** The Import Status filter row — scopes the chips away from the identically
-   * named "Merge" page-toggle button. */
-  function statusRow(page: Page) {
-    return page
-      .locator("div.flex.flex-wrap.items-start.gap-2")
-      .filter({ has: page.getByText("Import Status", { exact: true }) });
+  /** The toolbar's Status popover trigger — reads "Status" when clear and
+   * "Status: <value>" when set (single-select). */
+  function statusTrigger(page: Page) {
+    return page.getByRole("button", { name: /^Status/ });
   }
 
-  function chip(page: Page, label: string) {
-    return statusRow(page).getByRole("button", { name: label, exact: true });
+  /** Pick a Status option: opens the popover, clicks the option, and waits
+   * for the popover to close (single-select closes on pick). Picking the
+   * active value clears the filter. */
+  async function pickStatus(page: Page, label: string) {
+    await statusTrigger(page).click();
+    const popover = page.locator("div.z-\\[25\\]");
+    await popover.getByRole("button", { name: label, exact: true }).click();
+    await expect(popover).toHaveCount(0);
   }
+
+  /** The discard (×) / save (✓) icon buttons a Final row grows while edited. */
+  const DISCARD_TITLE = "Discard source changes (Esc)";
+  const SAVE_TITLE = "Save source changes";
 
   /** A merge-board column, scoped by its "<Label> · N" header. */
   function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "Final") {
@@ -277,33 +290,37 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     return withDb((db) => db.idea.findUniqueOrThrow({ where: { id } }));
   }
 
-  test("JM1 Final page: unchanged hidden by default, Unchanged chip reveals them, chips are single-select", async ({
+  test("JM1 Final page: unchanged hidden by default, Status: Unchanged reveals them, the Status popover is single-select", async ({
     page,
   }) => {
     await loginAsRoomLens(page);
     await gotoIdeas(page);
 
     // Default view: new + updated visible, unchanged nowhere.
+    await expect(statusTrigger(page)).toHaveText(/^Status$/);
     await expect(ideaRow(page, UPDATED_TITLE)).toBeVisible();
     await expect(ideaRow(page, UNCHANGED_A_TITLE)).toHaveCount(0);
     await expect(ideaRow(page, UNCHANGED_B_TITLE)).toHaveCount(0);
 
-    // Unchanged chip: only the unchanged backlog shows.
-    await chip(page, "Unchanged").click();
+    // Status: Unchanged → only the unchanged backlog shows.
+    await pickStatus(page, "Unchanged");
+    await expect(page.getByRole("button", { name: "Status: Unchanged", exact: true })).toBeVisible();
     await expect(ideaRow(page, UNCHANGED_A_TITLE)).toBeVisible();
     await expect(ideaRow(page, UNCHANGED_B_TITLE)).toBeVisible();
     await expect(ideaRow(page, NEW_TITLE)).toHaveCount(0);
     await expect(ideaRow(page, UPDATED_TITLE)).toHaveCount(0);
 
-    // Single-select: clicking New REPLACES Unchanged (were the chips
+    // Single-select: picking New REPLACES Unchanged (were the options
     // additive, the unchanged rows would still be here).
-    await chip(page, "New").click();
+    await pickStatus(page, "New");
+    await expect(page.getByRole("button", { name: "Status: New", exact: true })).toBeVisible();
     await expect(ideaRow(page, NEW_TITLE)).toBeVisible();
     await expect(ideaRow(page, UNCHANGED_A_TITLE)).toHaveCount(0);
     await expect(ideaRow(page, UPDATED_TITLE)).toHaveCount(0);
 
-    // Clicking the active chip clears the selection → default view again.
-    await chip(page, "New").click();
+    // Picking the active value clears the selection → default view again.
+    await pickStatus(page, "New");
+    await expect(statusTrigger(page)).toHaveText(/^Status$/);
     await expect(ideaRow(page, UPDATED_TITLE)).toBeVisible();
     await expect(ideaRow(page, NEW_TITLE)).toBeVisible();
     await expect(ideaRow(page, UNCHANGED_A_TITLE)).toHaveCount(0);
@@ -319,8 +336,8 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await ideaRow(page, NEW_TITLE).hover();
     await expect(page.getByTitle("Mark reviewed")).toBeVisible();
 
-    // The unchanged row (via its chip) never grows the mark on hover.
-    await chip(page, "Unchanged").click();
+    // The unchanged row (via Status: Unchanged) never grows the mark on hover.
+    await pickStatus(page, "Unchanged");
     const rowA = ideaRow(page, UNCHANGED_A_TITLE);
     await expect(rowA).toBeVisible();
     await rowA.hover();
@@ -358,38 +375,55 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     expect((await ideaFromDb(newId)).decision).toBe("pending");
   });
 
-  test("JM3 merge view: unchanged ideas and their Jira sources hide under Merge, show under Unchanged, edit shows the full pool", async ({
+  test("JM3 merge view: unchanged ideas and their Jira sources hide by default, show under Status Unchanged/All, edit shows the full pool", async ({
     page,
   }) => {
     await loginAsRoomLens(page);
     await gotoIdeas(page);
 
-    // Entering the merge view auto-starts an edit → the full Jira pool shows,
-    // including sources that back only unchanged ideas.
+    // Entering the merge view starts NO edit (since the facelift): the
+    // default scope shows the batch's ideas; the unchanged backlog and the
+    // Jira keys that back only it are hidden.
     await pageToggle(page, "Merge").click();
     const jiraCol = mergeColumn(page, "Jira");
     const finalCol = mergeColumn(page, "Final");
-    await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
-    await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
-
-    // Out of edit mode, under the Merge chip: multi-source ideas only; the
-    // unchanged backlog and its Jira keys are gone.
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await chip(page, "Merge").click();
     await expect(finalCol.getByText(UPDATED_TITLE)).toBeVisible();
+    await expect(finalCol.getByTitle(DISCARD_TITLE)).toHaveCount(0);
     await expect(jiraCol.getByRole("button", { name: JIRA_C })).toBeVisible();
     await expect(finalCol.getByText(UNCHANGED_A_TITLE)).toHaveCount(0);
     await expect(finalCol.getByText(UNCHANGED_B_TITLE)).toHaveCount(0);
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toHaveCount(0);
     await expect(jiraCol.getByRole("button", { name: JIRA_B })).toHaveCount(0);
 
-    // Under the Unchanged chip both come back.
-    await chip(page, "Unchanged").click();
+    // Status: Unchanged → only the backlog and its keys.
+    await pickStatus(page, "Unchanged");
     await expect(finalCol.getByText(UNCHANGED_A_TITLE)).toBeVisible();
     await expect(finalCol.getByText(UNCHANGED_B_TITLE)).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_B })).toBeVisible();
     await expect(finalCol.getByText(UPDATED_TITLE)).toHaveCount(0);
+
+    // Status: All → everything at once.
+    await pickStatus(page, "All");
+    await expect(finalCol.getByText(UPDATED_TITLE)).toBeVisible();
+    await expect(finalCol.getByText(UNCHANGED_A_TITLE)).toBeVisible();
+    await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
+    await expect(jiraCol.getByRole("button", { name: JIRA_C })).toBeVisible();
+
+    // Back to the default scope, then editing the updated idea shows the
+    // full Jira pool (attach-anything), including the backlog-only keys;
+    // discarding the edit hides them again.
+    await pickStatus(page, "All");
+    await expect(jiraCol.getByRole("button", { name: JIRA_A })).toHaveCount(0);
+    const updatedRow = finalCol.locator("div.cursor-pointer", { hasText: UPDATED_TITLE });
+    await updatedRow.click();
+    await expect(updatedRow.getByTitle(DISCARD_TITLE)).toBeVisible();
+    await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
+    await expect(jiraCol.getByRole("button", { name: JIRA_B })).toBeVisible();
+    await updatedRow.getByTitle(DISCARD_TITLE).click();
+    await expect(finalCol.getByTitle(DISCARD_TITLE)).toHaveCount(0);
+    await expect(jiraCol.getByRole("button", { name: JIRA_A })).toHaveCount(0);
+    await expect(jiraCol.getByRole("button", { name: JIRA_B })).toHaveCount(0);
   });
 
   test("JM4 merge reassign: attaching a ticket flips an unchanged Jira idea to Updated with a vote delta; detaching flips it back", async ({
@@ -398,26 +432,28 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await loginAsRoomLens(page);
     await gotoIdeas(page);
     await pageToggle(page, "Merge").click();
-    await page.getByRole("button", { name: "Cancel" }).click(); // leave the auto-started edit
 
     const zenCol = mergeColumn(page, "Zendesk");
     const finalCol = mergeColumn(page, "Final");
     const orphanRow = zenCol.locator("div.cursor-pointer", { hasText: TICKET_ORPHAN_SUBJECT });
     const targetRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
 
-    // Start editing the unchanged Jira idea (visible only under its chip)
-    // and attach the orphan ticket as evidence.
-    await chip(page, "Unchanged").click();
+    // Start editing the unchanged Jira idea (visible only under Status:
+    // Unchanged) by clicking its row, and attach the orphan ticket as
+    // evidence. The save (✓) icon appears only once the edit is dirty.
+    await pickStatus(page, "Unchanged");
     await targetRow.click();
-    await expect(page.getByText("1 source selected")).toBeVisible();
+    await expect(targetRow.getByTitle(DISCARD_TITLE)).toBeVisible();
+    await expect(targetRow.getByTitle(SAVE_TITLE)).toHaveCount(0);
     await orphanRow.click();
-    await expect(page.getByText("2 sources selected")).toBeVisible();
-    await page.getByRole("button", { name: "Save" }).click();
+    await expect(targetRow.getByTitle(SAVE_TITLE)).toBeVisible();
+    await targetRow.getByTitle(SAVE_TITLE).click();
 
-    // Saved: now Updated, so it left the Unchanged listing and shows under
-    // Merge with both sources.
+    // Saved: now Updated, so it left the Unchanged listing and shows in the
+    // default scope with both sources.
     await expect(targetRow).toHaveCount(0);
-    await chip(page, "Merge").click();
+    await pickStatus(page, "Unchanged"); // clears the filter
+    await expect(statusTrigger(page)).toHaveText(/^Status$/);
     await expect(finalCol.getByText(UNCHANGED_B_TITLE)).toBeVisible();
     await expect(
       finalCol
@@ -439,15 +475,14 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
 
     // Reverse it: detach the ticket → back to Unchanged, delta gone.
     await pageToggle(page, "Merge").click();
-    await page.getByRole("button", { name: "Cancel" }).click();
-    await chip(page, "Merge").click();
-    await finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE }).click();
-    await expect(page.getByText("2 sources selected")).toBeVisible();
+    const updatedRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
+    await updatedRow.click();
+    await expect(updatedRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await orphanRow.click();
-    await expect(page.getByText("1 source selected")).toBeVisible();
-    await page.getByRole("button", { name: "Save" }).click();
+    await expect(updatedRow.getByTitle(SAVE_TITLE)).toBeVisible();
+    await updatedRow.getByTitle(SAVE_TITLE).click();
 
-    // Unchanged again: hidden under the Merge chip, and both the vote delta
+    // Unchanged again: hidden in the default scope, and both the vote delta
     // and status rolled back in the DB.
     await expect(finalCol.getByText(UNCHANGED_B_TITLE)).toHaveCount(0);
     const afterDetach = await ideaFromDb(unchangedBId);

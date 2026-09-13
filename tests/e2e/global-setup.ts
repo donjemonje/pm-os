@@ -8,7 +8,6 @@ import { LOCAL_BASE_URL, PORT, RESOLVED_ENV } from "./test-env";
  * (yaml) and in CI (workflow job env, no yaml) without false positives.
  *
  * Feature-flag expectations are derived from what the specs assert:
- *   - DISABLE_LOGIN=false  — every spec logs in (auth.spec, all-pages.spec)
  *   - IDEAS_ENABLED off    — all-pages.spec asserts /ideas 404s
  *   - DOCS_ENABLED on      — all-pages.spec asserts /docs renders
  *   - CHAT_ENABLED on      — all-pages.spec asserts /chat renders; admin
@@ -34,14 +33,6 @@ export default function validateTestEnv(): void {
   const env = RESOLVED_ENV;
   const problems: string[] = [];
   let testDbName: string | undefined;
-
-  // Login must be enabled (DISABLE_LOGIN is default-closed: unset = disabled).
-  if (!isFalseLike(env.DISABLE_LOGIN)) {
-    problems.push(
-      `DISABLE_LOGIN resolves to ${show(env.DISABLE_LOGIN)} — login would be ` +
-        `disabled and every test fails at sign-in; ${FIX_YAML}`
-    );
-  }
 
   // Tests run against the dedicated pmos_test database (CI, shared local
   // runs) or a feature's own dev clone pmos_ft_<name> (feature QA inside
@@ -131,17 +122,6 @@ export default function validateTestEnv(): void {
           `together with this check`
       );
     }
-  }
-
-  // google-sso.spec.ts G1 asserts the env-only Google switch: with
-  // DISABLE_GOOGLE_LOGIN on, google is absent from the providers list and
-  // the authorize endpoint bounces to /login?error=google_sso_disabled.
-  if (!isTrueLike(env.DISABLE_GOOGLE_LOGIN)) {
-    problems.push(
-      `DISABLE_GOOGLE_LOGIN resolves to ${show(env.DISABLE_GOOGLE_LOGIN)} but ` +
-        `google-sso.spec.ts G1 asserts Google is hidden by env — set it ` +
-        `to "true", or update that spec together with this check`
-    );
   }
 
   // google-sso.spec.ts needs Google to count as "configured" so the env

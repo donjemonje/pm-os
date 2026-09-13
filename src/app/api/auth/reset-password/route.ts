@@ -4,7 +4,6 @@ import {
   sessionCookieOptions,
   twoFactorPendingCookieOptions,
 } from "@/lib/auth";
-import { loginDisabledResponse } from "@/lib/auth-guard";
 import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "@/lib/password-policy";
 import { resetPassword } from "@/lib/password-reset";
 import { rateLimit } from "@/lib/rate-limit";
@@ -16,8 +15,6 @@ import { rateLimit } from "@/lib/rate-limit";
  * TOTP challenge, or enrollment for a new account) and then into the app.
  */
 export async function POST(request: NextRequest) {
-  const disabled = loginDisabledResponse();
-  if (disabled) return disabled;
 
   let body: { token?: string; password?: string };
   try {

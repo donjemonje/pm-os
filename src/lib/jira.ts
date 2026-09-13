@@ -92,6 +92,19 @@ export async function getAccessibleResources(accessToken: string) {
   return response.json() as Promise<Array<{ id: string; url: string; name: string }>>;
 }
 
+/**
+ * True when a Jira connection exists AND its token is usable (fresh, or
+ * refreshable with the configured Atlassian OAuth creds). A configured but
+ * dead connection is "not connected" for anything that needs to write.
+ */
+export async function hasValidJiraConnection(workspaceId: string): Promise<boolean> {
+  try {
+    return (await getValidConnection(workspaceId)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 async function getValidConnection(workspaceId: string) {
   const connection = await db.jiraConnection.findUnique({ where: { workspaceId } });
   if (!connection) return null;

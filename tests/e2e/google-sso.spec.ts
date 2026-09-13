@@ -7,12 +7,12 @@ import { passTwoFactorChallenge } from "./two-factor-helpers";
 
 /**
  * Google sign-in + forgot-password (feature/google-sso; flags removed on
- * feature/admin-delete-user-org — Google is always on when configured, the
- * only switch is env DISABLE_GOOGLE_LOGIN, and sign-up is invite-only).
+ * feature/admin-delete-user-org — Google is always on when configured and
+ * sign-up is invite-only; since feature/ui_facelift_v1 there is no disable
+ * switch at all: login and Google can never be turned off).
  *
- * G1  env switch: with DISABLE_GOOGLE_LOGIN=true (pinned by the env guard)
- *     google is absent from /api/auth/oauth/providers and the authorize
- *     endpoint bounces to /login?error=google_sso_disabled. Fake Google
+ * G1  always-on: google is present in /api/auth/oauth/providers and the
+ *     authorize endpoint redirects out to Google's OAuth screen. Fake Google
  *     creds make the provider "configured" — nothing ever calls Google.
  * G2  forgot-password is enumeration-safe: identical { ok: true } for a real
  *     and a nonexistent email; a token row exists only for the real user.
@@ -98,7 +98,7 @@ test.describe("Google SSO + forgot-password", () => {
   test.beforeAll(resetGoogleSsoFixtures);
   test.afterAll(resetGoogleSsoFixtures);
 
-  test("G1 env switch: DISABLE_GOOGLE_LOGIN hides Google from the providers list and blocks the authorize endpoint", async ({
+  test("G1 always-on: Google is in the providers list and the authorize endpoint redirects to Google", async ({
     request,
   }) => {
     const res = await request.get("/api/auth/oauth/providers");
@@ -106,16 +106,14 @@ test.describe("Google SSO + forgot-password", () => {
     const { providers } = (await res.json()) as {
       providers: { provider: string }[];
     };
-    expect(providers.map((p) => p.provider)).not.toContain("google");
+    expect(providers.map((p) => p.provider)).toContain("google");
 
     const authorize = await request.get("/api/auth/oauth/google", {
       maxRedirects: 0,
     });
     expect(authorize.status(), "authorize endpoint must redirect").toBeGreaterThanOrEqual(300);
     expect(authorize.status()).toBeLessThan(400);
-    expect(authorize.headers()["location"] ?? "").toBe(
-      `${LOCAL_BASE_URL}/login?error=google_sso_disabled`
-    );
+    expect(authorize.headers()["location"] ?? "").toContain("accounts.google.com");
   });
 
   test("G2 forgot-password request is enumeration-safe: identical response, token row only for the real user", async ({

@@ -23,10 +23,13 @@ export type MenuOrganization = {
 export function UserMenu({
   user,
   organization,
+  collapsed = false,
   appVersion,
 }: {
   user: MenuUser;
   organization: MenuOrganization | null;
+  /** Narrow-rail mode: avatar-only trigger; the menu overflows the rail. */
+  collapsed?: boolean;
   /** package.json version — shown at the bottom of the menu. */
   appVersion: string;
 }) {
@@ -63,7 +66,10 @@ export function UserMenu({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors",
+          // px-0.5 puts the 36px avatar at x=14 inside the 64px collapsed
+          // rail — dead center — while keeping a constant x when expanded
+          // (the curtain rule: nothing shifts, only the rail width moves).
+          "flex w-full items-center gap-3 rounded-lg px-0.5 py-2 text-left transition-colors",
           open ? "bg-white/10" : "hover:bg-white/5"
         )}
         aria-expanded={open}
@@ -75,10 +81,15 @@ export function UserMenu({
         >
           {user.initials}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-white">{user.name}</span>
-          <span className="block truncate text-xs text-white/50">
-            {user.organizationName ?? user.email}
+        <span
+          className="shrink-0 overflow-hidden transition-[max-width,opacity] duration-200 ease-out"
+          style={{ maxWidth: collapsed ? 0 : 140, opacity: collapsed ? 0 : 1 }}
+        >
+          <span className="block w-[140px]">
+            <span className="block truncate text-sm font-medium text-white">{user.name}</span>
+            <span className="block truncate text-xs text-white/50">
+              {user.organizationName ?? user.email}
+            </span>
           </span>
         </span>
       </button>
@@ -86,7 +97,10 @@ export function UserMenu({
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full left-3 right-3 mb-1 overflow-hidden rounded-lg border border-white/10 bg-sidebar shadow-lg"
+          className={cn(
+            "absolute bottom-full mb-1 overflow-hidden rounded-lg border border-white/10 bg-sidebar shadow-lg",
+            collapsed ? "left-2 w-56" : "left-3 right-3"
+          )}
         >
           <div className="border-b border-white/10 px-3 py-2">
             <p className="truncate text-xs text-white/50">{user.email}</p>

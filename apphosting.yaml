@@ -9,19 +9,9 @@ runConfig:
 
 env:
   # --- Auth gates ---
-  - variable: DISABLE_LOGIN
-    value: "false"
-    availability:
-      - BUILD
-      - RUNTIME
 
   # Google sign-in is live (env-only switch; no admin flag). Sign-up is
   # invite-only (PM-OS Admin → Users), so there is no ALLOW_SIGNUP anymore.
-  - variable: DISABLE_GOOGLE_LOGIN
-    value: "false"
-    availability:
-      - BUILD
-      - RUNTIME
 
   - variable: IDEAS_ENABLED
     value: "false"
@@ -113,7 +103,7 @@ env:
       - RUNTIME
 
   - variable: VERTEX_LOCATION
-    value: global
+    value: eu
     availability:
       - RUNTIME
 

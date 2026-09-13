@@ -144,6 +144,10 @@ model ProductLine {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
   description String    @default("")
+  /// Manual sort order (Settings → Ideas → Product Lines); ties break by name.
+  position    Int       @default(0)
+  /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
+  color       String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -160,6 +164,11 @@ model Customer {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
   description String    @default("")
+  /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
+  color       String?
+  /// Spellings merged into this customer (Settings → Customers → Merge);
+  /// imports map them here, and a merge can be split back out.
+  aliases     Json      @default("[]")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -320,7 +329,29 @@ model ZendeskTicketRaw {
   dismissedCustomers Json    @default("[]")
   tags            Json       @default("[]")
   productLine     String?
+  /// Reporter-chosen module/product hint (e.g. Zendesk "Module" field) —
+  /// a metadata hint for classification, never an override.
+  module          String?
+  /// Customer named by the reporter in a dedicated field — treated as truth.
+  customerName    String?
+  /// The reporter marked the ticket as affecting all customers (parsed from
+  /// values like "All customers" in the customer fields).
+  affectsAllCustomers Boolean @default(false)
+  /// Reporter's "why should we build this" text — interpretation, same
+  /// grain of salt as the rest of the ticket.
+  whyBuild        String?
+  /// Reporter's "what insights do we have" text — interpretation.
+  insights        String?
+  /// e.g. Yes / No / Helpful — deal linkage as reported.
+  dealRelated     String?
+  /// e.g. Customer / POC.
+  customerType    String?
+  /// Direct link to the source ticket; preferred over the URL template.
+  url             String?
   sourceCreatedAt String?
+  /// What the match stage decided per FR unit of this ticket:
+  /// [{ unit, ideaId, merged, reason }] — the PM-facing "why" next to the idea link.
+  matchNotes      Json       @default("[]")
   raw             Json
   batchId         String?
   batch           IdeaBatch? @relation(fields: [batchId], references: [id])
@@ -362,6 +393,13 @@ model IdeaBatch {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
   stats       Json?
+  /** running | completed | failed | aborted (server stopped mid-import). */
+  status      String    @default("running")
+  error       String?
+  /** Touched after every model call and stage; a stale beat on a running batch = dead run. */
+  heartbeatAt DateTime  @default(now())
+  /** Per-stage timings, call counts, token usage — see src/lib/ideas/trace.ts. */
+  trace       Json?
 
   tickets ZendeskTicketRaw[]
 
@@ -382,6 +420,9 @@ model Idea {
   /// Human-readable narration of what this import did to an Updated idea
   /// (votes, enrichment, added product lines/platforms). Cleared on rollover.
   batchChanges  Json      @default("[]")
+  /// Customers a PM added by hand (names). Ticket-derived customers are
+  /// never stored here; removing one of those is a dismissal on its tickets.
+  addedCustomers Json     @default("[]")
   pmScore       Int?
   manualScore   Int?
   existingVotes Int       @default(0)
