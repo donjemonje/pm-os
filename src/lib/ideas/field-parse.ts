@@ -112,10 +112,11 @@ export async function parseCustomerCells(
     config: {
       systemInstruction: PARSE_SYSTEM_PROMPT,
       temperature: 0,
-      // Field cleanup is extraction, not reasoning: thinking off keeps the
-      // call fast and — since 2.5 Flash bills thinking against the output
-      // budget — keeps the JSON from being cut off mid-array.
-      thinkingConfig: { thinkingBudget: 0 },
+      // Gemini bills thinking against maxOutputTokens, so the two budgets
+      // are sized together: thinking is kept (Daniel's call) but bounded,
+      // and the output limit leaves room for the answer after it — a
+      // truncated JSON array is what a 4000-token limit produced once.
+      thinkingConfig: { thinkingBudget: 2048 },
       maxOutputTokens: 16000,
       responseMimeType: "application/json",
       responseSchema: RESPONSE_SCHEMA,
