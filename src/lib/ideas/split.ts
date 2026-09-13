@@ -35,6 +35,7 @@ export const SPLIT_SYSTEM_PROMPT = `You break one customer-support ticket into i
 An earlier stage judged that this ticket contains more than one capability. Your job is to write each capability as its own idea. Rules:
 
 - Split on capabilities a product manager would ship and size SEPARATELY — things that would become separate backlog items even when they serve one goal (e.g. "scan TLS certificates" and "scan email security settings" are two). Alternative solutions, implementation details, or extra context for ONE capability are one idea, not several. Each idea's text covers only its own capability — never restate a sibling's ask, and never claim a precedent or scope the ticket does not state. If, reading closely, the ticket really contains a single capability, return exactly one request — that is a valid and welcome answer.
+- A request for the product team to analyze, research, compare or decide something is context for the capabilities, not a capability of its own — never make it an idea.
 - Never invent problems the ticket does not raise, and never split beyond ${MAX_SPLITS}.
 - Everything in the ticket was written or relayed by an organization representative — treat all of it as that person's interpretation of customer interactions, one grade of information, and evaluate what each underlying need actually is.
 
