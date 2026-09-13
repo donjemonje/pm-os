@@ -112,7 +112,11 @@ export async function parseCustomerCells(
     config: {
       systemInstruction: PARSE_SYSTEM_PROMPT,
       temperature: 0,
-      maxOutputTokens: 4000,
+      // Field cleanup is extraction, not reasoning: thinking off keeps the
+      // call fast and — since 2.5 Flash bills thinking against the output
+      // budget — keeps the JSON from being cut off mid-array.
+      thinkingConfig: { thinkingBudget: 0 },
+      maxOutputTokens: 16000,
       responseMimeType: "application/json",
       responseSchema: RESPONSE_SCHEMA,
     },
@@ -122,7 +126,11 @@ export async function parseCustomerCells(
   try {
     parsed = JSON.parse(response.text ?? "");
   } catch {
-    throw new Error("Field-parse model returned invalid JSON");
+    const text = response.text ?? "";
+    const finish = response.candidates?.[0]?.finishReason ?? "unknown";
+    throw new Error(
+      `Field-parse model returned invalid JSON (finish: ${finish}, ${text.length} chars: ${JSON.stringify(text.slice(-120))})`,
+    );
   }
   const results: ParsedCell[] = (
     Array.isArray(parsed.results) ? parsed.results : []
