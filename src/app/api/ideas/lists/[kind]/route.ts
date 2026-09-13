@@ -268,7 +268,11 @@ export async function PUT(request: NextRequest, context: RouteContext) {
   const order = Array.isArray(body.order) ? body.order.filter((x) => typeof x === "string") : [];
   const rows = await db.productLine.findMany({ where: { workspaceId }, select: { id: true } });
   const known = new Set(rows.map((r) => r.id));
-  if (order.length !== rows.length || !order.every((id) => known.has(id as string))) {
+  if (
+    order.length !== rows.length ||
+    new Set(order).size !== rows.length ||
+    !order.every((id) => known.has(id as string))
+  ) {
     return NextResponse.json({ error: "Order must list every product line once" }, { status: 400 });
   }
   await db.$transaction(

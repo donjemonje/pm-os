@@ -128,11 +128,23 @@ export class PrefixWarmer {
     this.entries.set(key, p);
   }
 
-  /** Resolve once `key`'s entry is readable (warm-up done + settle time). */
+  /**
+   * Resolve once `key`'s entry is readable (warm-up done + settle time). A
+   * failed warm-up is logged and the wave runs unwarmed — caching is a cost
+   * optimization, never a reason to fail an import.
+   */
   async ready(key: string): Promise<void> {
     const p = this.entries.get(key);
     if (!p) return;
-    const completedAt = await p;
+    let completedAt: number;
+    try {
+      completedAt = await p;
+    } catch (err) {
+      console.error(
+        `[ideas:import] cache warm-up for ${key} failed, continuing unwarmed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
     const wait = cacheSettleMs() - (Date.now() - completedAt);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   }

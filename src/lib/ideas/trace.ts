@@ -174,8 +174,13 @@ export class ImportTrace implements StageHooks {
   uploaded = 0;
   fresh = 0;
 
+  private timer: ReturnType<typeof setInterval> | null = null;
+
   constructor(readonly batchId: string) {
     this.tag = `${LOG_PREFIX} ${batchId.slice(0, 8)}]`;
+    // A run in a long model call still beats — liveness must not depend on
+    // a call completing (a reconciliation call can run for tens of seconds).
+    this.timer = setInterval(() => this.beat(false), HEARTBEAT_EVERY_MS);
   }
 
   get elapsedMs(): number {
@@ -292,6 +297,10 @@ export class ImportTrace implements StageHooks {
     stats?: unknown;
     error?: string;
   }): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     if (this.current) this.end();
     await this.pending;
     const trace = this.snapshot();
@@ -324,17 +333,16 @@ export class ImportTrace implements StageHooks {
 }
 
 /**
- * Close out runs the server never finished: every batch still `running`
- * whose heartbeat is older than the stale window (or all of them, on server
- * start — nothing can still be running then). Deterministic, no guessing.
+ * Close out runs no server is finishing: every batch still `running` whose
+ * heartbeat is older than the stale window. Checked at server start and
+ * before each import. A live run beats every few seconds even mid-call, so
+ * a stale beat is proof, not a guess — and another instance booting (prod
+ * scales out) never touches a run that is still alive elsewhere.
  */
 export async function markAbandonedImports(
   reason: "server started" | "stale heartbeat",
 ): Promise<number> {
-  const cutoff =
-    reason === "server started"
-      ? new Date()
-      : new Date(Date.now() - STALE_HEARTBEAT_MS);
+  const cutoff = new Date(Date.now() - STALE_HEARTBEAT_MS);
   const dead = await db.ideaBatch.findMany({
     where: { status: "running", heartbeatAt: { lt: cutoff } },
     select: { id: true, heartbeatAt: true, trace: true },
@@ -345,11 +353,9 @@ export async function markAbandonedImports(
     const where = last
       ? `${last.stage}${last.error ? ` (${last.error})` : ""}`
       : "before the first stage";
-    const error = `Import aborted — ${
-      reason === "server started"
-        ? "the server was stopped while it was running"
-        : "no heartbeat since the server stopped or lost the request"
-    }; last alive at ${b.heartbeatAt.toISOString()} in ${where}`;
+    const error = `Import aborted — no heartbeat for over ${Math.round(STALE_HEARTBEAT_MS / 60000)} min (${
+      reason === "server started" ? "noticed at server start" : "noticed at the next import"
+    }); last alive at ${b.heartbeatAt.toISOString()} in ${where}`;
     await db.ideaBatch.update({
       where: { id: b.id },
       data: { status: "aborted", error, completedAt: b.heartbeatAt },

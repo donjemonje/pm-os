@@ -1,4 +1,4 @@
-import { type CsvMapping, DEFAULT_CSV_MAPPING } from "./csv-mapping";
+import { type CsvMapping, DEFAULT_CSV_MAPPING, safeHttpUrl } from "./csv-mapping";
 import type { ZendeskTicket } from "./types";
 
 /** Minimal RFC 4180 parser: quoted fields, escaped quotes, embedded newlines. */
@@ -147,7 +147,7 @@ export function ticketsFromCsv(
     if (dealRelated) ticket.dealRelated = dealRelated;
     const customerType = cell(r, iCustomerType);
     if (customerType) ticket.customerType = customerType;
-    const url = cell(r, iUrl);
+    const url = safeHttpUrl(cell(r, iUrl));
     if (url) ticket.url = url;
     // The dedicated Zendesk field is one signal among several — it's not
     // always filled in, so text extraction runs regardless. Names contain

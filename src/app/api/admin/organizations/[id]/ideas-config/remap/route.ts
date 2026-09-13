@@ -26,7 +26,8 @@ export async function POST(
   if (!workspace) {
     return NextResponse.json({ error: "Organization has no workspace" }, { status: 404 });
   }
-  const mapping = mergeIdeasJiraConfig(workspace.ideasConfig).csv;
+  const cfg = mergeIdeasJiraConfig(workspace.ideasConfig);
+  const mapping = cfg.csv;
 
   const tickets = await db.zendeskTicketRaw.findMany({
     where: { workspaceId: workspace.id },
@@ -43,8 +44,14 @@ export async function POST(
     const raw = (t.raw ?? {}) as Record<string, string>;
     const fields = extractMappedFields(raw, mapping);
     // The catalog stage's extracted customers stay; mapped ones merge in.
+    // With AI field parsing on, the import already cleaned the list column
+    // (qualifiers, "all customers"); only the truth column is re-merged here
+    // so a remap never reintroduces raw fragments.
+    const mappedNames = cfg.fieldParsing.customers
+      ? (fields.customerName ?? "").split(/[,;/]+/).map((n) => n.trim()).filter(Boolean)
+      : fields.customers;
     const current = ((t.affectedCustomers as string[]) ?? []).map((c) => c.trim()).filter(Boolean);
-    const merged = [...current, ...fields.customers].filter(
+    const merged = [...current, ...mappedNames].filter(
       (c, i, all) => all.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i
     );
     await db.zendeskTicketRaw.update({

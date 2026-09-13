@@ -106,6 +106,12 @@ function toAliasList(v: unknown): string[] | null {
     .filter(Boolean);
 }
 
+/** A CSV value is a link only when it is an http(s) URL — anything else is dropped, never rendered. */
+export function safeHttpUrl(value: string | undefined | null): string | undefined {
+  const v = (value ?? "").trim();
+  return /^https?:\/\/[^\s]+$/i.test(v) ? v : undefined;
+}
+
 /** Stored overrides merged over defaults; unknown params ignored, absent ones defaulted. */
 export function mergeCsvMapping(raw: unknown): CsvMapping {
   const stored =
@@ -174,7 +180,7 @@ export function extractMappedFields(
     insights: get("insights") || undefined,
     dealRelated: get("dealRelated") || undefined,
     customerType: get("customerType") || undefined,
-    url: get("url") || undefined,
+    url: safeHttpUrl(get("url")),
     tags: get("tags").split(/[\s,;]+/).filter(Boolean),
     created: get("created") || undefined,
     requestType: get("requestType") || undefined,

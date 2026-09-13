@@ -1061,6 +1061,22 @@ export async function mutateIdeas(
               : {}),
           },
         });
+        // An added name that was dismissed earlier on one of the tickets is
+        // being brought back on purpose — lift those dismissals.
+        for (const name of addedCustomers ?? []) {
+          const wanted = name.toLowerCase();
+          for (const s of idea.sources) {
+            if (s.kind !== "zendesk" || !s.ticket) continue;
+            const dismissed = (s.ticket.dismissedCustomers as string[]) ?? [];
+            const next = dismissed.filter((c) => c.toLowerCase() !== wanted);
+            if (next.length !== dismissed.length) {
+              await db.zendeskTicketRaw.update({
+                where: { id: s.ticket.id },
+                data: { dismissedCustomers: next as Prisma.InputJsonValue },
+              });
+            }
+          }
+        }
         // A removed ticket-derived customer is a dismissal on the tickets
         // that named it — never a deletion, so "show dismissed" restores it.
         for (const name of mutation.removeCustomers ?? []) {

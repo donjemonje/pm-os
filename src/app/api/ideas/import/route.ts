@@ -40,6 +40,13 @@ export async function POST(request: NextRequest) {
         : undefined,
       createdAt: typeof item.createdAt === "string" ? item.createdAt : undefined,
       productLine: typeof item.productLine === "string" ? item.productLine : undefined,
+      module: typeof item.module === "string" ? item.module : undefined,
+      customerName: typeof item.customerName === "string" ? item.customerName : undefined,
+      whyBuild: typeof item.whyBuild === "string" ? item.whyBuild : undefined,
+      insights: typeof item.insights === "string" ? item.insights : undefined,
+      dealRelated: typeof item.dealRelated === "string" ? item.dealRelated : undefined,
+      customerType: typeof item.customerType === "string" ? item.customerType : undefined,
+      url: typeof item.url === "string" ? item.url : undefined,
       raw:
         item.raw && typeof item.raw === "object" ? (item.raw as Record<string, string>) : {},
     });
