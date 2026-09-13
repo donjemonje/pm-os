@@ -135,6 +135,13 @@ export function IdeasView({
   const [pushResults, setPushResults] = useState<PushResult[] | null>(null);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+  /** Transient confirmation of an action (auto-dismisses). */
+  const [toast, setToast] = useState("");
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
   const [importing, setImporting] = useState(false);
   /** Index into IMPORT_STEPS while the import overlay is up; null = closed. */
   const [importStep, setImportStep] = useState<number | null>(null);
@@ -182,6 +189,7 @@ export function IdeasView({
         return false;
       }
       applyState(data.state);
+      if (typeof data.notice === "string" && data.notice) setToast(data.notice);
       return true;
     } catch {
       setError("Update failed — is the dev server running?");
@@ -721,7 +729,7 @@ export function IdeasView({
           <div className="mb-5 flex items-center gap-6 rounded-xl border border-border bg-white px-5 py-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-2">
               <div className="flex flex-wrap items-baseline gap-2.5">
-                <span className="font-title text-[15px] font-semibold">Merge in Progress</span>
+                <span className="font-title text-[15px] font-semibold">Review in Progress</span>
                 <span className="text-[13px] text-[#4a5b74]">
                   {counts.new} new · {counts.updated} updated · {counts.unchanged} unchanged ·{" "}
                   {counts.archive} archive proposed
@@ -1195,6 +1203,15 @@ export function IdeasView({
           }
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}
         />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-border bg-[#101828] px-4 py-2.5 text-[13px] font-medium text-white shadow-[0_12px_32px_rgba(10,22,40,.25)]"
+        >
+          {toast}
+        </div>
       )}
 
       {/* Import progress overlay */}

@@ -984,10 +984,17 @@ async function logEvents(
   });
 }
 
+export interface MutateResult {
+  state: IdeasState;
+  /** Something the PM should be told about the action (shown as a toast). */
+  notice?: string;
+}
+
 export async function mutateIdeas(
   workspaceId: string,
   mutation: IdeasMutation,
-): Promise<IdeasState> {
+): Promise<MutateResult> {
+  let notice: string | undefined;
   switch (mutation.type) {
     case "decision": {
       const idea = await db.idea.findFirst({
@@ -1145,6 +1152,17 @@ export async function mutateIdeas(
         where: { id: { in: targets.map((i) => i.id) } },
         data: { decision: revert ? "pending" : "reviewed" },
       });
+      if (!revert) {
+        const skipped = approvable.filter(
+          (i) => i.decision === "pending" && !targets.includes(i),
+        ).length;
+        notice =
+          skipped > 0
+            ? `${targets.length} approved · ${skipped} skipped — review the suggested customer${skipped === 1 ? "" : "s"} on ${skipped === 1 ? "that idea" : "those ideas"} first`
+            : `${targets.length} approved`;
+      } else {
+        notice = `${targets.length} back to pending`;
+      }
       await logEvents(
         workspaceId,
         targets.map((i) => ({
@@ -1339,7 +1357,7 @@ export async function mutateIdeas(
     }
   }
 
-  return getIdeasState(workspaceId);
+  return { state: await getIdeasState(workspaceId), notice };
 }
 
 /** Clear imported data. The ledger and the batch rows are deliberately kept —

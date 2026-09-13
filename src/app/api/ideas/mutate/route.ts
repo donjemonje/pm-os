@@ -29,8 +29,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const state = await mutateIdeas(workspaceResult, mutation);
-    return NextResponse.json({ state });
+    const { state, notice } = await mutateIdeas(workspaceResult, mutation);
+    return NextResponse.json({ state, notice });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Update failed" },
