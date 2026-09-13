@@ -212,10 +212,8 @@ export function ProductLinesPanel({
                       color={item.color}
                       fallback={PRODUCT_CHIP_DEFAULT}
                       name={item.name}
-                      canEdit={canEdit && !busy}
-                      onPick={(color) =>
-                        call("PATCH", { id: item.id, name: item.name, description: item.description, color })
-                      }
+                      canEdit={!busy}
+                      onPick={(color) => call("PATCH", { id: item.id, color })}
                     />
                     <span className="font-title text-[14px] font-semibold">{item.name}</span>
                   </span>

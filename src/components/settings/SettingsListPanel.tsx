@@ -196,9 +196,7 @@ export function SettingsListPanel({
                     fallback={CUSTOMER_CHIP_DEFAULT}
                     name={item.name}
                     canEdit={!busy}
-                    onPick={(color) =>
-                      call("PATCH", { id: item.id, name: item.name, description: item.description, color })
-                    }
+                    onPick={(color) => call("PATCH", { id: item.id, color })}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium text-foreground">{item.name}</div>

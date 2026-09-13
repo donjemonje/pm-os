@@ -26,6 +26,7 @@ interface ListOps {
   create(workspaceId: string, name: string, description: string, color: string): Promise<unknown>;
   /** `color` undefined = unchanged. */
   update(id: string, name: string, description: string, color?: string): Promise<unknown>;
+  setColor(id: string, color: string): Promise<unknown>;
   remove(workspaceId: string, id: string): Promise<number>;
 }
 
@@ -64,6 +65,7 @@ const KINDS: Record<string, ListOps> = {
     },
     update: (id, name, description, color) =>
       db.productLine.update({ where: { id }, data: { name, description, ...(color ? { color } : {}) } }),
+    setColor: (id, color) => db.productLine.update({ where: { id }, data: { color } }),
     remove: async (workspaceId, id) =>
       (await db.productLine.deleteMany({ where: { id, workspaceId } })).count,
   },
@@ -89,6 +91,7 @@ const KINDS: Record<string, ListOps> = {
       db.customer.create({ data: { workspaceId, name, description, color } }),
     update: (id, name, description, color) =>
       db.customer.update({ where: { id }, data: { name, description, ...(color ? { color } : {}) } }),
+    setColor: (id, color) => db.customer.update({ where: { id }, data: { color } }),
     remove: async (workspaceId, id) =>
       (await db.customer.deleteMany({ where: { id, workspaceId } })).count,
   },
@@ -113,6 +116,7 @@ const KINDS: Record<string, ListOps> = {
       db.platform.create({ data: { workspaceId, name, description } }),
     update: (id, name, description) =>
       db.platform.update({ where: { id }, data: { name, description } }),
+    setColor: async () => undefined,
     remove: async (workspaceId, id) =>
       (await db.platform.deleteMany({ where: { id, workspaceId } })).count,
   },
@@ -122,7 +126,7 @@ type RouteContext = { params: Promise<{ kind: string }> };
 
 async function guard(
   context: RouteContext,
-  opts: { write?: boolean } = {}
+  opts: { write?: boolean; colorOnly?: boolean } = {}
 ): Promise<{ ops: ListOps; kind: string; workspaceId: string } | NextResponse> {
   const disabled = await ideasDisabledResponse();
   if (disabled) return disabled;
@@ -130,8 +134,14 @@ async function guard(
   const ops = KINDS[kind];
   if (!ops) return NextResponse.json({ error: "Unknown list" }, { status: 404 });
   // Product lines are the AI's ground truth: readable by everyone in the
-  // workspace, changed only by a PM-OS admin.
-  if (opts.write && kind === "product-lines" && !isPmosAdmin(await getCurrentUser())) {
+  // workspace, changed only by a PM-OS admin. The chip color is
+  // presentation, not ground truth — any workspace user may pick it.
+  if (
+    opts.write &&
+    !opts.colorOnly &&
+    kind === "product-lines" &&
+    !isPmosAdmin(await getCurrentUser())
+  ) {
     return NextResponse.json(
       { error: "Only a PM-OS admin can change product lines" },
       { status: 403 }
@@ -196,15 +206,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
-  const auth = await guard(context, { write: true });
+  const body = await readJson(request);
+  if (body instanceof NextResponse) return body;
+  // { id, color } alone is a color pick — allowed for every workspace user.
+  const colorOnly =
+    isChipColorId(body.color) && body.name === undefined && body.description === undefined;
+  const auth = await guard(context, { write: true, colorOnly });
   if (auth instanceof NextResponse) return auth;
   const { ops, workspaceId } = auth;
 
-  const body = await readJson(request);
-  if (body instanceof NextResponse) return body;
   const id = typeof body.id === "string" ? body.id : "";
   if (!id || !(await ops.exists(workspaceId, id))) {
     return NextResponse.json({ error: "Item not found" }, { status: 404 });
+  }
+  if (colorOnly) {
+    await ops.setColor(id, body.color as string);
+    return NextResponse.json({ items: await ops.list(workspaceId) });
   }
   const name = cleanName(body.name);
   if (name instanceof NextResponse) return name;
