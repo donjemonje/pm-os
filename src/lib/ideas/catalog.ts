@@ -21,7 +21,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v11";
+export const CATALOG_PROMPT_VERSION = "catalog-v12";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -56,7 +56,7 @@ Everything in the ticket was written or relayed by an organization representativ
 
 Tickets may carry tags and a reporter-chosen module. Both are entered by humans who are not product managers and who make mistakes — treat them as hints at most: the module usually points at the right product line, but never let it or a tag override what the ticket content itself says.
 
-Tickets sometimes pack several DISTINCT user problems into one message (reporters are busy people). Report request_count: the number of distinct user problems a product manager would file as separate backlog items. It is 1 unless the ticket clearly contains several unrelated asks; alternative solutions or details of ONE problem are still 1. A later stage handles the actual splitting — here you only count, and your product_title/product_summary should cover the ticket as a whole either way.
+Tickets sometimes pack several capabilities into one message (reporters are busy people). Report request_count: the number of distinct capabilities a product manager would ship and size SEPARATELY — i.e. would file as separate backlog items. Two asks that serve one goal but would be built and released independently (e.g. "scan TLS certificates" and "scan email security settings", or "list workspaces via API" and "discover subdomains via API") count as two. Alternative solutions, implementation details, or examples of ONE capability are still 1. It is 1 unless the ticket clearly contains more than one such capability. A later stage handles the actual splitting — here you only count, and your product_title/product_summary should cover the ticket as a whole either way.
 
 Judge only from the ticket content and the catalogs provided. Do not consider priority or importance — only what kind of item this is and where it belongs. Give a single short sentence of reasoning covering the classification and, for feature requests, the assignment.`;
 
@@ -102,7 +102,7 @@ const CATALOG_TOOL = {
         type: "integer",
         minimum: 1,
         description:
-          "Distinct user problems a PM would file as separate backlog items. 1 unless the ticket clearly contains several.",
+          "Distinct capabilities a PM would ship and size separately (separate backlog items). 1 unless the ticket clearly contains more than one.",
       },
       reason: {
         type: "string",
