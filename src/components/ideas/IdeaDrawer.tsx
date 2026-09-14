@@ -429,8 +429,7 @@ export function IdeaDrawer({
             idea &&
             (idea.products.length > 0 ||
               (idea.platforms ?? []).length > 0 ||
-              (idea.customers ?? []).length > 0 ||
-              idea.affectsAllCustomers) && (
+              (idea.customers ?? []).length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {idea.products.map((p) => (
                   <Chip key={p} dot style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}>
@@ -443,13 +442,9 @@ export function IdeaDrawer({
                     {p}
                   </Chip>
                 ))}
-                {/* Affected customers from the supporting tickets; teal when
-                    cataloged, amber suggestion with approve/dismiss when not. */}
-                {idea.affectsAllCustomers && (
-                  <Chip kind="all" title="A supporting ticket marks this as affecting all customers">
-                    All customers
-                  </Chip>
-                )}
+                {/* Affected customers from the supporting tickets (All Customers is
+                    one of them); palette chip when cataloged, amber suggestion
+                    with approve/dismiss when not. */}
                 {(idea.customers ?? []).map((c) => {
                   const suggested = !customerCatalog.some(
                     (k) => k.toLowerCase() === c.toLowerCase(),
@@ -1060,9 +1055,6 @@ function TicketView({
           </div>
         ) : (
           <div className="text-[13px] text-muted">Not evaluated yet.</div>
-        )}
-        {ticket.affectsAllCustomers && (
-          <div className="text-xs font-medium text-[#2a5fd0]">Affects all customers</div>
         )}
         {(ticket.affectedCustomers ?? []).length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">

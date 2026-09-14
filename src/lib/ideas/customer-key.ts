@@ -1,4 +1,14 @@
 /**
+ * "All Customers" is a built-in catalog customer in every workspace: a ticket
+ * that says a request affects everyone carries it like any other customer,
+ * so it is never a suggestion and counts in every per-customer breakdown.
+ */
+export const ALL_CUSTOMERS_NAME = "All Customers";
+export function isAllCustomers(name: string): boolean {
+  return customerKey(name) === customerKey(ALL_CUSTOMERS_NAME);
+}
+
+/**
  * Normalized identity of a customer name — what "the same company" means
  * across the Customer Name column, PMOS AI's parsed names and the catalog:
  * case, punctuation, spacing, a leading "The" and a trailing legal suffix

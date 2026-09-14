@@ -83,11 +83,10 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
 }
 
 /** Row tags that aren't catalog values — the Label filter's options. */
-const IDEA_LABELS = ["Internal", "All customers"];
+const IDEA_LABELS = ["Internal"];
 /** Does the idea carry this label? Internal = no customer named on any supporting ticket. */
 function hasLabel(i: Idea, label: string): boolean {
-  if (label === "Internal") return (i.customers ?? []).length === 0 && !i.affectsAllCustomers;
-  if (label === "All customers") return !!i.affectsAllCustomers;
+  if (label === "Internal") return (i.customers ?? []).length === 0;
   return false;
 }
 
@@ -137,7 +136,7 @@ export function IdeasView({
   const [platformFilter, setPlatformFilter] = useState<string[]>([]);
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  /** Label filter: the row tags that aren't catalog values (Internal, All customers). */
+  /** Label filter: the row tags that aren't catalog values (Internal). */
   const [labelFilter, setLabelFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
 
@@ -382,10 +381,13 @@ export function IdeasView({
     if (!idea || idea.decision === "injected") return;
     if (idea.decision === "pending" && unresolvedSuggested(idea).length > 0) return;
     setNote("");
+    const approving = idea.decision === "pending";
     void callMutate({
       type: "decision",
       ideaId: id,
-      decision: idea.decision === "pending" ? "reviewed" : "pending",
+      decision: approving ? "reviewed" : "pending",
+    }).then((ok) => {
+      if (ok) setToast(approving ? `Approved “${idea.title}”` : `“${idea.title}” marked unreviewed`);
     });
   };
 
@@ -1321,16 +1323,8 @@ export function IdeasView({
                                       {p}
                                     </Chip>
                                   ))}
-                                  {idea.affectsAllCustomers && (
-                                    <Chip
-                                      kind="all"
-                                      title="A supporting ticket marks this as affecting all customers"
-                                    >
-                                      All customers
-                                    </Chip>
-                                  )}
                                   {/* No customer named on any supporting ticket → an internal request */}
-                                  {customers.length === 0 && !idea.affectsAllCustomers && (
+                                  {customers.length === 0 && (
                                     <Chip kind="all" title="No customer is named on the supporting tickets">
                                       Internal
                                     </Chip>
@@ -1343,7 +1337,7 @@ export function IdeasView({
                               </div>
                               {/* Reporters — who filed the supporting tickets */}
                               <span
-                                className="flex w-24 shrink-0 items-center"
+                                className="flex w-[84px] shrink-0 items-center justify-end"
                                 title={
                                   (idea.reporters ?? []).length > 0
                                     ? `Reported by ${(idea.reporters ?? []).join(", ")}`
@@ -1375,7 +1369,7 @@ export function IdeasView({
                                   if (idea.newVotes > 0) gotoMerge(idea.id);
                                 }}
                                 title={idea.newVotes > 0 ? "Show merge sources" : undefined}
-                                className={`flex w-[84px] shrink-0 items-center justify-end rounded-control border border-transparent px-1.5 py-1 ${
+                                className={`flex w-[72px] shrink-0 items-center justify-center rounded-control border border-transparent px-1.5 py-1 ${
                                   idea.newVotes > 0
                                     ? "cursor-pointer hover:border-border hover:bg-white"
                                     : "cursor-default"
@@ -1383,7 +1377,9 @@ export function IdeasView({
                               >
                                 {votesOf(idea)}
                               </button>
-                              <span className="flex w-[84px] shrink-0 justify-end">
+                              {/* Votes sit centred in a fixed box, so the gap to the reporters on
+                                  the left equals the gap to the status pill on the right. */}
+                              <span className="flex w-[84px] shrink-0 justify-start">
                                 {badge && (
                                   <Pill
                                     badge={badge}

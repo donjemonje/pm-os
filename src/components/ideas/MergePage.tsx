@@ -31,7 +31,7 @@ interface MergePageProps {
   pendingOnly: boolean;
   /** Shared Status filter from the toolbar (chip labels; empty = all except Unchanged). */
   statusFilter: string[];
-  /** Shared Label filter (Internal / All customers); empty = no restriction. */
+  /** Shared Label filter (Internal); empty = no restriction. */
   labelFilter?: string[];
   edit: MergeEdit | null;
   selectedFinalId: string | null;
@@ -132,10 +132,8 @@ export function MergePage({
     )
       return false;
     if (labelFilter.length > 0) {
-      const internal = (i.customers ?? []).length === 0 && !i.affectsAllCustomers;
-      const ok = labelFilter.some((l) =>
-        l === "Internal" ? internal : l === "All customers" ? !!i.affectsAllCustomers : false,
-      );
+      const internal = (i.customers ?? []).length === 0;
+      const ok = labelFilter.some((l) => (l === "Internal" ? internal : false));
       if (!ok) return false;
     }
     if (pendingOnly && i.decision !== "pending") return false;

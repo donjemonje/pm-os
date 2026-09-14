@@ -1,5 +1,6 @@
 import { db } from "../db";
 import { nextChipColor } from "./colors";
+import { ALL_CUSTOMERS_NAME, isAllCustomers } from "./customer-key";
 
 /**
  * Catalog rows created before colors existed (or by paths that don't pick
@@ -7,6 +8,7 @@ import { nextChipColor } from "./colors";
  * and customer always renders in its own tint without anyone configuring it.
  */
 export async function ensureCatalogColors(workspaceId: string): Promise<void> {
+  await ensureAllCustomers(workspaceId);
   const [lines, customers] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId },
@@ -33,4 +35,21 @@ export async function ensureCatalogColors(workspaceId: string): Promise<void> {
     customerColors.push(color);
     await db.customer.update({ where: { id: c.id }, data: { color } });
   }
+}
+
+/** The built-in "All Customers" row exists in every workspace's catalog. */
+export async function ensureAllCustomers(workspaceId: string): Promise<void> {
+  const rows = await db.customer.findMany({
+    where: { workspaceId },
+    select: { name: true, color: true },
+  });
+  if (rows.some((r) => isAllCustomers(r.name))) return;
+  await db.customer.create({
+    data: {
+      workspaceId,
+      name: ALL_CUSTOMERS_NAME,
+      description: "Requests that affect every customer.",
+      color: nextChipColor(rows.map((r) => r.color)),
+    },
+  });
 }
