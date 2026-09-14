@@ -70,6 +70,10 @@ export default defineConfig({
     // points (npm script, bare npx, --ui, --headed) get the same test env.
     // Empty object in CI (no yaml) — job env passes through.
     env: TEST_ENV,
+    // Ops/release runs (2026-09-14): PW_SERVER_STDOUT=1 pipes the app's
+    // stdout into the run log so `[ideas:import …]` stage lines are readable
+    // next to the test output. Default unchanged (stderr only).
+    stdout: process.env.PW_SERVER_STDOUT ? "pipe" : "ignore",
     url: LOCAL_BASE_URL,
     // Never silently reuse a server that might be pointed at the dev DB.
     reuseExistingServer: false,

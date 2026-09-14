@@ -1,4 +1,4 @@
-import { LOCAL_BASE_URL, PORT, RESOLVED_ENV } from "./test-env";
+import { LOCAL_BASE_URL, OPS_BOGUS_MODEL, OPS_MODEL_VARS, PORT, RESOLVED_ENV } from "./test-env";
 
 /**
  * Env guard: refuses to start the suite when the resolved test env is wrong,
@@ -148,4 +148,9 @@ export default function validateTestEnv(): void {
   console.log(
     `[test-env] OK — login enabled, database ${testDbName}, app at ${LOCAL_BASE_URL}, ideas off, docs/chat/dashboard pinned on, google hidden by env (fake creds set), TOTP key set`
   );
+  if (OPS_BOGUS_MODEL) {
+    console.log(
+      `[test-env] OPS RUN — ${OPS_MODEL_VARS.join("/")} overridden to "${OPS_BOGUS_MODEL}" for the webServer (PW_OPS_BOGUS_MODEL); only @ops specs are meant to run now`
+    );
+  }
 }
