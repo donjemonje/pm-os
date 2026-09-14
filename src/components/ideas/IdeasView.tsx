@@ -37,10 +37,10 @@ import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import { Pill } from "@/components/ui/Pill";
 import { Ring } from "@/components/ui/Ring";
-import { VoteBar } from "@/components/ui/VoteBar";
 import {
   chipStyle,
   CUSTOMER_CHIP_DEFAULT,
+  paletteColorFor,
   PRODUCT_CHIP_DEFAULT,
 } from "@/lib/ideas/colors";
 import { IdeaDrawer } from "./IdeaDrawer";
@@ -666,7 +666,6 @@ export function IdeasView({
     for (const i of live) for (const p of i.products) m.set(p, (m.get(p) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
   })();
-  const maxVotes = Math.max(1, ...visible.map((i) => i.existingVotes + i.newVotes));
   // Rows grouped by first product line, in the catalog's manual order;
   // names outside the catalog follow alphabetically, "Unassigned" last.
   const groups = (() => {
@@ -709,21 +708,32 @@ export function IdeasView({
       </Chip>
     );
   };
+  // Long customer names are cut after 26 characters ("Ostara Financial
+  // Pension &…"); the full name is the hover hint.
+  const CHIP_MAX = 26;
+  const shortName = (name: string) =>
+    name.length > CHIP_MAX ? `${name.slice(0, CHIP_MAX).trimEnd()}…` : name;
   const customerChip = (c: string) => {
     // Off-catalog names are suggestions awaiting PM review in the drawer —
     // flagged, never hidden.
     const offCatalog = !customerCatalog.some((k) => k.toLowerCase() === c.toLowerCase());
+    const cut = shortName(c) !== c;
     return offCatalog ? (
-      <Chip key={`customer-${c}`} kind="suggested" title="Suggested customer — review in the idea">
-        {c} ⚑
+      <Chip
+        key={`customer-${c}`}
+        kind="suggested"
+        title={`${cut ? `${c} — ` : ""}Suggested customer — review in the idea`}
+      >
+        {shortName(c)} ⚑
       </Chip>
     ) : (
       <Chip
         key={`customer-${c}`}
         kind="customer"
+        title={cut ? c : undefined}
         style={chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
       >
-        {c}
+        {shortName(c)}
       </Chip>
     );
   };
@@ -1289,18 +1299,31 @@ export function IdeasView({
                                   )}
                                 </span>
                               </div>
-                              <span className="flex w-24 shrink-0 items-center">
-                                {customers.slice(0, 3).map((c, k) => (
-                                  <Avatar
-                                    key={c}
-                                    name={c}
-                                    size={26}
-                                    className={k ? "-ml-2" : ""}
-                                    style={chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
-                                  />
-                                ))}
-                                {customers.length === 0 && (
-                                  <span className="text-[11.5px] text-fg-disabled">Internal</span>
+                              {/* Reporters — who filed the supporting tickets */}
+                              <span
+                                className="flex w-24 shrink-0 items-center"
+                                title={
+                                  (idea.reporters ?? []).length > 0
+                                    ? `Reported by ${(idea.reporters ?? []).join(", ")}`
+                                    : undefined
+                                }
+                              >
+                                {(idea.reporters ?? []).slice(0, 3).map((r, k) => {
+                                  const c = paletteColorFor(r);
+                                  return (
+                                    <Avatar
+                                      key={r}
+                                      name={r}
+                                      size={26}
+                                      className={k ? "-ml-2" : ""}
+                                      style={{ background: c.bg, color: c.fg }}
+                                    />
+                                  );
+                                })}
+                                {(idea.reporters ?? []).length > 3 && (
+                                  <span className="ml-1 text-[11px] text-fg-muted">
+                                    +{(idea.reporters ?? []).length - 3}
+                                  </span>
                                 )}
                               </span>
                               {/* Votes — the "+N" jumps to the Merge page with this idea selected */}
@@ -1310,18 +1333,13 @@ export function IdeasView({
                                   if (idea.newVotes > 0) gotoMerge(idea.id);
                                 }}
                                 title={idea.newVotes > 0 ? "Show merge sources" : undefined}
-                                className={`flex w-[84px] shrink-0 flex-col items-end gap-[3px] rounded-control border border-transparent px-1.5 py-1 ${
+                                className={`flex w-[84px] shrink-0 items-center justify-end rounded-control border border-transparent px-1.5 py-1 ${
                                   idea.newVotes > 0
                                     ? "cursor-pointer hover:border-border hover:bg-white"
                                     : "cursor-default"
                                 }`}
                               >
                                 {votesOf(idea)}
-                                <VoteBar
-                                  existing={idea.existingVotes}
-                                  added={idea.newVotes}
-                                  max={maxVotes}
-                                />
                               </button>
                               <span className="flex w-[84px] shrink-0 justify-end">
                                 {badge && (
