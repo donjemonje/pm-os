@@ -922,7 +922,7 @@ export function IdeasView({
               )}
               <div className="flex flex-1 flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
                 <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">
-                  Top Product Lines
+                  Requests by Product
                 </span>
                 {topProducts.length === 0 ? (
                   <span className="text-[12px] text-fg-faint">No product lines yet</span>
@@ -954,7 +954,7 @@ export function IdeasView({
               </div>
               <div className="flex flex-1 flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
                 <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">
-                  Most Requested By
+                  Requests by Customer
                 </span>
                 {topCustomers.length === 0 ? (
                   <span className="text-[12px] text-fg-faint">No customers named yet</span>
