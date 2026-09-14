@@ -5,12 +5,12 @@
   --brand-muted: #aaa3c4;
   --brand-accent: #7aa7ff;
 
-  /* ——— PM-OS app tokens — Direction B ("Board"), from the design handoff (mono = DM Mono)
+  /* ——— PM-OS app tokens — Direction B ("Board"), from the design handoff (mono slots = DM Sans)
      (design_handoff_ideas_facelift_b/app-tokens.css). App-only: nothing here
      is shared with the marketing site. ——— */
   --app-font-title: var(--font-title), ui-sans-serif, system-ui, sans-serif;
   --app-font-body: var(--font-body), ui-sans-serif, system-ui, sans-serif;
-  --app-font-mono: var(--font-jbmono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --app-font-mono: var(--font-title), ui-sans-serif, system-ui, sans-serif; /* "mono" slots use DM Sans */
 
   /* Accent */
   --app-accent: #2457f5;
@@ -121,7 +121,7 @@
   --shadow-card: var(--app-shadow-card);
   --shadow-sm: var(--app-shadow-sm);
   --font-sans: var(--font-body), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jbmono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: var(--font-title), ui-sans-serif, system-ui, sans-serif;
 }
 
 body {

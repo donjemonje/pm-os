@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Chakra_Petch, DM_Mono, DM_Sans, IBM_Plex_Sans } from "next/font/google";
+import { Chakra_Petch, DM_Sans, IBM_Plex_Sans } from "next/font/google";
 import { cookies } from "next/headers";
 import "./globals.css";
 import {
@@ -19,19 +19,13 @@ const chakraPetch = Chakra_Petch({
   weight: ["700"],
 });
 
-// App type per the Direction B handoff: DM Sans titles, IBM Plex Sans body,
-// DM Mono for ids/chips/eyebrows. The CSS variable names are unchanged so
+// App type: DM Sans titles and (since 2026-09-14) ids/chips/eyebrows too —
+// there is no monospace face; IBM Plex Sans body outside Ideas. The CSS variable names are unchanged so
 // every font-title / font-body / font-mono consumer follows automatically.
 const dmSans = DM_Sans({
   subsets: ["latin"],
   variable: "--font-title",
   weight: ["500", "600", "700"],
-});
-
-const dmMono = DM_Mono({
-  subsets: ["latin"],
-  variable: "--font-jbmono",
-  weight: ["400", "500"],
 });
 
 const plexSans = IBM_Plex_Sans({
@@ -95,7 +89,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${chakraPetch.variable} ${dmSans.variable} ${plexSans.variable} ${dmMono.variable}`}
+      className={`${chakraPetch.variable} ${dmSans.variable} ${plexSans.variable}`}
     >
       <body className="font-body antialiased">
         <Shell
