@@ -743,7 +743,7 @@ export function IdeaDrawer({
                 )}
               <div>
                 <div className={`${MONO_LABEL} mb-1.5`}>
-                  Details ({idea.batch})
+                  Details
                 </div>
                 <UmMarkdown
                   content={idea.details}
