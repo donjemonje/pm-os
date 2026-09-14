@@ -1160,7 +1160,7 @@ export function IdeasView({
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">
                     <GitMerge size={14} className="text-primary" />
-                    Pick an idea in Final to edit its sources · a source's N× shows every idea it backs
+                    Pick an idea in Final to edit its sources
                   </div>
                 )}
                 <MergePage
