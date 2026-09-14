@@ -287,7 +287,7 @@ function PrdPickerModal({
             <div className="space-y-4">
               {visibleFolders.length > 0 && (
                 <div>
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                  <div className="mb-2 text-xs font-medium text-muted">
                     Folders
                   </div>
                   <div className="divide-y divide-border rounded-lg border border-border">
@@ -313,7 +313,7 @@ function PrdPickerModal({
 
               {visibleFiles.length > 0 && (
                 <div>
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                  <div className="mb-2 text-xs font-medium text-muted">
                     Files
                   </div>
                   <div className="divide-y divide-border rounded-lg border border-border">

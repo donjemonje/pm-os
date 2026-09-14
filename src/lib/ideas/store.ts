@@ -2,7 +2,8 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { PrefixWarmer } from "./ai-cache";
 import { nextChipColor } from "./colors";
-import { buildCustomerResolver, customerKey } from "./customer-key";
+import { ALL_CUSTOMERS_NAME, buildCustomerResolver, customerKey } from "./customer-key";
+import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
@@ -170,8 +171,11 @@ function toClientIdea(row: IdeaRow): Idea {
     reporters: distinct(
       ticketRows.flatMap((t) => (t.requester ? [t.requester] : [])),
     ),
+    // "All Customers" rides on the affects-all flag (tickets imported before
+    // the built-in row existed carry the flag but not the name).
     customers: distinct([
       ...ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+      ...(ticketRows.some((t) => t.affectsAllCustomers) ? [ALL_CUSTOMERS_NAME] : []),
       ...((row.addedCustomers as string[]) ?? []),
     ]).filter((c) => !dismissedKeys.has(c.toLowerCase())),
     addedCustomers: (row.addedCustomers as string[]) ?? [],
@@ -278,6 +282,8 @@ export async function importBatch(
   workspaceId: string,
   inputs: ImportTicketInput[],
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
+  // The built-in All Customers row must exist before the catalog is read.
+  await ensureAllCustomers(workspaceId);
   await markAbandonedImports("stale heartbeat");
   const batch = await db.ideaBatch.create({ data: { workspaceId } });
   const trace = new ImportTrace(batch.id);
@@ -440,6 +446,11 @@ async function runImport(
     }
     return out;
   };
+  const affectsAll = (t: { customerName?: string; affectedCustomers?: string[] }): boolean =>
+    parseOn &&
+    [t.customerName ?? "", ...(t.affectedCustomers ?? [])].some(
+      (v) => parsedOf(v)?.all === true,
+    );
   const parsedOf = (value: string | undefined | null): ParsedCell | null =>
     value ? (parse.byRaw.get(value.trim().toLowerCase()) ?? null) : null;
   /** Names a field value contributes — parsed when on, legacy split when off. */
@@ -663,6 +674,8 @@ async function runImport(
       }),
     });
   }
+  // ensureAllCustomers ran at the top of the import, so the catalog read
+  // above already holds the built-in All Customers row.
   const canonicalCustomer = buildCustomerResolver([
     ...customerCatalog,
     ...Array.from(truthNames.values()).map((name) => ({ name, aliases: [] })),
@@ -780,13 +793,11 @@ async function runImport(
               (n) => !suppressedKeys(input).has(customerKey(n)),
             ),
             ...(input.affectedCustomers ?? []).flatMap((v) => namesOf(v)),
+            // "affects everyone" is the built-in All Customers customer.
+            ...(affectsAll(input) ? [ALL_CUSTOMERS_NAME] : []),
           ].map(canonicalCustomer),
         ) as Prisma.InputJsonValue,
-        affectsAllCustomers:
-          parseOn &&
-          [input.customerName ?? "", ...(input.affectedCustomers ?? [])].some(
-            (v) => parsedOf(v)?.all === true,
-          ),
+        affectsAllCustomers: affectsAll(input),
         tags: input.tags as Prisma.InputJsonValue,
         productLine: input.productLine ?? null,
         module: input.module ?? null,

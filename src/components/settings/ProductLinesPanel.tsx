@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { SettingsListItem } from "./SettingsListPanel";
 import { PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { ColorSwatch } from "./ColorSwatch";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 const ENDPOINT = "/api/ideas/lists/product-lines";
 const MAX_DESCRIPTION = 2000;
@@ -38,6 +39,7 @@ export function ProductLinesPanel({
   initialItems: SettingsListItem[];
   canEdit: boolean;
 }) {
+  const { confirm } = useConfirm();
   const [items, setItems] = useState(initialItems);
   const [view, setView] = useState<ViewMode>("formatted");
   const [adding, setAdding] = useState(false);
@@ -108,7 +110,8 @@ export function ProductLinesPanel({
   }
 
   async function onDelete(id: string, itemName: string) {
-    if (!window.confirm(`Delete "${itemName}"?`)) return;
+    if (!(await confirm({ title: `Delete "${itemName}"?`, confirmLabel: "Delete", tone: "danger" })))
+      return;
     await call("DELETE", { id });
   }
 
@@ -132,7 +135,7 @@ export function ProductLinesPanel({
         onChange={(e) => onChange(e.target.value)}
         rows={7}
         maxLength={MAX_DESCRIPTION}
-        placeholder="What is this product line? Markdown is fine — this text is exactly what PMOS AI reads when classifying ideas."
+        placeholder="What is this product line? Markdown is fine — this text is exactly what PMOS reads when classifying ideas."
         className={`${INPUT_CLASS} resize-y font-mono text-[12.5px] leading-relaxed`}
       />
       <div className="mt-1 text-right font-mono text-[10.5px] text-[#9aa8be]">
@@ -151,7 +154,7 @@ export function ProductLinesPanel({
           </button>
           <button
             onClick={() => setView("markdown")}
-            title="The raw text exactly as PMOS AI receives it"
+            title="The raw text exactly as PMOS receives it"
             className={viewChip(view === "markdown")}
           >
             Markdown

@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import {
-  ArrowUpRight,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Flag,
+  GitMerge,
+  Pencil,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -16,6 +18,7 @@ import {
   needsApproval,
   SCORING_ENABLED,
   scoreOf,
+  STATUS_TONES,
   votesLabel,
   CATALOG_KIND_LABELS,
 } from "@/lib/ideas/idea";
@@ -30,6 +33,11 @@ import {
   CUSTOMER_CHIP_DEFAULT,
   PRODUCT_CHIP_DEFAULT,
 } from "@/lib/ideas/colors";
+import { PmosMark } from "@/components/brand/PmosMark";
+import { Button } from "@/components/ui/Button";
+import { Chip } from "@/components/ui/Chip";
+import { Pill } from "@/components/ui/Pill";
+import { VoteBar } from "@/components/ui/VoteBar";
 
 /** Case-insensitive lookup of a catalog color by name. */
 function colorOf(map: Record<string, string>, name: string): string | undefined {
@@ -67,6 +75,10 @@ interface IdeaDrawerProps {
     name: string,
   ) => void;
   onClose: () => void;
+  /** Set when the drawer was reached from another drawer view — shows a back chevron. */
+  onBack?: () => void;
+  /** Open another idea from inside the drawer (ticket view → the ideas it produced). */
+  onOpenIdea?: (id: string, from: { source: SourceSel | null }) => void;
   onToggleApprove?: () => void;
   /** Set only while this idea's last-merge write is undoable AND the ideasUndo flag is on. */
   onUndoPush?: () => void;
@@ -83,10 +95,10 @@ interface IdeaDrawerProps {
 }
 
 const MONO_LABEL =
-  "font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[#7a8aa3]";
+  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
 
-const ZEN_TAG = { background: "#eef1f6", color: "#4a5b74" };
-const JIRA_TAG = { background: "rgba(122,167,255,.14)", color: "#3b6fd4" };
+const ZEN_TAG = { background: "#e6eaf2", color: "#4a5b74" };
+const JIRA_TAG = { background: "rgba(59,124,246,.15)", color: "#2a5fd0" };
 
 export function IdeaDrawer({
   idea,
@@ -102,12 +114,19 @@ export function IdeaDrawer({
   customerCatalog = [],
   onCustomerAction,
   onClose,
+  onBack,
+  onOpenIdea,
   onToggleApprove,
   onUndoPush,
   onSave,
   onMerge,
 }: IdeaDrawerProps) {
-  const [width, setWidth] = useState(480);
+  // Opens at half the window (sidebar included); the PM can still drag it
+  // between 380px and 90% of the window.
+  const [width, setWidth] = useState(() => {
+    if (typeof window === "undefined") return 640;
+    return Math.max(380, Math.round(window.innerWidth / 2));
+  });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
   const [editMode, setEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -191,7 +210,9 @@ export function IdeaDrawer({
     const startX = e.clientX;
     const startW = width;
     const move = (ev: MouseEvent) =>
-      setWidth(Math.min(1100, Math.max(380, startW + (startX - ev.clientX))));
+      setWidth(
+        Math.min(Math.round(window.innerWidth * 0.9), Math.max(380, startW + (startX - ev.clientX)))
+      );
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
@@ -202,27 +223,59 @@ export function IdeaDrawer({
     window.addEventListener("mouseup", up);
   };
 
-  const stats: { label: string; value: string }[] =
-    viewingSource || !idea || !score
+  const stats: { label: string; value: React.ReactNode }[] =
+    viewingSource || !idea
       ? []
       : [
-          ...(SCORING_ENABLED
+          ...(SCORING_ENABLED && score
             ? [
-                {
-                  label: "Score",
-                  value: score.value != null ? String(score.value) : "—",
-                },
-                {
-                  label: "PM-OS",
-                  value: idea.pmScore != null ? String(idea.pmScore) : "—",
-                },
-                {
-                  label: "Manual",
-                  value: idea.manual != null ? String(idea.manual) : "—",
-                },
+                { label: "Score", value: score.value != null ? String(score.value) : "—" },
+                { label: "PM-OS", value: idea.pmScore != null ? String(idea.pmScore) : "—" },
+                { label: "Manual", value: idea.manual != null ? String(idea.manual) : "—" },
               ]
             : []),
-          { label: "Votes", value: votes ?? "—" },
+          {
+            label: "Votes",
+            value: (
+              <>
+                <span>{votes ?? "—"}</span>
+                {votes && (
+                  <VoteBar
+                    existing={idea.existingVotes}
+                    added={idea.newVotes}
+                    max={idea.existingVotes + idea.newVotes}
+                    width={56}
+                    height={5}
+                  />
+                )}
+              </>
+            ),
+          },
+          {
+            label: "Sources",
+            value: (
+              <>
+                <span>{idea.zen.length + idea.jira.length}</span>
+                <span className="text-[11px] font-medium text-fg-muted">
+                  {idea.zen.length} Zendesk · {idea.jira.length} Jira
+                </span>
+              </>
+            ),
+          },
+          {
+            label: "Reporters",
+            value: (
+              <>
+                <span>{(idea.reporters ?? []).length || "—"}</span>
+                {(idea.reporters ?? []).length > 0 && (
+                  <span className="truncate text-[11px] font-medium text-fg-muted">
+                    {(idea.reporters ?? []).slice(0, 2).join(", ")}
+                    {(idea.reporters ?? []).length > 2 ? ` +${(idea.reporters ?? []).length - 2}` : ""}
+                  </span>
+                )}
+              </>
+            ),
+          },
         ];
 
   if (!idea && !viewingSource) return null;
@@ -278,9 +331,20 @@ export function IdeaDrawer({
         }}
       />
       <div
-        className="fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border bg-white shadow-[-24px_0_48px_rgba(10,22,40,.14)]"
+        className="fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border bg-white shadow-[var(--app-shadow-drawer)]"
         style={{ width }}
       >
+        {/* Status edge: the idea's batch color (accent for sources and In Jira). */}
+        <div
+          className="absolute bottom-0 left-0 top-0 w-[3px]"
+          style={{
+            background:
+              !viewingSource && badge && badge.bg !== "#ffffff" && badge.bd === "transparent"
+                ? badge.bg
+                : "var(--app-accent)",
+          }}
+          aria-hidden
+        />
         <div
           className="absolute -left-[3px] bottom-0 top-0 z-[42] w-2 cursor-col-resize"
           title="Drag to resize"
@@ -288,10 +352,10 @@ export function IdeaDrawer({
         />
 
         {/* Header */}
-        <div className="flex flex-col gap-3 border-b border-[#e8eef7] px-6 pb-4 pt-5">
+        <div className="flex flex-col gap-3 border-b border-border px-6 pb-4 pt-[18px]">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              {viewingSource && idea && (
+              {viewingSource && idea ? (
                 <button
                   onClick={() => setSrcSel(null)}
                   title="Back to idea"
@@ -299,10 +363,18 @@ export function IdeaDrawer({
                 >
                   <ChevronLeft size={15} />
                 </button>
-              )}
+              ) : onBack ? (
+                <button
+                  onClick={onBack}
+                  title="Back"
+                  className="flex rounded-md p-0.5 text-[#7a8aa3] hover:text-foreground"
+                >
+                  <ChevronLeft size={15} />
+                </button>
+              ) : null}
               {ticket ? (
                 <span
-                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#dde5ef] px-2.5 py-0.5 text-xs font-medium"
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#dde5ef] px-2.5 py-0.5 text-xs font-semibold"
                   style={ZEN_TAG}
                 >
                   Zendesk ticket <span className="font-mono">{ticket.id}</span>
@@ -321,31 +393,18 @@ export function IdeaDrawer({
                 </span>
               ) : jiraSrc ? (
                 <span
-                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[rgba(122,167,255,.4)] px-2.5 py-0.5 text-xs font-medium"
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.4)] px-2.5 py-0.5 text-xs font-semibold"
                   style={JIRA_TAG}
                 >
                   Jira idea <span className="font-mono">{jiraSrc.id}</span>
                 </span>
               ) : (
-                badge && (
-                  <span
-                    className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium"
-                    style={{
-                      background:
-                        badge.bg === "transparent" ? "#ffffff" : badge.bg,
-                      color: badge.fg,
-                      borderColor: badge.bd,
-                    }}
-                  >
-                    {badge.check && <Check size={11} strokeWidth={3} />}
-                    {badge.label}
-                  </span>
-                )
+                badge && <Pill badge={badge} />
               )}
             </div>
             <button
               onClick={onClose}
-              className="flex rounded-md p-1 text-[#7a8aa3] hover:bg-background hover:text-foreground"
+              className="flex rounded-[7px] p-1 text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
               aria-label="Close"
             >
               <X size={16} />
@@ -357,10 +416,10 @@ export function IdeaDrawer({
               type="text"
               value={editTitle}
               onChange={(e) => setEditTitle(e.target.value)}
-              className="font-title w-full rounded-lg border border-primary px-3 py-2 text-base font-semibold shadow-[0_0_0_1px_rgba(122,167,255,.3)] outline-none"
+              className="font-title w-full rounded-control border border-primary px-3 py-2 text-[17px] font-bold shadow-[0_0_0_2px_var(--app-accent-soft)] outline-none"
             />
           ) : (
-            <h2 className="font-title m-0 text-lg font-semibold leading-snug">
+            <h2 className="font-title m-0 text-[19px] font-bold leading-[1.3] text-foreground">
               {ticket ? ticket.subject : jiraSrc ? jiraSrc.title : idea?.title}
             </h2>
           )}
@@ -369,59 +428,44 @@ export function IdeaDrawer({
             idea &&
             (idea.products.length > 0 ||
               (idea.platforms ?? []).length > 0 ||
-              (idea.customers ?? []).length > 0 ||
-              idea.affectsAllCustomers) && (
+              (idea.customers ?? []).length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {idea.products.map((p) => (
-                  <span
-                    key={p}
-                    className="rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
-                    style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}
-                  >
+                  <Chip key={p} dot style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}>
                     {p}
-                  </span>
+                  </Chip>
                 ))}
                 {/* Platforms assigned by PMOS AI at import; purple per the design. */}
                 {(idea.platforms ?? []).map((p) => (
-                  <span
-                    key={`platform-${p}`}
-                    className="rounded bg-[rgba(169,140,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#6b4bd0]"
-                  >
+                  <Chip key={`platform-${p}`} kind="platform">
                     {p}
-                  </span>
+                  </Chip>
                 ))}
-                {/* Affected customers from the supporting tickets; teal when
-                    cataloged, amber suggestion with approve/dismiss when not. */}
-                {idea.affectsAllCustomers && (
-                  <span
-                    title="A supporting ticket marks this as affecting all customers"
-                    className="rounded bg-[rgba(122,167,255,.16)] px-1.5 py-0.5 font-mono text-[11px] font-semibold text-[#3b6fd4]"
-                  >
-                    All customers
-                  </span>
-                )}
+                {/* Affected customers from the supporting tickets (All Customers is
+                    one of them); palette chip when cataloged, amber suggestion
+                    with approve/dismiss when not. */}
                 {(idea.customers ?? []).map((c) => {
                   const suggested = !customerCatalog.some(
                     (k) => k.toLowerCase() === c.toLowerCase(),
                   );
                   if (!suggested) {
                     return (
-                      <span
+                      <Chip
                         key={`customer-${c}`}
-                        className="rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                        kind="customer"
                         style={chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
                       >
                         {c}
-                      </span>
+                      </Chip>
                     );
                   }
                   return (
                     <span
                       key={`customer-${c}`}
                       title="Suggested customer — not in the catalog yet"
-                      className="inline-flex items-center gap-1 rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
+                      className="inline-flex items-center gap-1 rounded-chip border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[var(--app-warn-fg)]"
                     >
-                      {c}
+                      {c} ⚑
                       {onCustomerAction && (
                         <>
                           <button
@@ -491,12 +535,10 @@ export function IdeaDrawer({
               {stats.map((st) => (
                 <div
                   key={st.label}
-                  className="rounded-lg bg-background px-2.5 py-2"
+                  className="flex min-w-0 flex-col gap-[3px] rounded-[10px] bg-[rgba(240,244,250,.85)] px-3 py-2.5"
                 >
-                  <div className="mb-0.5 font-mono text-[9.5px] uppercase tracking-[0.12em] text-[#7a8aa3]">
-                    {st.label}
-                  </div>
-                  <div className="font-title text-base font-bold">
+                  <div className="eyebrow text-[9.5px]">{st.label}</div>
+                  <div className="font-title flex min-w-0 items-center gap-2 text-[18px] font-bold leading-none">
                     {st.value}
                   </div>
                 </div>
@@ -517,6 +559,7 @@ export function IdeaDrawer({
               ideasById={ideasById}
               customerCatalog={customerCatalog}
               customerColors={customerColors}
+              onOpenIdea={onOpenIdea ? (id) => onOpenIdea(id, { source: srcSel }) : undefined}
             />
           ) : jiraSrc ? (
             <>
@@ -554,14 +597,14 @@ export function IdeaDrawer({
                   value={editManual}
                   onChange={(e) => setEditManual(e.target.value)}
                   placeholder="—"
-                  className="font-title w-full rounded-lg border border-border px-2.5 py-2 text-sm font-semibold outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                  className="font-title w-full rounded-lg border border-border px-2.5 py-2 text-sm font-semibold outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                 />
                 <span className="text-[11px] text-[#9aa8be]">
                   Overrides the displayed score
                 </span>
               </div>
               )}
-              {/* Product lines — catalog names plus "Other"; PMOS AI's pick is a starting point, not a verdict. */}
+              {/* Product lines — catalog names plus "Other"; PMOS's pick is a starting point, not a verdict. */}
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Product lines</span>
                 <div className="flex flex-wrap gap-1.5">
@@ -671,7 +714,7 @@ export function IdeaDrawer({
                   rows={12}
                   value={editDetails}
                   onChange={(e) => setEditDetails(e.target.value)}
-                  className="w-full resize-y rounded-lg border border-border px-3 py-2.5 text-[13.5px] leading-relaxed outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]"
+                  className="w-full resize-y rounded-lg border border-border px-3 py-2.5 text-[13.5px] leading-relaxed outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                 />
               </div>
             </>
@@ -681,8 +724,8 @@ export function IdeaDrawer({
                   have to diff anything by eye. */}
               {idea.batch === "updated" &&
                 (idea.batchChanges ?? []).length > 0 && (
-                  <div className="rounded-lg border border-[rgba(122,167,255,.35)] bg-[rgba(122,167,255,.07)] px-3.5 py-2.5">
-                    <div className={`${MONO_LABEL} mb-1.5`}>
+                  <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
+                    <div className={`${MONO_LABEL} mb-1.5 text-[#2a5fd0]`}>
                       Updated this import
                     </div>
                     <ul className="m-0 flex list-none flex-col gap-1 p-0">
@@ -691,7 +734,7 @@ export function IdeaDrawer({
                           key={`${i}-${c}`}
                           className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
                         >
-                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#7aa7ff]" />
+                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
                           {c}
                         </li>
                       ))}
@@ -700,7 +743,7 @@ export function IdeaDrawer({
                 )}
               <div>
                 <div className={`${MONO_LABEL} mb-1.5`}>
-                  Details ({idea.batch})
+                  Details
                 </div>
                 <UmMarkdown
                   content={idea.details}
@@ -719,10 +762,10 @@ export function IdeaDrawer({
                         onClick={() =>
                           setSrcSel({ kind: src.kind, key: src.key })
                         }
-                        className="flex w-full items-center gap-2.5 rounded-lg border border-[#e2eaf4] bg-[#f7fafd] px-3 py-2.5 text-left transition-colors hover:border-primary"
+                        className="flex w-full items-center gap-2.5 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-3 py-2.5 text-left transition-colors hover:border-primary hover:bg-white"
                       >
                         <span
-                          className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold"
+                          className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-bold"
                           style={src.tag}
                         >
                           {src.id}
@@ -764,21 +807,13 @@ export function IdeaDrawer({
 
         {/* Footer */}
         {!viewingSource && idea && (
-          <div className="flex gap-2 border-t border-[#e8eef7] bg-white px-6 py-3.5">
+          <div className="flex items-center gap-2 border-t border-border bg-[rgba(255,255,255,.6)] px-6 py-3">
             {editMode ? (
               <>
-                <button
-                  onClick={saveEdit}
-                  className="inline-flex h-8 items-center whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                >
+                <Button variant="primary" glow onClick={saveEdit}>
                   Save changes
-                </button>
-                <button
-                  onClick={() => setEditMode(false)}
-                  className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                >
-                  Cancel
-                </button>
+                </Button>
+                <Button onClick={() => setEditMode(false)}>Cancel</Button>
               </>
             ) : (
               <>
@@ -795,55 +830,59 @@ export function IdeaDrawer({
                           ),
                       );
                     return (
-                      <button
-                        onClick={() => onToggleApprove?.()}
-                        disabled={blocked}
-                        title={
-                          blocked
-                            ? "Approve or dismiss the suggested customers first"
-                            : undefined
-                        }
-                        className={
-                          blocked
-                            ? "inline-flex h-8 cursor-not-allowed items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium opacity-40"
-                            : idea.decision === "pending"
-                              ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                              : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover"
-                        }
-                      >
-                        <Check size={13} strokeWidth={3} />
-                        {idea.decision === "pending" ? "Approve" : "Approved"}
-                      </button>
+                      <>
+                        <Button
+                          variant={idea.decision === "pending" ? "success" : "secondary"}
+                          glow={idea.decision === "pending"}
+                          onClick={() => onToggleApprove?.()}
+                          disabled={blocked}
+                          title={
+                            blocked
+                              ? "Approve or dismiss the suggested customers first"
+                              : idea.decision === "pending"
+                                ? undefined
+                                : "Click to mark unreviewed"
+                          }
+                        >
+                          <Check size={13} strokeWidth={3} />
+                          {idea.decision === "pending" ? "Approve" : "Approved"}
+                        </Button>
+                      </>
                     );
                   })()}
                 {onUndoPush && idea.decision === "injected" && (
-                  <button
+                  <Button
+                    variant="warning"
                     onClick={onUndoPush}
                     title={
                       idea.undoable?.action === "create"
                         ? `Deletes ${idea.undoable.jiraKey} in Jira (asks first)`
                         : `Restores ${idea.undoable?.jiraKey} to its pre-merge state`
                     }
-                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-300 bg-amber-50 px-3.5 text-[13px] font-medium text-amber-800 hover:border-amber-400"
                   >
                     Undo merge
-                  </button>
+                  </Button>
                 )}
                 {onMerge && (
-                  <button
-                    onClick={onMerge}
-                    className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                  >
+                  <Button onClick={onMerge}>
+                    <GitMerge size={13} strokeWidth={2.25} />
                     Merge
-                    <ArrowUpRight size={13} />
-                  </button>
+                  </Button>
                 )}
-                <button
-                  onClick={startEdit}
-                  className="inline-flex h-8 items-center rounded-lg border border-border bg-white px-3.5 text-[13px] font-medium hover:border-primary"
-                >
+                <Button onClick={startEdit}>
+                  <Pencil size={13} />
                   Edit
-                </button>
+                </Button>
+                {needsApproval(idea) &&
+                  idea.decision === "pending" &&
+                  (idea.customers ?? []).some(
+                    (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase()),
+                  ) && (
+                    <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] text-[var(--app-warn-fg)]">
+                      <Flag size={12} />
+                      Resolve suggested customers first
+                    </span>
+                  )}
               </>
             )}
           </div>
@@ -856,7 +895,7 @@ export function IdeaDrawer({
 /* ───────────────────────── Zendesk ticket view ───────────────────────── */
 
 const FIELD_LABEL =
-  "font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[#9aa8be]";
+  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#9aa8be]";
 
 function formatDate(value: string | undefined): string | null {
   if (!value) return null;
@@ -881,11 +920,22 @@ function RawChip({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** One labelled value on the ticket's header line: "Customer  Acme". */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className={FIELD_LABEL}>{label}</span>
+      <span className="text-[13px] font-medium text-foreground">{children}</span>
+    </span>
+  );
+}
+
 /**
- * The ticket as evidence, then PMOS AI's reading of it, then every raw
- * column verbatim (collapsed) — so nothing an export carries is ever lost,
- * and what the reporter wrote stays visibly apart from what the model
- * inferred.
+ * The ticket as evidence (what the reporter wrote), then PMOS's evaluation
+ * of it, then every raw column verbatim (collapsed) — so nothing an export
+ * carries is ever lost, and the reporter's words stay visibly apart from
+ * what PMOS inferred. Type and priority are not used by the product yet, so
+ * they live only under "All fields".
  */
 function TicketView({
   ticket,
@@ -893,21 +943,20 @@ function TicketView({
   ideasById,
   customerCatalog,
   customerColors,
+  onOpenIdea,
 }: {
   ticket: ZendeskTicket;
   csvMapping: CsvMapping;
   ideasById?: Map<string, Idea>;
   customerCatalog: string[];
   customerColors: Record<string, string>;
+  onOpenIdea?: (id: string) => void;
 }) {
   const [allOpen, setAllOpen] = useState(false);
   const raw = ticket.raw ?? {};
   const mapped = extractMappedFields(raw, csvMapping);
   const created = formatDate(ticket.createdAt);
   const chips: { label: string; value: string }[] = [
-    ...(ticket.module ? [{ label: "Module (hint)", value: ticket.module }] : []),
-    ...(mapped.requestType ? [{ label: "Type", value: mapped.requestType }] : []),
-    ...(mapped.priority ? [{ label: "Priority", value: mapped.priority }] : []),
     ...(mapped.severity ? [{ label: "Severity", value: mapped.severity }] : []),
     ...(ticket.dealRelated ? [{ label: "Deal related", value: ticket.dealRelated }] : []),
   ];
@@ -921,29 +970,16 @@ function TicketView({
     <>
       {/* ── Raw ticket: what the reporter wrote ── */}
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
-          {ticket.customerName ? (
-            <span className="font-semibold text-foreground">
-              {ticket.customerName}
-              {ticket.customerType ? (
-                <span className="font-normal text-muted"> · {ticket.customerType}</span>
-              ) : null}
-            </span>
-          ) : (
-            <span className="text-muted">No customer named</span>
-          )}
-          <span className="text-muted">
-            {ticket.requester ? `Reported by ${ticket.requester}` : "Reporter unknown"}
-            {created ? ` · ${created}` : ""}
-          </span>
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5">
+          <Field label="Customer">
+            {ticket.customerName || <span className="font-normal text-muted">Not named</span>}
+          </Field>
+          <Field label="Reported by">
+            {ticket.requester || <span className="font-normal text-muted">Unknown</span>}
+          </Field>
+          {ticket.module && <Field label="Module">{ticket.module}</Field>}
+          {created && <Field label="Created">{created}</Field>}
         </div>
-        {chips.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <RawChip key={c.label} label={c.label} value={c.value} />
-            ))}
-          </div>
-        )}
         <div>
           <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
           <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-foreground">
@@ -972,8 +1008,12 @@ function TicketView({
             {verbatimAffected.join(", ")}
           </div>
         )}
-        {ticket.tags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
+        {(ticket.tags.length > 0 || chips.length > 0) && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className={`${FIELD_LABEL} mr-0.5`}>Tags</span>
+            {chips.map((c) => (
+              <RawChip key={c.label} label={c.label} value={c.value} />
+            ))}
             {ticket.tags.map((t) => (
               <span
                 key={t}
@@ -986,12 +1026,12 @@ function TicketView({
         )}
       </div>
 
-      {/* ── PMOS AI's reading — interpretation, kept apart from the evidence ── */}
-      <div className="flex flex-col gap-2.5 rounded-lg border border-[#e3ebf7] bg-[#f8fafd] px-4 py-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className={MONO_LABEL}>PMOS AI reading</span>
-          <span className="text-[11px] text-[#9aa8be]">interpretation, not ticket data</span>
-        </div>
+      {/* ── PMOS's evaluation — kept apart from the evidence ── */}
+      <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-4 py-3">
+        <span className="font-title inline-flex items-center gap-1.5 text-[13px] font-bold text-foreground">
+          <PmosMark size={20} />
+          Evaluation
+        </span>
         {ticket.catalog ? (
           <div className="text-[13px] leading-relaxed">
             <span className="font-semibold">{CATALOG_KIND_LABELS[ticket.catalog.kind]}</span>
@@ -1000,14 +1040,11 @@ function TicketView({
             ) : null}
           </div>
         ) : (
-          <div className="text-[13px] text-muted">Not classified yet.</div>
-        )}
-        {ticket.affectsAllCustomers && (
-          <div className="text-xs font-medium text-[#4a6fd6]">Affects all customers</div>
+          <div className="text-[13px] text-muted">Not evaluated yet.</div>
         )}
         {(ticket.affectedCustomers ?? []).length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
-            <span className={FIELD_LABEL}>Customers</span>
+            <span className={`${FIELD_LABEL} mr-0.5`}>Customers</span>
             {(ticket.affectedCustomers ?? []).map((c) => {
               const dismissed = (ticket.dismissedCustomers ?? []).some(
                 (k) => k.toLowerCase() === c.toLowerCase(),
@@ -1027,10 +1064,10 @@ function TicketView({
                   }
                   className={
                     dismissed
-                      ? "rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496] line-through"
+                      ? "rounded-chip bg-[#eef1f6] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[#7a8496] line-through"
                       : suggested
-                        ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                        : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                        ? "rounded-chip border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[var(--app-warn-fg)]"
+                        : "rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold"
                   }
                   style={
                     dismissed || suggested
@@ -1045,22 +1082,32 @@ function TicketView({
           </div>
         )}
         {notes.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            {notes.length > 1 && (
-              <div className="text-xs text-muted">Split into {notes.length} ideas</div>
-            )}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`${FIELD_LABEL} mr-0.5 whitespace-nowrap`}>
+              {notes.length > 1 ? `Split into ${notes.length} ideas` : "Idea"}
+            </span>
             {notes.map((n) => {
               const idea = ideasById?.get(n.ideaId);
+              const tone = n.merged ? STATUS_TONES.updated : STATUS_TONES.new;
+              if (!idea)
+                return (
+                  <span key={n.unit} className="text-[12px] text-muted">
+                    (idea no longer exists)
+                  </span>
+                );
               return (
-                <div key={n.unit} className="text-[13px] leading-relaxed">
-                  <span className="text-muted">{n.merged ? "Merged into" : "New idea"}</span>{" "}
-                  {idea ? (
-                    <span className="font-medium">{idea.title}</span>
-                  ) : n.merged ? (
-                    <span className="text-muted">(idea no longer exists)</span>
-                  ) : null}
-                  {n.reason ? <span className="text-muted"> — {n.reason}</span> : null}
-                </div>
+                <button
+                  key={n.unit}
+                  type="button"
+                  onClick={() => onOpenIdea?.(idea.id)}
+                  disabled={!onOpenIdea}
+                  title={`${n.merged ? "Merged into" : "New idea"}: ${idea.title}${n.reason ? ` — ${n.reason}` : ""}`}
+                  className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full border bg-white py-[3px] pl-2.5 pr-1.5 text-[12px] font-medium transition-colors hover:border-primary disabled:cursor-default"
+                  style={{ borderColor: `color-mix(in srgb, ${tone.solid} 40%, white)`, color: tone.fg }}
+                >
+                  <span className="truncate text-fg-2">{idea.title}</span>
+                  <ChevronRight size={12} className="shrink-0" />
+                </button>
               );
             })}
           </div>

@@ -43,16 +43,16 @@ export interface CsvParamMeta {
 
 export const CSV_PARAM_META: Record<CsvParam, CsvParamMeta> = {
   id: { label: "Ticket id", treatment: "Dedupe key; falls back to subject+created.", required: true },
-  subject: { label: "Subject", treatment: "Shown and sent to PMOS AI.", required: true },
-  body: { label: "Description", treatment: "The ticket content PMOS AI classifies.", required: true },
+  subject: { label: "Subject", treatment: "Shown and sent to PMOS.", required: true },
+  body: { label: "Description", treatment: "The ticket content PMOS classifies.", required: true },
   requester: { label: "Requester name", treatment: "Reporter attribution; never an affected customer." },
   requesterEmail: { label: "Requester email", treatment: "Fallback when the name column is empty." },
-  tags: { label: "Tags", treatment: "Weak hints to PMOS AI." },
+  tags: { label: "Tags", treatment: "Weak hints to PMOS." },
   created: { label: "Created at", treatment: "Recency; part of the fallback dedupe key." },
   product: { label: "Product line", treatment: "Pre-assigns the idea's product line when present." },
   module: {
     label: "Module",
-    treatment: "Metadata hint to PMOS AI — humans make mistakes, so it never overrides the content.",
+    treatment: "Metadata hint to PMOS — humans make mistakes, so it never overrides the content.",
   },
   customerName: {
     label: "Customer name",
@@ -70,9 +70,9 @@ export const CSV_PARAM_META: Record<CsvParam, CsvParamMeta> = {
   dealRelated: { label: "Deal related", treatment: "Stored on the ticket (scoring input later)." },
   customerType: { label: "Customer type", treatment: "Stored on the ticket (scoring input later)." },
   url: { label: "Ticket URL", treatment: "Link to the source ticket; used for Jira export links." },
-  requestType: { label: "Request type", treatment: "Shown on the ticket view (e.g. Feature Request / Enhancement); not sent to PMOS AI." },
-  priority: { label: "Priority", treatment: "Shown on the ticket view; not sent to PMOS AI." },
-  severity: { label: "Severity", treatment: "Shown on the ticket view; not sent to PMOS AI." },
+  requestType: { label: "Request type", treatment: "Shown on the ticket view (e.g. Feature Request / Enhancement); not sent to PMOS." },
+  priority: { label: "Priority", treatment: "Shown on the ticket view; not sent to PMOS." },
+  severity: { label: "Severity", treatment: "Shown on the ticket view; not sent to PMOS." },
 };
 
 /** Works for the historic seed corpus AND Kela's anonymized export unchanged. */

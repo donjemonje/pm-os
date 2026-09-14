@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "AI is not configured. Set VERTEX_PROJECT_ID and Google Application Default Credentials.",
+          "PMOS is not configured. Set VERTEX_PROJECT_ID and Google Application Default Credentials.",
       },
       { status: 503 }
     );

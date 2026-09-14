@@ -4,6 +4,7 @@ import { isPmosAdmin } from "@/lib/admin-auth";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
+import { isAllCustomers } from "@/lib/ideas/customer-key";
 
 const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
 const CUSTOMER_SELECT = { ...ITEM_SELECT, aliases: true } as const;
@@ -214,7 +215,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     isChipColorId(body.color) && body.name === undefined && body.description === undefined;
   const auth = await guard(context, { write: true, colorOnly });
   if (auth instanceof NextResponse) return auth;
-  const { ops, workspaceId } = auth;
+  const { ops, kind, workspaceId } = auth;
 
   const id = typeof body.id === "string" ? body.id : "";
   if (!id || !(await ops.exists(workspaceId, id))) {
@@ -226,6 +227,16 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   }
   const name = cleanName(body.name);
   if (name instanceof NextResponse) return name;
+
+  if (kind === "customers") {
+    const row = await db.customer.findFirst({ where: { id, workspaceId }, select: { name: true } });
+    if (row && isAllCustomers(row.name) && !isAllCustomers(name)) {
+      return NextResponse.json(
+        { error: "All Customers is built in and can't be renamed" },
+        { status: 400 },
+      );
+    }
+  }
 
   if (await ops.nameTaken(workspaceId, name, id)) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
@@ -243,11 +254,20 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 export async function DELETE(request: NextRequest, context: RouteContext) {
   const auth = await guard(context, { write: true });
   if (auth instanceof NextResponse) return auth;
-  const { ops, workspaceId } = auth;
+  const { ops, kind, workspaceId } = auth;
 
   const body = await readJson(request);
   if (body instanceof NextResponse) return body;
   const id = typeof body.id === "string" ? body.id : "";
+  if (kind === "customers" && id) {
+    const row = await db.customer.findFirst({ where: { id, workspaceId }, select: { name: true } });
+    if (row && isAllCustomers(row.name)) {
+      return NextResponse.json(
+        { error: "All Customers is built in and can't be deleted" },
+        { status: 400 },
+      );
+    }
+  }
   const count = id ? await ops.remove(workspaceId, id) : 0;
   if (count === 0) {
     return NextResponse.json({ error: "Item not found" }, { status: 404 });

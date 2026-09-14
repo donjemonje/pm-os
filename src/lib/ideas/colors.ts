@@ -67,3 +67,13 @@ export function nextChipColor(used: (string | null | undefined)[]): string {
   }
   return best;
 }
+
+/**
+ * A stable palette color for names that carry none in the catalog (e.g.
+ * reporters): the same name always gets the same tint, on every screen.
+ */
+export function paletteColorFor(name: string): ChipColor {
+  let h = 7;
+  for (const ch of name.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return CHIP_PALETTE[h % CHIP_PALETTE.length];
+}

@@ -157,7 +157,7 @@ ${JSON.stringify(compact)}`,
         {
           id: "all",
           label: "All tickets in scope",
-          reason: "AI grouping unavailable — showing all",
+          reason: "PMOS grouping unavailable — showing all",
           issueKeys: allKeys,
         },
       ],
@@ -202,7 +202,7 @@ ${(documentContext ?? "None").slice(0, 1500)}`;
     if (error instanceof AiQuotaError) {
       const top = issues[0];
       return {
-        answer: `AI quota is unavailable right now. Check Jira directly: ${issues.map((i) => `**${i.key}** ${i.summary}`).join("; ") || "no issues in context"}.`,
+        answer: `PMOS is busy right now. Check Jira directly: ${issues.map((i) => `**${i.key}** ${i.summary}`).join("; ") || "no issues in context"}.`,
         citations: top
           ? [{ issueKey: top.key, snippet: top.summary, field: "summary" }]
           : [],
@@ -290,7 +290,7 @@ ${transcript || "None"}`;
     if (error instanceof AiQuotaError) {
       const top = context.issues[0];
       return {
-        answer: `AI quota is unavailable right now. Closest matches found: ${
+        answer: `PMOS is busy right now. Closest matches found: ${
           [
             ...context.issues.slice(0, 5).map((i) => `**${i.key}** ${i.summary}`),
             ...context.driveFiles.map((f) => `**${f.name}** (Drive)`),
