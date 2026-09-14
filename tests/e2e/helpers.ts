@@ -45,24 +45,6 @@ export async function loginAsRoomLensAdmin(page: Page): Promise<void> {
 }
 
 /**
- * The one login flow, for any TOTP-enrolled user: credentials → the
- * mandatory /login/2fa challenge with a real code from `totpSecret` → the
- * dashboard. Specs that seed their own QA user (own org, own synthetic
- * secret) log in through this; the RoomLens helpers above are aliases.
- */
-export async function loginWithTotp(
-  page: Page,
-  creds: { email: string; password: string; totpSecret: string }
-): Promise<void> {
-  await loginExpecting2fa(page, creds.email, creds.password);
-  await passTwoFactorChallenge(page, creds.totpSecret);
-  await page.waitForURL("**/dashboard");
-  await expect(
-    page.getByRole("heading", { name: "Dashboard" })
-  ).toBeVisible();
-}
-
-/**
  * Open an app page as a logged-in user and assert it really rendered:
  * a page-specific expected element is visible, the session was not
  * bounced back to /login, and no Next.js 404 / error boundary showed.
