@@ -1274,11 +1274,7 @@ export function IdeasView({
                                       {idea.jira[0]}
                                     </span>
                                   )}
-                                  {(firstTicket || idea.jira[0]) &&
-                                    (idea.products.length > 1 ||
-                                      (idea.platforms ?? []).length > 0 ||
-                                      customers.length > 0 ||
-                                      idea.affectsAllCustomers) && <span>·</span>}
+                                  {(firstTicket || idea.jira[0]) && <span>·</span>}
                                   {idea.products.slice(1).map((p) => productChip(p))}
                                   {(idea.platforms ?? []).map((p) => (
                                     <Chip key={`platform-${p}`} kind="platform">
@@ -1291,6 +1287,16 @@ export function IdeasView({
                                       title="A supporting ticket marks this as affecting all customers"
                                     >
                                       All customers
+                                    </Chip>
+                                  )}
+                                  {/* No customer named on any supporting ticket → an internal request */}
+                                  {customers.length === 0 && !idea.affectsAllCustomers && (
+                                    <Chip
+                                      kind="customer"
+                                      title="No customer is named on the supporting tickets"
+                                      style={{ background: "#eef1f6", color: "#4a5b74" }}
+                                    >
+                                      Internal
                                     </Chip>
                                   )}
                                   {customers.slice(0, 2).map(customerChip)}
