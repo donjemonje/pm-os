@@ -937,7 +937,9 @@ export function IdeasView({
                         >
                           <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.color }} />
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-fg-2">{name}</span>
+                        <span className="min-w-0 flex-1 truncate text-fg-2" title={shortName(name) !== name ? name : undefined}>
+                          {shortName(name)}
+                        </span>
                         <span className="inline-flex h-1 w-[54px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
                           <span
                             className="block h-full bg-primary"
@@ -964,7 +966,9 @@ export function IdeasView({
                         size={16}
                         style={chipStyle(colorOf(customerColors, name), CUSTOMER_CHIP_DEFAULT)}
                       />
-                      <span className="min-w-0 flex-1 truncate text-fg-2">{name}</span>
+                      <span className="min-w-0 flex-1 truncate text-fg-2" title={shortName(name) !== name ? name : undefined}>
+                        {shortName(name)}
+                      </span>
                       <span className="inline-flex h-1 w-[54px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
                         <span
                           className="block h-full bg-primary"
