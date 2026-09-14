@@ -1331,11 +1331,7 @@ export function IdeasView({
                                   )}
                                   {/* No customer named on any supporting ticket → an internal request */}
                                   {customers.length === 0 && !idea.affectsAllCustomers && (
-                                    <Chip
-                                      kind="customer"
-                                      title="No customer is named on the supporting tickets"
-                                      style={{ background: "#eef1f6", color: "#4a5b74" }}
-                                    >
+                                    <Chip kind="all" title="No customer is named on the supporting tickets">
                                       Internal
                                     </Chip>
                                   )}

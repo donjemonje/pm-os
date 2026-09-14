@@ -7,7 +7,8 @@ const KIND_CLASS: Record<ChipKind, string> = {
   product: "",
   customer: "",
   platform: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
-  all: "bg-[rgba(36,87,245,.14)] text-[#2a5fd0]",
+  // Labels (Internal, All customers): neutral grey, never a catalog color.
+  all: "bg-[#eef1f6] text-[#4a5b74]",
   // Off-catalog suggestions: amber dashed outline, never hidden.
   suggested: "border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] text-[var(--app-warn-fg)]",
 };
