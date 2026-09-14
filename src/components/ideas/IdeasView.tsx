@@ -1527,7 +1527,7 @@ export function IdeasView({
                             active ? "font-semibold text-foreground" : done ? "text-fg-3" : "text-fg-faint"
                           }`}
                         >
-                          {step.pmos && <PmosMark size={17} />}
+                          {step.pmos && <PmosMark size={19} />}
                           {step.label}
                         </span>
                         {active && <span className="text-[11.5px] text-fg-3">{step.hint}</span>}

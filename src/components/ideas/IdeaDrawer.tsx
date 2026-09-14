@@ -1043,7 +1043,7 @@ function TicketView({
       {/* ── PMOS's evaluation — kept apart from the evidence ── */}
       <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-4 py-3">
         <span className="font-title inline-flex items-center gap-1.5 text-[13px] font-bold text-foreground">
-          <PmosMark size={16} />
+          <PmosMark size={18} />
           Evaluation
         </span>
         {ticket.catalog ? (

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * PMOS did something (read a ticket, classified it, drafted a document).
  * Product copy never says "AI"; it says PMOS, and this mark sits beside it.
  */
-export function PmosMark({ size = 16, className }: { size?: number; className?: string }) {
+export function PmosMark({ size = 18, className }: { size?: number; className?: string }) {
   return (
     <Image
       src={brand.logoStandalone}
