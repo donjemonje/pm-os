@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
-import { loginAsRoomLens } from "./helpers";
+import { acceptConfirm, loginAsRoomLens } from "./helpers";
 import { RESOLVED_ENV } from "./test-env";
 
 /**
@@ -250,8 +250,6 @@ test.describe("Ideas — customers & reporters", () => {
   test("CR1 Settings → Ideas: Customers panel add, duplicate rejection, delete", async ({
     page,
   }) => {
-    // Delete confirms via window.confirm.
-    page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLens(page);
     // Since feature/ui_facelift_v1 the Customers panel lives on its own
@@ -289,6 +287,7 @@ test.describe("Ideas — customers & reporters", () => {
 
     // Delete — gone from the list and stays gone after a reload.
     await panel.getByLabel(`Delete ${SETTINGS_CUSTOMER}`).click();
+    await acceptConfirm(page);
     await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toHaveCount(0);
     await page.reload();
     await expect(panel.getByText(CATALOGED, { exact: true })).toBeVisible();

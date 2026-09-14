@@ -91,3 +91,14 @@ export async function withTestDb<T>(
     await db.$disconnect();
   }
 }
+
+/**
+ * Accept the PM-OS confirm dialog (the app never uses window.confirm): waits
+ * for the alertdialog and clicks its primary action — the last button.
+ */
+export async function acceptConfirm(page: Page): Promise<void> {
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button").last().click();
+  await expect(dialog).toHaveCount(0);
+}

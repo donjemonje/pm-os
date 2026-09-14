@@ -30,6 +30,7 @@ import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
 import { ApproveMark } from "@/components/ui/ApproveMark";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
@@ -122,6 +123,7 @@ export function IdeasView({
   /** "ideasUndo" org flag: per-idea undo of the last merge in the drawer. */
   undoEnabled?: boolean;
 }) {
+  const { confirm } = useConfirm();
   const [tickets, setTickets] = useState<ZendeskTicket[]>([]);
   const [jiraSources, setJiraSources] = useState<JiraSource[]>([]);
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -319,7 +321,14 @@ export function IdeasView({
   };
 
   const clearAll = async () => {
-    if (!window.confirm("Remove all imported tickets and ideas? (The verdict ledger is kept.)"))
+    if (
+      !(await confirm({
+        title: "Are you sure?",
+        message: "This removes every imported ticket and idea from this workspace.",
+        confirmLabel: "Remove all",
+        tone: "danger",
+      }))
+    )
       return;
     try {
       const res = await fetch("/api/ideas", { method: "DELETE" });
@@ -356,9 +365,17 @@ export function IdeasView({
     if (!idea.undoable) return;
     const message =
       idea.undoable.action === "create"
-        ? `Undo will permanently DELETE ${idea.undoable.jiraKey} in Jira — comments and edits made there are lost. Continue?`
-        : `Undo restores ${idea.undoable.jiraKey} to its pre-merge state. Fields edited in Jira since the merge are left alone. Continue?`;
-    if (!window.confirm(message)) return;
+        ? `${idea.undoable.jiraKey} will be permanently deleted in Jira — comments and edits made there are lost.`
+        : `${idea.undoable.jiraKey} goes back to how it was before the merge. Fields edited in Jira since then are left alone.`;
+    if (
+      !(await confirm({
+        title: "Undo the last merge?",
+        message,
+        confirmLabel: "Undo merge",
+        tone: idea.undoable.action === "create" ? "danger" : "default",
+      }))
+    )
+      return;
     setError("");
     try {
       const res = await fetch("/api/ideas/undo", {
@@ -856,10 +873,6 @@ export function IdeasView({
               <Upload size={14} />
               {importing ? "Importing…" : "Upload Zendesk CSV"}
             </Button>
-            <div className="mt-5 font-mono text-[10.5px] text-fg-faint">
-              Expected columns: external_id, subject, description · optional: requester_name, tags,
-              created_at, product_line, affected_customers
-            </div>
           </div>
         ) : (
           <>
@@ -1083,18 +1096,8 @@ export function IdeasView({
                     <span className="min-w-0 flex-1 truncate">
                       Editing <b className="font-semibold">{editedIdea.title}</b> —{" "}
                       {editCount} source{editCount === 1 ? "" : "s"} selected. Tick a Zendesk or Jira
-                      row to attach it.
+                      row to attach it; ✓ on the idea saves, ✕ or Esc discards.
                     </span>
-                    <span className="hidden font-mono text-[11px] text-[#0f7a47]/70 xl:inline">
-                      Esc discards
-                    </span>
-                    <Button size="sm" onClick={cancelEdit}>
-                      Discard
-                    </Button>
-                    <Button size="sm" variant="success" glow disabled={!editDirty} onClick={saveEdit}>
-                      <Check size={13} strokeWidth={3} />
-                      Save sources
-                    </Button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">

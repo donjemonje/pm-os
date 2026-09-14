@@ -113,7 +113,13 @@ export function IdeaDrawer({
   onSave,
   onMerge,
 }: IdeaDrawerProps) {
-  const [width, setWidth] = useState(480);
+  // Opens at half the app's content width (the area beside the sidebar);
+  // the PM can still drag it between 380px and 90% of the window.
+  const [width, setWidth] = useState(() => {
+    if (typeof window === "undefined") return 640;
+    const main = document.querySelector("main");
+    return Math.max(380, Math.round((main?.clientWidth ?? window.innerWidth) / 2));
+  });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
   const [editMode, setEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -197,7 +203,9 @@ export function IdeaDrawer({
     const startX = e.clientX;
     const startW = width;
     const move = (ev: MouseEvent) =>
-      setWidth(Math.min(1100, Math.max(380, startW + (startX - ev.clientX))));
+      setWidth(
+        Math.min(Math.round(window.innerWidth * 0.9), Math.max(380, startW + (startX - ev.clientX)))
+      );
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);

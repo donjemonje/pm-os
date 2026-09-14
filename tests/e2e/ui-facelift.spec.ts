@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
-import { loginAsRoomLens, loginAsRoomLensAdmin, withTestDb } from "./helpers";
+import { acceptConfirm, loginAsRoomLens, loginAsRoomLensAdmin, withTestDb } from "./helpers";
 import { LOCAL_BASE_URL } from "./test-env";
 
 /**
@@ -316,8 +316,6 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
   test("UF2 Settings → Customers: color swatch per row persists a palette pick; near-duplicate names merge into an alias and split back out", async ({
     page,
   }) => {
-    // Merge confirms via window.confirm.
-    page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLens(page);
     await page.goto("/settings/ideas/customers");
@@ -366,6 +364,7 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
 
     // Merge "The …" into the plain spelling: row gone, alias listed.
     await theRow.getByRole("button", { name: `Merge into "${WHITFIELD}"` }).click();
+    await acceptConfirm(page);
     await expect(plainRow.getByText("Also known as")).toBeVisible();
     await expect(plainRow.getByText(THE_WHITFIELD, { exact: true })).toBeVisible();
     await expect(theRow).toHaveCount(0);

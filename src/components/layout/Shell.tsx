@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { ConfirmProvider } from "@/components/ui/ConfirmDialog";
 import { OrgFeaturesProvider } from "./OrgFeaturesContext";
 import { Sidebar } from "./Sidebar";
 import type { MenuOrganization, MenuUser } from "./UserMenu";
@@ -51,10 +52,11 @@ export function Shell({
   // anonymous visitors off app pages, so this only affects public pages, and
   // it guarantees a signed-out visitor can never see a sidebar frame.
   if (isAuthPage || !user) {
-    return <>{children}</>;
+    return <ConfirmProvider>{children}</ConfirmProvider>;
   }
 
   return (
+    <ConfirmProvider>
     <OrgFeaturesProvider value={{ chatEnabled }}>
       <div className="flex h-screen overflow-hidden">
         <Sidebar
@@ -71,5 +73,6 @@ export function Shell({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
     </OrgFeaturesProvider>
+    </ConfirmProvider>
   );
 }

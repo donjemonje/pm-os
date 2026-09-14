@@ -5,6 +5,7 @@ import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { CUSTOMER_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { customerKey } from "@/lib/ideas/customer-key";
 import { ColorSwatch } from "./ColorSwatch";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export interface SettingsListItem {
   id: string;
@@ -40,6 +41,7 @@ export function SettingsListPanel({
   emptyLabel: string;
   initialItems: SettingsListItem[];
 }) {
+  const { confirm } = useConfirm();
   const [items, setItems] = useState(initialItems);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -109,7 +111,8 @@ export function SettingsListPanel({
   }
 
   async function onDelete(item: SettingsListItem) {
-    if (!window.confirm(`Delete "${item.name}"?`)) return;
+    if (!(await confirm({ title: `Delete "${item.name}"?`, confirmLabel: "Delete", tone: "danger" })))
+      return;
     await call("DELETE", { id: item.id });
   }
 
@@ -123,9 +126,11 @@ export function SettingsListPanel({
   async function onMerge(keep: SettingsListItem, merge: SettingsListItem) {
     if (
       !mergeEndpoint ||
-      !window.confirm(
-        `Merge "${merge.name}" into "${keep.name}"? Every ticket and idea will show "${keep.name}"; "${merge.name}" is kept as an alias and can be split out again.`,
-      )
+      !(await confirm({
+        title: `Merge "${merge.name}" into "${keep.name}"?`,
+        message: `Every ticket and idea will show "${keep.name}". "${merge.name}" is kept as an alias and can be split out again.`,
+        confirmLabel: "Merge",
+      }))
     )
       return;
     await call("POST", { action: "merge", keepId: keep.id, mergeId: merge.id }, mergeEndpoint);

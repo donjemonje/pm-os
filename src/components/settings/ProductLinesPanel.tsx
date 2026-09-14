@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import type { SettingsListItem } from "./SettingsListPanel";
 import { PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { ColorSwatch } from "./ColorSwatch";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 const ENDPOINT = "/api/ideas/lists/product-lines";
 const MAX_DESCRIPTION = 2000;
@@ -38,6 +39,7 @@ export function ProductLinesPanel({
   initialItems: SettingsListItem[];
   canEdit: boolean;
 }) {
+  const { confirm } = useConfirm();
   const [items, setItems] = useState(initialItems);
   const [view, setView] = useState<ViewMode>("formatted");
   const [adding, setAdding] = useState(false);
@@ -108,7 +110,8 @@ export function ProductLinesPanel({
   }
 
   async function onDelete(id: string, itemName: string) {
-    if (!window.confirm(`Delete "${itemName}"?`)) return;
+    if (!(await confirm({ title: `Delete "${itemName}"?`, confirmLabel: "Delete", tone: "danger" })))
+      return;
     await call("DELETE", { id });
   }
 
