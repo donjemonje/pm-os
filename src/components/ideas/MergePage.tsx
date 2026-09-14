@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Layers, LifeBuoy, Sparkles, X } from "lucide-react";
+import { Check, Sparkles, X } from "lucide-react";
+import { JiraMark, ZendeskMark } from "@/components/brand/SourceIcons";
 import { ApproveMark } from "@/components/ui/ApproveMark";
 import { Chip } from "@/components/ui/Chip";
 import { chipStyle, PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
@@ -245,12 +246,12 @@ export function MergePage({
   const columnFrame = (
     label: string,
     count: number,
-    Icon: typeof Layers,
+    icon: React.ReactNode,
     children: React.ReactNode,
   ) => (
     <div className="glass overflow-hidden rounded-card">
       <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-fg-3">
-        <Icon size={13} strokeWidth={2.25} className="text-primary" />
+        <span className="inline-flex text-primary">{icon}</span>
         <span>{label}</span>
         <span className="ml-auto rounded-full bg-[rgba(12,25,41,.06)] px-[7px] py-px tracking-normal">
           {count}
@@ -279,14 +280,14 @@ export function MergePage({
   const renderColumn = (
     kind: SourceKind,
     label: string,
-    Icon: typeof Layers,
+    icon: React.ReactNode,
     rows: SourceRow[],
     emptyText: string,
   ) =>
     columnFrame(
       label,
       rows.length,
-      Icon,
+      icon,
       <>
         {rows.map((row) => {
           const lit =
@@ -388,14 +389,14 @@ export function MergePage({
         hasJira ? "grid-cols-[1fr_1fr_1.15fr]" : "grid-cols-[1fr_1.15fr]"
       }`}
     >
-      {renderColumn("zen", "Zendesk", LifeBuoy, zenRows, "No Zendesk sources")}
-      {hasJira && renderColumn("jira", "Jira", Layers, jiraRows, "No Jira sources")}
+      {renderColumn("zen", "Zendesk", <ZendeskMark size={13} />, zenRows, "No Zendesk sources")}
+      {hasJira && renderColumn("jira", "Jira", <JiraMark size={13} />, jiraRows, "No Jira sources")}
 
       {/* Final column */}
       {columnFrame(
         "Final",
         finals.length,
-        Sparkles,
+        <Sparkles size={13} strokeWidth={2.25} />,
         <>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
