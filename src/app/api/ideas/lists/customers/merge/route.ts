@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
 import { db } from "@/lib/db";
 import { nextChipColor } from "@/lib/ideas/colors";
+import { isAllCustomers } from "@/lib/ideas/customer-key";
 
 /**
  * Merge two customers that are the same company under different spellings
@@ -88,6 +89,13 @@ export async function POST(request: NextRequest) {
       db.customer.findFirst({ where: { id: mergeId, workspaceId } }),
     ]);
     if (!keep || !merge) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+    // The built-in All Customers row is neither absorbed nor absorbing.
+    if (isAllCustomers(keep.name) || isAllCustomers(merge.name)) {
+      return NextResponse.json(
+        { error: "All Customers is built in and can't be merged" },
+        { status: 400 },
+      );
+    }
     const aliases = Array.from(
       new Set([
         ...((keep.aliases as string[]) ?? []),

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
-import { loginAsRoomLens } from "./helpers";
+import { acceptConfirm, loginAsRoomLens } from "./helpers";
 import { RESOLVED_ENV } from "./test-env";
 
 /**
@@ -250,8 +250,6 @@ test.describe("Ideas — customers & reporters", () => {
   test("CR1 Settings → Ideas: Customers panel add, duplicate rejection, delete", async ({
     page,
   }) => {
-    // Delete confirms via window.confirm.
-    page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLens(page);
     // Since feature/ui_facelift_v1 the Customers panel lives on its own
@@ -289,6 +287,7 @@ test.describe("Ideas — customers & reporters", () => {
 
     // Delete — gone from the list and stays gone after a reload.
     await panel.getByLabel(`Delete ${SETTINGS_CUSTOMER}`).click();
+    await acceptConfirm(page);
     await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toHaveCount(0);
     await page.reload();
     await expect(panel.getByText(CATALOGED, { exact: true })).toBeVisible();
@@ -312,7 +311,7 @@ test.describe("Ideas — customers & reporters", () => {
     // suggestion styling, no suggestion title).
     const catChip = drawer.getByText(CATALOGED, { exact: true });
     await expect(catChip).toBeVisible();
-    await expect(catChip).not.toHaveClass(/border-amber-400/);
+    await expect(catChip).not.toHaveClass(/border-dashed/);
     await expect(catChip).toHaveAttribute("style", /background/);
     await expect(
       drawer.locator(`span[title="${SUGGESTED_TITLE}"]`, { hasText: CATALOGED })
@@ -323,7 +322,7 @@ test.describe("Ideas — customers & reporters", () => {
       hasText: SUGGESTED_APPROVE,
     });
     await expect(suggested).toBeVisible();
-    await expect(suggested).toHaveClass(/border-amber-400/);
+    await expect(suggested).toHaveClass(/border-dashed/);
 
     // ✓ approve → catalog gains the name and the chip flips from the amber
     // suggestion to a palette-colored catalog chip live (the customer
@@ -334,7 +333,7 @@ test.describe("Ideas — customers & reporters", () => {
     ).toHaveCount(0);
     const approvedChip = drawer.getByText(SUGGESTED_APPROVE, { exact: true });
     await expect(approvedChip).toBeVisible();
-    await expect(approvedChip).not.toHaveClass(/border-amber-400/);
+    await expect(approvedChip).not.toHaveClass(/border-dashed/);
     await expect(approvedChip).toHaveAttribute("style", /background/);
 
     // The name is really in the Customers catalog (same session's cookies),
@@ -408,7 +407,7 @@ test.describe("Ideas — customers & reporters", () => {
     const popover = page.locator("div.z-\\[25\\]");
     await popover.getByRole("button", { name: CATALOGED, exact: true }).click();
     // Multi-select stays open — close via the backdrop before asserting.
-    await page.locator("div.z-\\[24\\]").click();
+    await page.locator("div.z-\\[24\\]").click({ position: { x: 4, y: 4 } }); // corner: the open list can cover the centre
     await expect(popover).toHaveCount(0);
     await expect(row1).toBeVisible();
     await expect(row2).toHaveCount(0);

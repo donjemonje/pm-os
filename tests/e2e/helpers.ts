@@ -7,6 +7,7 @@ import {
   loginExpecting2fa,
   passTwoFactorChallenge,
   TEST_ADMIN_TOTP_SECRET,
+  TEST_TOTP_SECRET,
 } from "./two-factor-helpers";
 
 /**
@@ -34,19 +35,27 @@ export const QA_ADMIN = {
  * login helpers — specs never re-implement login.
  */
 export async function loginAsRoomLens(page: Page): Promise<void> {
-  await loginExpecting2fa(page, QA_USER.email, QA_USER.password);
-  await passTwoFactorChallenge(page);
-  await page.waitForURL("**/dashboard");
-  await expect(
-    page.getByRole("heading", { name: "Dashboard" })
-  ).toBeVisible();
+  await loginWithTotp(page, { ...QA_USER, totpSecret: TEST_TOTP_SECRET });
 }
 
 /** Same flow as loginAsRoomLens, for the seeded PMOS_ADMIN user. Lands on
  * /dashboard like any user — admin-ness only matters on /admin routes. */
 export async function loginAsRoomLensAdmin(page: Page): Promise<void> {
-  await loginExpecting2fa(page, QA_ADMIN.email, QA_ADMIN.password);
-  await passTwoFactorChallenge(page, TEST_ADMIN_TOTP_SECRET);
+  await loginWithTotp(page, { ...QA_ADMIN, totpSecret: TEST_ADMIN_TOTP_SECRET });
+}
+
+/**
+ * The one login flow, for any TOTP-enrolled user: credentials → the
+ * mandatory /login/2fa challenge with a real code from `totpSecret` → the
+ * dashboard. Specs that seed their own QA user (own org, own synthetic
+ * secret) log in through this; the RoomLens helpers above are aliases.
+ */
+export async function loginWithTotp(
+  page: Page,
+  creds: { email: string; password: string; totpSecret: string }
+): Promise<void> {
+  await loginExpecting2fa(page, creds.email, creds.password);
+  await passTwoFactorChallenge(page, creds.totpSecret);
   await page.waitForURL("**/dashboard");
   await expect(
     page.getByRole("heading", { name: "Dashboard" })
@@ -164,4 +173,15 @@ export async function seedQaOrgWithUser(
     },
   });
   return { orgId: org.id, workspaceId: org.workspace!.id, userId: user.id };
+}
+
+/**
+ * Accept the PM-OS confirm dialog (the app never uses window.confirm): waits
+ * for the alertdialog and clicks its primary action — the last button.
+ */
+export async function acceptConfirm(page: Page): Promise<void> {
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button").last().click();
+  await expect(dialog).toHaveCount(0);
 }

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import {
+  acceptConfirm,
   loginAsRoomLens,
   loginAsRoomLensAdmin,
   QA_ADMIN,
@@ -79,8 +80,6 @@ test.describe("PM-OS Admin", () => {
   test("A1 role changes are script-only: API rejects role PATCH, UI has no role controls, deactivation guardrails hold", async ({
     page,
   }) => {
-    // Deactivation confirms via window.confirm.
-    page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLensAdmin(page);
     await page.goto("/admin/users");
@@ -148,6 +147,7 @@ test.describe("PM-OS Admin", () => {
     // anyway: the actor must be an active admin, so a last-admin target is
     // always self. Asserting the message the API actually returns.
     await own.getByRole("button", { name: "Deactivate" }).click();
+    await acceptConfirm(page);
     await expect(
       page.getByText("You cannot deactivate your own account")
     ).toBeVisible();
@@ -247,7 +247,6 @@ test.describe("PM-OS Admin", () => {
     // Three TOTP logins, two of them for the same user (single-use code
     // windows force a wait between those) — needs more than the 60s default.
     test.setTimeout(150_000);
-    page.on("dialog", (dialog) => dialog.accept());
 
     // The target user logs in first in their own browser context.
     const victimContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
@@ -260,6 +259,7 @@ test.describe("PM-OS Admin", () => {
     await page.goto("/admin/users");
     const row = memberRow(page, QA_USER.email);
     await row.getByRole("button", { name: "Deactivate" }).click();
+    await acceptConfirm(page);
     await expect(row.getByText("Deactivated", { exact: true })).toBeVisible();
 
     // The live session was revoked server-side: the API rejects it, and a

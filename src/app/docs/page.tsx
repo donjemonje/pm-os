@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 interface Document {
   id: string;
@@ -17,6 +18,7 @@ interface Document {
 }
 
 function DocsPageContent() {
+  const { confirm, notice } = useConfirm();
   const searchParams = useSearchParams();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,9 +48,12 @@ function DocsPageContent() {
     e.stopPropagation();
     if (doc.type !== "UM") return;
 
-    const confirmed = window.confirm(
-      `Delete user manual "${doc.title}"?\n\nThis cannot be undone.`
-    );
+    const confirmed = await confirm({
+      title: `Delete "${doc.title}"?`,
+      message: "This cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
     if (!confirmed) return;
 
     setDeletingId(doc.id);
@@ -58,7 +63,7 @@ function DocsPageContent() {
       if (!res.ok) throw new Error(data.error ?? "Delete failed");
       setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Delete failed");
+      await notice({ title: "Delete failed", message: err instanceof Error ? err.message : undefined });
     } finally {
       setDeletingId(null);
     }

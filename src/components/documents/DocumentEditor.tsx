@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Eye, EyeOff, FileDown, Loader2, Save, Sparkles, Trash2 } from "lucide-react";
 import { UmMarkdown } from "./UmMarkdown";
 import { exportDocumentAsPdf } from "@/lib/export-document-pdf";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 interface DocumentEditorProps {
   documentId: string;
@@ -32,6 +33,7 @@ export function DocumentEditor({
   audience,
   jiraKeys = [],
 }: DocumentEditorProps) {
+  const { confirm, notice } = useConfirm();
   const [title, setTitle] = useState(initialTitle);
   const [body, setBody] = useState(initialBody);
   const [status, setStatus] = useState(initialStatus);
@@ -73,9 +75,12 @@ export function DocumentEditor({
   async function deleteDocument() {
     if (type !== "UM") return;
 
-    const confirmed = window.confirm(
-      `Delete user manual "${title}"?\n\nThis cannot be undone.`
-    );
+    const confirmed = await confirm({
+      title: `Delete "${title}"?`,
+      message: "This cannot be undone.",
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
     if (!confirmed) return;
 
     setDeleting(true);
@@ -86,7 +91,7 @@ export function DocumentEditor({
       router.push("/docs?type=UM");
       router.refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Delete failed");
+      await notice({ title: "Delete failed", message: err instanceof Error ? err.message : undefined });
       setDeleting(false);
     }
   }
@@ -102,7 +107,7 @@ export function DocumentEditor({
       if (data.body) setBody(data.body);
       if (data.title) setTitle(data.title);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Generation failed");
+      await notice({ title: "Generation failed", message: err instanceof Error ? err.message : undefined });
     } finally {
       setGenerating(false);
     }
@@ -114,7 +119,7 @@ export function DocumentEditor({
     setExporting(true);
     exportDocumentAsPdf(exportRef.current, title)
       .catch((err) => {
-        alert(err instanceof Error ? err.message : "Export failed");
+        void notice({ title: "Export failed", message: err instanceof Error ? err.message : undefined });
       })
       .finally(() => {
         setExporting(false);

@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
+import { ConfirmProvider } from "@/components/ui/ConfirmDialog";
 import { OrgFeaturesProvider } from "./OrgFeaturesContext";
 import { Sidebar } from "./Sidebar";
 import type { MenuOrganization, MenuUser } from "./UserMenu";
@@ -20,6 +21,7 @@ export function Shell({
   children,
   sidebarDefaultCollapsed,
   ideasEnabled,
+  ideasPending = 0,
   docsEnabled,
   chatEnabled,
   dashboardEnabled,
@@ -31,6 +33,8 @@ export function Shell({
   /** Server-read cookie state so the rail renders collapsed without a flash. */
   sidebarDefaultCollapsed: boolean;
   ideasEnabled: boolean;
+  /** Ideas awaiting review — the badge on the Ideas nav item. */
+  ideasPending?: number;
   docsEnabled: boolean;
   chatEnabled: boolean;
   dashboardEnabled: boolean;
@@ -48,15 +52,17 @@ export function Shell({
   // anonymous visitors off app pages, so this only affects public pages, and
   // it guarantees a signed-out visitor can never see a sidebar frame.
   if (isAuthPage || !user) {
-    return <>{children}</>;
+    return <ConfirmProvider>{children}</ConfirmProvider>;
   }
 
   return (
+    <ConfirmProvider>
     <OrgFeaturesProvider value={{ chatEnabled }}>
       <div className="flex h-screen overflow-hidden">
         <Sidebar
           defaultCollapsed={sidebarDefaultCollapsed}
           ideasEnabled={ideasEnabled}
+          ideasPending={ideasPending}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
           dashboardEnabled={dashboardEnabled}
@@ -67,5 +73,6 @@ export function Shell({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
     </OrgFeaturesProvider>
+    </ConfirmProvider>
   );
 }

@@ -24,7 +24,7 @@ export default async function CustomersSettingsPage() {
   return (
     <SettingsListPanel
       title="Customers"
-      blurb="The customers tickets can affect. PMOS AI tags ideas with customers from this list and suggests new names it finds in tickets — approving a suggestion adds it here."
+      blurb="The customers tickets can affect. PMOS tags ideas with customers from this list and suggests new names it finds in tickets — approving a suggestion adds it here."
       endpoint="/api/ideas/lists/customers"
       mergeEndpoint="/api/ideas/lists/customers/merge"
       namePlaceholder="Customer name"

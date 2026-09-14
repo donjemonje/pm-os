@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
-import { loginAsRoomLensAdmin, QA_ADMIN, withTestDb } from "./helpers";
+import { acceptConfirm, loginAsRoomLensAdmin, QA_ADMIN, withTestDb } from "./helpers";
 import { LOCAL_BASE_URL } from "./test-env";
 
 /**
@@ -179,8 +179,6 @@ test.describe("Admin delete + invites + landing (feature/admin-delete-user-org)"
   test("AD1 delete a user from the row, refuse self/own-org/unconfirmed deletes, delete an org through the type-to-confirm dialog", async ({
     page,
   }) => {
-    // Row delete confirms via window.confirm.
-    page.on("dialog", (dialog) => dialog.accept());
 
     await loginAsRoomLensAdmin(page);
 
@@ -210,6 +208,7 @@ test.describe("Admin delete + invites + landing (feature/admin-delete-user-org)"
     // Row "Delete" → confirm → the row is gone and so is the DB row; the
     // neighbour is untouched.
     await memberRow(card, DEL_1).getByRole("button", { name: "Delete" }).click();
+    await acceptConfirm(page);
     await expect(memberRow(card, DEL_1)).toHaveCount(0);
     await expect(memberRow(card, DEL_2)).toBeVisible();
     await withTestDb(async (db) => {

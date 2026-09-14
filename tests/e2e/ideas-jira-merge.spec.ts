@@ -267,11 +267,11 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
   const DISCARD_TITLE = "Discard source changes (Esc)";
   const SAVE_TITLE = "Save source changes";
 
-  /** A merge-board column, scoped by its "<Label> · N" header. */
+  /** A merge-board column (glass card), scoped by its header label. */
   function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "Final") {
     return page
-      .locator("div.overflow-hidden.rounded-xl")
-      .filter({ has: page.getByText(new RegExp(`^${label} · \\d+$`)) });
+      .locator("div.overflow-hidden.rounded-card")
+      .filter({ has: page.getByText(label, { exact: true }) });
   }
 
   /** The page-toggle (Merge ⇄ Final) buttons above the board. */
@@ -332,16 +332,16 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await loginAsRoomLens(page);
     await gotoIdeas(page);
 
-    // Positive control: hovering an approvable row shows the approve mark.
-    await ideaRow(page, NEW_TITLE).hover();
-    await expect(page.getByTitle("Mark reviewed")).toBeVisible();
+    // Positive control: an approvable row carries the approve mark (always
+    // visible since face_lift_v2, so scope by row).
+    await expect(ideaRow(page, NEW_TITLE).getByTitle("Mark reviewed")).toBeVisible();
 
-    // The unchanged row (via Status: Unchanged) never grows the mark on hover.
+    // The unchanged row (via Status: Unchanged) never gets the mark.
     await pickStatus(page, "Unchanged");
     const rowA = ideaRow(page, UNCHANGED_A_TITLE);
     await expect(rowA).toBeVisible();
-    await rowA.hover();
-    await expect(page.getByTitle("Mark reviewed")).toHaveCount(0);
+    await expect(rowA.getByTitle("Mark reviewed")).toHaveCount(0);
+    await expect(rowA.getByTitle("Mark unreviewed")).toHaveCount(0);
 
     // Its drawer has no Approve button either (Merge/Edit still render).
     await rowA.click();

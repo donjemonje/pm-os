@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { ORG_DELETE_CONFIRMATION } from "@/lib/admin-guard";
 import { cn } from "@/lib/utils";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 type Member = {
   id: string;
@@ -47,6 +48,7 @@ export function UserManagement({
 }: {
   initialOrganizations: Organization[];
 }) {
+  const { confirm } = useConfirm();
   const [organizations, setOrganizations] =
     useState<Organization[]>(initialOrganizations);
   const [showAddUser, setShowAddUser] = useState(false);
@@ -91,9 +93,12 @@ export function UserManagement({
   async function setDeactivated(orgName: string, member: Member, deactivated: boolean) {
     if (
       deactivated &&
-      !window.confirm(
-        `Deactivate ${member.name || member.email} (${orgName})? They will be signed out and unable to log in until reactivated.`
-      )
+      !(await confirm({
+        title: `Deactivate ${member.name || member.email}?`,
+        message: `${orgName} · They will be signed out and unable to log in until reactivated.`,
+        confirmLabel: "Deactivate",
+        tone: "danger",
+      }))
     ) {
       return;
     }
@@ -121,9 +126,12 @@ export function UserManagement({
 
   async function deleteMember(orgName: string, member: Member) {
     if (
-      !window.confirm(
-        `Permanently delete ${member.name || member.email} (${orgName})? Their sessions and sign-in methods are removed. This cannot be undone.`
-      )
+      !(await confirm({
+        title: `Delete ${member.name || member.email}?`,
+        message: `${orgName} · Their sessions and sign-in methods are removed. This cannot be undone.`,
+        confirmLabel: "Delete",
+        tone: "danger",
+      }))
     ) {
       return;
     }

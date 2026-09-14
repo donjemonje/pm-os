@@ -56,7 +56,7 @@ export function InviteChoices({
                 <span className="w-full border-t border-white/10" />
               </div>
               <div className="relative flex justify-center">
-                <span className="font-subtitle bg-[#0a1220] px-2 text-xs uppercase tracking-wide text-brand-muted">
+                <span className="font-subtitle bg-[#0a1220] px-2 text-xs text-brand-muted">
                   or
                 </span>
               </div>
