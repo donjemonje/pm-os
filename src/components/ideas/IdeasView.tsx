@@ -659,7 +659,11 @@ export function IdeasView({
   const parked = tickets.filter((t) => t.catalog && t.catalog.kind !== "fr").length;
   const reviewedPct = total ? Math.round(((total - pending) / total) * 100) : 0;
   const allReviewed = total > 0 && pending === 0;
-  const newVotesTotal = live.reduce((a, i) => a + i.newVotes, 0);
+  // Votes that landed on Updated ideas this import (New ideas' votes are new
+  // ideas, not momentum — they belong to the New card).
+  const updatedVotes = live
+    .filter((i) => i.batch === "updated")
+    .reduce((a, i) => a + i.newVotes, 0);
   const pendingIn = (batch: Idea["batch"]) =>
     approvable.filter((i) => i.batch === batch && i.decision === "pending").length;
   // Who asks for the most: ideas per customer, top three, bars relative to the leader.
@@ -751,7 +755,10 @@ export function IdeasView({
         <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: tone.solid }} />
         <span className="flex items-baseline gap-2">
           <span className="font-title text-2xl font-bold leading-none">{n}</span>
-          <span className="eyebrow text-[9.5px]" style={{ color: tone.fg }}>
+          <span
+            className="font-mono text-[10px] font-medium tracking-[0.04em]"
+            style={{ color: tone.fg }}
+          >
             {label}
           </span>
         </span>
@@ -887,11 +894,11 @@ export function IdeasView({
               {statCard(
                 "updated",
                 counts.updated,
-                newVotesTotal > 0
-                  ? `+${newVotesTotal} vote${newVotesTotal === 1 ? "" : "s"} this import`
-                  : counts.updated > 0
-                    ? "Details enriched"
-                    : "None this import"
+                counts.updated === 0
+                  ? "None this import"
+                  : updatedVotes > 0
+                    ? `+${updatedVotes} vote${updatedVotes === 1 ? "" : "s"} this import`
+                    : "Details enriched"
               )}
               {statCard(
                 "archive",
@@ -899,7 +906,9 @@ export function IdeasView({
                 pendingIn("archive") > 0 ? `${pendingIn("archive")} to decide` : counts.archive > 0 ? "All reviewed" : "Nothing proposed"
               )}
               <div className="flex flex-[1.1] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
-                <span className="eyebrow text-[9.5px]">Most requested by</span>
+                <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">
+                  Most Requested By
+                </span>
                 {topCustomers.length === 0 ? (
                   <span className="text-[12px] text-fg-faint">No customers named yet</span>
                 ) : (

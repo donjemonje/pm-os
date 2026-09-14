@@ -378,10 +378,18 @@ export function MergePage({
       </>,
     );
 
+  // No Jira connected (no Jira sources at all) → two columns; the board
+  // widens instead of showing an empty Jira column.
+  const hasJira = jiraSources.length > 0;
+
   return (
-    <div className="grid grid-cols-[1fr_1fr_1.15fr] items-start gap-4">
+    <div
+      className={`grid items-start gap-4 ${
+        hasJira ? "grid-cols-[1fr_1fr_1.15fr]" : "grid-cols-[1fr_1.15fr]"
+      }`}
+    >
       {renderColumn("zen", "Zendesk", LifeBuoy, zenRows, "No Zendesk sources")}
-      {renderColumn("jira", "Jira", Layers, jiraRows, "No Jira sources")}
+      {hasJira && renderColumn("jira", "Jira", Layers, jiraRows, "No Jira sources")}
 
       {/* Final column */}
       {columnFrame(

@@ -76,7 +76,8 @@ export default async function RootLayout({
       }
     : null;
 
-  const sidebarCollapsed = (await cookies()).get("pmos_sidebar")?.value === "collapsed";
+  // The rail starts collapsed; it stays open only once the user expanded it.
+  const sidebarCollapsed = (await cookies()).get("pmos_sidebar")?.value !== "expanded";
 
   // Ideas awaiting review — the sidebar's badge on "Ideas". One count query;
   // unchanged/deleted ideas never need approval (see lib/ideas/idea.ts).
