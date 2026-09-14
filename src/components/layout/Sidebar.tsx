@@ -145,12 +145,14 @@ export function Sidebar({
               )}
             >
               <Icon size={16} strokeWidth={active ? 2.25 : 2} className="shrink-0" />
-              <Curtain collapsed={collapsed} width={140}>
-                <span className="flex w-[140px] items-center whitespace-nowrap">
+              {/* 170 = rail 240 − nav padding 24 − link padding 20 − icon 16 − gap 10,
+                  so a badge with ml-auto sits flush with the link's right edge. */}
+              <Curtain collapsed={collapsed} width={170}>
+                <span className="flex w-[170px] items-center whitespace-nowrap">
                   {label}
                   {badge != null && (
                     <span
-                      className="ml-auto mr-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-success px-1.5 font-mono text-[10px] font-semibold text-white"
+                      className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-success px-1.5 font-mono text-[10px] font-semibold text-white"
                       title={`${badge} awaiting review`}
                     >
                       {badge}
