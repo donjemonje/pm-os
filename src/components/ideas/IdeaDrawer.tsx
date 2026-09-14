@@ -121,12 +121,11 @@ export function IdeaDrawer({
   onSave,
   onMerge,
 }: IdeaDrawerProps) {
-  // Opens at half the app's content width (the area beside the sidebar);
-  // the PM can still drag it between 380px and 90% of the window.
+  // Opens at half the window (sidebar included); the PM can still drag it
+  // between 380px and 90% of the window.
   const [width, setWidth] = useState(() => {
     if (typeof window === "undefined") return 640;
-    const main = document.querySelector("main");
-    return Math.max(380, Math.round((main?.clientWidth ?? window.innerWidth) / 2));
+    return Math.max(380, Math.round(window.innerWidth / 2));
   });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
   const [editMode, setEditMode] = useState(false);
@@ -1043,7 +1042,7 @@ function TicketView({
       {/* ── PMOS's evaluation — kept apart from the evidence ── */}
       <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-4 py-3">
         <span className="font-title inline-flex items-center gap-1.5 text-[13px] font-bold text-foreground">
-          <PmosMark size={18} />
+          <PmosMark size={20} />
           Evaluation
         </span>
         {ticket.catalog ? (
