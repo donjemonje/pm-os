@@ -48,7 +48,16 @@ export default defineConfig({
   projects: [
     {
       name: "local",
-      use: { ...devices["Desktop Chrome"], baseURL: LOCAL_BASE_URL },
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: LOCAL_BASE_URL,
+        // Release QA (Daniel, 2026-09-14): run on the real installed Google
+        // Chrome, headed — `PW_CHANNEL=chrome PW_HEADED=1 npx playwright test`.
+        // Both undefined (CI, plain local runs) = bundled headless Chromium,
+        // unchanged behaviour.
+        channel: process.env.PW_CHANNEL,
+        headless: process.env.PW_HEADED ? false : undefined,
+      },
     },
   ],
   webServer: {
