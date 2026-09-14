@@ -972,16 +972,7 @@ function TicketView({
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5">
           <Field label="Customer">
-            {ticket.customerName ? (
-              <>
-                {ticket.customerName}
-                {ticket.customerType ? (
-                  <span className="font-normal text-muted"> · {ticket.customerType}</span>
-                ) : null}
-              </>
-            ) : (
-              <span className="font-normal text-muted">Not named</span>
-            )}
+            {ticket.customerName || <span className="font-normal text-muted">Not named</span>}
           </Field>
           <Field label="Reported by">
             {ticket.requester || <span className="font-normal text-muted">Unknown</span>}
@@ -989,13 +980,6 @@ function TicketView({
           {ticket.module && <Field label="Module">{ticket.module}</Field>}
           {created && <Field label="Created">{created}</Field>}
         </div>
-        {chips.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <RawChip key={c.label} label={c.label} value={c.value} />
-            ))}
-          </div>
-        )}
         <div>
           <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
           <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-foreground">
@@ -1024,9 +1008,12 @@ function TicketView({
             {verbatimAffected.join(", ")}
           </div>
         )}
-        {ticket.tags.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
+        {(ticket.tags.length > 0 || chips.length > 0) && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
             <span className={`${FIELD_LABEL} mr-0.5`}>Tags</span>
+            {chips.map((c) => (
+              <RawChip key={c.label} label={c.label} value={c.value} />
+            ))}
             {ticket.tags.map((t) => (
               <span
                 key={t}
@@ -1095,29 +1082,18 @@ function TicketView({
           </div>
         )}
         {notes.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            <span className={FIELD_LABEL}>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`${FIELD_LABEL} mr-0.5 whitespace-nowrap`}>
               {notes.length > 1 ? `Split into ${notes.length} ideas` : "Idea"}
             </span>
             {notes.map((n) => {
               const idea = ideasById?.get(n.ideaId);
-              const tag = (
-                <span
-                  className="w-[68px] shrink-0 rounded px-1.5 py-0.5 text-center font-mono text-[10px] font-semibold"
-                  style={{
-                    background: n.merged ? STATUS_TONES.updated.soft : STATUS_TONES.new.soft,
-                    color: n.merged ? STATUS_TONES.updated.fg : STATUS_TONES.new.fg,
-                  }}
-                >
-                  {n.merged ? "Merged into" : "New idea"}
-                </span>
-              );
+              const tone = n.merged ? STATUS_TONES.updated : STATUS_TONES.new;
               if (!idea)
                 return (
-                  <div key={n.unit} className="flex items-center gap-2.5 text-[13px] text-muted">
-                    {tag}
-                    <span>(idea no longer exists)</span>
-                  </div>
+                  <span key={n.unit} className="text-[12px] text-muted">
+                    (idea no longer exists)
+                  </span>
                 );
               return (
                 <button
@@ -1125,14 +1101,12 @@ function TicketView({
                   type="button"
                   onClick={() => onOpenIdea?.(idea.id)}
                   disabled={!onOpenIdea}
-                  title={n.reason || undefined}
-                  className="flex w-full items-center gap-2.5 rounded-[8px] border border-border bg-white px-2.5 py-2 text-left transition-colors hover:border-primary disabled:cursor-default"
+                  title={`${n.merged ? "Merged into" : "New idea"}: ${idea.title}${n.reason ? ` — ${n.reason}` : ""}`}
+                  className="inline-flex max-w-[260px] items-center gap-1.5 rounded-full border bg-white py-[3px] pl-2.5 pr-1.5 text-[12px] font-medium transition-colors hover:border-primary disabled:cursor-default"
+                  style={{ borderColor: `color-mix(in srgb, ${tone.solid} 40%, white)`, color: tone.fg }}
                 >
-                  {tag}
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg-2">
-                    {idea.title}
-                  </span>
-                  <ChevronRight size={13} className="shrink-0 text-fg-faint" />
+                  <span className="truncate text-fg-2">{idea.title}</span>
+                  <ChevronRight size={12} className="shrink-0" />
                 </button>
               );
             })}
