@@ -5,7 +5,7 @@
   --brand-muted: #aaa3c4;
   --brand-accent: #7aa7ff;
 
-  /* ——— PM-OS app tokens — Direction B ("Board"), from the design handoff
+  /* ——— PM-OS app tokens — Direction B ("Board"), from the design handoff (mono = DM Mono)
      (design_handoff_ideas_facelift_b/app-tokens.css). App-only: nothing here
      is shared with the marketing site. ——— */
   --app-font-title: var(--font-title), ui-sans-serif, system-ui, sans-serif;
