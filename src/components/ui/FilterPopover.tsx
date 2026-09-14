@@ -131,7 +131,7 @@ export function FilterPopover({
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
           <div
             onKeyDown={onKeyDown}
-            className="glass-strong absolute left-0 top-[calc(100%+4px)] z-[25] w-[250px] rounded-inner border border-border p-1 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]"
+            className="absolute left-0 top-[calc(100%+6px)] z-[25] w-[260px] rounded-inner border border-border bg-white p-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]"
           >
             {options.length > 6 && (
               <input
@@ -143,7 +143,7 @@ export function FilterPopover({
                   setHighlight(0);
                 }}
                 placeholder={`Search ${label.toLowerCase()}…`}
-                className="mb-1 w-full rounded-[7px] border border-border bg-white px-2.5 py-1.5 text-[12.5px] outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
+                className="mb-1.5 w-full rounded-[8px] border border-border bg-[var(--app-bg)] px-3 py-[7px] text-[13px] outline-none placeholder:text-fg-faint focus:border-primary focus:bg-white focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
               />
             )}
             <div className="max-h-60 overflow-y-auto">
@@ -154,17 +154,19 @@ export function FilterPopover({
                     key={option}
                     onClick={() => pick(option)}
                     onMouseEnter={() => setHighlight(i)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left font-mono text-[11.5px] font-medium ${
-                      i === highlight ? "bg-background" : ""
-                    } ${isSelected ? accents.selected : "text-[#3f506b]"}`}
+                    className={`flex w-full items-center justify-between gap-2 rounded-[8px] px-3 py-[7px] text-left text-[13px] ${
+                      isSelected ? "font-semibold" : "font-medium"
+                    } ${i === highlight ? "bg-[var(--app-accent-soft)]" : ""} ${
+                      isSelected ? accents.selected : "text-fg-2"
+                    }`}
                   >
-                    {option}
-                    {isSelected && <Check size={12} strokeWidth={2.5} />}
+                    <span className="truncate">{option}</span>
+                    {isSelected && <Check size={13} strokeWidth={3} className="shrink-0" />}
                   </button>
                 );
               })}
               {shown.length === 0 && (
-                <div className="px-2.5 py-2 text-xs text-muted">{emptyText}</div>
+                <div className="px-3 py-2 text-[12.5px] text-fg-muted">{emptyText}</div>
               )}
             </div>
           </div>

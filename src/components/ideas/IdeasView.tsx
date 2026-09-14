@@ -29,6 +29,7 @@ import {
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
+import { PmosMark } from "@/components/brand/PmosMark";
 import { ApproveMark } from "@/components/ui/ApproveMark";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Avatar } from "@/components/ui/Avatar";
@@ -48,11 +49,19 @@ import { MergePage } from "./MergePage";
 const MONO_LABEL =
   "font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7a8aa3]";
 
-/** High-level narration of the import for the progress overlay. */
-const IMPORT_STEPS: { label: string; hint: string }[] = [
-  { label: "Reading your file", hint: "Parsing the Zendesk export" },
-  { label: "Checking for new tickets", hint: "Skipping anything already imported" },
-  { label: "AI is reviewing each ticket", hint: "Spotting feature requests and where they belong" },
+/**
+ * What the import does, in order, for the progress overlay. The PMOS step is
+ * the long one (classify, split, match against existing ideas and Jira) and
+ * holds until the server answers; the others are quick.
+ */
+const IMPORT_STEPS: { label: string; hint: string; pmos?: boolean }[] = [
+  { label: "Reading your file", hint: "Checking the export's columns" },
+  { label: "Checking for new tickets", hint: "Tickets already imported are skipped" },
+  {
+    label: "PMOS is reading each ticket",
+    hint: "Telling requests from bugs and questions, then matching them to existing ideas",
+    pmos: true,
+  },
   { label: "Preparing ideas for review", hint: "Almost there" },
 ];
 
@@ -63,26 +72,6 @@ interface ServerState {
   customerCatalog?: string[];
   jiraConnected?: boolean;
   csvMapping?: CsvMapping;
-}
-
-interface ImportSummary {
-  imported: number;
-  frs: number;
-  matched: number;
-  bugs: number;
-  needsDetails: number;
-  opsTasks?: number;
-  questions?: number;
-  duplicates: number;
-  split?: number;
-  jiraConnected: boolean;
-  jiraCount: number;
-  durationMs?: number;
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.round(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
 /** Case-insensitive lookup of a catalog color by name. */
@@ -286,32 +275,10 @@ export function IdeasView({
       }
       setImportStep(3);
       await sleep(800);
+      // The KPI panel and the grouped list tell the whole story — no
+      // summary line.
       applyState(data.state);
-      const s = data.summary as ImportSummary;
-
-      const parts = [
-        `Imported ${s.imported} ticket${s.imported === 1 ? "" : "s"} from ${file.name}${
-          s.durationMs ? ` in ${formatDuration(s.durationMs)}` : ""
-        }`,
-      ];
-      if (s.imported > 0) parts.push(`${s.frs} FR${s.frs === 1 ? "" : "s"} → ideas`);
-      if (s.matched > 0)
-        parts.push(`${s.matched} matched to existing Jira idea${s.matched === 1 ? "" : "s"}`);
-      if (s.bugs > 0) parts.push(`${s.bugs} bug${s.bugs === 1 ? "" : "s"} parked`);
-      if ((s.opsTasks ?? 0) > 0)
-        parts.push(`${s.opsTasks} ops task${s.opsTasks === 1 ? "" : "s"} parked`);
-      if ((s.questions ?? 0) > 0)
-        parts.push(`${s.questions} question${s.questions === 1 ? "" : "s"} parked`);
-      if (s.needsDetails > 0)
-        parts.push(`${s.needsDetails} need${s.needsDetails === 1 ? "s" : ""} more details`);
-      if (s.duplicates > 0) parts.push(`${s.duplicates} already imported`);
-      if ((s.split ?? 0) > 0)
-        parts.push(`${s.split} ticket${s.split === 1 ? "" : "s"} split into multiple ideas`);
-      if (result.skipped > 0)
-        parts.push(`${result.skipped} empty row${result.skipped === 1 ? "" : "s"} skipped`);
-      if (s.jiraConnected)
-        parts.push(`${s.jiraCount} Jira idea${s.jiraCount === 1 ? "" : "s"} synced`);
-      setNote(parts.join(" · "));
+      setNote("");
     } catch {
       setError("Import failed — is the dev server running?");
     } finally {
@@ -805,7 +772,7 @@ export function IdeasView({
     );
 
   return (
-    <div className="app-canvas min-h-full">
+    <div className="app-canvas font-title min-h-full">
       <div className="mx-auto w-full max-w-[1680px] px-7 pb-24 pt-6">
         <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFile} />
 
@@ -1443,10 +1410,11 @@ export function IdeasView({
                       </span>
                       <span className="flex min-w-0 flex-col">
                         <span
-                          className={`text-[13px] ${
+                          className={`inline-flex items-center gap-1.5 text-[13px] ${
                             active ? "font-semibold text-foreground" : done ? "text-fg-3" : "text-fg-faint"
                           }`}
                         >
+                          {step.pmos && <PmosMark size={15} />}
                           {step.label}
                         </span>
                         {active && <span className="text-[11.5px] text-fg-3">{step.hint}</span>}

@@ -135,7 +135,7 @@ export function ProductLinesPanel({
         onChange={(e) => onChange(e.target.value)}
         rows={7}
         maxLength={MAX_DESCRIPTION}
-        placeholder="What is this product line? Markdown is fine — this text is exactly what PMOS AI reads when classifying ideas."
+        placeholder="What is this product line? Markdown is fine — this text is exactly what PMOS reads when classifying ideas."
         className={`${INPUT_CLASS} resize-y font-mono text-[12.5px] leading-relaxed`}
       />
       <div className="mt-1 text-right font-mono text-[10.5px] text-[#9aa8be]">
@@ -154,7 +154,7 @@ export function ProductLinesPanel({
           </button>
           <button
             onClick={() => setView("markdown")}
-            title="The raw text exactly as PMOS AI receives it"
+            title="The raw text exactly as PMOS receives it"
             className={viewChip(view === "markdown")}
           >
             Markdown

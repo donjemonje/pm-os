@@ -108,5 +108,5 @@ export const CATALOG_KIND_LABELS: Record<CatalogKind, string> = {
   bug: "Bug",
   needs_details: "Needs details",
   ops_task: "Ops task",
-  question: "Question",
+  question: "Product Question",
 };

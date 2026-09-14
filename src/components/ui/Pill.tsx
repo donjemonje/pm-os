@@ -22,7 +22,7 @@ export function Pill({
     <span
       title={title}
       className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border font-body font-semibold",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border font-semibold",
         size === "sm" ? "px-2 py-px text-[11px]" : "px-2.5 py-0.5 text-xs",
         className
       )}

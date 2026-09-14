@@ -32,6 +32,7 @@ import {
   CUSTOMER_CHIP_DEFAULT,
   PRODUCT_CHIP_DEFAULT,
 } from "@/lib/ideas/colors";
+import { PmosMark } from "@/components/brand/PmosMark";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import { Pill } from "@/components/ui/Pill";
@@ -249,7 +250,7 @@ export function IdeaDrawer({
             value: (
               <>
                 <span>{idea.zen.length + idea.jira.length}</span>
-                <span className="font-body text-[11px] font-medium text-fg-muted">
+                <span className="text-[11px] font-medium text-fg-muted">
                   {idea.zen.length} Zendesk · {idea.jira.length} Jira
                 </span>
               </>
@@ -261,7 +262,7 @@ export function IdeaDrawer({
               <>
                 <span>{(idea.reporters ?? []).length || "—"}</span>
                 {(idea.reporters ?? []).length > 0 && (
-                  <span className="truncate font-body text-[11px] font-medium text-fg-muted">
+                  <span className="truncate text-[11px] font-medium text-fg-muted">
                     {(idea.reporters ?? []).slice(0, 2).join(", ")}
                     {(idea.reporters ?? []).length > 2 ? ` +${(idea.reporters ?? []).length - 2}` : ""}
                   </span>
@@ -324,7 +325,7 @@ export function IdeaDrawer({
         }}
       />
       <div
-        className="glass-strong fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border shadow-[var(--app-shadow-drawer)]"
+        className="fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border bg-white shadow-[var(--app-shadow-drawer)]"
         style={{ width }}
       >
         {/* Status edge: the idea's batch color (accent for sources and In Jira). */}
@@ -593,7 +594,7 @@ export function IdeaDrawer({
                 </span>
               </div>
               )}
-              {/* Product lines — catalog names plus "Other"; PMOS AI's pick is a starting point, not a verdict. */}
+              {/* Product lines — catalog names plus "Other"; PMOS's pick is a starting point, not a verdict. */}
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Product lines</span>
                 <div className="flex flex-wrap gap-1.5">
@@ -1017,7 +1018,10 @@ function TicketView({
       {/* ── PMOS AI's reading — interpretation, kept apart from the evidence ── */}
       <div className="flex flex-col gap-2.5 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-4 py-3">
         <div className="flex items-baseline justify-between gap-2">
-          <span className={MONO_LABEL}>PMOS AI reading</span>
+          <span className={`${MONO_LABEL} inline-flex items-center gap-1.5`}>
+            <PmosMark size={13} />
+            PMOS reading
+          </span>
           <span className="text-[11px] text-[#9aa8be]">interpretation, not ticket data</span>
         </div>
         {ticket.catalog ? (

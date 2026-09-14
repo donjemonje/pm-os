@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
       },
       usedTemplate,
       notice: usedTemplate
-        ? "Generated without AI (quota unavailable). Review and edit before publishing."
+        ? "PMOS was unavailable, so this draft was assembled from your sources. Review and edit before publishing."
         : undefined,
     });
   } catch (err) {
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           document: { ...document, projectKey: projectKey ?? null },
           usedTemplate: true,
-          notice: "AI quota exceeded — saved a draft from your sources instead.",
+          notice: "PMOS is busy right now — saved a draft from your sources instead.",
         });
       } catch {
         // fall through
