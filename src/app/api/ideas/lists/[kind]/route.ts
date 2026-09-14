@@ -215,7 +215,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     isChipColorId(body.color) && body.name === undefined && body.description === undefined;
   const auth = await guard(context, { write: true, colorOnly });
   if (auth instanceof NextResponse) return auth;
-  const { ops, workspaceId } = auth;
+  const { ops, kind, workspaceId } = auth;
 
   const id = typeof body.id === "string" ? body.id : "";
   if (!id || !(await ops.exists(workspaceId, id))) {
@@ -227,6 +227,16 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   }
   const name = cleanName(body.name);
   if (name instanceof NextResponse) return name;
+
+  if (kind === "customers") {
+    const row = await db.customer.findFirst({ where: { id, workspaceId }, select: { name: true } });
+    if (row && isAllCustomers(row.name) && !isAllCustomers(name)) {
+      return NextResponse.json(
+        { error: "All Customers is built in and can't be renamed" },
+        { status: 400 },
+      );
+    }
+  }
 
   if (await ops.nameTaken(workspaceId, name, id)) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });

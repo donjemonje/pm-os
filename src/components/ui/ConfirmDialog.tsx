@@ -50,6 +50,7 @@ interface Pending {
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const confirm = useCallback(
     (options: ConfirmOptions) =>
@@ -85,11 +86,26 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     if (!pending) return;
     confirmRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
+      // A held key (auto-repeat) never confirms: the Enter that opened the
+      // dialog from a Delete button must not also close it.
+      if (e.repeat) {
+        e.preventDefault();
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
         settle(pending.options.cancelLabel !== null ? false : true);
       } else if (e.key === "Enter") {
+        // Enter on Cancel (or any other dialog button) is that button's
+        // own click — only the dialog itself / the primary button confirm.
+        const active = document.activeElement;
+        if (
+          active instanceof HTMLButtonElement &&
+          dialogRef.current?.contains(active) &&
+          active !== confirmRef.current
+        )
+          return;
         e.preventDefault();
         e.stopPropagation();
         settle(true);
@@ -113,6 +129,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           onClick={() => settle(o.cancelLabel === null)}
         >
           <div
+            ref={dialogRef}
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="pmos-dialog-title"

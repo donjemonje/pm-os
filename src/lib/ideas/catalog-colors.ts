@@ -44,12 +44,17 @@ export async function ensureAllCustomers(workspaceId: string): Promise<void> {
     select: { name: true, color: true },
   });
   if (rows.some((r) => isAllCustomers(r.name))) return;
-  await db.customer.create({
-    data: {
-      workspaceId,
-      name: ALL_CUSTOMERS_NAME,
-      description: "Requests that affect every customer.",
-      color: nextChipColor(rows.map((r) => r.color)),
-    },
+  // Two first loads at once (page + import, two tabs) both reach here; the
+  // unique (workspaceId, name) index makes the second insert a no-op.
+  await db.customer.createMany({
+    data: [
+      {
+        workspaceId,
+        name: ALL_CUSTOMERS_NAME,
+        description: "Requests that affect every customer.",
+        color: nextChipColor(rows.map((r) => r.color)),
+      },
+    ],
+    skipDuplicates: true,
   });
 }

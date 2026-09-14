@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Check,
@@ -121,6 +122,7 @@ export function IdeasView({
   undoEnabled?: boolean;
 }) {
   const { confirm } = useConfirm();
+  const router = useRouter();
   const [tickets, setTickets] = useState<ZendeskTicket[]>([]);
   const [jiraSources, setJiraSources] = useState<JiraSource[]>([]);
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -175,13 +177,16 @@ export function IdeasView({
 
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const applyState = (state: ServerState) => {
+  const applyState = (state: ServerState, opts: { refreshShell?: boolean } = { refreshShell: true }) => {
     setTickets(state.tickets);
     setJiraSources(state.jiraSources);
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
     if (state.csvMapping) setCsvMapping(state.csvMapping);
+    // The sidebar's pending badge is rendered by the root layout on the
+    // server; a mutation here must re-render it (client state survives).
+    if (opts.refreshShell) router.refresh();
   };
 
   useEffect(() => {
@@ -189,7 +194,7 @@ export function IdeasView({
       try {
         const res = await fetch("/api/ideas");
         if (res.ok) {
-          applyState(await res.json());
+          applyState(await res.json(), { refreshShell: false });
         } else {
           const data = await res.json().catch(() => ({ error: undefined }));
           setError(data.error ?? "Failed to load ideas");
@@ -324,6 +329,7 @@ export function IdeasView({
     }
     setDrawerId(null);
     setDrawerSrc(null);
+    setDrawerHistory([]);
     setPage("final");
     setEdit(null);
     setSelectedFinalId(null);
@@ -400,6 +406,7 @@ export function IdeasView({
     setPage("merge");
     setDrawerId(null);
     setDrawerSrc(null);
+    setDrawerHistory([]);
     setEdit(target ? { ideaId: target.id, zen: [...target.zen], jira: [...target.jira] } : null);
     setSelectedFinalId(target ? target.id : null);
   };
@@ -1182,10 +1189,12 @@ export function IdeasView({
                   onCancelEdit={cancelEdit}
                   onToggleSrc={toggleSrc}
                   onOpenIdea={(id) => {
+                    setDrawerHistory([]);
                     setDrawerId(id);
                     setDrawerSrc(null);
                   }}
                   onOpenSource={(kind, key) => {
+                    setDrawerHistory([]);
                     setDrawerSrc({ kind, key });
                     setDrawerId(null);
                   }}
@@ -1263,7 +1272,10 @@ export function IdeasView({
                           return (
                             <div
                               key={idea.id}
-                              onClick={() => setDrawerId(idea.id)}
+                              onClick={() => {
+                                setDrawerHistory([]);
+                                setDrawerId(idea.id);
+                              }}
                               className="flex h-[58px] cursor-pointer items-center gap-3.5 border-b border-hairline px-4 transition-colors last:border-b-0 hover:bg-white/70"
                               style={
                                 isOpen

@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { PrefixWarmer } from "./ai-cache";
 import { nextChipColor } from "./colors";
-import { ALL_CUSTOMERS_NAME, buildCustomerResolver, customerKey, isAllCustomers } from "./customer-key";
+import { ALL_CUSTOMERS_NAME, buildCustomerResolver, customerKey } from "./customer-key";
 import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
@@ -674,12 +674,11 @@ async function runImport(
       }),
     });
   }
+  // ensureAllCustomers ran at the top of the import, so the catalog read
+  // above already holds the built-in All Customers row.
   const canonicalCustomer = buildCustomerResolver([
     ...customerCatalog,
     ...Array.from(truthNames.values()).map((name) => ({ name, aliases: [] })),
-    ...(customerCatalog.some((c) => isAllCustomers(c.name))
-      ? []
-      : [{ name: ALL_CUSTOMERS_NAME, aliases: [] as string[] }]),
   ]);
   trace.end({ note: `${truthNames.size} added to the catalog` });
 
