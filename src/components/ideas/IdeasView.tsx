@@ -47,7 +47,7 @@ import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
 
 const MONO_LABEL =
-  "font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[#7a8aa3]";
+  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
 
 /**
  * What the import does, in order, for the progress overlay. The PMOS step is
@@ -138,6 +138,10 @@ export function IdeasView({
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
+  /** Drawer views left behind by in-drawer navigation (ticket → idea); Back pops one. */
+  const [drawerHistory, setDrawerHistory] = useState<
+    { ideaId: string | null; src: { kind: "zen" | "jira"; key: string } | null }[]
+  >([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
   /** Merge scope: selected product lines; empty = all. */
   const [scopeSel, setScopeSel] = useState<string[]>([]);
@@ -1350,6 +1354,23 @@ export function IdeasView({
           onClose={() => {
             setDrawerId(null);
             setDrawerSrc(null);
+            setDrawerHistory([]);
+          }}
+          onBack={
+            drawerHistory.length > 0
+              ? () => {
+                  const prev = drawerHistory[drawerHistory.length - 1];
+                  setDrawerHistory((h) => h.slice(0, -1));
+                  setDrawerId(prev.ideaId);
+                  setDrawerSrc(prev.src);
+                }
+              : undefined
+          }
+          onOpenIdea={(id, from) => {
+            if (!ideasById.has(id)) return;
+            setDrawerHistory((h) => [...h, { ideaId: drawerIdea?.id ?? null, src: from.source }]);
+            setDrawerId(id);
+            setDrawerSrc(null);
           }}
           onToggleApprove={drawerIdea ? () => toggleApprove(drawerIdea.id) : undefined}
           onUndoPush={
@@ -1414,7 +1435,7 @@ export function IdeasView({
                             active ? "font-semibold text-foreground" : done ? "text-fg-3" : "text-fg-faint"
                           }`}
                         >
-                          {step.pmos && <PmosMark size={15} />}
+                          {step.pmos && <PmosMark size={17} />}
                           {step.label}
                         </span>
                         {active && <span className="text-[11.5px] text-fg-3">{step.hint}</span>}
@@ -1578,13 +1599,13 @@ export function IdeasView({
                           >
                             <div className="flex items-center gap-2.5">
                               <span
-                                className="w-11 shrink-0 rounded px-1.5 py-0.5 text-center font-mono text-[9.5px] font-semibold uppercase"
+                                className="w-14 shrink-0 rounded px-1.5 py-0.5 text-center font-mono text-[10px] font-semibold"
                                 style={{
                                   background: item.action === "create" ? STATUS_TONES.new.soft : STATUS_TONES.updated.soft,
                                   color: item.action === "create" ? STATUS_TONES.new.fg : STATUS_TONES.updated.fg,
                                 }}
                               >
-                                {item.action === "create" ? "New" : "Upd"}
+                                {item.action === "create" ? "New" : "Update"}
                               </span>
                               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg-2">
                                 {item.title}
@@ -1593,7 +1614,7 @@ export function IdeasView({
                                 {item.action === "create" ? "→ new issue" : item.jiraKey}
                               </span>
                             </div>
-                            <span className="pl-[54px] text-[11.5px] text-fg-muted">
+                            <span className="pl-[66px] text-[11.5px] text-fg-muted">
                               {item.noop
                                 ? "Already up to date in Jira — will be marked merged"
                                 : item.changes.map((c) => c.label).join(", ")}

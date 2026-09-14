@@ -18,6 +18,7 @@ import {
   needsApproval,
   SCORING_ENABLED,
   scoreOf,
+  STATUS_TONES,
   votesLabel,
   CATALOG_KIND_LABELS,
 } from "@/lib/ideas/idea";
@@ -74,6 +75,10 @@ interface IdeaDrawerProps {
     name: string,
   ) => void;
   onClose: () => void;
+  /** Set when the drawer was reached from another drawer view — shows a back chevron. */
+  onBack?: () => void;
+  /** Open another idea from inside the drawer (ticket view → the ideas it produced). */
+  onOpenIdea?: (id: string, from: { source: SourceSel | null }) => void;
   onToggleApprove?: () => void;
   /** Set only while this idea's last-merge write is undoable AND the ideasUndo flag is on. */
   onUndoPush?: () => void;
@@ -90,7 +95,7 @@ interface IdeaDrawerProps {
 }
 
 const MONO_LABEL =
-  "font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[#7a8aa3]";
+  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
 
 const ZEN_TAG = { background: "#e6eaf2", color: "#4a5b74" };
 const JIRA_TAG = { background: "rgba(59,124,246,.15)", color: "#2a5fd0" };
@@ -109,6 +114,8 @@ export function IdeaDrawer({
   customerCatalog = [],
   onCustomerAction,
   onClose,
+  onBack,
+  onOpenIdea,
   onToggleApprove,
   onUndoPush,
   onSave,
@@ -349,7 +356,7 @@ export function IdeaDrawer({
         <div className="flex flex-col gap-3 border-b border-border px-6 pb-4 pt-[18px]">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-2">
-              {viewingSource && idea && (
+              {viewingSource && idea ? (
                 <button
                   onClick={() => setSrcSel(null)}
                   title="Back to idea"
@@ -357,7 +364,15 @@ export function IdeaDrawer({
                 >
                   <ChevronLeft size={15} />
                 </button>
-              )}
+              ) : onBack ? (
+                <button
+                  onClick={onBack}
+                  title="Back"
+                  className="flex rounded-md p-0.5 text-[#7a8aa3] hover:text-foreground"
+                >
+                  <ChevronLeft size={15} />
+                </button>
+              ) : null}
               {ticket ? (
                 <span
                   className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#dde5ef] px-2.5 py-0.5 text-xs font-semibold"
@@ -550,6 +565,7 @@ export function IdeaDrawer({
               ideasById={ideasById}
               customerCatalog={customerCatalog}
               customerColors={customerColors}
+              onOpenIdea={onOpenIdea ? (id) => onOpenIdea(id, { source: srcSel }) : undefined}
             />
           ) : jiraSrc ? (
             <>
@@ -885,7 +901,7 @@ export function IdeaDrawer({
 /* ───────────────────────── Zendesk ticket view ───────────────────────── */
 
 const FIELD_LABEL =
-  "font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[#9aa8be]";
+  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#9aa8be]";
 
 function formatDate(value: string | undefined): string | null {
   if (!value) return null;
@@ -910,11 +926,22 @@ function RawChip({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** One labelled value on the ticket's header line: "Customer  Acme". */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className={FIELD_LABEL}>{label}</span>
+      <span className="text-[13px] font-medium text-foreground">{children}</span>
+    </span>
+  );
+}
+
 /**
- * The ticket as evidence, then PMOS AI's reading of it, then every raw
- * column verbatim (collapsed) — so nothing an export carries is ever lost,
- * and what the reporter wrote stays visibly apart from what the model
- * inferred.
+ * The ticket as evidence (what the reporter wrote), then PMOS's evaluation
+ * of it, then every raw column verbatim (collapsed) — so nothing an export
+ * carries is ever lost, and the reporter's words stay visibly apart from
+ * what PMOS inferred. Type and priority are not used by the product yet, so
+ * they live only under "All fields".
  */
 function TicketView({
   ticket,
@@ -922,21 +949,20 @@ function TicketView({
   ideasById,
   customerCatalog,
   customerColors,
+  onOpenIdea,
 }: {
   ticket: ZendeskTicket;
   csvMapping: CsvMapping;
   ideasById?: Map<string, Idea>;
   customerCatalog: string[];
   customerColors: Record<string, string>;
+  onOpenIdea?: (id: string) => void;
 }) {
   const [allOpen, setAllOpen] = useState(false);
   const raw = ticket.raw ?? {};
   const mapped = extractMappedFields(raw, csvMapping);
   const created = formatDate(ticket.createdAt);
   const chips: { label: string; value: string }[] = [
-    ...(ticket.module ? [{ label: "Module (hint)", value: ticket.module }] : []),
-    ...(mapped.requestType ? [{ label: "Type", value: mapped.requestType }] : []),
-    ...(mapped.priority ? [{ label: "Priority", value: mapped.priority }] : []),
     ...(mapped.severity ? [{ label: "Severity", value: mapped.severity }] : []),
     ...(ticket.dealRelated ? [{ label: "Deal related", value: ticket.dealRelated }] : []),
   ];
@@ -950,21 +976,24 @@ function TicketView({
     <>
       {/* ── Raw ticket: what the reporter wrote ── */}
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
-          {ticket.customerName ? (
-            <span className="font-semibold text-foreground">
-              {ticket.customerName}
-              {ticket.customerType ? (
-                <span className="font-normal text-muted"> · {ticket.customerType}</span>
-              ) : null}
-            </span>
-          ) : (
-            <span className="text-muted">No customer named</span>
-          )}
-          <span className="text-muted">
-            {ticket.requester ? `Reported by ${ticket.requester}` : "Reporter unknown"}
-            {created ? ` · ${created}` : ""}
-          </span>
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1.5">
+          <Field label="Customer">
+            {ticket.customerName ? (
+              <>
+                {ticket.customerName}
+                {ticket.customerType ? (
+                  <span className="font-normal text-muted"> · {ticket.customerType}</span>
+                ) : null}
+              </>
+            ) : (
+              <span className="font-normal text-muted">Not named</span>
+            )}
+          </Field>
+          <Field label="Reported by">
+            {ticket.requester || <span className="font-normal text-muted">Unknown</span>}
+          </Field>
+          {ticket.module && <Field label="Module">{ticket.module}</Field>}
+          {created && <Field label="Created">{created}</Field>}
         </div>
         {chips.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
@@ -1003,6 +1032,7 @@ function TicketView({
         )}
         {ticket.tags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`${FIELD_LABEL} mr-0.5`}>Tags</span>
             {ticket.tags.map((t) => (
               <span
                 key={t}
@@ -1015,15 +1045,12 @@ function TicketView({
         )}
       </div>
 
-      {/* ── PMOS AI's reading — interpretation, kept apart from the evidence ── */}
-      <div className="flex flex-col gap-2.5 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-4 py-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className={`${MONO_LABEL} inline-flex items-center gap-1.5`}>
-            <PmosMark size={13} />
-            PMOS reading
-          </span>
-          <span className="text-[11px] text-[#9aa8be]">interpretation, not ticket data</span>
-        </div>
+      {/* ── PMOS's evaluation — kept apart from the evidence ── */}
+      <div className="flex flex-col gap-3 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-4 py-3">
+        <span className="font-title inline-flex items-center gap-1.5 text-[13px] font-bold text-foreground">
+          <PmosMark size={16} />
+          Evaluation
+        </span>
         {ticket.catalog ? (
           <div className="text-[13px] leading-relaxed">
             <span className="font-semibold">{CATALOG_KIND_LABELS[ticket.catalog.kind]}</span>
@@ -1032,14 +1059,14 @@ function TicketView({
             ) : null}
           </div>
         ) : (
-          <div className="text-[13px] text-muted">Not classified yet.</div>
+          <div className="text-[13px] text-muted">Not evaluated yet.</div>
         )}
         {ticket.affectsAllCustomers && (
-          <div className="text-xs font-medium text-[#4a6fd6]">Affects all customers</div>
+          <div className="text-xs font-medium text-[#2a5fd0]">Affects all customers</div>
         )}
         {(ticket.affectedCustomers ?? []).length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
-            <span className={FIELD_LABEL}>Customers</span>
+            <span className={`${FIELD_LABEL} mr-0.5`}>Customers</span>
             {(ticket.affectedCustomers ?? []).map((c) => {
               const dismissed = (ticket.dismissedCustomers ?? []).some(
                 (k) => k.toLowerCase() === c.toLowerCase(),
@@ -1059,10 +1086,10 @@ function TicketView({
                   }
                   className={
                     dismissed
-                      ? "rounded bg-[#eef1f6] px-1.5 py-0.5 font-mono text-[11px] font-medium text-[#7a8496] line-through"
+                      ? "rounded-chip bg-[#eef1f6] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[#7a8496] line-through"
                       : suggested
-                        ? "rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                        : "rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
+                        ? "rounded-chip border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[var(--app-warn-fg)]"
+                        : "rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold"
                   }
                   style={
                     dismissed || suggested
@@ -1078,21 +1105,44 @@ function TicketView({
         )}
         {notes.length > 0 && (
           <div className="flex flex-col gap-1.5">
-            {notes.length > 1 && (
-              <div className="text-xs text-muted">Split into {notes.length} ideas</div>
-            )}
+            <span className={FIELD_LABEL}>
+              {notes.length > 1 ? `Split into ${notes.length} ideas` : "Idea"}
+            </span>
             {notes.map((n) => {
               const idea = ideasById?.get(n.ideaId);
+              const tag = (
+                <span
+                  className="w-[68px] shrink-0 rounded px-1.5 py-0.5 text-center font-mono text-[10px] font-semibold"
+                  style={{
+                    background: n.merged ? STATUS_TONES.updated.soft : STATUS_TONES.new.soft,
+                    color: n.merged ? STATUS_TONES.updated.fg : STATUS_TONES.new.fg,
+                  }}
+                >
+                  {n.merged ? "Merged into" : "New idea"}
+                </span>
+              );
+              if (!idea)
+                return (
+                  <div key={n.unit} className="flex items-center gap-2.5 text-[13px] text-muted">
+                    {tag}
+                    <span>(idea no longer exists)</span>
+                  </div>
+                );
               return (
-                <div key={n.unit} className="text-[13px] leading-relaxed">
-                  <span className="text-muted">{n.merged ? "Merged into" : "New idea"}</span>{" "}
-                  {idea ? (
-                    <span className="font-medium">{idea.title}</span>
-                  ) : n.merged ? (
-                    <span className="text-muted">(idea no longer exists)</span>
-                  ) : null}
-                  {n.reason ? <span className="text-muted"> — {n.reason}</span> : null}
-                </div>
+                <button
+                  key={n.unit}
+                  type="button"
+                  onClick={() => onOpenIdea?.(idea.id)}
+                  disabled={!onOpenIdea}
+                  title={n.reason || undefined}
+                  className="flex w-full items-center gap-2.5 rounded-[8px] border border-border bg-white px-2.5 py-2 text-left transition-colors hover:border-primary disabled:cursor-default"
+                >
+                  {tag}
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg-2">
+                    {idea.title}
+                  </span>
+                  <ChevronRight size={13} className="shrink-0 text-fg-faint" />
+                </button>
               );
             })}
           </div>

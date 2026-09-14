@@ -249,7 +249,7 @@ export function MergePage({
     children: React.ReactNode,
   ) => (
     <div className="glass overflow-hidden rounded-card">
-      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-fg-3">
+      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-fg-3">
         <Icon size={13} strokeWidth={2.25} className="text-primary" />
         <span>{label}</span>
         <span className="ml-auto rounded-full bg-[rgba(12,25,41,.06)] px-[7px] py-px tracking-normal">

@@ -178,13 +178,13 @@ body {
   -webkit-backdrop-filter: blur(24px);
 }
 
-/* Mono eyebrow label: 10px, 600, uppercase, tracked. */
+/* Mono eyebrow label: 10px, 600, lightly tracked. Sentence case — the app
+   never shouts in capitals. */
 .eyebrow {
   font-family: var(--app-font-mono);
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--app-fg-muted);
 }
 

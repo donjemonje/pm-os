@@ -94,7 +94,7 @@ export function OAuthButtons({
         <div className="absolute inset-0 flex items-center">
           <span className={`w-full border-t ${isDark ? "border-white/10" : "border-border"}`} />
         </div>
-        <div className="relative flex justify-center text-xs uppercase tracking-wide">
+        <div className="relative flex justify-center text-xs">
           <span
             className={`px-2 font-subtitle ${isDark ? "bg-[#0a1220] text-brand-muted" : "bg-card text-muted"}`}
           >

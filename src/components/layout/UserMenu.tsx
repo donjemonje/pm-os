@@ -107,7 +107,7 @@ export function UserMenu({
           </div>
           {organization && (
             <div className="border-b border-white/10 px-3 py-2.5">
-              <p className="text-[11px] uppercase tracking-wide text-white/40">Organization</p>
+              <p className="text-[11px] text-white/40">Organization</p>
               <p className="mt-0.5 truncate text-sm font-medium text-white">
                 {organization.name}
               </p>
