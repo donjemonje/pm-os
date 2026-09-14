@@ -660,6 +660,12 @@ export function IdeasView({
     for (const i of live) for (const c of i.customers ?? []) m.set(c, (m.get(c) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
   })();
+  // Busiest product lines: ideas per line, top three.
+  const topProducts = (() => {
+    const m = new Map<string, number>();
+    for (const i of live) for (const p of i.products) m.set(p, (m.get(p) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
+  })();
   const maxVotes = Math.max(1, ...visible.map((i) => i.existingVotes + i.newVotes));
   // Rows grouped by first product line, in the catalog's manual order;
   // names outside the catalog follow alphabetically, "Unassigned" last.
@@ -739,7 +745,7 @@ export function IdeasView({
     const tone = STATUS_TONES[key];
     const label = key === "new" ? "New" : key === "updated" ? "Updated" : "Archive";
     return (
-      <div className="relative flex flex-1 flex-col gap-0.5 overflow-hidden rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
+      <div className="relative flex min-w-[132px] flex-[0.55] flex-col gap-0.5 overflow-hidden rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
         <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: tone.solid }} />
         <span className="flex items-baseline gap-2">
           <span className="font-title text-2xl font-bold leading-none">{n}</span>
@@ -889,7 +895,37 @@ export function IdeasView({
                 counts.archive,
                 pendingIn("archive") > 0 ? `${pendingIn("archive")} to decide` : counts.archive > 0 ? "All reviewed" : "Nothing proposed"
               )}
-              <div className="flex flex-[1.1] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
+              <div className="flex flex-1 flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
+                <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">
+                  Top Product Lines
+                </span>
+                {topProducts.length === 0 ? (
+                  <span className="text-[12px] text-fg-faint">No product lines yet</span>
+                ) : (
+                  topProducts.map(([name, n]) => {
+                    const c = chipStyle(colorOf(productColors, name), PRODUCT_CHIP_DEFAULT);
+                    return (
+                      <span key={name} className="flex items-center gap-2 text-[12px]">
+                        <span
+                          className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px]"
+                          style={{ background: c.background }}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.color }} />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-fg-2">{name}</span>
+                        <span className="inline-flex h-1 w-[54px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+                          <span
+                            className="block h-full bg-primary"
+                            style={{ width: `${Math.round((n / topProducts[0][1]) * 100)}%` }}
+                          />
+                        </span>
+                        <span className="w-4 text-right font-mono text-[10.5px] text-fg-muted">{n}</span>
+                      </span>
+                    );
+                  })
+                )}
+              </div>
+              <div className="flex flex-1 flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3">
                 <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">
                   Most Requested By
                 </span>
