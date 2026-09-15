@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { createHash, randomBytes } from "crypto";
 import { loginAsRoomLensAdmin, withTestDb } from "./helpers";
 import { ensureWindowHeadroom, submitTwoFactorCode, totpFor } from "./two-factor-helpers";
@@ -247,7 +247,9 @@ test.describe("PM-OS Admin: onboarding, CSV mapping, import runs (ADM-02, ADM-08
       ms: 10_000, items: 3, ...(calls !== undefined ? { calls } : {}), ...(error ? { error } : {}),
       ...(kind === "ai" ? { tokens: { input: 3000, output: 400, cacheRead: 2400, cacheWrite: 0, thinking: 0 }, model: "qa-model" } : {}),
     });
-    const trace = (stages: unknown[]) => ({ version: 1, pid: 1, serverBootedAt: new Date(now - 600_000).toISOString(), uploaded: 3, fresh: 3, stages });
+    // Typed as Prisma JSON input: `next build` type-checks tests/ too, and a
+    // plain unknown[] here failed the 2026-09-15 production build.
+    const trace = (stages: Prisma.InputJsonValue[]): Prisma.InputJsonObject => ({ version: 1, pid: 1, serverBootedAt: new Date(now - 600_000).toISOString(), uploaded: 3, fresh: 3, stages });
     const runningId = await withTestDb(async (db) => {
       await db.ideaBatch.deleteMany({ where: { workspaceId } });
       await db.ideaBatch.create({ data: {
