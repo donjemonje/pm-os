@@ -220,10 +220,16 @@ test.describe("Gating and isolation (GATE-02, GATE-06, XC-02)", () => {
     expect(del.status(), await del.text()).toBe(404);
     const rename = await page.request.patch("/api/ideas/lists/customers", { data: { id: aIds.customer, name: "QA-ISO HACKED" } });
     expect(rename.status(), await rename.text()).toBe(404);
-    const color = await page.request.patch("/api/ideas/lists/product-lines", { data: { id: aIds.line, color: "teal" } });
+    // The app assigns a palette color to every product line on the org's own
+    // first Ideas/Settings load, so A's line may already carry one — the
+    // invariant is "unchanged by B's call", not "still null" (release-gate
+    // run 2026-09-15 read "lime", auto-assigned earlier in the suite).
+    const lineBefore = await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: aIds.line } }));
+    const probeColor = lineBefore.color === "teal" ? "lime" : "teal";
+    const color = await page.request.patch("/api/ideas/lists/product-lines", { data: { id: aIds.line, color: probeColor } });
     expect(color.status(), await color.text()).toBe(404);
     expect((await withTestDb((db) => db.customer.findUniqueOrThrow({ where: { id: aIds.customer } }))).name).toBe(A.customer);
-    expect((await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: aIds.line } }))).color).toBeNull();
+    expect((await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: aIds.line } }))).color).toBe(lineBefore.color);
 
     // Admin-only history of another org: hidden, not forbidden.
     const runs = await page.request.get(`/api/admin/organizations/${roomlensOrgId}/ideas-runs`);
