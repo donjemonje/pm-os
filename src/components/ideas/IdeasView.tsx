@@ -60,7 +60,7 @@ const IMPORT_STEPS: { label: string; hint: string; pmos?: boolean }[] = [
   { label: "Checking for new tickets", hint: "Tickets already imported are skipped" },
   {
     label: "PMOS is reading each ticket",
-    hint: "Telling requests from bugs and questions, then matching them to existing ideas",
+    hint: "Classifying, splitting, matching and ideating",
     pmos: true,
   },
   { label: "Preparing ideas for review", hint: "Almost there" },
