@@ -1,5 +1,8 @@
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
-import { ideasEnabledForCurrentUser } from "@/lib/org-features";
+import {
+  featureEnabledForCurrentUser,
+  ideasEnabledForCurrentUser,
+} from "@/lib/org-features";
 import { getJiraConnectionStatus } from "@/lib/jira";
 import { getGoogleDriveConnectionStatus } from "@/lib/google-drive";
 import { getJiraOAuthSetupStatus } from "@/lib/jira-oauth-config";
@@ -18,11 +21,16 @@ export default async function IntegrationsSettingsPage({
 }) {
   await requireUserPage("/settings/jira");
   const workspace = await getOrCreateWorkspace();
-  const [jiraStatus, driveStatus, ideasEnabled] = await Promise.all([
+  // Google Drive only feeds Docs, so it follows the Docs flag: with Docs off
+  // (every client org today) Drive does not exist — no card, no status call.
+  const [jiraStatus, ideasEnabled, driveEnabled] = await Promise.all([
     getJiraConnectionStatus(workspace.id),
-    getGoogleDriveConnectionStatus(workspace.id),
     ideasEnabledForCurrentUser(),
+    featureEnabledForCurrentUser("docs"),
   ]);
+  const driveStatus = driveEnabled
+    ? await getGoogleDriveConnectionStatus(workspace.id)
+    : { connected: false };
   const jiraOauthSetup = getJiraOAuthSetupStatus();
   const driveOauthSetup = getGoogleDriveOAuthSetupStatus();
   const params = await searchParams;
@@ -30,12 +38,15 @@ export default async function IntegrationsSettingsPage({
   return (
     <div>
       <p className="mb-6 text-sm text-muted">
-        Connect Jira and Google Drive to import tickets and PRDs.
+        {driveEnabled
+          ? "Connect Jira and Google Drive to import tickets and PRDs."
+          : "Connect Jira to import tickets."}
       </p>
 
       <IntegrationsPanel
         jiraStatus={jiraStatus}
         driveStatus={driveStatus}
+        driveEnabled={driveEnabled}
         ideasEnabled={ideasEnabled}
         jiraOauthReady={jiraOauthSetup.ready}
         driveOauthReady={driveOauthSetup.ready}
