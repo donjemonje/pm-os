@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { orgFeatureDisabledResponse } from "@/lib/api-auth";
 
 /** Legacy callback — redirects to unified Google OAuth callback. */
 export async function GET(request: NextRequest) {
+  const gated = await orgFeatureDisabledResponse("docs");
+  if (gated) return gated;
   const url = new URL(request.url);
   const target = new URL("/api/auth/oauth/google/callback", url.origin);
   url.searchParams.forEach((value, key) => target.searchParams.set(key, value));

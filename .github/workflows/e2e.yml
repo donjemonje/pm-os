@@ -84,8 +84,10 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       # playwright.config.ts webServer runs `next build && next start` in CI.
+      # `@ai` specs call PMOS AI live through Vertex (ADC on the QA machine
+      # only) — CI has no credentials and never runs them (Daniel, 2026-09-13).
       - name: Run e2e suite
-        run: npx playwright test --project=local
+        run: npx playwright test --project=local --grep-invert "@ai|@ops"
 
       - name: Upload report on failure
         if: failure()

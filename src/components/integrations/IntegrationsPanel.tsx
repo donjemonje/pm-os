@@ -32,6 +32,8 @@ type IntegrationsPanelProps = {
   };
   /** Ideas feature flag for the caller's org — shows the write-back target picker. */
   ideasEnabled?: boolean;
+  /** False = Drive is off for this org (follows the Docs flag): no card, no banners. */
+  driveEnabled?: boolean;
 };
 
 function StatusDot({ connected }: { connected: boolean }) {
@@ -118,6 +120,7 @@ export function IntegrationsPanel({
   driveOauthReady,
   banners,
   ideasEnabled = false,
+  driveEnabled = true,
 }: IntegrationsPanelProps) {
   const [jiraExpanded, setJiraExpanded] = useState(Boolean(jiraStatus?.connected));
   const [driveExpanded, setDriveExpanded] = useState(Boolean(driveStatus?.connected));
@@ -131,7 +134,7 @@ export function IntegrationsPanel({
           Jira connected successfully.
         </div>
       )}
-      {banners?.driveSuccess && (
+      {driveEnabled && banners?.driveSuccess && (
         <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
           Google Drive connected successfully.
         </div>
@@ -141,7 +144,7 @@ export function IntegrationsPanel({
           {formatIntegrationError(banners.jiraError)}
         </div>
       )}
-      {banners?.driveError && (
+      {driveEnabled && banners?.driveError && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {formatIntegrationError(banners.driveError)}
         </div>
@@ -169,6 +172,7 @@ export function IntegrationsPanel({
         )}
       </IntegrationRow>
 
+      {driveEnabled && (
       <IntegrationRow
         name="Drive Integration"
         connected={driveConnected}
@@ -191,6 +195,7 @@ export function IntegrationsPanel({
           />
         )}
       </IntegrationRow>
+      )}
     </div>
   );
 }
