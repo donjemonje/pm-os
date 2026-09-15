@@ -27,7 +27,7 @@ import { loginWithTotp, seedQaOrgWithUser, withTestDb } from "./helpers";
  * Steps (one test.step per inventory case so the report settles them):
  *   cost guard  — total AI calls ≤ key.maxAiCalls before anything else
  *   IMP-01  upload completes: batch completed, error null, imported 10,
- *           UI note says 1 empty row skipped, ≤ 180 s, ideas listed
+ *           status card "11 tickets · 3 parked", ≤ 180 s, ideas listed
  *   IMP-02  classify kind vs key on ≥ 8 of the 10 corpus tickets; only fr
  *           tickets became ideas
  *   IMP-03  parked kinds: bugs 2, needs-details 1, none has an idea
@@ -52,7 +52,7 @@ import { loginWithTotp, seedQaOrgWithUser, withTestDb } from "./helpers";
  * are expect.soft so one miss is recorded without hiding the cases that
  * follow it; structural checks (merge pair, split, raw row) stay hard.
  * UI assertions are limited to what feature/face_lift_v2 does not touch
- * (upload button, import note, status-card text); chip/drawer rendering of
+ * (upload button, Importing… overlay, status-card text); chip/drawer rendering of
  * customers and PMOS AI reading (IMP-11/13 UI halves) are asserted from the
  * API state instead — a v2 selector change would be a TCR, not a finding.
  */
@@ -146,17 +146,20 @@ test.describe("@ai golden run — one live upload of the RoomLens corpus", () =>
     await page.goto("/ideas");
     await expect(page.getByText("No ideas yet")).toBeVisible();
 
-    const importNote = (imported: number) =>
-      page.getByText(new RegExp(`^Imported ${imported} tickets? from roomlens-golden-v2\\.csv`));
+    // TCR 1 (class A, approved by Daniel 2026-09-15): face_lift_v2 (c0171ba)
+    // removed the "Imported N tickets from <file>" line. "Done" is now the
+    // Importing… overlay ending; counts come from the batch row (stats) and
+    // the status card, same expected values as before.
+    const importing = page.getByRole("button", { name: "Importing…" });
     const importError = page.getByText(/^Import failed/);
 
-    const upload = async (imported: number) => {
+    const upload = async () => {
       await page.locator('input[type="file"]').setInputFiles(FIXTURE);
-      await expect(importNote(imported).or(importError)).toBeVisible({ timeout: UPLOAD_TIMEOUT_MS });
+      await expect(importing.first()).toBeVisible();
+      await expect(importing).toHaveCount(0, { timeout: UPLOAD_TIMEOUT_MS });
       if (await importError.isVisible()) {
         throw new Error(`upload failed in the UI: ${await importError.innerText()}`);
       }
-      return (await importNote(imported).innerText()).trim();
     };
 
     const latestBatch = () =>
@@ -172,8 +175,7 @@ test.describe("@ai golden run — one live upload of the RoomLens corpus", () =>
       stages.filter((s) => s.kind === "ai").reduce((n, s) => n + (s.calls ?? 0), 0);
 
     // ——— the one upload ———
-    const note = await upload(KEY.ticketsSent);
-    console.log(`[golden] ${note}`);
+    await upload();
     const batch = await latestBatch();
     const trace = batch.trace as unknown as { stages: Stage[] } | null;
     const stages = trace?.stages ?? [];
@@ -201,7 +203,10 @@ test.describe("@ai golden run — one live upload of the RoomLens corpus", () =>
       expect(batch.status).toBe("completed");
       expect(batch.error).toBeNull();
       expect(stats.imported).toBe(KEY.ticketsSent);
-      expect(note).toContain(`${KEY.skippedRows} empty row skipped`);
+      // The empty row is skipped client-side: 12 rows sent as 11 tickets (stats.imported above).
+      await expect(
+        page.getByText(new RegExp(`^${KEY.ticketsSent} tickets · ${KEY.parked.bugs + KEY.parked.needsDetails} parked`))
+      ).toBeVisible();
       expect(batch.completedAt).not.toBeNull();
       const durationMs = batch.completedAt!.getTime() - batch.startedAt.getTime();
       console.log(`[golden] duration ${(durationMs / 1000).toFixed(1)}s`);
@@ -361,9 +366,7 @@ test.describe("@ai golden run — one live upload of the RoomLens corpus", () =>
     // ——— second upload: dedupe runs before AI ———
     await test.step("IMP-06 re-upload is all duplicates: 0 imported, no AI stage, no new ideas/ledger rows", async () => {
       const ledgerBefore = await withTestDb((db) => db.ledgerEntry.count({ where: { workspaceId } }));
-      const note2 = await upload(0);
-      console.log(`[golden] ${note2}`);
-      expect(note2).toContain(`${KEY.ticketsSent} already imported`);
+      await upload();
       const batch2 = await latestBatch();
       expect(batch2.id).not.toBe(batch.id);
       expect(batch2.status).toBe("completed");
