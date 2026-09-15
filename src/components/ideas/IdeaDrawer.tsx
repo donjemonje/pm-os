@@ -742,9 +742,6 @@ export function IdeaDrawer({
                   </div>
                 )}
               <div>
-                <div className={`${MONO_LABEL} mb-1.5`}>
-                  Details
-                </div>
                 <UmMarkdown
                   content={idea.details}
                   className="text-[13.5px] leading-relaxed"
