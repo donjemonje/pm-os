@@ -23,7 +23,7 @@ import { RESOLVED_ENV } from "./test-env";
  * - PJ3: the PM flow end to end without a Jira connection — save My
  *   Product Lines in Settings → Ideas, see them pre-applied as the Ideas
  *   filter (and removable, i.e. a default, not a hard scope), open the
- *   Merge to Jira modal with the scope pre-selected, watch the
+ *   Jira Merge modal with the scope pre-selected, watch the
  *   scope-sensitive approved/pending hints, preview into the
  *   "Jira is not connected" blocker with Confirm disabled, and prove the
  *   execute API refuses with 409 before writing anything (idea stays
@@ -121,11 +121,28 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       // Ideas on for the org via the per-org override (env default stays off).
       await db.organization.update({
         where: { id: org.id },
-        data: { features: { ideas: true } },
+        data: { features: { ideas: true, myProductLines: true } },
       });
 
       await deleteFixtures(db);
       await resetSharedState(db);
+
+      // The Jira Merge button is gated on a Jira integration existing
+      // (feature/ui_facelift_v1). A token-less row satisfies the gate; live
+      // flows treat it as not-connected (no OAuth creds in the test env).
+      await db.jiraConnection.upsert({
+        where: { workspaceId: org.workspace.id },
+        create: {
+          workspaceId: org.workspace.id,
+          cloudId: "qa-pj-cloud",
+          siteUrl: "https://qa-pj.atlassian.net",
+          accessToken: "",
+          refreshToken: "",
+          expiresAt: new Date(0),
+          projectKeys: JSON.stringify(["QAPJ"]),
+        },
+        update: {},
+      });
 
       for (const name of [LINE_A, LINE_B]) {
         await db.productLine.create({ data: { workspaceId, name } });
@@ -193,6 +210,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
 
   test.afterAll(async () => {
     await withDb(async (db) => {
+      await db.jiraConnection.deleteMany({
+        where: { workspaceId, cloudId: "qa-pj-cloud" },
+      });
       await deleteFixtures(db);
       await resetSharedState(db);
       // Back to the env default (ideas off) — all-pages.spec.ts depends on it.
@@ -252,11 +272,16 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       "https://qa.zendesk.example/agent/tickets/{id}"
     );
     await fieldRow(page, "Customers").locator('input[type="text"]').fill("QA_Customers");
-    await fieldRow(page, "Components").getByRole("checkbox").uncheck();
-    // Disabling an attribute disables its field-name input.
+    // Components (platforms → P_Components) is OFF by default since
+    // 2026-09-03, so its field-name input starts disabled; enabling the
+    // attribute enables the input.
     await expect(
       fieldRow(page, "Components").locator('input[type="text"]')
     ).toBeDisabled();
+    await fieldRow(page, "Components").getByRole("checkbox").check();
+    await expect(
+      fieldRow(page, "Components").locator('input[type="text"]')
+    ).toBeEnabled();
     await labeledInput(page, "Prefix").fill("QA update:");
 
     await page.getByRole("button", { name: "Save" }).click();
@@ -284,7 +309,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       policy: "union",
       enabled: true,
     });
-    expect(fields.platforms.enabled).toBe(false);
+    expect(fields.platforms.enabled).toBe(true);
     expect(fields.votes).toEqual({
       jiraField: "P_Votes",
       type: "number",
@@ -299,7 +324,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(
       fieldRow(page, "Customers").locator('input[type="text"]')
     ).toHaveValue("QA_Customers");
-    await expect(fieldRow(page, "Components").getByRole("checkbox")).not.toBeChecked();
+    await expect(fieldRow(page, "Components").getByRole("checkbox")).toBeChecked();
 
     // PUT normalization: garbage in, complete valid config out — the same
     // mergeIdeasJiraConfig the push path runs, so a stored config can never
@@ -327,8 +352,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       policy: "increment",
       enabled: false,
     });
-    // PUT replaces the whole config — the earlier platforms toggle is gone.
-    expect(config.fields.platforms.enabled).toBe(true);
+    // PUT replaces the whole config — the earlier platforms toggle is gone,
+    // back to the default (off).
+    expect(config.fields.platforms.enabled).toBe(false);
 
     // An org id without a workspace is refused, not upserted.
     const missing = await page.request.put(
@@ -432,7 +458,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       await withDb((db) =>
         db.organization.update({
           where: { slug: ROOMLENS_SLUG },
-          data: { features: { ideas: true } },
+          data: { features: { ideas: true, myProductLines: true } },
         })
       );
     }
@@ -470,9 +496,9 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(rowB).toBeVisible();
 
     // Merge modal: scope opens pre-selected to my line.
-    await page.getByRole("button", { name: "Merge to Jira" }).click();
+    await page.getByRole("button", { name: "Jira Merge" }).click();
     const modal = page.locator("div.fixed.inset-0.z-50");
-    await expect(modal.getByText("Merge to Jira", { exact: true })).toBeVisible();
+    await expect(modal.getByText("Jira Merge", { exact: true })).toBeVisible();
     await expect(modal.getByRole("button", { name: LINE_A, exact: true })).toHaveClass(
       /bg-primary/
     );

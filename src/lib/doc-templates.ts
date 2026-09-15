@@ -21,7 +21,7 @@ export function generateReleaseNotesTemplate(
 
   return `# ${releaseName}
 
-> **Draft (no AI)** — Assembled from Jira. Edit before sending to customers.
+> **Draft (assembled without PMOS)** — Built from Jira. Edit before sending to customers.
 
 ## Highlights
 

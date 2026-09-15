@@ -33,7 +33,7 @@ export async function POST(
   }
 
   if (!isAiEnabled()) {
-    return NextResponse.json({ error: "AI not configured" }, { status: 503 });
+    return NextResponse.json({ error: "PMOS is not configured" }, { status: 503 });
   }
 
   try {

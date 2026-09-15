@@ -11,7 +11,7 @@ test("login page renders and links to the forgot-password page", async ({
   await page.goto("/login");
   await expect(page.locator("#email")).toBeVisible();
   await expect(page.locator("#password")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Log In" })).toBeVisible();
 
   // 2026-09-01 (feature/google-sso): the "Forgot password?" link is the only
   // entry point to the reset flow — google-sso.spec.ts G2–G4 exercise the

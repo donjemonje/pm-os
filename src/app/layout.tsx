@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { Chakra_Petch, Inter, Space_Grotesk } from "next/font/google";
+import { Chakra_Petch, DM_Sans, IBM_Plex_Sans } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 import {
   getCurrentUser,
@@ -9,6 +10,8 @@ import {
 import { brand } from "@/lib/brand";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { Shell } from "@/components/layout/Shell";
+import { APP_VERSION } from "@/lib/version";
+import { db } from "@/lib/db";
 
 const chakraPetch = Chakra_Petch({
   subsets: ["latin"],
@@ -16,13 +19,16 @@ const chakraPetch = Chakra_Petch({
   weight: ["700"],
 });
 
-const spaceGrotesk = Space_Grotesk({
+// App type: DM Sans titles and (since 2026-09-14) ids/chips/eyebrows too —
+// there is no monospace face; IBM Plex Sans body outside Ideas. The CSS variable names are unchanged so
+// every font-title / font-body / font-mono consumer follows automatically.
+const dmSans = DM_Sans({
   subsets: ["latin"],
   variable: "--font-title",
-  weight: ["400", "500", "600", "700"],
+  weight: ["500", "600", "700"],
 });
 
-const inter = Inter({
+const plexSans = IBM_Plex_Sans({
   subsets: ["latin"],
   variable: "--font-body",
   weight: ["400", "500", "600"],
@@ -64,19 +70,38 @@ export default async function RootLayout({
       }
     : null;
 
+  // The rail starts collapsed; it stays open only once the user expanded it.
+  const sidebarCollapsed = (await cookies()).get("pmos_sidebar")?.value !== "expanded";
+
+  // Ideas awaiting review — the sidebar's badge on "Ideas". One count query;
+  // unchanged/deleted ideas never need approval (see lib/ideas/idea.ts).
+  const ideasPending =
+    ideasEnabled && user?.workspaceId
+      ? await db.idea.count({
+          where: {
+            workspaceId: user.workspaceId,
+            decision: "pending",
+            batchStatus: { notIn: ["unchanged", "deleted"] },
+          },
+        })
+      : 0;
+
   return (
     <html
       lang="en"
-      className={`${chakraPetch.variable} ${spaceGrotesk.variable} ${inter.variable}`}
+      className={`${chakraPetch.variable} ${dmSans.variable} ${plexSans.variable}`}
     >
       <body className="font-body antialiased">
         <Shell
+          sidebarDefaultCollapsed={sidebarCollapsed}
           ideasEnabled={ideasEnabled}
+          ideasPending={ideasPending}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
           dashboardEnabled={dashboardEnabled}
           user={menuUser}
           organization={organization}
+          appVersion={APP_VERSION}
         >
           {children}
         </Shell>

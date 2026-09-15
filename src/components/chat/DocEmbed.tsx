@@ -20,7 +20,7 @@ export function DocEmbed({ embed }: DocEmbedProps) {
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border bg-background px-3 py-2">
-        <div className="text-xs font-medium uppercase tracking-wide text-muted">
+        <div className="text-xs font-medium text-muted">
           {embed.type === "document" ? "Live document" : "Issue"}
         </div>
         {embed.type === "document" && (

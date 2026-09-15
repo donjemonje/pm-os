@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Loader2, Plus } from "lucide-react";
 import { AppShell } from "@/components/layout/AppShell";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 interface Release {
   id: string;
@@ -25,6 +26,7 @@ interface Version {
 }
 
 export default function ReleasesPage() {
+  const { notice } = useConfirm();
   const [releases, setReleases] = useState<Release[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [versions, setVersions] = useState<Version[]>([]);
@@ -83,7 +85,10 @@ export default function ReleasesPage() {
         window.location.href = `/docs/${data.document.id}`;
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create release");
+      await notice({
+        title: "Couldn't create the release",
+        message: err instanceof Error ? err.message : undefined,
+      });
     } finally {
       setCreating(false);
     }

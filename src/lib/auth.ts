@@ -2,7 +2,8 @@ import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { db } from "./db";
-import { isSignupAllowed } from "./feature-flags";
+import { isPasswordValid, PASSWORD_POLICY_MESSAGE } from "./password-policy";
+import { consumePasswordTokenForUser } from "./password-tokens";
 import {
   decryptTotpSecret,
   encryptTotpSecret,
@@ -57,14 +58,6 @@ function slugify(input: string): string {
   return base || "org";
 }
 
-function makeInviteCode(): string {
-  return randomBytes(6)
-    .toString("base64url")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 8)
-    .toUpperCase();
-}
-
 async function uniqueOrgSlug(base: string): Promise<string> {
   let slug = base;
   let n = 1;
@@ -75,14 +68,6 @@ async function uniqueOrgSlug(base: string): Promise<string> {
   return slug;
 }
 
-async function uniqueInviteCode(): Promise<string> {
-  let code = makeInviteCode();
-  while (await db.organization.findUnique({ where: { inviteCode: code } })) {
-    code = makeInviteCode();
-  }
-  return code;
-}
-
 /**
  * Create a new organization and its single shared workspace (the tenant data
  * container). All members of the org share this workspace.
@@ -90,12 +75,10 @@ async function uniqueInviteCode(): Promise<string> {
 export async function createOrganizationWithWorkspace(name: string) {
   const orgName = name.trim() || "My Organization";
   const slug = await uniqueOrgSlug(slugify(orgName));
-  const inviteCode = await uniqueInviteCode();
   return db.organization.create({
     data: {
       name: orgName,
       slug,
-      inviteCode,
       workspace: { create: { name: `${orgName} Workspace` } },
     },
     include: { workspace: true },
@@ -162,7 +145,17 @@ function toAuthUser(user: {
   };
 }
 
-export async function createSession(userId: string): Promise<string> {
+export async function createSession(
+  userId: string,
+  options: {
+    /**
+     * Start the session already past the TOTP step. Only for the per-org
+     * "Google SSO skips 2FA" flag (oauth-flow.ts); every other login leaves
+     * this false and goes through /login/2fa.
+     */
+    twoFactorVerified?: boolean;
+  } = {}
+): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + SESSION_DAYS);
@@ -172,6 +165,7 @@ export async function createSession(userId: string): Promise<string> {
       userId,
       tokenHash: hashToken(token),
       expiresAt,
+      twoFactorVerified: options.twoFactorVerified === true,
     },
   });
 
@@ -343,49 +337,6 @@ export async function verifyTwoFactorChallenge(
   return { status: "ok" };
 }
 
-export async function registerUser(input: {
-  email: string;
-  password: string;
-  name: string;
-  organizationName?: string;
-  inviteCode?: string;
-}): Promise<AuthUser> {
-  const email = input.email.trim().toLowerCase();
-  const existing = await db.user.findUnique({ where: { email } });
-  if (existing) {
-    throw new Error("An account with this email already exists");
-  }
-
-  // Resolve the organization: join an existing one via invite code, otherwise
-  // create a brand-new organization (with its own isolated workspace).
-  let organizationId: string;
-  const inviteCode = input.inviteCode?.trim().toUpperCase();
-  if (inviteCode) {
-    const org = await db.organization.findUnique({ where: { inviteCode } });
-    if (!org) {
-      throw new Error("Invalid organization invite code");
-    }
-    organizationId = org.id;
-  } else {
-    const org = await createOrganizationWithWorkspace(
-      input.organizationName?.trim() || `${input.name.trim()}'s Organization`
-    );
-    organizationId = org.id;
-  }
-
-  const user = await db.user.create({
-    data: {
-      email,
-      name: input.name.trim(),
-      passwordHash: hashPassword(input.password),
-      organizationId,
-    },
-    include: userWithOrgInclude,
-  });
-
-  return toAuthUser(user);
-}
-
 export async function authenticateUser(
   email: string,
   password: string
@@ -406,6 +357,8 @@ export async function signInWithOAuth(input: {
   providerUserId: string;
   email: string;
   name: string;
+  /** Raw invite token from /invite → "Sign Up with Google" (see oauth-flow). */
+  inviteToken?: string | null;
 }): Promise<AuthUser> {
   const email = input.email.trim().toLowerCase();
 
@@ -434,8 +387,16 @@ export async function signInWithOAuth(input: {
   if (existing) {
     if (existing.deactivatedAt) throw new Error("account_deactivated");
     // Login type is sticky: same email but a password account — no auto-link,
-    // no SSO sign-in. (SSO-created users may still link another provider.)
+    // no SSO sign-in.
     if (existing.passwordHash) throw new Error("email_uses_password");
+    // A no-password, no-link user is an invite that was never completed.
+    // Completing it via Google needs the live invite token (same 7-day,
+    // single-use promise as the password path) — the email claim alone is
+    // not enough to claim the account. Consuming the token also revokes the
+    // user's other unused links.
+    if (!(await consumePasswordTokenForUser(existing.id, input.inviteToken))) {
+      throw new Error("invite_required");
+    }
     await db.oAuthAccount.create({
       data: {
         userId: existing.id,
@@ -446,32 +407,10 @@ export async function signInWithOAuth(input: {
     return toAuthUser(existing);
   }
 
-  // No linked account and no existing user with this email: this would be a
-  // brand-new signup. Only create the account when signup is allowed.
-  if (!isSignupAllowed()) {
-    throw new Error("signup_disabled");
-  }
-
-  const name = input.name.trim() || email.split("@")[0];
-  const org = await createOrganizationWithWorkspace(`${name}'s Organization`);
-
-  const user = await db.user.create({
-    data: {
-      email,
-      name,
-      passwordHash: null,
-      organizationId: org.id,
-      accounts: {
-        create: {
-          provider: input.provider,
-          providerUserId: input.providerUserId,
-        },
-      },
-    },
-    include: userWithOrgInclude,
-  });
-
-  return toAuthUser(user);
+  // No linked account and no user with this email: there is no self-service
+  // sign-up — accounts are created in PM-OS Admin and activated through the
+  // invite link. The login page shows this as "ask your admin for an invite".
+  throw new Error("signup_disabled");
 }
 
 /**
@@ -494,8 +433,8 @@ export async function createOrganizationUser(input: {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new Error("Invalid email address");
   }
-  if (input.password && input.password.length < 8) {
-    throw new Error("Password must be at least 8 characters");
+  if (input.password && !isPasswordValid(input.password)) {
+    throw new Error(PASSWORD_POLICY_MESSAGE);
   }
 
   const existing = await db.user.findUnique({ where: { email } });
@@ -535,6 +474,10 @@ export type OrganizationMember = {
   name: string;
   role: "USER" | "PMOS_ADMIN";
   hasPassword: boolean;
+  /** Linked SSO providers (e.g. ["google"]). */
+  providers: string[];
+  /** Finished sign-up: has a password or a linked SSO account. Otherwise the invite is still pending. */
+  activated: boolean;
   deactivatedAt: string | null;
   createdAt: string;
 };
@@ -543,7 +486,6 @@ export type OrganizationWithMembers = {
   id: string;
   name: string;
   slug: string;
-  inviteCode: string;
   features: Record<string, boolean>;
   createdAt: string;
   memberCount: number;
@@ -569,7 +511,10 @@ export async function listOrganizationsWithMembers(): Promise<
   const orgs = await db.organization.findMany({
     orderBy: { createdAt: "asc" },
     include: {
-      users: { orderBy: { createdAt: "asc" } },
+      users: {
+        orderBy: { createdAt: "asc" },
+        include: { accounts: { select: { provider: true } } },
+      },
     },
   });
 
@@ -577,7 +522,6 @@ export async function listOrganizationsWithMembers(): Promise<
     id: org.id,
     name: org.name,
     slug: org.slug,
-    inviteCode: org.inviteCode,
     features: toFeatureOverrides(org.features),
     createdAt: org.createdAt.toISOString(),
     memberCount: org.users.length,
@@ -587,9 +531,44 @@ export async function listOrganizationsWithMembers(): Promise<
       name: u.name,
       role: u.role,
       hasPassword: Boolean(u.passwordHash),
+      providers: u.accounts.map((a) => a.provider),
+      activated: Boolean(u.passwordHash) || u.accounts.length > 0,
       deactivatedAt: u.deactivatedAt?.toISOString() ?? null,
       createdAt: u.createdAt.toISOString(),
     })),
+  }));
+}
+
+export type OrganizationSummaryRow = {
+  id: string;
+  name: string;
+  slug: string;
+  memberCount: number;
+  features: Record<string, boolean>;
+};
+
+/**
+ * PM-OS Admin helper for the Enablements matrix: every organization with a
+ * member COUNT only (no member rows — listOrganizationsWithMembers loads
+ * every user of every org, which the flags page never needs).
+ */
+export async function listOrganizationsSummary(): Promise<OrganizationSummaryRow[]> {
+  const orgs = await db.organization.findMany({
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      features: true,
+      _count: { select: { users: true } },
+    },
+  });
+  return orgs.map((org) => ({
+    id: org.id,
+    name: org.name,
+    slug: org.slug,
+    memberCount: org._count.users,
+    features: toFeatureOverrides(org.features),
   }));
 }
 
@@ -600,7 +579,6 @@ export async function getOrganizationSummary(organizationId: string) {
       id: true,
       name: true,
       slug: true,
-      inviteCode: true,
       _count: { select: { users: true } },
     },
   });
@@ -609,7 +587,6 @@ export async function getOrganizationSummary(organizationId: string) {
     id: org.id,
     name: org.name,
     slug: org.slug,
-    inviteCode: org.inviteCode,
     memberCount: org._count.users,
   };
 }

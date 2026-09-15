@@ -1,4 +1,5 @@
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { featureEnabledForCurrentUser } from "@/lib/org-features";
 
 /** Legacy route — integrations live on the main settings page. */
 export default async function GoogleDriveSettingsPage({
@@ -6,6 +7,8 @@ export default async function GoogleDriveSettingsPage({
 }: {
   searchParams: Promise<{ connected?: string; error?: string }>;
 }) {
+  // Drive follows the Docs flag: off = this route does not exist.
+  if (!(await featureEnabledForCurrentUser("docs"))) notFound();
   const params = await searchParams;
   const query = new URLSearchParams();
 

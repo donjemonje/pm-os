@@ -7,6 +7,7 @@ import {
   getCreateMetaFields,
   getEditMetaFields,
   getJiraConnectionStatus,
+  hasValidJiraConnection,
   listAllFields,
   textToAdf,
   updateJiraIssue,
@@ -31,7 +32,7 @@ async function getIdeasJiraConfig(workspaceId: string): Promise<IdeasJiraConfig>
 }
 
 /**
- * Write-back of reviewed ideas to Jira ("Merge to Jira").
+ * Write-back of reviewed ideas to Jira ("Jira Merge").
  *
  * Output semantics (Daniel, 2026-09-01 — all configurable in Admin → Ideas,
  * see jira-mapping.ts):
@@ -79,11 +80,15 @@ interface TicketRef {
   id: string;
   requester: string | null;
   subject: string;
+  /** Direct link from the ticket's own url column, when the CSV carried one. */
+  url: string | null;
 }
 
-function ticketUrl(config: IdeasJiraConfig, id: string): string | null {
+/** A ticket's own URL wins; the workspace template is the fallback. */
+function ticketUrl(config: IdeasJiraConfig, ticket: TicketRef): string | null {
+  if (ticket.url) return ticket.url;
   if (!config.zendeskTicketUrlTemplate) return null;
-  return config.zendeskTicketUrlTemplate.replace("{id}", encodeURIComponent(id));
+  return config.zendeskTicketUrlTemplate.replace("{id}", encodeURIComponent(ticket.id));
 }
 
 /** The full new description as ADF plus its plain-text twin (for diffing). */
@@ -109,7 +114,7 @@ function buildDescription(
       type: "orderedList",
       attrs: { order: 1 },
       content: tickets.map((t) => {
-        const url = ticketUrl(config, t.id);
+        const url = ticketUrl(config, t);
         const lead = `${t.requester || "Unknown reporter"}: ${t.subject}`;
         const inline: unknown[] = [{ type: "text", text: url ? `${lead}, ` : `${lead} (ticket ${t.id})` }];
         if (url) {
@@ -120,7 +125,7 @@ function buildDescription(
     });
     textLines.push(config.supportedTicketsHeading);
     tickets.forEach((t, i) => {
-      const url = ticketUrl(config, t.id);
+      const url = ticketUrl(config, t);
       textLines.push(
         `${i + 1}. ${t.requester || "Unknown reporter"}: ${t.subject}${url ? `, ${url}` : ` (ticket ${t.id})`}`
       );
@@ -220,6 +225,7 @@ const PUSH_INCLUDE = {
           externalId: true,
           subject: true,
           requester: true,
+          url: true,
           affectedCustomers: true,
           dismissedCustomers: true,
         },
@@ -281,7 +287,14 @@ function ideaCustomers(row: PushIdeaRow): string[] {
 function ideaTickets(row: PushIdeaRow): TicketRef[] {
   return row.sources.flatMap((s) =>
     s.kind === "zendesk" && s.ticket
-      ? [{ id: s.ticket.externalId, requester: s.ticket.requester, subject: s.ticket.subject }]
+      ? [
+          {
+            id: s.ticket.externalId,
+            requester: s.ticket.requester,
+            subject: s.ticket.subject,
+            url: s.ticket.url ?? null,
+          },
+        ]
       : []
   );
 }
@@ -303,8 +316,10 @@ async function derivePlan(
   const writes: PushWrites = { creates: new Map(), updates: new Map() };
   const config = await getIdeasJiraConfig(workspaceId);
 
+  // Row-existence gates the button; writing needs a usable token too, so the
+  // preview blocker also covers a configured-but-dead connection.
   const status = await getJiraConnectionStatus(workspaceId);
-  if (!status?.connected) {
+  if (!status?.connected || !(await hasValidJiraConnection(workspaceId))) {
     return {
       plan: {
         target: null,

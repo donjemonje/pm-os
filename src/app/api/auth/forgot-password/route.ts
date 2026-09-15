@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loginDisabledResponse } from "@/lib/auth-guard";
 import { requestPasswordReset } from "@/lib/password-reset";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -9,8 +8,6 @@ import { rateLimit } from "@/lib/rate-limit";
  * never revealed. The actual gating lives in requestPasswordReset.
  */
 export async function POST(request: NextRequest) {
-  const disabled = loginDisabledResponse();
-  if (disabled) return disabled;
 
   let body: { email?: string };
   try {

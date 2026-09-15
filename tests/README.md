@@ -32,6 +32,18 @@ feature session.
 Schema changed in your branch? Re-run `npm run test:db:setup` (db push is
 idempotent).
 
+## Tags: `@ai` and `@ops`
+
+- `@ai` — calls PMOS AI live through Vertex (the release golden run,
+  `ai-golden.spec.ts`). Needs ADC on the machine; CI never runs it
+  (`--grep-invert`). Runs in the normal `npm run test:e2e`.
+- `@ops` — needs a differently configured server. Today: `ops-ai-failure.spec.ts`
+  (IMP-09) boots the app with a wrong model name so the import fails at
+  the first Anthropic stage. Run it on its own with `npm run test:e2e:ops`
+  (sets `PW_OPS_BOGUS_MODEL`, the one shell variable that overrides yaml
+  values: the three `IDEAS_*_MODEL` stage models — see tests/e2e/test-env.ts). `npm run test:e2e` and CI exclude it;
+  run without the override it fails by design, never vacuously.
+
 ## Mandatory 2FA
 
 2FA is mandatory for every account: every login lands on `/login/2fa`
@@ -68,8 +80,6 @@ app boot misconfigured. `tests/e2e/global-setup.ts` validates the resolved
 env (shell env + test-apphosting.yaml, yaml wins — the exact env the app
 gets) before any test runs, and fails with one line per problem:
 
-- `DISABLE_LOGIN` resolves to `false` (login enabled — it is disabled by
-  default when unset).
 - `DATABASE_URL` is set and its database name is exactly `pmos_test` —
   hard fail otherwise, so tests can never touch the dev database.
 - `SESSION_SECRET` is set (login would 500 without it).

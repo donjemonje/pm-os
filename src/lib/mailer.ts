@@ -1,41 +1,91 @@
+import nodemailer, { type Transporter } from "nodemailer";
+
 /**
- * Outbound email. Transport is env-driven:
- *   - RESEND_API_KEY set  -> send via Resend's HTTP API (no SDK dependency).
- *     EMAIL_FROM sets the sender (default onboarding@resend.dev, Resend's
- *     sandbox sender — replace once a domain is verified).
- *   - otherwise           -> dev fallback: the full email is printed to the
- *     server console so flows are testable locally without a provider.
+ * Outbound email over SMTP (Google Workspace / Gmail by default — the same
+ * approach as the marketing site). Env:
+ *   SMTP_USER + SMTP_PASSWORD  mailbox login (Google app password). Both set
+ *                              → real sends. Either missing → dev fallback:
+ *                              the full email is printed to the server
+ *                              console so flows are testable locally.
+ *   SMTP_HOST / SMTP_PORT      default smtp.gmail.com / 465 (implicit TLS).
+ *   SMTP_FROM                 visible sender, default "PM-OS <SMTP_USER>".
+ *                              A Workspace alias (support@pm-os.io) works
+ *                              when it is configured as "Send mail as" on
+ *                              the SMTP_USER mailbox; otherwise Gmail
+ *                              rewrites it to SMTP_USER.
+ *   SMTP_REPLY_TO             optional Reply-To.
  */
-export async function sendEmail(input: {
+
+export type OutboundEmail = {
   to: string;
   subject: string;
+  /** Plain-text body — always required (fallback + what the dev console shows). */
   text: string;
-}): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
+  /** Optional HTML twin (see email-templates.ts). */
+  html?: string;
+  /** Inline/CID attachments for the HTML (e.g. the brand logo). */
+  attachments?: { filename: string; content: Buffer; contentType: string; cid: string }[];
+};
 
-  if (!apiKey) {
-    console.log(
-      `\n━━━ DEV EMAIL (no RESEND_API_KEY — not sent) ━━━\n` +
-        `To: ${input.to}\nSubject: ${input.subject}\n\n${input.text}\n` +
-        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
-    );
-    return;
-  }
+export function isEmailConfigured(): boolean {
+  return Boolean(
+    process.env.SMTP_USER?.trim() && process.env.SMTP_PASSWORD?.trim()
+  );
+}
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+let transporter: Transporter | null = null;
+
+function getTransporter(): Transporter {
+  if (transporter) return transporter;
+  const port = Number(process.env.SMTP_PORT?.trim() || 465);
+  transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST?.trim() || "smtp.gmail.com",
+    port,
+    secure: port === 465,
+    // 587 must upgrade to TLS, never fall back to plaintext.
+    requireTLS: port !== 465,
+    // Bounded waits: an unreachable SMTP host must fail the request in
+    // seconds, not hang the admin's "Add user" call for minutes.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+    auth: {
+      user: process.env.SMTP_USER!.trim(),
+      pass: process.env.SMTP_PASSWORD!.trim(),
     },
-    body: JSON.stringify({
-      from: process.env.EMAIL_FROM?.trim() || "onboarding@resend.dev",
-      to: [input.to],
-      subject: input.subject,
-      text: input.text,
-    }),
   });
-  if (!res.ok) {
-    throw new Error(`Email send failed: ${res.status} ${await res.text()}`);
+  return transporter;
+}
+
+/**
+ * Send one plain-text email. Resolves { delivered: true } after the SMTP
+ * server accepted it, { delivered: false } when no transport is configured
+ * (dev fallback — printed to the console instead). Throws on SMTP failure.
+ */
+export async function sendEmail(
+  input: OutboundEmail
+): Promise<{ delivered: boolean }> {
+  if (!isEmailConfigured()) {
+    console.log(
+      `\n━━━ DEV EMAIL (SMTP_USER/SMTP_PASSWORD unset — not sent) ━━━\n` +
+        `To: ${input.to}\nSubject: ${input.subject}\n\n${input.text}\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
+    );
+    return { delivered: false };
   }
+
+  const user = process.env.SMTP_USER!.trim();
+  const from = process.env.SMTP_FROM?.trim() || `PM-OS <${user}>`;
+  const replyTo = process.env.SMTP_REPLY_TO?.trim() || undefined;
+
+  await getTransporter().sendMail({
+    from,
+    to: input.to,
+    replyTo,
+    subject: input.subject,
+    text: input.text,
+    html: input.html,
+    attachments: input.attachments,
+  });
+  return { delivered: true };
 }

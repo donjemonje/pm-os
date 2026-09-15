@@ -2,7 +2,7 @@ export type IdeaBatchStatus = "new" | "updated" | "unchanged" | "archive" | "del
 export type IdeaDecision = "pending" | "reviewed" | "injected";
 
 /** Catalog stage: what a raw Zendesk ticket is. Only FRs become ideas. */
-export type CatalogKind = "fr" | "bug" | "needs_details";
+export type CatalogKind = "fr" | "bug" | "needs_details" | "ops_task" | "question";
 
 export interface CatalogVerdict {
   kind: CatalogKind;
@@ -25,10 +25,38 @@ export interface ZendeskTicket {
   createdAt?: string;
   /** Optional product_line column, used to pre-assign the idea's product. */
   productLine?: string;
+  /** Reporter-chosen module — a hint to PMOS AI, never an override. */
+  module?: string;
+  /** Customer named in a dedicated column — truth; auto-added to the catalog. */
+  customerName?: string;
+  /** The reporter marked the ticket as affecting all customers. */
+  affectsAllCustomers?: boolean;
+  /** Reporter's "why should we build this" — interpretation. */
+  whyBuild?: string;
+  /** Reporter's "what insights do we have" — interpretation. */
+  insights?: string;
+  /** Deal linkage as reported (Yes / No / Helpful …). */
+  dealRelated?: string;
+  /** Customer / POC. */
+  customerType?: string;
+  /** Direct link to the source ticket. */
+  url?: string;
   /** Catalog verdict; Bug / Needs-details tickets are parked with the label. */
   catalog?: CatalogVerdict | null;
   /** The CSV row exactly as received; sent on import, persisted in the raw store. */
   raw?: Record<string, string>;
+  /** What the match stage decided per FR unit of this ticket. */
+  matchNotes?: MatchNote[];
+}
+
+/** One FR unit's outcome in the match stage, kept on the ticket for the PM. */
+export interface MatchNote {
+  /** "<ticket>" or "<ticket>#n" for a split sub-idea. */
+  unit: string;
+  /** The idea this unit ended up in (created or merged into). */
+  ideaId: string;
+  merged: boolean;
+  reason: string;
 }
 
 /** A Jira idea pulled at its live state on import. */
@@ -56,8 +84,12 @@ export interface Idea {
   reporters?: string[];
   /** Customers the supporting tickets say are affected — union over sources, minus dismissed. */
   customers?: string[];
+  /** Any supporting ticket was marked as affecting all customers. */
+  affectsAllCustomers?: boolean;
   /** Dismissed suggestions, restorable from the drawer. */
   dismissedCustomers?: string[];
+  /** Customers a PM added by hand (subset of `customers`); removing one deletes it, not a dismissal. */
+  addedCustomers?: string[];
   batch: IdeaBatchStatus;
   /** For Updated ideas: what this import did (votes, enrichment, added metadata). */
   batchChanges?: string[];

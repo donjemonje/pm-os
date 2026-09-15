@@ -40,7 +40,6 @@ export async function POST(request: NextRequest) {
           id: org.id,
           name: org.name,
           slug: org.slug,
-          inviteCode: org.inviteCode,
         },
       },
       { status: 201 }

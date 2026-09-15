@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiWorkspaceId } from "@/lib/api-auth";
+import { apiWorkspaceId, orgFeatureDisabledResponse } from "@/lib/api-auth";
 import { listGoogleDriveFiles } from "@/lib/google-drive";
 
 export async function GET(request: NextRequest) {
+  const gated = await orgFeatureDisabledResponse("docs");
+  if (gated) return gated;
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
 

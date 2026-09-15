@@ -1,4 +1,4 @@
-import { expect, Page } from "@playwright/test";
+import { expect, Locator, Page } from "@playwright/test";
 import * as OTPAuth from "otpauth";
 
 /**
@@ -66,7 +66,7 @@ export async function loginExpecting2fa(
   await page.goto("/login");
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
+  await page.getByRole("button", { name: /log in/i }).click();
   await page.waitForURL(/\/login\/2fa/);
 }
 
@@ -100,10 +100,14 @@ const lastConsumedStepBySecret = new Map<string, number>();
  */
 export async function passTwoFactorChallenge(
   page: Page,
-  secret: string = TEST_TOTP_SECRET
+  secret: string = TEST_TOTP_SECRET,
+  // Where a successful login lands. Default: the Dashboard heading (RoomLens
+  // under the suite's flags). Specs whose org lands elsewhere pass their own
+  // anchor (helpers.ts loginWithTotp passes the app shell <aside>).
+  landed?: Locator
 ): Promise<void> {
   const error = page.locator("form p", { hasText: INVALID_CODE_ERROR });
-  const dashboardHeading = page.getByRole("heading", { name: "Dashboard" });
+  const dashboardHeading = landed ?? page.getByRole("heading", { name: "Dashboard" });
 
   for (let attempt = 0; attempt < 3; attempt++) {
     // Skip any window a previous login of this user (secret) in this

@@ -7,7 +7,6 @@
  * Run with:  npm run orgs:migrate
  */
 import { PrismaClient } from "@prisma/client";
-import { randomBytes } from "crypto";
 
 const prisma = new PrismaClient();
 
@@ -20,10 +19,6 @@ function slugify(input) {
   return base || "org";
 }
 
-function inviteCode() {
-  return randomBytes(6).toString("base64url").replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
-}
-
 async function uniqueSlug(base) {
   let slug = base;
   let n = 1;
@@ -33,15 +28,6 @@ async function uniqueSlug(base) {
     slug = `${base}-${n}`;
   }
   return slug;
-}
-
-async function uniqueInviteCode() {
-  let code = inviteCode();
-  // eslint-disable-next-line no-await-in-loop
-  while (await prisma.organization.findUnique({ where: { inviteCode: code } })) {
-    code = inviteCode();
-  }
-  return code;
 }
 
 async function main() {
@@ -61,10 +47,9 @@ async function main() {
     const ownerName = ws.user?.name || ws.user?.email || ws.name || "Organization";
     const orgName = ws.user ? `${ownerName}'s Organization` : ws.name || "Organization";
     const slug = await uniqueSlug(slugify(orgName));
-    const code = await uniqueInviteCode();
 
     const org = await prisma.organization.create({
-      data: { name: orgName, slug, inviteCode: code },
+      data: { name: orgName, slug },
     });
 
     await prisma.workspace.update({
@@ -80,7 +65,7 @@ async function main() {
     }
 
     console.log(
-      `  ✓ ${orgName} (slug=${slug}, invite=${code}) ← workspace ${ws.id}${ws.userId ? ` / user ${ws.user?.email}` : " (orphan)"}`
+      `  ✓ ${orgName} (slug=${slug}) ← workspace ${ws.id}${ws.userId ? ` / user ${ws.user?.email}` : " (orphan)"}`
     );
   }
 

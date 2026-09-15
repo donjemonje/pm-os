@@ -1,3 +1,8 @@
+import {
+  type CsvMapping,
+  DEFAULT_CSV_MAPPING,
+  mergeCsvMapping,
+} from "./csv-mapping";
 /**
  * Ideas → Jira output configuration. Everything about HOW review results
  * land in the customer's Jira (field names, write policies, description
@@ -42,9 +47,28 @@ export interface IdeasJiraConfig {
     customers: FieldMapping;
     platforms: FieldMapping;
   };
+  /** Per-org CSV import mapping (see csv-mapping.ts). */
+  csv: CsvMapping;
+  /** Sections PMOS AI writes for every idea (markdown ## headings + rules). */
+  ideaTemplate: string;
+  /** AI field parsing at import (Gemini). Default ON so production can never
+   *  silently fall back to naive separator-splitting. */
+  fieldParsing: { customers: boolean };
 }
 
+export const DEFAULT_IDEA_TEMPLATE = `## The Problem
+The user problem and who it affects — the main stakeholders (customers and internal teams alike). The core of the idea; always present.
+
+## Proposed Solution
+Only when the ticket implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how.
+
+## Additional Info
+Other important related context. When the ticket describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Omit this section when there is none.`;
+
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
+  ideaTemplate: DEFAULT_IDEA_TEMPLATE,
+  fieldParsing: { customers: true },
+  csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
@@ -59,14 +83,26 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       enabled: true,
     },
     // Jira's built-in "Votes" name was taken, hence P_Votes (same as P_Components).
-    votes: { jiraField: "P_Votes", type: "number", policy: "increment", enabled: true },
-    customers: { jiraField: "Customers", type: "multi_select", policy: "union", enabled: true },
+    votes: {
+      jiraField: "P_Votes",
+      type: "number",
+      policy: "increment",
+      enabled: true,
+    },
+    customers: {
+      jiraField: "Customers",
+      type: "multi_select",
+      policy: "union",
+      enabled: true,
+    },
     // Jira's built-in "Components" name was taken, hence P_Components.
+    // Off by default (Daniel, 2026-09-03): most Jira projects have no
+    // P_Components field; an org turns it on in Admin → Ideas.
     platforms: {
       jiraField: "P_Components",
       type: "multi_select",
       policy: "union",
-      enabled: true,
+      enabled: false,
     },
   },
 };
@@ -82,9 +118,27 @@ export const MAPPED_ATTRIBUTES: MappedAttribute[] = [
 /** Stored overrides merged over defaults — unknown keys ignored, partial
  *  field entries completed from the default, so old configs never crash. */
 export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
-  const stored = (raw && typeof raw === "object" ? raw : {}) as Partial<IdeasJiraConfig>;
+  const stored = (
+    raw && typeof raw === "object" ? raw : {}
+  ) as Partial<IdeasJiraConfig>;
+  const csv = mergeCsvMapping(stored.csv);
+  const ideaTemplate =
+    typeof stored.ideaTemplate === "string" && stored.ideaTemplate.trim()
+      ? stored.ideaTemplate
+      : DEFAULT_IDEA_TEMPLATE;
+  const storedParsing = (stored.fieldParsing ?? {}) as Partial<{
+    customers: boolean;
+  }>;
+  const fieldParsing = {
+    customers:
+      typeof storedParsing.customers === "boolean"
+        ? storedParsing.customers
+        : true,
+  };
   const fields = { ...DEFAULT_IDEAS_JIRA_CONFIG.fields };
-  const storedFields = (stored.fields ?? {}) as Partial<IdeasJiraConfig["fields"]>;
+  const storedFields = (stored.fields ?? {}) as Partial<
+    IdeasJiraConfig["fields"]
+  >;
   for (const attr of MAPPED_ATTRIBUTES) {
     const f = storedFields[attr];
     if (f && typeof f === "object") {
@@ -92,13 +146,18 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
     }
   }
   return {
+    csv,
+    ideaTemplate,
+    fieldParsing,
     descriptionMode: "overwrite",
     descriptionGapLines:
-      typeof stored.descriptionGapLines === "number" && stored.descriptionGapLines >= 0
+      typeof stored.descriptionGapLines === "number" &&
+      stored.descriptionGapLines >= 0
         ? stored.descriptionGapLines
         : DEFAULT_IDEAS_JIRA_CONFIG.descriptionGapLines,
     supportedTicketsHeading:
-      typeof stored.supportedTicketsHeading === "string" && stored.supportedTicketsHeading
+      typeof stored.supportedTicketsHeading === "string" &&
+      stored.supportedTicketsHeading
         ? stored.supportedTicketsHeading
         : DEFAULT_IDEAS_JIRA_CONFIG.supportedTicketsHeading,
     zendeskTicketUrlTemplate:

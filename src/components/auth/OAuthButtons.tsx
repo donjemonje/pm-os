@@ -94,11 +94,11 @@ export function OAuthButtons({
         <div className="absolute inset-0 flex items-center">
           <span className={`w-full border-t ${isDark ? "border-white/10" : "border-border"}`} />
         </div>
-        <div className="relative flex justify-center text-xs uppercase tracking-wide">
+        <div className="relative flex justify-center text-xs">
           <span
             className={`px-2 font-subtitle ${isDark ? "bg-[#0a1220] text-brand-muted" : "bg-card text-muted"}`}
           >
-            Or continue with email
+            Or
           </span>
         </div>
       </div>
@@ -116,10 +116,11 @@ export const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   oauth_token_failed: "Could not complete sign-in. Please try again.",
   oauth_profile_failed: "Could not read your profile from the provider.",
   oauth_signin_failed: "Sign-in failed. Please try again.",
-  signup_disabled: "Sign-up is disabled. Ask an admin to invite you, then sign in.",
+  signup_disabled:
+    "No PM-OS account exists for this Google email. Ask your admin for an invite.",
   account_deactivated: "This account has been deactivated. Contact your admin.",
-  google_sso_disabled:
-    "Google sign-in is currently disabled. Sign in with email instead.",
+  invite_required:
+    "This invite link has expired or was already used. Ask your admin to resend the invite.",
   email_uses_password:
     "This email uses password sign-in. Enter your email and password below.",
 };
