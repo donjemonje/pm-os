@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  --app-zoom: 1.1;
   --brand-text: #f3f1fb;
   --brand-muted: #aaa3c4;
   --brand-accent: #7aa7ff;
@@ -128,7 +129,16 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  /* Hotfix 2.0.1 (Daniel 2026-09-16): the app is designed at what Chrome
+     shows at 110 % page zoom, so render it that way for everyone — login
+     included. Viewport units are not affected by CSS zoom, so full-height
+     shells divide by the same factor below. */
+  zoom: var(--app-zoom);
 }
+
+/* Full-height shells: 100vh is measured before zoom, so compensate. */
+.h-screen { height: calc(100vh / var(--app-zoom)); }
+.min-h-screen { min-height: calc(100vh / var(--app-zoom)); }
 
 .font-title,
 .font-display {
