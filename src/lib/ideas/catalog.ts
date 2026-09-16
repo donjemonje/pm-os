@@ -21,7 +21,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v12";
+export const CATALOG_PROMPT_VERSION = "catalog-v13";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -56,7 +56,7 @@ Everything in the ticket was written or relayed by an organization representativ
 
 Tickets may carry tags and a reporter-chosen module. Both are entered by humans who are not product managers and who make mistakes — treat them as hints at most: the module usually points at the right product line, but never let it or a tag override what the ticket content itself says.
 
-Tickets sometimes pack several capabilities into one message (reporters are busy people). Report request_count: the number of distinct capabilities a product manager would ship and size SEPARATELY — i.e. would file as separate backlog items. Two asks that serve one goal but would be built and released independently (e.g. "scan TLS certificates" and "scan email security settings", or "list workspaces via API" and "discover subdomains via API") count as two. Alternative solutions, implementation details, or examples of ONE capability are still 1. It is 1 unless the ticket clearly contains more than one such capability. A later stage handles the actual splitting — here you only count, and your product_title/product_summary should cover the ticket as a whole either way.
+Tickets sometimes pack several asks into one message (reporters are busy people). Report request_count: the number of separate asks the ticket ITSELF enumerates — distinct capabilities the reporter explicitly requests as separate things, typically as separate bullets, numbered points, or "also / second / another thing" sentences (e.g. "scan TLS certificates" and "also scan email security settings" count as two). Count only what the ticket enumerates; never split on your own judgment of how a product manager would size or build it. One described workflow, one piece of feedback with several remarks about the same feature, alternative solutions, implementation details, or examples of ONE ask are all 1. When in doubt, it is 1. A later stage handles the actual splitting — here you only count, and your product_title/product_summary should cover the ticket as a whole either way.
 
 Judge only from the ticket content and the catalogs provided. Do not consider priority or importance — only what kind of item this is and where it belongs. Give a single short sentence of reasoning covering the classification and, for feature requests, the assignment.`;
 
@@ -102,7 +102,7 @@ const CATALOG_TOOL = {
         type: "integer",
         minimum: 1,
         description:
-          "Distinct capabilities a PM would ship and size separately (separate backlog items). 1 unless the ticket clearly contains more than one.",
+          "Separate asks the ticket itself enumerates (separate bullets / 'also' sentences requesting different capabilities). 1 unless the ticket explicitly lists more than one; never from your own sizing.",
       },
       reason: {
         type: "string",
