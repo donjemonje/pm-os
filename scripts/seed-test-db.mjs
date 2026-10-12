@@ -181,7 +181,7 @@ const TEST_KELA_TOTP_SECRET = "MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK";
 
 /**
  * A second QA organization shaped like Kela: ideas on per org, product lines
- * come from the Jira "Module" field, smart-merge descriptions, and — when the
+ * come from the Jira "Module" field, and — when the
  * JIRA_TEST_* env is present — a live Jira connection (API token, basic auth)
  * to the TEST project (scripts/jira-test-project.mjs). Without the env the
  * org is seeded unconnected and the live-Jira specs skip.
@@ -236,7 +236,6 @@ async function seedKelaQa() {
     where: { id: ws.id },
     data: {
       ideasConfig: {
-        descriptionMode: "merge",
         pull: { productLineFieldId: fieldId, createProductLines: true, excludeStatuses: [], maxIssues: 10000 },
         fields: {
           productLine: { jiraField: "Module", type: "single_select", policy: "set_if_empty", enabled: true },

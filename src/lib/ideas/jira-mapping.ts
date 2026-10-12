@@ -54,26 +54,13 @@ export interface JiraPullConfig {
   maxIssues: number;
 }
 
-export type DescriptionMode = "overwrite" | "merge";
-
-export const DESCRIPTION_MODE_LABELS: Record<DescriptionMode, string> = {
-  merge: "Smart merge (PMOS AI)",
-  overwrite: "Overwrite",
-};
-
 export interface IdeasJiraConfig {
   /**
-   * "overwrite" (default; RoomLens, 2026-09-01): replace the description
-   * with the PM-OS details + ticket list — right when PM-OS authored the
-   * issues in the first place.
-   * "merge" (Kela, 2026-10-12): PMOS AI rewrites the issue description into
-   * ONE text that keeps every fact of the current Jira description and folds
-   * in the PM-OS idea text; the ticket list is then appended
-   * deterministically. Only issues with new evidence are rewritten, and the
-   * preview shows the exact text that will be written. Creates are identical
-   * in both modes.
+   * The Jira description IS the PM-OS idea text plus the tickets list — one
+   * rule, no modes (Daniel, 2026-10-12: the idea is where the merge of the
+   * Jira text and the ticket evidence happens; the push just writes it).
    */
-  descriptionMode: DescriptionMode;
+  descriptionMode: "overwrite";
   /** How the Jira backlog is pulled at import. */
   pull: JiraPullConfig;
   /** Blank lines between the details text and the tickets block. */
@@ -229,8 +216,7 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
     csv,
     ideaTemplate,
     fieldParsing,
-    descriptionMode:
-      stored.descriptionMode === "merge" ? "merge" : "overwrite",
+    descriptionMode: "overwrite",
     pull,
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&

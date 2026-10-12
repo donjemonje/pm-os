@@ -5,10 +5,8 @@ import { Check, Loader2 } from "lucide-react";
 import {
   ATTRIBUTE_LABELS,
   DEFAULT_IDEA_TEMPLATE,
-  DESCRIPTION_MODE_LABELS,
   JIRA_PULL_MAX_ISSUES,
   MAPPED_ATTRIBUTES,
-  type DescriptionMode,
   type IdeasJiraConfig,
   type JiraPullConfig,
   type MappedAttribute,
@@ -313,28 +311,11 @@ export function IdeasOutputConfig({
       {/* Description format */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Description</h2>
-        <p className="mb-3 mt-0.5 text-xs text-slate-500">
-          What a merge does to the Jira description. Smart merge: PMOS AI
-          rewrites the issue&apos;s current description and the PM-OS idea into
-          one text that keeps every fact the team wrote — only for issues with
-          new evidence, and the preview shows the exact text before it is
-          written. Overwrite: the description is replaced with the PM-OS
-          details. Both end with a gap and the supported-tickets list; new
-          issues are identical in both modes.
+        <p className="mb-4 mt-0.5 text-xs text-slate-500">
+          On every merge the Jira description becomes the PM-OS idea text, a
+          gap, and the supported-tickets list. The idea is where the issue&apos;s
+          original text and the ticket evidence were merged.
         </p>
-        <div className="mb-4 flex flex-wrap gap-4">
-          {(Object.keys(DESCRIPTION_MODE_LABELS) as DescriptionMode[]).map((mode) => (
-            <label key={mode} className="flex items-center gap-2 text-sm font-medium">
-              <input
-                type="radio"
-                name={`description-mode-${orgId}`}
-                checked={config.descriptionMode === mode}
-                onChange={() => patch({ descriptionMode: mode })}
-              />
-              {DESCRIPTION_MODE_LABELS[mode]}
-            </label>
-          ))}
-        </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-xs font-medium text-slate-600">

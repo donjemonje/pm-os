@@ -1778,26 +1778,6 @@ export function IdeasView({
                                 {item.action === "create" ? "→ new issue" : item.jiraKey}
                               </span>
                             </div>
-                            {/* Smart-merge description: the exact text that will be written, next to what Jira holds now */}
-                            {item.changes
-                              .filter((c) => c.field === "description" && c.from !== "(replaced)" && c.from !== "")
-                              .map((c) => (
-                                <details key={`${item.ideaId}-desc`} className="ml-[66px] rounded-inner border border-hairline bg-[rgba(247,250,253,.6)]">
-                                  <summary className="cursor-pointer px-2.5 py-1.5 text-[11.5px] font-medium text-fg-2">
-                                    Description — before / after
-                                  </summary>
-                                  <div className="grid gap-3 border-t border-hairline p-2.5 sm:grid-cols-2">
-                                    <div>
-                                      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-fg-muted">In Jira now</div>
-                                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-sans text-[11.5px] leading-relaxed text-fg-2">{c.from}</pre>
-                                    </div>
-                                    <div>
-                                      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-fg-muted">After merge</div>
-                                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-sans text-[11.5px] leading-relaxed text-fg-2">{c.to}</pre>
-                                    </div>
-                                  </div>
-                                </details>
-                              ))}
                             <span className="pl-[66px] text-[11.5px] text-fg-muted">
                               {item.noop
                                 ? "Already up to date in Jira — will be marked merged"
