@@ -1170,9 +1170,9 @@ export function IdeasView({
                   ))}
                   {jiraStatusFilter.map((option) => (
                     <button
-                      key={`js-`}
+                      key={`js-${option}`}
                       onClick={() => setJiraStatusFilter((prev) => prev.filter((x) => x !== option))}
-                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white `}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.status.chip}`}
                     >
                       Jira: {option} ✕
                     </button>
