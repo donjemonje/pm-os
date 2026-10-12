@@ -85,6 +85,10 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
 
 /** Row tags that aren't catalog values — the Label filter's options. */
 const IDEA_LABELS = ["Internal"];
+/** Jira statuses that mean "shipped" — hidden by default when nothing asks for them. */
+function isJiraDoneStatus(status: string): boolean {
+  return /^(done|closed|resolved|released|shipped)$/i.test(status.trim());
+}
 /** Does the idea carry this label? Internal = no customer named on any supporting ticket. */
 function hasLabel(i: Idea, label: string): boolean {
   if (label === "Internal") return (i.customers ?? []).length === 0;
@@ -138,6 +142,8 @@ export function IdeasView({
   const [platformFilter, setPlatformFilter] = useState<string[]>([]);
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  /** Jira status filter (the issue's own workflow status, e.g. Backlog / Done). */
+  const [jiraStatusFilter, setJiraStatusFilter] = useState<string[]>([]);
   /** Label filter: the row tags that aren't catalog values (Internal). */
   const [labelFilter, setLabelFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
@@ -232,6 +238,17 @@ export function IdeasView({
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
   const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
   const jiraByKey = useMemo(() => new Map(jiraSources.map((s) => [s.key, s])), [jiraSources]);
+  /** Distinct Jira statuses in the pulled backlog — the Jira status filter's options. */
+  const jiraStatuses = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const s of jiraSources) {
+      if (s.status && !seen.has(s.status.toLowerCase())) seen.set(s.status.toLowerCase(), s.status);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [jiraSources]);
+  /** The idea's Jira status: the status of its first linked issue (ideas hold one). */
+  const jiraStatusOf = (i: Idea): string | undefined =>
+    i.jira.map((k) => jiraByKey.get(k)?.status).find(Boolean);
   // Catalog names first, in the admin's manual order (their casing also wins
   // over idea-derived duplicates); names only found on ideas trail after,
   // alphabetically.
@@ -504,6 +521,15 @@ export function IdeasView({
       // unchanged ideas need no review, so they show only via their chip.
       return false;
     }
+    const jiraStatus = jiraStatusOf(i);
+    if (jiraStatusFilter.length > 0) {
+      const wanted = jiraStatusFilter.map((s) => s.toLowerCase());
+      if (!jiraStatus || !wanted.includes(jiraStatus.toLowerCase())) return false;
+    } else if (jiraStatus && isJiraDoneStatus(jiraStatus) && i.zen.length === 0) {
+      // Shipped in Jira and no ticket asks for it: hidden by default. Once a
+      // ticket is matched to it ("already shipped"), the PM wants to see it.
+      return false;
+    }
     if (labelFilter.length > 0 && !labelFilter.some((l) => hasLabel(i, l))) return false;
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
@@ -619,6 +645,7 @@ export function IdeasView({
     setPlatformFilter([]);
     setCustomerFilter([]);
     setStatusFilter([]);
+    setJiraStatusFilter([]);
     setLabelFilter([]);
     setPendingOnly(false);
   };
@@ -627,6 +654,7 @@ export function IdeasView({
     productFilter.length > 0 ||
     platformFilter.length > 0 ||
     customerFilter.length > 0 ||
+    jiraStatusFilter.length > 0 ||
     labelFilter.length > 0 ||
     pendingOnly;
 
@@ -636,6 +664,7 @@ export function IdeasView({
     platformFilter.length > 0 ||
     customerFilter.length > 0 ||
     statusFilter.length > 0 ||
+    jiraStatusFilter.length > 0 ||
     labelFilter.length > 0 ||
     pendingOnly;
 
@@ -1054,6 +1083,20 @@ export function IdeasView({
                   selected={statusFilter}
                   onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
                 />
+                {jiraStatuses.length > 0 && (
+                  <FilterPopover
+                    label="Jira Status"
+                    accent="status"
+                    options={jiraStatuses}
+                    selected={jiraStatusFilter}
+                    onToggle={(o) =>
+                      setJiraStatusFilter((prev) =>
+                        prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                      )
+                    }
+                    emptyText="No matching Jira status"
+                  />
+                )}
                 <FilterPopover
                   label="Label"
                   accent="status"
@@ -1123,6 +1166,15 @@ export function IdeasView({
                       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.customer.chip}`}
                     >
                       {option} ✕
+                    </button>
+                  ))}
+                  {jiraStatusFilter.map((option) => (
+                    <button
+                      key={`js-`}
+                      onClick={() => setJiraStatusFilter((prev) => prev.filter((x) => x !== option))}
+                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white `}
+                    >
+                      Jira: {option} ✕
                     </button>
                   ))}
                   {labelFilter.map((option) => (
@@ -1326,6 +1378,14 @@ export function IdeasView({
                                   {idea.jira[0] && (
                                     <span className="shrink-0 font-mono font-semibold text-[#2a5fd0]">
                                       {idea.jira[0]}
+                                    </span>
+                                  )}
+                                  {jiraStatusOf(idea) && (
+                                    <span
+                                      className="shrink-0 rounded bg-[#eef3fb] px-1.5 py-px text-[10.5px] font-medium text-[#2a5fd0]"
+                                      title="Status in Jira"
+                                    >
+                                      {jiraStatusOf(idea)}
                                     </span>
                                   )}
                                   {(firstTicket || idea.jira[0]) && <span>·</span>}
@@ -1718,6 +1778,26 @@ export function IdeasView({
                                 {item.action === "create" ? "→ new issue" : item.jiraKey}
                               </span>
                             </div>
+                            {/* Smart-merge description: the exact text that will be written, next to what Jira holds now */}
+                            {item.changes
+                              .filter((c) => c.field === "description" && c.from !== "(replaced)" && c.from !== "")
+                              .map((c) => (
+                                <details key={`${item.ideaId}-desc`} className="ml-[66px] rounded-inner border border-hairline bg-[rgba(247,250,253,.6)]">
+                                  <summary className="cursor-pointer px-2.5 py-1.5 text-[11.5px] font-medium text-fg-2">
+                                    Description — before / after
+                                  </summary>
+                                  <div className="grid gap-3 border-t border-hairline p-2.5 sm:grid-cols-2">
+                                    <div>
+                                      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-fg-muted">In Jira now</div>
+                                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-sans text-[11.5px] leading-relaxed text-fg-2">{c.from}</pre>
+                                    </div>
+                                    <div>
+                                      <div className="mb-1 font-mono text-[10px] uppercase tracking-wide text-fg-muted">After merge</div>
+                                      <pre className="max-h-64 overflow-auto whitespace-pre-wrap font-sans text-[11.5px] leading-relaxed text-fg-2">{c.to}</pre>
+                                    </div>
+                                  </div>
+                                </details>
+                              ))}
                             <span className="pl-[66px] text-[11.5px] text-fg-muted">
                               {item.noop
                                 ? "Already up to date in Jira — will be marked merged"

@@ -105,9 +105,41 @@ export async function hasValidJiraConnection(workspaceId: string): Promise<boole
   }
 }
 
+type JiraConnectionRow = NonNullable<
+  Awaited<ReturnType<typeof db.jiraConnection.findUnique>>
+>;
+
+/**
+ * Two auth styles share every call below:
+ * - "oauth" (product): Bearer token against api.atlassian.com/ex/jira/<cloudId>.
+ * - "basic" (QA only): email + API token (stored base64-encoded in
+ *   accessToken) against the site URL itself. Lets the e2e suite hold a
+ *   connection to the TEST project across DB resets — OAuth refresh tokens
+ *   rotate on use, so a seeded one would die after the first refresh.
+ */
+function authHeader(connection: JiraConnectionRow): string {
+  return connection.authType === "basic"
+    ? `Basic ${connection.accessToken}`
+    : `Bearer ${connection.accessToken}`;
+}
+
+function apiBase(connection: JiraConnectionRow): string {
+  return connection.authType === "basic"
+    ? connection.siteUrl.replace(/\/+$/, "")
+    : `${ATLASSIAN_API_URL}/ex/jira/${connection.cloudId}`;
+}
+
+/** Value for JiraConnection.accessToken when authType is "basic". */
+export function basicAuthToken(email: string, apiToken: string): string {
+  return Buffer.from(`${email.trim()}:${apiToken.trim()}`, "utf8").toString("base64");
+}
+
 async function getValidConnection(workspaceId: string) {
   const connection = await db.jiraConnection.findUnique({ where: { workspaceId } });
   if (!connection) return null;
+
+  // API tokens don't expire on a schedule — nothing to refresh.
+  if (connection.authType === "basic") return connection;
 
   if (connection.expiresAt.getTime() <= Date.now() + 60_000) {
     // Without Atlassian OAuth credentials a refresh is impossible; report
@@ -138,11 +170,11 @@ async function jiraFetch(workspaceId: string, path: string, init?: RequestInit) 
     throw new Error("Jira not connected");
   }
 
-  const url = `${ATLASSIAN_API_URL}/ex/jira/${connection.cloudId}${path}`;
+  const url = `${apiBase(connection)}${path}`;
   const response = await fetch(url, {
     ...init,
     headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
+      Authorization: authHeader(connection),
       Accept: "application/json",
       "Content-Type": "application/json",
       ...init?.headers,
@@ -190,9 +222,40 @@ const JIRA_SEARCH_FIELDS = [
   "attachment",
 ];
 
-function mapIssue(issue: Record<string, unknown>): JiraIssue {
+interface MapIssueOptions {
+  /** Custom field id whose value is the issue's product line (see
+   *  IdeasJiraConfig.pull.productLineFieldId). */
+  productLineFieldId?: string;
+}
+
+/**
+ * Read a product-line value whatever shape Jira stores it in: single-select
+ * option ({value}), name-bearing object ({name}), plain string, or an array
+ * of those (multi-select / labels-style). Anything else → undefined.
+ */
+export function readProductLineValue(raw: unknown): string | undefined {
+  const one = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v.trim() || undefined;
+    if (v && typeof v === "object") {
+      const o = v as { value?: unknown; name?: unknown };
+      if (typeof o.value === "string" && o.value.trim()) return o.value.trim();
+      if (typeof o.name === "string" && o.name.trim()) return o.name.trim();
+    }
+    return undefined;
+  };
+  if (Array.isArray(raw)) {
+    const first = raw.map(one).find(Boolean);
+    return first;
+  }
+  return one(raw);
+}
+
+function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): JiraIssue {
   const fields = issue.fields as Record<string, unknown>;
   const issueKey = String(issue.key);
+  const productLine = opts.productLineFieldId
+    ? readProductLineValue(fields[opts.productLineFieldId])
+    : undefined;
   const descriptionRaw = fields.description;
   const description =
     typeof descriptionRaw === "string"
@@ -253,6 +316,7 @@ function mapIssue(issue: Record<string, unknown>): JiraIssue {
     issueType,
     labels,
     components,
+    productLine,
     acceptanceCriteria: extractAcceptanceCriteria(description),
     parentKey,
     epicKey,
@@ -275,7 +339,7 @@ export async function fetchJiraAttachmentBytes(
 
   const response = await fetch(meta.content, {
     headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
+      Authorization: authHeader(connection),
       Accept: "*/*",
     },
   });
@@ -322,19 +386,40 @@ interface JqlSearchPage {
   nextPageToken?: string;
 }
 
-async function searchJira(
+interface SearchOptions extends MapIssueOptions {
+  /** Extra field ids to request on top of JIRA_SEARCH_FIELDS. */
+  extraFields?: string[];
+}
+
+export interface PagedIssues {
+  issues: JiraIssue[];
+  /** True when the cap stopped the walk while Jira still had more pages —
+   *  the caller reports it; nothing is dropped silently. */
+  truncated: boolean;
+}
+
+/**
+ * Walk the JQL search pages (Jira serves at most 100 per page) up to
+ * maxResults issues. The cap is a ceiling, never a page size.
+ */
+async function searchJiraPaged(
   workspaceId: string,
   jql: string,
-  maxResults = 100
-): Promise<JiraIssue[]> {
+  maxResults = 100,
+  opts: SearchOptions = {}
+): Promise<PagedIssues> {
   const issues: JiraIssue[] = [];
   let nextPageToken: string | undefined;
+  let truncated = false;
+  const fields = opts.extraFields?.length
+    ? Array.from(new Set([...JIRA_SEARCH_FIELDS, ...opts.extraFields]))
+    : JIRA_SEARCH_FIELDS;
 
   while (issues.length < maxResults) {
     const body: Record<string, unknown> = {
       jql,
       maxResults: Math.min(100, maxResults - issues.length),
-      fields: JIRA_SEARCH_FIELDS,
+      fields,
     };
     if (nextPageToken) {
       body.nextPageToken = nextPageToken;
@@ -346,15 +431,30 @@ async function searchJira(
     })) as JqlSearchPage;
 
     const page = data.issues ?? [];
-    issues.push(...page.map(mapIssue));
+    issues.push(...page.map((issue) => mapIssue(issue, opts)));
 
     if (data.isLast || !data.nextPageToken || page.length === 0) {
       break;
     }
     nextPageToken = data.nextPageToken;
+    if (issues.length >= maxResults) truncated = true;
   }
 
-  return issues.slice(0, maxResults);
+  return { issues: issues.slice(0, maxResults), truncated };
+}
+
+async function searchJira(
+  workspaceId: string,
+  jql: string,
+  maxResults = 100,
+  opts: SearchOptions = {}
+): Promise<JiraIssue[]> {
+  return (await searchJiraPaged(workspaceId, jql, maxResults, opts)).issues;
+}
+
+/** JQL string literal — Jira's escape is a backslash before quote/backslash. */
+function jqlString(value: string): string {
+  return `"${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
 }
 
 export interface IssueScopeParams {
@@ -362,16 +462,19 @@ export interface IssueScopeParams {
   versionName?: string;
   epicKey?: string;
   statuses?: string[];
+  /** Status names to leave out (`status not in (…)`). */
+  excludeStatuses?: string[];
+  /** Ceiling on issues returned; default 100 for the legacy callers. */
+  maxResults?: number;
+  /** Custom field id read as the issue's product line. */
+  productLineFieldId?: string;
 }
 
-export async function fetchIssuesForScope(
-  workspaceId: string,
-  params: IssueScopeParams
-): Promise<JiraIssue[]> {
-  const clauses: string[] = [`project = "${params.projectKey}"`];
+function scopeJql(params: IssueScopeParams): string {
+  const clauses: string[] = [`project = ${jqlString(params.projectKey)}`];
 
   if (params.versionName) {
-    clauses.push(`fixVersion = "${params.versionName}"`);
+    clauses.push(`fixVersion = ${jqlString(params.versionName)}`);
   }
 
   if (params.epicKey) {
@@ -379,12 +482,33 @@ export async function fetchIssuesForScope(
   }
 
   if (params.statuses?.length) {
-    const statusList = params.statuses.map((s) => `"${s}"`).join(", ");
-    clauses.push(`status in (${statusList})`);
+    clauses.push(`status in (${params.statuses.map(jqlString).join(", ")})`);
   }
 
-  const jql = `${clauses.join(" AND ")} ORDER BY issuetype ASC, key ASC`;
-  return searchJira(workspaceId, jql, 100);
+  if (params.excludeStatuses?.length) {
+    clauses.push(`status not in (${params.excludeStatuses.map(jqlString).join(", ")})`);
+  }
+
+  return `${clauses.join(" AND ")} ORDER BY issuetype ASC, key ASC`;
+}
+
+/** Same as fetchIssuesForScope, plus whether the cap cut the result. */
+export async function fetchIssuesForScopePaged(
+  workspaceId: string,
+  params: IssueScopeParams
+): Promise<PagedIssues> {
+  const fieldId = params.productLineFieldId?.trim() || undefined;
+  return searchJiraPaged(workspaceId, scopeJql(params), params.maxResults ?? 100, {
+    productLineFieldId: fieldId,
+    extraFields: fieldId ? [fieldId] : [],
+  });
+}
+
+export async function fetchIssuesForScope(
+  workspaceId: string,
+  params: IssueScopeParams
+): Promise<JiraIssue[]> {
+  return (await fetchIssuesForScopePaged(workspaceId, params)).issues;
 }
 
 export async function fetchEpicsForProject(

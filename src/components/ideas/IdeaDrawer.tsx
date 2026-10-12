@@ -570,9 +570,9 @@ export function IdeaDrawer({
                 </div>
               </div>
               <div className="flex flex-col gap-1 text-xs text-muted">
-                {jiraSrc.status && <span>Status: {jiraSrc.status}</span>}
+                {jiraSrc.status && <span>Jira status: {jiraSrc.status}</span>}
                 {jiraSrc.products.length > 0 && (
-                  <span>Components: {jiraSrc.products.join(", ")}</span>
+                  <span>Product line: {jiraSrc.products.join(", ")}</span>
                 )}
               </div>
               {jiraSrc.url && (

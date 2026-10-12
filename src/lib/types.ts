@@ -34,6 +34,9 @@ export interface JiraIssue {
   issueType: string;
   labels: string[];
   components: string[];
+  /** Value of the configured product-line field (e.g. Kela's "Module"); only
+   *  set when the pull was given a field id. */
+  productLine?: string;
   acceptanceCriteria?: string;
   parentKey?: string;
   epicKey?: string;

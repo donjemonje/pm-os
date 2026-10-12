@@ -27,7 +27,7 @@ export default async function ProductLinesSettingsPage() {
     db.productLine.findMany({
       where: { workspaceId: workspace.id },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      select: { id: true, name: true, description: true, color: true },
+      select: { id: true, name: true, description: true, color: true, origin: true },
     }),
     db.platform.findMany({
       where: { workspaceId: workspace.id },

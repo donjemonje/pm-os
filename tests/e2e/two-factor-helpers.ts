@@ -22,6 +22,8 @@ export const USER_ADMIN = "qa+roomlens-admin@pm-os.io"; // PMOS_ADMIN, enrolled
  */
 export const TEST_TOTP_SECRET = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
 export const TEST_ADMIN_TOTP_SECRET = "KRSXG5CTMVRXEZLUKRSXG5CTMVRXEZLU";
+/** Kela QA org user (qa+kela@pm-os.io) — the live-Jira specs; seeded by scripts/seed-test-db.mjs. */
+export const TEST_KELA_TOTP_SECRET = "MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK";
 
 export const TOTP_PERIOD_MS = 30_000;
 

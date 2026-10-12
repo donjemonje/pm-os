@@ -44,7 +44,7 @@ export interface MatchHooks extends StageHooks {
 export const MATCH_PROMPT_VERSION = "match-v7";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
-function getMatchModel(): string {
+export function getMatchModel(): string {
   return process.env.IDEAS_MATCH_MODEL?.trim() || "claude-opus-5";
 }
 

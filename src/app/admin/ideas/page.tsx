@@ -14,6 +14,10 @@ import {
   PARSE_SYSTEM_PROMPT,
 } from "@/lib/ideas/field-parse";
 import { SPLIT_PROMPT_VERSION, SPLIT_SYSTEM_PROMPT } from "@/lib/ideas/split";
+import {
+  DESCRIBE_MERGE_PROMPT_VERSION,
+  DESCRIBE_MERGE_SYSTEM_PROMPT,
+} from "@/lib/ideas/describe-merge";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { AdminShell } from "../AdminShell";
 import { IdeasOutputConfig } from "./IdeasOutputConfig";
@@ -71,6 +75,12 @@ export default async function AdminIdeasPage() {
             title: `Jira backlog matching (${MATCH_PROMPT_VERSION})`,
             note: "Phase 1, all at once: every feature request is matched against existing ideas, unrepresented Jira issues, and every other request of the same import. The answers are folded into groups deterministically; groups of two or more then get the reconciliation prompt below.",
             text: MATCH_SYSTEM_PROMPT,
+          },
+          {
+            id: "describe-merge",
+            title: `Description smart merge (${DESCRIBE_MERGE_PROMPT_VERSION})`,
+            note: "Jira Merge, description mode \"Smart merge\": one call per updated issue with new evidence — the issue's current description plus the PM-OS idea text become one description that keeps every fact the team wrote. Judged once per input and reused, so the preview is exactly what gets written.",
+            text: DESCRIBE_MERGE_SYSTEM_PROMPT,
           },
         ]}
         organizations={organizations

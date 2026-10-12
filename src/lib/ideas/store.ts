@@ -8,7 +8,7 @@ import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
-import { fetchJiraLiveSources } from "./jira-sync";
+import { ensureJiraProductLines, fetchJiraLiveSources } from "./jira-sync";
 import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import {
@@ -323,9 +323,21 @@ async function runImport(
   const jira = await fetchJiraLiveSources(workspaceId);
   trace.end({
     note: jira.connected
-      ? `${jira.sources.length} live issues`
+      ? `${jira.sources.length} live issues` +
+        (jira.truncatedProjects.length > 0
+          ? ` · CAPPED at ${jira.pull.maxIssues} in ${jira.truncatedProjects.join(", ")}`
+          : "")
       : "Jira not connected",
   });
+
+  // Product lines the backlog names but the catalog lacks become catalog rows
+  // now (origin "jira"), before the stage contexts below read the catalog —
+  // so this import's prompts and filters already know them.
+  if (jira.connected && jira.pull.createProductLines) {
+    trace.begin("jira-product-lines", "db");
+    const added = await ensureJiraProductLines(workspaceId, jira.sources);
+    trace.end({ note: added.length > 0 ? `added ${added.join(", ")}` : "catalog complete" });
+  }
 
   // Stage contexts (catalogs + template) are loaded once, and the prompt
   // prefixes known now are warmed in the provider's cache while the parse

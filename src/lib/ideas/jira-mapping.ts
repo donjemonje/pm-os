@@ -28,10 +28,54 @@ export interface FieldMapping {
   enabled: boolean;
 }
 
+/** How the Jira backlog is read at import time. */
+export interface JiraPullConfig {
+  /**
+   * Jira field id whose value becomes the idea's product line (e.g.
+   * "customfield_10319" — Kela's single-select "Module"). Stored by id, not
+   * name: names are editable in Jira, ids are not. Empty = use Components
+   * (RoomLens). Single-select, option-name, string and array values are all
+   * read; anything else is ignored.
+   */
+  productLineFieldId: string;
+  /**
+   * When the pull meets a product-line value PM-OS has no catalog row for,
+   * create one (origin "jira") so the match catalog, the filters and the
+   * scoped merge see it. Off = unknown values still land on the idea, but
+   * only cataloged names appear in the Product Line filter.
+   */
+  createProductLines: boolean;
+  /** Jira status names left out of the pull entirely (JQL `status not in`).
+   *  Empty = pull every status; Done issues then stay in the match pool so
+   *  "already shipped" matches surface, and the UI hides them by default. */
+  excludeStatuses: string[];
+  /** Safety ceiling per project (Jira pages at 100). The pull warns when it
+   *  is reached instead of truncating silently. */
+  maxIssues: number;
+}
+
+export type DescriptionMode = "overwrite" | "merge";
+
+export const DESCRIPTION_MODE_LABELS: Record<DescriptionMode, string> = {
+  merge: "Smart merge (PMOS AI)",
+  overwrite: "Overwrite",
+};
+
 export interface IdeasJiraConfig {
-  /** "overwrite": replace the Jira description with PM-OS details + ticket
-   *  list. This is the customer's chosen semantics (2026-09-01). */
-  descriptionMode: "overwrite";
+  /**
+   * "overwrite" (default; RoomLens, 2026-09-01): replace the description
+   * with the PM-OS details + ticket list — right when PM-OS authored the
+   * issues in the first place.
+   * "merge" (Kela, 2026-10-12): PMOS AI rewrites the issue description into
+   * ONE text that keeps every fact of the current Jira description and folds
+   * in the PM-OS idea text; the ticket list is then appended
+   * deterministically. Only issues with new evidence are rewritten, and the
+   * preview shows the exact text that will be written. Creates are identical
+   * in both modes.
+   */
+  descriptionMode: DescriptionMode;
+  /** How the Jira backlog is pulled at import. */
+  pull: JiraPullConfig;
   /** Blank lines between the details text and the tickets block. */
   descriptionGapLines: number;
   supportedTicketsHeading: string;
@@ -65,11 +109,22 @@ Only when the ticket implies an implementation AND there is high confidence it i
 ## Additional Info
 Other important related context. When the ticket describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Omit this section when there is none.`;
 
+export const DEFAULT_JIRA_PULL_CONFIG: JiraPullConfig = {
+  productLineFieldId: "",
+  createProductLines: true,
+  excludeStatuses: [],
+  maxIssues: 10_000,
+};
+
+/** Hard ceiling on the configurable per-project pull cap. */
+export const JIRA_PULL_MAX_ISSUES = 10_000;
+
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   ideaTemplate: DEFAULT_IDEA_TEMPLATE,
   fieldParsing: { customers: true },
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
+  pull: DEFAULT_JIRA_PULL_CONFIG,
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
   zendeskTicketUrlTemplate: "",
@@ -145,11 +200,38 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
       fields[attr] = { ...DEFAULT_IDEAS_JIRA_CONFIG.fields[attr], ...f };
     }
   }
+  const storedPull = (
+    stored.pull && typeof stored.pull === "object" ? stored.pull : {}
+  ) as Partial<JiraPullConfig>;
+  const pull: JiraPullConfig = {
+    productLineFieldId:
+      typeof storedPull.productLineFieldId === "string"
+        ? storedPull.productLineFieldId.trim()
+        : DEFAULT_JIRA_PULL_CONFIG.productLineFieldId,
+    createProductLines:
+      typeof storedPull.createProductLines === "boolean"
+        ? storedPull.createProductLines
+        : DEFAULT_JIRA_PULL_CONFIG.createProductLines,
+    excludeStatuses: Array.isArray(storedPull.excludeStatuses)
+      ? storedPull.excludeStatuses
+          .filter((s): s is string => typeof s === "string")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : DEFAULT_JIRA_PULL_CONFIG.excludeStatuses,
+    maxIssues:
+      typeof storedPull.maxIssues === "number" &&
+      Number.isFinite(storedPull.maxIssues) &&
+      storedPull.maxIssues >= 1
+        ? Math.min(Math.floor(storedPull.maxIssues), JIRA_PULL_MAX_ISSUES)
+        : DEFAULT_JIRA_PULL_CONFIG.maxIssues,
+  };
   return {
     csv,
     ideaTemplate,
     fieldParsing,
-    descriptionMode: "overwrite",
+    descriptionMode:
+      stored.descriptionMode === "merge" ? "merge" : "overwrite",
+    pull,
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&
       stored.descriptionGapLines >= 0

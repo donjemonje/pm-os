@@ -5,8 +5,12 @@ import { Check, Loader2 } from "lucide-react";
 import {
   ATTRIBUTE_LABELS,
   DEFAULT_IDEA_TEMPLATE,
+  DESCRIPTION_MODE_LABELS,
+  JIRA_PULL_MAX_ISSUES,
   MAPPED_ATTRIBUTES,
+  type DescriptionMode,
   type IdeasJiraConfig,
+  type JiraPullConfig,
   type MappedAttribute,
 } from "@/lib/ideas/jira-mapping";
 import {
@@ -92,6 +96,14 @@ export function IdeasOutputConfig({
           [attr]: { ...prev[orgId].fields[attr], ...next },
         },
       },
+    }));
+  };
+
+  const patchPull = (next: Partial<JiraPullConfig>) => {
+    setSaved(false);
+    setConfigs((prev) => ({
+      ...prev,
+      [orgId]: { ...prev[orgId], pull: { ...prev[orgId].pull, ...next } },
     }));
   };
 
@@ -223,12 +235,106 @@ export function IdeasOutputConfig({
       )}
 
       {/* Description format */}
+      {/* Jira pull — how the backlog is read at import */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-sm font-bold">Jira pull</h2>
+        <p className="mb-4 mt-0.5 text-xs text-slate-500">
+          How this organization&apos;s Jira backlog is read on every import.
+          Product line comes from the field below when set (Kela: Module =
+          customfield_10319), otherwise from Components. Every status is
+          pulled unless excluded — Done issues stay in the match pool so
+          &quot;already shipped&quot; matches surface; the Ideas page hides
+          them by default.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs font-medium text-slate-600">
+              Product-line field id (empty = Components)
+            </span>
+            <input
+              type="text"
+              value={config.pull.productLineFieldId}
+              onChange={(e) => patchPull({ productLineFieldId: e.target.value })}
+              placeholder="customfield_10319"
+              className={`${inputCls} font-mono`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs font-medium text-slate-600">
+              Max issues per project (ceiling {JIRA_PULL_MAX_ISSUES.toLocaleString()})
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={JIRA_PULL_MAX_ISSUES}
+              value={config.pull.maxIssues}
+              onChange={(e) =>
+                patchPull({
+                  maxIssues: Math.min(
+                    JIRA_PULL_MAX_ISSUES,
+                    Math.max(1, parseInt(e.target.value, 10) || 1),
+                  ),
+                })
+              }
+              className={inputCls}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-xs font-medium text-slate-600">
+              Exclude Jira statuses (comma-separated; empty = pull all)
+            </span>
+            <input
+              type="text"
+              value={config.pull.excludeStatuses.join(", ")}
+              onChange={(e) =>
+                patchPull({
+                  excludeStatuses: e.target.value
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                })
+              }
+              placeholder="e.g. Won't do, Duplicate"
+              className={inputCls}
+            />
+          </label>
+          <label className="flex items-center gap-2 self-end pb-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={config.pull.createProductLines}
+              onChange={(e) => patchPull({ createProductLines: e.target.checked })}
+              className="rounded"
+            />
+            Add unknown product lines to the catalog (marked “from Jira”)
+          </label>
+        </div>
+      </section>
+
+      {/* Description format */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Description</h2>
-        <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          On every merge the Jira description is replaced with the PM-OS
-          details, a gap, and the supported-tickets list.
+        <p className="mb-3 mt-0.5 text-xs text-slate-500">
+          What a merge does to the Jira description. Smart merge: PMOS AI
+          rewrites the issue&apos;s current description and the PM-OS idea into
+          one text that keeps every fact the team wrote — only for issues with
+          new evidence, and the preview shows the exact text before it is
+          written. Overwrite: the description is replaced with the PM-OS
+          details. Both end with a gap and the supported-tickets list; new
+          issues are identical in both modes.
         </p>
+        <div className="mb-4 flex flex-wrap gap-4">
+          {(Object.keys(DESCRIPTION_MODE_LABELS) as DescriptionMode[]).map((mode) => (
+            <label key={mode} className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="radio"
+                name={`description-mode-${orgId}`}
+                checked={config.descriptionMode === mode}
+                onChange={() => patch({ descriptionMode: mode })}
+              />
+              {DESCRIPTION_MODE_LABELS[mode]}
+            </label>
+          ))}
+        </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-xs font-medium text-slate-600">

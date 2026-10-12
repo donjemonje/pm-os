@@ -20,6 +20,7 @@ import {
   type IdeasJiraConfig,
   type MappedAttribute,
 } from "./jira-mapping";
+import { mergeDescription, stripSupportedTickets } from "./describe-merge";
 import { getIdeasState, type IdeasState } from "./store";
 
 /** The workspace's stored output config merged over defaults. */
@@ -473,12 +474,36 @@ async function derivePlan(
       write.undo.summary = { before: live.summary, after: row.title };
     }
 
-    const desc = buildDescription(config, row.details, ideaTickets(row));
-    if (normText(desc.text) !== normText(live.descriptionText)) {
+    // Description: "overwrite" rewrites whenever the rendered text differs
+    // from Jira's. "merge" rewrites only when this idea gained evidence since
+    // the last push (new votes) — then PMOS AI folds the idea text into the
+    // customer's current description and the tickets block is re-appended.
+    let desc: { adf: unknown; text: string } | null = null;
+    if (config.descriptionMode === "merge") {
+      if (row.newVotes > 0) {
+        try {
+          const merged = await mergeDescription(workspaceId, {
+            current: stripSupportedTickets(live.descriptionText, config.supportedTicketsHeading),
+            details: row.details,
+            template: config.ideaTemplate,
+          });
+          desc = buildDescription(config, merged.text, ideaTickets(row));
+        } catch (err) {
+          warnings.push(
+            `${key}: PMOS AI could not merge the description (${err instanceof Error ? err.message : "unknown error"}) — description left as is, other fields still written.`
+          );
+        }
+      }
+    } else {
+      desc = buildDescription(config, row.details, ideaTickets(row));
+    }
+    if (desc && normText(desc.text) !== normText(live.descriptionText)) {
       changes.push({
         field: "description",
         label: ATTRIBUTE_LABELS.description,
-        from: "(replaced)",
+        // The preview shows both texts side by side in merge mode; overwrite
+        // keeps its one-word marker (nothing of the old text survives).
+        from: config.descriptionMode === "merge" ? live.descriptionText : "(replaced)",
         to: desc.text,
       });
       write.descriptionAdf = desc.adf;

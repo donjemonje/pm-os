@@ -6,7 +6,7 @@ import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
 import { isAllCustomers } from "@/lib/ideas/customer-key";
 
-const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
+const ITEM_SELECT = { id: true, name: true, description: true, color: true, origin: true } as const;
 const CUSTOMER_SELECT = { ...ITEM_SELECT, aliases: true } as const;
 const MAX_NAME = 80;
 const MAX_DESCRIPTION = 2000;
