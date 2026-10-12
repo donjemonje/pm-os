@@ -38,7 +38,7 @@ export default async function AdminIdeasPage() {
     <AdminShell
       user={admin}
       title="Ideas"
-      description="How review results land in each customer's Jira: field mapping, write policies, description format. Changes apply to the next merge."
+      description="Per-organization Ideas setup in four parts: import stats, Jira (pull, mapping, write-back), Zendesk (CSV import mapping), and the AI stages. Changes apply to the next import or merge."
     >
       <IdeasOutputConfig
         prompts={[
