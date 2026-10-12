@@ -180,8 +180,8 @@ const KELA_PASSWORD = "kela-qa-pass1";
 const TEST_KELA_TOTP_SECRET = "MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK";
 
 /**
- * A second QA organization shaped like Kela: ideas on per org, product lines
- * come from the Jira "Module" field, and — when the
+ * A second QA organization shaped like Kela: ideas on per org, Product Line
+ * mapped to the Jira "Module" field (read on pull, written on push), and — when the
  * JIRA_TEST_* env is present — a live Jira connection (API token, basic auth)
  * to the TEST project (scripts/jira-test-project.mjs). Without the env the
  * org is seeded unconnected and the live-Jira specs skip.
@@ -230,13 +230,13 @@ async function seedKelaQa() {
   await prisma.jiraIdeaSnapshot.deleteMany({ where: { workspaceId: ws.id } });
   await prisma.productLine.deleteMany({ where: { workspaceId: ws.id, origin: "jira" } });
 
-  const fieldId = process.env.JIRA_TEST_PRODUCT_LINE_FIELD_ID?.trim() || "customfield_10319";
   // Stored as the partial the app merges over its defaults (mergeIdeasJiraConfig).
+  // Product Line ↔ "Module": the pull reads it, the push writes it.
   await prisma.workspace.update({
     where: { id: ws.id },
     data: {
       ideasConfig: {
-        pull: { productLineFieldId: fieldId, createProductLines: true, excludeStatuses: [], maxIssues: 10000 },
+        pull: { maxIssues: 10000 },
         fields: {
           productLine: { jiraField: "Module", type: "single_select", policy: "set_if_empty", enabled: true },
         },

@@ -64,7 +64,7 @@ export async function loginAsKelaQa(page: Page): Promise<void> {
 
 /** The JIRA_TEST_* env the live-Jira specs need; undefined → those specs skip. */
 export function jiraTestEnv():
-  | { siteUrl: string; email: string; apiToken: string; projectKey: string; productLineFieldId: string }
+  | { siteUrl: string; email: string; apiToken: string; projectKey: string; moduleFieldId: string }
   | undefined {
   const siteUrl = RESOLVED_ENV.JIRA_TEST_SITE_URL?.trim();
   const email = RESOLVED_ENV.JIRA_TEST_EMAIL?.trim();
@@ -75,7 +75,9 @@ export function jiraTestEnv():
     email,
     apiToken,
     projectKey: RESOLVED_ENV.JIRA_TEST_PROJECT_KEY?.trim() || "TEST",
-    productLineFieldId: RESOLVED_ENV.JIRA_TEST_PRODUCT_LINE_FIELD_ID?.trim() || "customfield_10319",
+    // Id of the Module field on the test site — only the TEST seeding script
+    // writes by id; the app resolves the mapped name "Module" itself.
+    moduleFieldId: RESOLVED_ENV.JIRA_TEST_PRODUCT_LINE_FIELD_ID?.trim() || "customfield_10319",
   };
 }
 

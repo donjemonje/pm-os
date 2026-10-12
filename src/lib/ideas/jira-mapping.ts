@@ -21,7 +21,9 @@ export type FieldPolicy =
   | "union";
 
 export interface FieldMapping {
-  /** Jira field name as shown in Jira (resolved to the field id at push time). */
+  /** Jira field name as shown in Jira (resolved to the field id at push time;
+   *  for Product Line also at pull time — the pull reads this field as the
+   *  issue's product line, Components when it is empty). */
   jiraField: string;
   type: "single_select" | "number" | "multi_select";
   policy: FieldPolicy;
@@ -30,25 +32,6 @@ export interface FieldMapping {
 
 /** How the Jira backlog is read at import time. */
 export interface JiraPullConfig {
-  /**
-   * Jira field id whose value becomes the idea's product line (e.g.
-   * "customfield_10319" — Kela's single-select "Module"). Stored by id, not
-   * name: names are editable in Jira, ids are not. Empty = use Components
-   * (RoomLens). Single-select, option-name, string and array values are all
-   * read; anything else is ignored.
-   */
-  productLineFieldId: string;
-  /**
-   * When the pull meets a product-line value PM-OS has no catalog row for,
-   * create one (origin "jira") so the match catalog, the filters and the
-   * scoped merge see it. Off = unknown values still land on the idea, but
-   * only cataloged names appear in the Product Line filter.
-   */
-  createProductLines: boolean;
-  /** Jira status names left out of the pull entirely (JQL `status not in`).
-   *  Empty = pull every status; Done issues then stay in the match pool so
-   *  "already shipped" matches surface, and the UI hides them by default. */
-  excludeStatuses: string[];
   /** Safety ceiling per project (Jira pages at 100). The pull warns when it
    *  is reached instead of truncating silently. */
   maxIssues: number;
@@ -97,9 +80,6 @@ Only when the ticket implies an implementation AND there is high confidence it i
 Other important related context. When the ticket describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Omit this section when there is none.`;
 
 export const DEFAULT_JIRA_PULL_CONFIG: JiraPullConfig = {
-  productLineFieldId: "",
-  createProductLines: true,
-  excludeStatuses: [],
   maxIssues: 10_000,
 };
 
@@ -191,20 +171,6 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
     stored.pull && typeof stored.pull === "object" ? stored.pull : {}
   ) as Partial<JiraPullConfig>;
   const pull: JiraPullConfig = {
-    productLineFieldId:
-      typeof storedPull.productLineFieldId === "string"
-        ? storedPull.productLineFieldId.trim()
-        : DEFAULT_JIRA_PULL_CONFIG.productLineFieldId,
-    createProductLines:
-      typeof storedPull.createProductLines === "boolean"
-        ? storedPull.createProductLines
-        : DEFAULT_JIRA_PULL_CONFIG.createProductLines,
-    excludeStatuses: Array.isArray(storedPull.excludeStatuses)
-      ? storedPull.excludeStatuses
-          .filter((s): s is string => typeof s === "string")
-          .map((s) => s.trim())
-          .filter(Boolean)
-      : DEFAULT_JIRA_PULL_CONFIG.excludeStatuses,
     maxIssues:
       typeof storedPull.maxIssues === "number" &&
       Number.isFinite(storedPull.maxIssues) &&

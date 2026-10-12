@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { fetchIssuesForScopePaged, getJiraConnectionStatus } from "../jira";
+import { fetchIssuesForScopePaged, getJiraConnectionStatus, listAllFields } from "../jira";
 import { mergeIdeasJiraConfig, type JiraPullConfig } from "./jira-mapping";
 import type { JiraSource } from "./types";
 
@@ -17,21 +17,39 @@ export interface JiraLiveResult {
  * each batch starts from Jira's current state, never from what PM-OS saw
  * last time, so nothing here is cached.
  *
- * Per-workspace pull rules (Admin → Ideas → Jira pull, IdeasJiraConfig.pull):
- * - product line comes from the configured field id (Kela: Module) — when
- *   none is configured, from Components (RoomLens);
- * - every page is walked up to `maxIssues` per project (Jira pages at 100);
- * - `excludeStatuses` are left out in JQL; by default every status is pulled,
- *   Done included, so "already shipped" matches can surface.
+ * Per-workspace rules (Admin → Ideas):
+ * - product line: the Jira field mapped as Product Line in the field mapping
+ *   (Kela: "Module"), resolved by name to its id on the site; an issue with
+ *   that field empty — or a site without the field — falls back to
+ *   Components (RoomLens). Jira field names are editable, so the name is
+ *   resolved on every pull, never stored as an id.
+ * - every page is walked up to `pull.maxIssues` per project (Jira pages at
+ *   100); every status is pulled, Done included, so "already shipped"
+ *   matches can surface (the Ideas page hides Done by default).
  */
 export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiveResult> {
   const [status, wsRow] = await Promise.all([
     getJiraConnectionStatus(workspaceId),
     db.workspace.findUnique({ where: { id: workspaceId }, select: { ideasConfig: true } }),
   ]);
-  const pull = mergeIdeasJiraConfig(wsRow?.ideasConfig).pull;
+  const config = mergeIdeasJiraConfig(wsRow?.ideasConfig);
+  const pull = config.pull;
   if (!status?.connected || status.projectKeys.length === 0) {
     return { connected: false, sources: [], truncatedProjects: [], pull };
+  }
+
+  // The field mapped as Product Line, by display name → id. Missing on this
+  // site = Components only (no warning: RoomLens never had the field).
+  let productLineFieldId: string | undefined;
+  const mappedName = config.fields.productLine.jiraField.trim().toLowerCase();
+  if (mappedName && mappedName !== "components") {
+    try {
+      productLineFieldId = (await listAllFields(workspaceId)).get(mappedName)?.id;
+    } catch (err) {
+      console.warn(
+        `[ideas:jira] could not read the field list (${err instanceof Error ? err.message : "unknown error"}) — product lines fall back to Components this import.`
+      );
+    }
   }
 
   const perProject = await Promise.all(
@@ -40,19 +58,17 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       ...(await fetchIssuesForScopePaged(workspaceId, {
         projectKey,
         maxResults: pull.maxIssues,
-        excludeStatuses: pull.excludeStatuses,
-        productLineFieldId: pull.productLineFieldId || undefined,
+        productLineFieldId,
       })),
     }))
   );
   const truncatedProjects = perProject.filter((p) => p.truncated).map((p) => p.projectKey);
   for (const key of truncatedProjects) {
     console.warn(
-      `[ideas:jira] ${key}: pull stopped at the ${pull.maxIssues}-issue ceiling — raise it in Admin → Ideas or exclude statuses.`
+      `[ideas:jira] ${key}: pull stopped at the ${pull.maxIssues}-issue ceiling — raise it in Admin → Ideas.`
     );
   }
 
-  const useField = Boolean(pull.productLineFieldId);
   const sources: JiraSource[] = perProject
     .flatMap((p) => p.issues)
     .filter((issue) => !/^sub-?task$/i.test(issue.issueType))
@@ -63,16 +79,16 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       body: issue.description,
       status: issue.status,
       url: `${status.siteUrl}/browse/${issue.key}`,
-      // A configured field is the only product-line source: Components are
-      // ignored even when present, so one customer's taxonomy never mixes.
-      products: useField ? (issue.productLine ? [issue.productLine] : []) : issue.components,
+      // Mapped field first (Kela: Module); Components when it is empty.
+      products: issue.productLine ? [issue.productLine] : issue.components,
     }));
   return { connected: true, sources, truncatedProjects, pull };
 }
 
 /**
  * Catalog rows for product-line values the pull brought that PM-OS doesn't
- * know yet (origin "jira"). Runs before the stage contexts load so this
+ * know yet (origin "jira"), tagged "from Jira" in Settings → Product Lines so
+ * a PM can tell them from hand-made rows. Runs before the stage contexts load so this
  * import's catalog/match prompts already list them. Case-insensitive on the
  * name; "Other" is the fallback bucket, never a catalog row.
  */

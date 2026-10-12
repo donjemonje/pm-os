@@ -237,75 +237,32 @@ export function IdeasOutputConfig({
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Jira pull</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          How this organization&apos;s Jira backlog is read on every import.
-          Product line comes from the field below when set (Kela: Module =
-          customfield_10319), otherwise from Components. Every status is
-          pulled unless excluded — Done issues stay in the match pool so
-          &quot;already shipped&quot; matches surface; the Ideas page hides
-          them by default.
+          The connected projects are read in full on every import, every
+          status included. Each issue&apos;s product line is the Jira field
+          mapped as Product Line below (Kela: Module), Components when that
+          field is empty; values the catalog lacks are added to it, marked
+          &quot;from Jira&quot;.
         </p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-slate-600">
-              Product-line field id (empty = Components)
-            </span>
-            <input
-              type="text"
-              value={config.pull.productLineFieldId}
-              onChange={(e) => patchPull({ productLineFieldId: e.target.value })}
-              placeholder="customfield_10319"
-              className={`${inputCls} font-mono`}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-slate-600">
-              Max issues per project (ceiling {JIRA_PULL_MAX_ISSUES.toLocaleString()})
-            </span>
-            <input
-              type="number"
-              min={1}
-              max={JIRA_PULL_MAX_ISSUES}
-              value={config.pull.maxIssues}
-              onChange={(e) =>
-                patchPull({
-                  maxIssues: Math.min(
-                    JIRA_PULL_MAX_ISSUES,
-                    Math.max(1, parseInt(e.target.value, 10) || 1),
-                  ),
-                })
-              }
-              className={inputCls}
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-xs font-medium text-slate-600">
-              Exclude Jira statuses (comma-separated; empty = pull all)
-            </span>
-            <input
-              type="text"
-              value={config.pull.excludeStatuses.join(", ")}
-              onChange={(e) =>
-                patchPull({
-                  excludeStatuses: e.target.value
-                    .split(",")
-                    .map((s) => s.trim())
-                    .filter(Boolean),
-                })
-              }
-              placeholder="e.g. Won't do, Duplicate"
-              className={inputCls}
-            />
-          </label>
-          <label className="flex items-center gap-2 self-end pb-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={config.pull.createProductLines}
-              onChange={(e) => patchPull({ createProductLines: e.target.checked })}
-              className="rounded"
-            />
-            Add unknown product lines to the catalog (marked “from Jira”)
-          </label>
-        </div>
+        <label className="flex flex-col gap-1 text-sm sm:w-72">
+          <span className="text-xs font-medium text-slate-600">
+            Max issues per project (ceiling {JIRA_PULL_MAX_ISSUES.toLocaleString()})
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={JIRA_PULL_MAX_ISSUES}
+            value={config.pull.maxIssues}
+            onChange={(e) =>
+              patchPull({
+                maxIssues: Math.min(
+                  JIRA_PULL_MAX_ISSUES,
+                  Math.max(1, parseInt(e.target.value, 10) || 1),
+                ),
+              })
+            }
+            className={inputCls}
+          />
+        </label>
       </section>
 
       {/* Description format */}
@@ -372,9 +329,11 @@ export function IdeasOutputConfig({
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Jira field mapping</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          PM-OS attribute → Jira field (matched by display name). Values that
-          aren&apos;t options of the Jira field are skipped with a warning in
-          the merge preview — add the options in Jira.
+          PM-OS attribute → Jira field (matched by display name). Product Line
+          is also read on import: its Jira field is the issue&apos;s product
+          line (Kela: Module). Values that aren&apos;t options of the Jira
+          field are skipped with a warning in the merge preview — add the
+          options in Jira.
         </p>
         <div className="space-y-3">
           {MAPPED_ATTRIBUTES.map((attr) => {

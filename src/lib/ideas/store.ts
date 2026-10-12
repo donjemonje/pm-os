@@ -333,7 +333,7 @@ async function runImport(
   // Product lines the backlog names but the catalog lacks become catalog rows
   // now (origin "jira"), before the stage contexts below read the catalog —
   // so this import's prompts and filters already know them.
-  if (jira.connected && jira.pull.createProductLines) {
+  if (jira.connected) {
     trace.begin("jira-product-lines", "db");
     const added = await ensureJiraProductLines(workspaceId, jira.sources);
     trace.end({ note: added.length > 0 ? `added ${added.join(", ")}` : "catalog complete" });
