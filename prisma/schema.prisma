@@ -117,7 +117,6 @@ model Workspace {
   platforms             Platform[]
   customers             Customer[]
   ideasPushUndos        IdeasPushUndo[]
-  jiraDedupeRejects     JiraDedupeReject[]
 }
 
 /// Per-idea undo snapshot for the LAST merge to Jira only — executePush
@@ -441,11 +440,6 @@ model Idea {
   /// Human-readable narration of what this import did to an Updated idea
   /// (votes, enrichment, added product lines/platforms). Cleared on rollover.
   batchChanges   Json      @default("[]")
-  /// Jira-to-Jira dedupe: this Jira-origin idea's issue addresses the same
-  /// user pain as this (older) issue. The idea is an Archive proposal, never
-  /// synced; the PM closes the issue in Jira by hand, or says "not a
-  /// duplicate" (which records a reject pair and restores the idea).
-  duplicateOf    String?
   /// Customers a PM added by hand (names). Ticket-derived customers are
   /// never stored here; removing one of those is a dismissal on its tickets.
   addedCustomers Json      @default("[]")
@@ -498,19 +492,6 @@ model JiraIdeaSnapshot {
   syncedAt        DateTime  @default(now())
 
   @@unique([workspaceId, key])
-}
-
-/// A PM said two Jira issues are NOT the same item (detached one on the
-/// Merge page). The Jira-to-Jira dedupe never groups a rejected pair again.
-model JiraDedupeReject {
-  id          String    @id @default(uuid())
-  workspaceId String
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  /// Pair id: the two keys, oldest first, joined with "|" (jira-dedupe.ts rejectPairKey).
-  pair        String
-  createdAt   DateTime  @default(now())
-
-  @@unique([workspaceId, pair])
 }
 
 /// Append-only training signal: every manual decision and edit (PRD, day one).

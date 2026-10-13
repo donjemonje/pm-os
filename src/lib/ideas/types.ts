@@ -102,8 +102,6 @@ export interface Idea {
   decision: IdeaDecision;
   /** Set while this idea's write from the LAST merge is still undoable. */
   undoable?: { action: "create" | "update"; jiraKey: string };
-  /** Jira-origin duplicate: the older issue (key) this idea's issue repeats. Archive proposal, never synced. */
-  duplicateOf?: string;
   /** Where this idea came from this batch. */
   origin: "zendesk" | "jira";
   /** Computed score — null until the scoring pipeline exists. */

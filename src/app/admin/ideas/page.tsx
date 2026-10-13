@@ -14,11 +14,6 @@ import {
   PARSE_SYSTEM_PROMPT,
 } from "@/lib/ideas/field-parse";
 import { SPLIT_PROMPT_VERSION, SPLIT_SYSTEM_PROMPT } from "@/lib/ideas/split";
-import {
-  JIRA_DEDUPE_PROMPT_VERSION,
-  JIRA_DEDUPE_SYSTEM_PROMPT,
-  JIRA_MERGE_SYSTEM_PROMPT,
-} from "@/lib/ideas/jira-dedupe";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { AdminShell } from "../AdminShell";
 import { IdeasOutputConfig } from "./IdeasOutputConfig";
@@ -52,18 +47,6 @@ export default async function AdminIdeasPage() {
             title: `Customer field parsing (${PARSE_PROMPT_VERSION}, Gemini)`,
             note: "One call per import over the unique raw customer-field values: clean names out of lists and qualifiers, plus the all-customers flag. Gated per org by Field parsing (AI); runs on the Gemini model (IDEAS_PARSE_MODEL / GEMINI_MODEL env).",
             text: PARSE_SYSTEM_PROMPT,
-          },
-          {
-            id: "jira-dedupe",
-            title: `Jira-to-Jira dedupe (${JIRA_DEDUPE_PROMPT_VERSION})`,
-            note: "After the Jira pull, one call per product line: which issues describe the same user pain (a PM would call them one problem filed more than once). Groups become one idea with several Jira sources; a pair a PM detached on the Merge page is never grouped again. Judged once per identical input.",
-            text: JIRA_DEDUPE_SYSTEM_PROMPT,
-          },
-          {
-            id: "jira-merge",
-            title: `Merged Jira idea text (${JIRA_DEDUPE_PROMPT_VERSION})`,
-            note: "One call per group: the grouped issues become one idea in the template, nothing any PM wrote lost.",
-            text: JIRA_MERGE_SYSTEM_PROMPT,
           },
           {
             id: "catalog",

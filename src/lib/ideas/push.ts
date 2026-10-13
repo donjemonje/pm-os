@@ -21,7 +21,7 @@ import {
   type IdeasJiraConfig,
   type MappedAttribute,
 } from "./jira-mapping";
-import { primaryJiraKey } from "./jira-dedupe";
+import { primaryJiraKey } from "./jira-keys";
 import { buildProductLineResolver } from "./product-line-key";
 import { getIdeasState, type IdeasState } from "./store";
 
@@ -314,8 +314,8 @@ function ideaTickets(row: PushIdeaRow): TicketRef[] {
   );
 }
 
-/** The issue a sync writes to: the oldest of the idea's Jira issues (a merged
- *  idea holds several; the duplicates are left alone until Stage 3). */
+/** The issue a sync writes to: the oldest of the idea's Jira issues (a PM can
+ *  attach several on the Merge page). */
 function ideaJiraKey(row: PushIdeaRow): string | null {
   return primaryJiraKey(row.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [])));
 }

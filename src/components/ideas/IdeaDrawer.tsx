@@ -84,8 +84,6 @@ interface IdeaDrawerProps {
   onToggleApprove?: () => void;
   /** Set only while this idea's last-merge write is undoable AND the ideasUndo flag is on. */
   onUndoPush?: () => void;
-  /** Jira-origin duplicate (Archive proposal): the PM says it is its own idea after all. */
-  onNotDuplicate?: () => void;
   onSave?: (patch: {
     title: string;
     details: string;
@@ -123,7 +121,6 @@ export function IdeaDrawer({
   onOpenIdea,
   onToggleApprove,
   onUndoPush,
-  onNotDuplicate,
   onSave,
   onMerge,
 }: IdeaDrawerProps) {
@@ -714,38 +711,6 @@ export function IdeaDrawer({
             </>
           ) : idea ? (
             <>
-              {/* Jira-to-Jira dedupe verdict: this issue repeats an older one. Never synced;
-                  the PM closes it in Jira by hand, or rejects the verdict here. */}
-              {idea.duplicateOf && (
-                <div className="rounded-[10px] border border-[rgba(239,90,138,.4)] bg-[rgba(239,90,138,.08)] px-3.5 py-2.5">
-                  <div className={`${MONO_LABEL} mb-1 text-[#c23767]`}>Duplicate · flagged for archive</div>
-                  <div className="text-[12.5px] leading-snug text-[#33445e]">
-                    Same user pain as{" "}
-                    {jiraByKey.get(idea.duplicateOf)?.url ? (
-                      <a
-                        href={jiraByKey.get(idea.duplicateOf)!.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-mono font-semibold text-primary hover:underline"
-                      >
-                        {idea.duplicateOf}
-                      </a>
-                    ) : (
-                      <span className="font-mono font-semibold">{idea.duplicateOf}</span>
-                    )}
-                    . Its tickets count there. PM-OS never syncs this one — close it in Jira by hand.
-                  </div>
-                  {onNotDuplicate && (
-                    <button
-                      onClick={onNotDuplicate}
-                      className="mt-2 rounded-lg border border-[rgba(239,90,138,.45)] bg-white px-2.5 py-1 text-[12px] font-semibold text-[#c23767] hover:bg-[rgba(239,90,138,.08)]"
-                      title="Keep this issue as its own idea; PM-OS won't group the pair again"
-                    >
-                      Not a duplicate
-                    </button>
-                  )}
-                </div>
-              )}
               {/* What this import did to an Updated idea — the PM shouldn't
                   have to diff anything by eye. */}
               {idea.batch === "updated" &&

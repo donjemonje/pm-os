@@ -1390,11 +1390,6 @@ export function IdeasView({
                                       {jiraStatusOf(idea)}
                                     </span>
                                   )}
-                                  {idea.duplicateOf && (
-                                    <span className="shrink-0 text-[#c23767]" title="Same user pain as an older Jira issue — flagged for archive, never synced">
-                                      duplicate of {idea.duplicateOf}
-                                    </span>
-                                  )}
                                   {(firstTicket || idea.jira[0]) && <span>·</span>}
                                   {idea.products.slice(1).map((p) => productChip(p))}
                                   {(idea.platforms ?? []).map((p) => (
@@ -1541,11 +1536,6 @@ export function IdeasView({
           onToggleApprove={drawerIdea ? () => toggleApprove(drawerIdea.id) : undefined}
           onUndoPush={
             undoEnabled && drawerIdea?.undoable ? () => void undoPush(drawerIdea) : undefined
-          }
-          onNotDuplicate={
-            drawerIdea?.duplicateOf
-              ? () => void callMutate({ type: "notDuplicate", ideaId: drawerIdea.id })
-              : undefined
           }
           onSave={
             drawerIdea
