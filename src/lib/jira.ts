@@ -675,17 +675,27 @@ export async function listProjectIssueTypes(
 }
 
 /** All fields on the site, keyed by lower-cased display name → field id.
- *  Custom fields ("Votes", "P_Components", …) can only be written by id. */
+ *  Custom fields ("Votes", "P_Components", …) can only be written by id.
+ *  Team-managed projects own project-scoped fields that may share a name with
+ *  a site-wide one (RoomLens's "P_Votes" vs the global "P_Votes" written on
+ *  PRDT) — the global field wins a name clash, since only it can sit on a
+ *  company-managed project's screens. */
 export async function listAllFields(
   workspaceId: string
 ): Promise<Map<string, { id: string; name: string }>> {
   const data = (await jiraFetch(workspaceId, "/rest/api/3/field")) as Array<{
     id: string;
     name: string;
+    scope?: { type?: string; project?: { id?: string } };
   }>;
-  const byName = new Map<string, { id: string; name: string }>();
-  for (const f of data ?? []) byName.set(f.name.toLowerCase(), { id: f.id, name: f.name });
-  return byName;
+  const byName = new Map<string, { id: string; name: string; scoped: boolean }>();
+  for (const f of data ?? []) {
+    const key = f.name.toLowerCase();
+    const scoped = Boolean(f.scope?.project);
+    const cur = byName.get(key);
+    if (!cur || (cur.scoped && !scoped)) byName.set(key, { id: f.id, name: f.name, scoped });
+  }
+  return new Map(Array.from(byName, ([k, v]) => [k, { id: v.id, name: v.name }]));
 }
 
 export interface JiraFieldMeta {
