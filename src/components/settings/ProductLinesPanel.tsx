@@ -237,14 +237,6 @@ export function ProductLinesPanel({
                       onPick={(color) => call("PATCH", { id: item.id, color })}
                     />
                     <span className="font-title text-[14px] font-semibold">{item.name}</span>
-                    {item.origin === "jira" && (
-                      <span
-                        title="Created by the Jira pull from the configured product-line field"
-                        className="ml-1 rounded bg-[#eef3fb] px-1.5 py-px font-mono text-[10px] font-semibold text-[#2a5fd0]"
-                      >
-                        from Jira
-                      </span>
-                    )}
                   </span>
                   {canEdit && (
                     <span className="flex shrink-0 items-center gap-1">

@@ -8,7 +8,7 @@ import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
-import { ensureJiraProductLines, fetchJiraLiveSources } from "./jira-sync";
+import { fetchJiraLiveSources } from "./jira-sync";
 import { buildProductLineResolver } from "./product-line-key";
 import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
@@ -327,20 +327,16 @@ async function runImport(
       ? `${jira.sources.length} live issues` +
         (jira.truncatedProjects.length > 0
           ? ` · CAPPED at ${jira.pull.maxIssues} in ${jira.truncatedProjects.join(", ")}`
+          : "") +
+        (jira.unresolvedProductLines.length > 0
+          ? ` · to Other (no product line or alias): ${jira.unresolvedProductLines.join(", ")}`
           : "")
       : "Jira not connected",
   });
 
-  // Product lines the backlog names but the catalog lacks become catalog rows
-  // now (origin "jira"), before the stage contexts below read the catalog —
-  // so this import's prompts and filters already know them.
-  if (jira.connected) {
-    trace.begin("jira-product-lines", "db");
-    const added = await ensureJiraProductLines(workspaceId, jira.sources);
-    trace.end({ note: added.length > 0 ? `added ${added.join(", ")}` : "catalog complete" });
-  }
   // One taxonomy: a ticket's Module column (any spelling, aliases included)
-  // names its product line deterministically — see product-line-key.ts.
+  // names its product line deterministically — see product-line-key.ts. A
+  // module no row or alias matches is "Other", same as on the Jira pull.
   const resolveProductLine = buildProductLineResolver(
     await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
   );
@@ -583,13 +579,15 @@ async function runImport(
     }
   }
 
-  // The ticket's Module is the product line when it names a catalog row —
-  // the model's pick stands only for tickets without a resolvable module.
+  // The ticket's Module is the product line — a catalog row or alias when it
+  // matches one, "Other" when it doesn't. The model's pick stands only for
+  // tickets with no module at all.
+  const moduleProductLine = (module?: string): string | undefined =>
+    module?.trim() ? (resolveProductLine.resolve(module) ?? "Other") : undefined;
   for (const [key, units] of unitsByTicket) {
-    const input = fresh.find((t) => t.key === key);
-    const resolved = input?.module ? resolveProductLine.resolve(input.module) : undefined;
-    if (!resolved) continue;
-    for (const u of units) u.rewrite = { ...u.rewrite, productLines: [resolved] };
+    const line = moduleProductLine(fresh.find((t) => t.key === key)?.module);
+    if (!line) continue;
+    for (const u of units) u.rewrite = { ...u.rewrite, productLines: [line] };
   }
 
   // Match candidates are the CURRENT ideas list — however each idea was born
@@ -951,14 +949,14 @@ async function runImport(
           });
           continue;
         }
-        // A resolvable Module column is the product line (one taxonomy with
-        // Jira). Otherwise the model's assignment wins and the CSV
+        // A Module column is the product line (one taxonomy with Jira; no
+        // match = Other). Otherwise the model's assignment wins and the CSV
         // product_line column is only a fallback when the model returned
         // nothing at all.
         // A group-reconciled rewrite (match stage) wins over the unit's own
         // catalog text: it was written with every member ticket in view.
         const finalRewrite = m?.rewrite ?? unit.rewrite;
-        const moduleLine = input.module ? resolveProductLine.resolve(input.module) : undefined;
+        const moduleLine = moduleProductLine(input.module);
         const products = moduleLine
           ? [moduleLine]
           : finalRewrite.productLines.length > 0

@@ -187,8 +187,8 @@ const TEST_KELA_TOTP_SECRET = "MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK";
  * org is seeded unconnected and the live-Jira specs skip.
  *
  * Reset every run: ideas, tickets, snapshots and undo rows go (the tests
- * import into a clean org); product lines of origin "jira" go too, so the
- * first import re-creates them from the pull. Manual product lines stay.
+ * import into a clean org). Product lines stay — the catalog is curated, a
+ * pull never grows it (unmatched Module values land in "Other").
  */
 async function seedKelaQa() {
   let org = await prisma.organization.findUnique({
@@ -228,7 +228,6 @@ async function seedKelaQa() {
   await prisma.idea.deleteMany({ where: { workspaceId: ws.id } });
   await prisma.zendeskTicketRaw.deleteMany({ where: { workspaceId: ws.id } });
   await prisma.jiraIdeaSnapshot.deleteMany({ where: { workspaceId: ws.id } });
-  await prisma.productLine.deleteMany({ where: { workspaceId: ws.id, origin: "jira" } });
   // One hand-made row with an alias: Kela's Jira option "Platform General" is
   // the catalog's "Platform" (the alias path on pull, Zendesk import and push).
   const platform = await prisma.productLine.findFirst({
@@ -238,7 +237,7 @@ async function seedKelaQa() {
   const platformData = {
     description:
       "Kela's shared infrastructure and platform layer — login and account mechanics, latency, cross-module reports, unified asset inventory, licensing.",
-    aliases: ["Platform General", "Platform- General"],
+    aliases: ["Platform General", "Platform- General", "API"],
     origin: "manual",
   };
   if (platform) await prisma.productLine.update({ where: { id: platform.id }, data: platformData });

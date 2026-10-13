@@ -250,8 +250,8 @@ export function IdeasOutputConfig({
           The connected projects are read in full on every import, every
           status included. Each issue&apos;s product line is the Jira field
           mapped as Product Line below (Kela: Module), Components when that
-          field is empty; values the catalog lacks are added to it, marked
-          &quot;from Jira&quot;.
+          field is empty — matched to the catalog by name or alias; a value
+          with no match lands in Other and is listed in the import run.
         </p>
         <label className="flex flex-col gap-1 text-sm sm:w-72">
           <span className="text-xs font-medium text-slate-600">
