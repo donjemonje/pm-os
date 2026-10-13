@@ -11,4 +11,7 @@ export const IDEA_WRITING_RULES = `  - The audience is the team's own product ma
   - No support framing ("customer says...", "user is asking..."), no requester or customer names (captured separately), no ticket phrasing — it should read as if the product team wrote the idea themselves.
   - Use bullet lists whenever you enumerate — several asks, cases, constraints, affected flows. Prose is for the one-sentence core of a section, lists for everything that is a list.
   - Never lose a concrete reference from the source: every URL, link, ticket or issue key (e.g. PG-1121), document name, version, number or named thing carries over verbatim — in the section it belongs to, else under Additional Info. A PM must never have to open the original ticket or issue to find something it contained.
-  - "Proposed Solution" holds ONLY the solution: what to build. Asks, requests, cases, context and evidence never go there — they belong in The Problem or Additional Info. When there is no high-confidence solution, leave the section out rather than restating the asks as a solution.`;
+  - Section discipline (hard rules, checked):
+    - "The Problem": the need and who has it. When several tickets ask for distinct things, list the distinct asks here as bullets — this is the only place asks are listed.
+    - "Proposed Solution": one to three sentences describing the capability to build, nothing else. No lists. Never the words "ask", "asks", "request", "requested", "related asks"; never per-ticket or per-customer items; never evidence or context. Present only with high confidence that it is the right solution — otherwise omit the section entirely.
+    - "Additional Info": real cases, references (links, keys, identifiers), constraints. Not a second list of asks.`;

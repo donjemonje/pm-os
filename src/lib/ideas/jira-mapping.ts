@@ -85,7 +85,7 @@ export const DEFAULT_IDEA_TEMPLATE = `## The Problem
 The user problem and who it affects — the main stakeholders (customers and internal teams alike). The core of the idea; always present.
 
 ## Proposed Solution
-Only when the source implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how. Only the solution lives here: never a list of asks, cases or context (those go to The Problem or Additional Info).
+Only when the source implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. One to three sentences on the what, not the how. No lists, no asks, no cases, no context — those go to The Problem (asks) or Additional Info (cases, references).
 
 ## Additional Info
 Other important related context. When the source describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Every link, issue key, document or identifier from the source that fits nowhere else goes here verbatim. Omit this section when there is none.`;

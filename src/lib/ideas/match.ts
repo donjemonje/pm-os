@@ -42,7 +42,7 @@ export interface MatchHooks extends StageHooks {
  * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v8";
+export const MATCH_PROMPT_VERSION = "match-v9";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 export function getMatchModel(): string {
