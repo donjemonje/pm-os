@@ -437,6 +437,21 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     });
     expect(dup.status()).toBe(409);
     expect((await dup.json()).error).toBe(`"${RL_LINE.toLowerCase()}" already exists`);
+    // Release QA 3.0.0 (Dana, 2026-10-14): a name or alias means ONE product
+    // line. The resolver is first-wins, so a clash would route a Module value
+    // by sort order with no error anywhere — the 409 (Tomer's review fix) is
+    // the only thing that makes it visible. Clash with another line's alias
+    // (any spelling) and with another line's name, as a new row and as an edit.
+    const CLASH_NAME = "QA-JK Ledger";
+    for (const aliases of [[` ${RL_ALIAS_SEEDED.toLowerCase()} `], [RL_LINE.toUpperCase()]]) {
+      const clash = await page.request.post("/api/ideas/lists/product-lines", {
+        data: { name: CLASH_NAME, description: "", aliases },
+      });
+      expect(clash.status(), `POST aliases ${JSON.stringify(aliases)}`).toBe(409);
+      expect((await clash.json()).error).toContain(`already belongs to product line "${RL_LINE}"`);
+    }
+    const afterClash = await page.request.get("/api/ideas/lists/product-lines");
+    expect(((await afterClash.json()).items as { name: string }[]).some((i) => i.name === CLASH_NAME)).toBe(false);
     // PATCH with an array body dedupes the same way as the comma field.
     const patched = await page.request.patch("/api/ideas/lists/product-lines", {
       data: {
