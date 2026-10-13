@@ -87,6 +87,8 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
   return undefined;
 }
 
+/** Sync scope sentinel: the user cleared every product line (vs. [] = all). */
+const SCOPE_NONE = "__none__";
 /** Jira statuses that mean "shipped" — hidden by default when nothing asks for them. */
 function isJiraDoneStatus(status: string): boolean {
   return /^(done|closed|resolved|released|shipped)$/i.test(status.trim());
@@ -560,7 +562,8 @@ export function IdeasView({
   const drawerIdea = drawerId ? ideas.find((i) => i.id === drawerId) : undefined;
 
   // ——— Sync-to-Jira modal (scope → preview → execute → results) ———
-  const scope = scopeSel.length > 0 ? scopeSel : null;
+  // Scope: [] = every product line; SCOPE_NONE = nothing selected (after "Clear").
+  const scope = scopeSel.includes(SCOPE_NONE) ? [SCOPE_NONE] : scopeSel.length > 0 ? scopeSel : null;
   const inMergeScope = (i: Idea): boolean =>
     !scope || i.products.some((p) => scope.some((s) => s.toLowerCase() === p.toLowerCase()));
   const scopedPending = approvable.filter(
@@ -605,14 +608,6 @@ export function IdeasView({
     setPlan(null);
     setPushResults(null);
     setMergeError("");
-  };
-
-  const toggleScope = (name: string) => {
-    setPlan(null); // a changed scope must be re-previewed before it can run
-    setMergeError("");
-    setScopeSel((prev) =>
-      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
-    );
   };
 
   const loadPlan = async () => {
@@ -1710,58 +1705,95 @@ export function IdeasView({
                     </p>
                   </div>
 
-                  {/* Scope: one row per product line with what is ready to go */}
-                  <div className="overflow-hidden rounded-inner border border-border">
-                    <button
-                      onClick={() => {
-                        setScopeSel([]);
-                        setPlan(null);
-                        setMergeError("");
-                      }}
-                      className={`flex w-full items-center gap-3 px-3 py-2 text-left text-[13px] hover:bg-[rgba(247,250,253,.9)] ${
-                        scopeSel.length === 0 ? "bg-[var(--app-accent-soft)]" : ""
-                      }`}
-                    >
-                      <span
-                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                          scopeSel.length === 0 ? "border-primary bg-primary text-white" : "border-border bg-white"
-                        }`}
-                      >
-                        {scopeSel.length === 0 && <Check size={11} strokeWidth={3} />}
-                      </span>
-                      <span className="flex-1 font-semibold text-fg-2">All product lines</span>
-                      <span className="font-mono text-[11px] text-fg-muted">
-                        {reviewed} approved · {pending} pending
-                      </span>
-                    </button>
-                    {productSyncStats.map((row) => {
-                      const on = scopeSel.includes(row.name);
-                      const disabled = row.approved === 0 && !on;
+                  {/* Scope: product lines with something approved, then the ones with nothing */}
+                  {(() => {
+                    const ready = productSyncStats.filter((r) => r.approved > 0);
+                    const idle = productSyncStats.filter((r) => r.approved === 0);
+                    const allSelected =
+                      !scopeSel.includes(SCOPE_NONE) &&
+                      (scopeSel.length === 0 ||
+                        (ready.length > 0 && ready.every((r) => scopeSel.includes(r.name))));
+                    const row = (r: (typeof productSyncStats)[number], disabled: boolean) => {
+                      const on = !disabled && (scopeSel.length === 0 || scopeSel.includes(r.name));
                       return (
                         <button
-                          key={row.name}
+                          key={r.name}
                           disabled={disabled}
-                          onClick={() => toggleScope(row.name)}
-                          title={disabled ? "Nothing approved in this product line" : undefined}
-                          className={`flex w-full items-center gap-3 border-t border-hairline px-3 py-2 text-left text-[13px] hover:bg-[rgba(247,250,253,.9)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
+                          onClick={() => {
+                            // Explicit picks: "all" (empty scope) becomes the full ready list minus this one.
+                            setPlan(null);
+                            setMergeError("");
+                            setScopeSel((prev) => {
+                              const picked = prev.filter((x) => x !== SCOPE_NONE);
+                              const base = prev.length === 0 ? ready.map((x) => x.name) : picked;
+                              const next = base.includes(r.name) ? base.filter((x) => x !== r.name) : [...base, r.name];
+                              return next.length === 0 ? [SCOPE_NONE] : next;
+                            });
+                          }}
+                          className={`flex w-full items-center gap-3 px-3 py-2 text-left text-[13px] hover:bg-[rgba(247,250,253,.9)] disabled:cursor-default disabled:hover:bg-transparent ${
                             on ? "bg-[var(--app-accent-soft)]" : ""
                           }`}
                         >
-                          <span
-                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                              on ? "border-primary bg-primary text-white" : "border-border bg-white"
-                            }`}
-                          >
-                            {on && <Check size={11} strokeWidth={3} />}
-                          </span>
-                          <span className="flex-1">{productChip(row.name)}</span>
+                          {!disabled && (
+                            <span
+                              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                on ? "border-primary bg-primary text-white" : "border-border bg-white"
+                              }`}
+                            >
+                              {on && <Check size={11} strokeWidth={3} />}
+                            </span>
+                          )}
+                          <span className={`flex-1 ${disabled ? "opacity-50" : ""}`}>{productChip(r.name)}</span>
                           <span className="font-mono text-[11px] text-fg-muted">
-                            {row.approved} approved · {row.pending} pending
+                            {disabled
+                              ? r.pending > 0
+                                ? `${r.pending} pending`
+                                : "no changes"
+                              : `${r.approved} approved${r.pending > 0 ? ` · ${r.pending} pending` : ""}`}
                           </span>
                         </button>
                       );
-                    })}
-                  </div>
+                    };
+                    return (
+                      <div className="flex items-start gap-3">
+                        <div className="min-w-0 flex-1 overflow-hidden rounded-inner border border-border">
+                          <div className="flex items-center justify-between bg-[rgba(247,250,253,.9)] px-3 py-1.5">
+                            <span className="eyebrow text-[10px] text-fg-muted">
+                              Ready to sync · {ready.length}
+                            </span>
+                          </div>
+                          {ready.length === 0 && (
+                            <div className="px-3 py-2 text-[12.5px] text-fg-muted">
+                              Nothing approved yet.
+                            </div>
+                          )}
+                          {ready.map((r) => row(r, false))}
+                          {idle.length > 0 && (
+                            <>
+                              <div className="flex items-center justify-between border-t border-border bg-[rgba(247,250,253,.9)] px-3 py-1.5">
+                                <span className="eyebrow text-[10px] text-fg-muted">
+                                  Nothing to sync · {idle.length}
+                                </span>
+                              </div>
+                              {idle.map((r) => row(r, true))}
+                            </>
+                          )}
+                        </div>
+                        <Button
+                          disabled={ready.length === 0}
+                          onClick={() => {
+                            setPlan(null);
+                            setMergeError("");
+                            // Toggle: all ready lines ↔ none (nothing selected = nothing to preview).
+                            setScopeSel(allSelected ? [SCOPE_NONE] : []);
+                          }}
+                          title={allSelected ? "Clear the selection" : "Select every product line with approved ideas"}
+                        >
+                          {allSelected ? "Clear" : "Select all"}
+                        </Button>
+                      </div>
+                    );
+                  })()}
                   <div className="text-xs text-fg-3">{previewHint}</div>
 
                   {/* Preview */}
