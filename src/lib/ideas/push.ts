@@ -776,8 +776,8 @@ export async function executePush(
         ok: false,
         blockers: [
           `Could not add options to Jira field "${o.label}": ${msg}` +
-            (/\(403\)/.test(msg)
-              ? " — the Jira connection lacks the configuration permission. Reconnect Jira in Settings → Integrations (it asks for it now), then sync again."
+            (/\((401|403)\)|scope does not match/i.test(msg)
+              ? " — the Jira connection was made before PM-OS asked for the configuration permission. Reconnect Jira in Settings → Integrations (Connect again; the project selection is kept), then sync again."
               : ""),
         ],
       };
