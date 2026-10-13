@@ -769,7 +769,7 @@ export function IdeaDrawer({
               <div>
                 <UmMarkdown
                   content={idea.details}
-                  className="text-[13.5px] leading-relaxed [&>h2]:mt-4 [&>h2:first-child]:mt-0 [&>h3]:mt-3 [&>p]:my-2 [&>ul]:my-2"
+                  className="um-compact text-[13.5px] leading-relaxed"
                 />
               </div>
               {sourceEntries.length > 0 && (
