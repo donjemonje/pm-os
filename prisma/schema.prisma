@@ -117,6 +117,7 @@ model Workspace {
   platforms             Platform[]
   customers             Customer[]
   ideasPushUndos        IdeasPushUndo[]
+  jiraDedupeRejects     JiraDedupeReject[]
 }
 
 /// Per-idea undo snapshot for the LAST merge to Jira only — executePush
@@ -492,6 +493,19 @@ model JiraIdeaSnapshot {
   syncedAt        DateTime  @default(now())
 
   @@unique([workspaceId, key])
+}
+
+/// A PM said two Jira issues are NOT the same item (detached one on the
+/// Merge page). The Jira-to-Jira dedupe never groups a rejected pair again.
+model JiraDedupeReject {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  /// Pair id: the two keys, oldest first, joined with "|" (jira-dedupe.ts rejectPairKey).
+  pair        String
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, pair])
 }
 
 /// Append-only training signal: every manual decision and edit (PRD, day one).

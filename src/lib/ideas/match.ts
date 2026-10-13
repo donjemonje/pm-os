@@ -301,6 +301,12 @@ export interface MatchRunOptions {
   hooks?: MatchHooks;
   warmer?: PrefixWarmer;
   ctx?: MatchContext;
+  /**
+   * Unit key → candidate key decided outside the model (a Jira issue that
+   * cites the ticket). The unit skips the pairwise judgment and merges into
+   * that candidate; the reconciliation prompt still writes the merged text.
+   */
+  forced?: Map<string, string>;
 }
 
 export async function matchTickets(
@@ -367,7 +373,17 @@ export async function matchTickets(
     enrichedSummary: string;
     reason: string;
   }[] = new Array(inputs.length);
+  const forced = options.forced ?? new Map<string, string>();
   await runPool(inputs, poolSize, async (input, i) => {
+    const forcedKey = forced.get(input.key);
+    if (forcedKey && anchorKeys.has(forcedKey)) {
+      pairwise[i] = {
+        target: forcedKey,
+        enrichedSummary: "",
+        reason: `Cited by Jira issue ${forcedKey.replace(/^jira:/, "")} — linked by the team, not judged.`,
+      };
+      return;
+    }
     const requestBlock = renderRequest(input, peerKey(input));
     const userMessage = `${pairwiseShared}\n\n${requestBlock}`;
     called++;
@@ -469,7 +485,9 @@ export async function matchTickets(
   const groupJobs: { terminal: string; members: number[] }[] = [];
   for (const [t, members] of groupsByTerminal) {
     members.sort((a, b) => a - b);
-    if (members.length === 1) {
+    // A forced single unit still goes through reconciliation: that prompt
+    // writes the idea text merged with the request; the pairwise step didn't.
+    if (members.length === 1 && !forced.has(inputs[members[0]].key)) {
       const i = members[0];
       // Standalone, or a single unit merging into an existing idea.
       results[i].matchedKey = anchorKeys.has(t) ? t : null;

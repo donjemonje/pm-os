@@ -8,6 +8,8 @@ import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { dedupeJiraSources, primaryJiraKey, rejectPairKey, type JiraDedupeGroup } from "./jira-dedupe";
+import { citationsByTicket } from "./jira-links";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { buildProductLineResolver } from "./product-line-key";
 import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
@@ -89,6 +91,10 @@ export interface ImportSummary {
   called: number;
   jiraConnected: boolean;
   jiraCount: number;
+  /** Jira issues folded into another issue's idea (same capability). */
+  jiraMerged: number;
+  /** Tickets attached to a Jira idea because the issue cites them. */
+  jiraCited: number;
   /** The batch row holding this run's trace (Admin/monitoring). */
   batchId: string;
   /** Server-side wall time of the whole import. */
@@ -224,9 +230,10 @@ function toClientIdea(row: IdeaRow): Idea {
     zen: row.sources.flatMap((s) =>
       s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [],
     ),
-    jira: row.sources.flatMap((s) =>
-      s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [],
-    ),
+    // Oldest issue first: the primary a sync writes to, the key rows show.
+    jira: row.sources
+      .flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : []))
+      .sort((a, b) => (primaryJiraKey([a, b]) === a ? -1 : 1)),
   };
 }
 
@@ -377,6 +384,47 @@ async function runImport(
   const resolveProductLine = buildProductLineResolver(
     await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
   );
+
+  // Jira-to-Jira dedupe: issues that describe one capability become one idea
+  // (jira-dedupe.ts). memberToPrimary maps every grouped key to the issue the
+  // idea lives in; everything downstream (match pool, sync, citations) talks
+  // in primaries.
+  const jiraGroups: JiraDedupeGroup[] = [];
+  const memberToPrimary = new Map<string, string>();
+  if (jira.connected && jira.sources.length >= 2) {
+    trace.begin("jira-dedupe", "ai", jira.sources.length);
+    const rejects = new Set(
+      (await db.jiraDedupeReject.findMany({ where: { workspaceId }, select: { pair: true } })).map(
+        (r) => r.pair,
+      ),
+    );
+    const template = mergeIdeasJiraConfig(
+      (await db.workspace.findUnique({ where: { id: workspaceId }, select: { ideasConfig: true } }))
+        ?.ideasConfig,
+    ).ideaTemplate;
+    const dedupe = await dedupeJiraSources(workspaceId, jira.sources, {
+      template,
+      rejects,
+      hooks: trace.side("jira-dedupe", "ai"),
+    });
+    jiraGroups.push(...dedupe.groups);
+    for (const g of jiraGroups) for (const m of g.members) memberToPrimary.set(m, g.primary);
+    trace.end({
+      note:
+        jiraGroups.length > 0
+          ? `${jiraGroups.length} group${jiraGroups.length === 1 ? "" : "s"}: ${jiraGroups
+              .map((g) => g.members.join("+"))
+              .join(", ")}`
+          : "no duplicates",
+    });
+  }
+  const toPrimary = (key: string) => memberToPrimary.get(key) ?? key;
+  const groupOf = new Map(jiraGroups.map((g) => [g.primary, g]));
+  /** Zendesk ticket id → primary Jira keys whose issue text cites it. */
+  const citedBy = new Map<string, string[]>();
+  for (const [ticketId, keys] of citationsByTicket(jira.sources)) {
+    citedBy.set(ticketId, Array.from(new Set(keys.map(toPrimary))));
+  }
 
   // Stage contexts (catalogs + template) are loaded once, and the prompt
   // prefixes known now are warmed in the provider's cache while the parse
@@ -653,13 +701,32 @@ async function runImport(
       body: i.details,
     })),
     ...(jira.connected ? jira.sources : [])
-      .filter((src) => !representedJiraKeys.has(src.key))
-      .map((src) => ({
-        key: `jira:${src.key}`,
-        title: src.title,
-        body: src.body,
-      })),
+      // A grouped issue is represented by its primary, with the merged text.
+      .filter((src) => toPrimary(src.key) === src.key && !representedJiraKeys.has(src.key))
+      .map((src) => {
+        const g = groupOf.get(src.key);
+        return {
+          key: `jira:${src.key}`,
+          title: g?.title ?? src.title,
+          body: g?.details ?? src.body,
+        };
+      }),
   ];
+  // Tickets a Jira issue cites are matched by that citation, not by the model:
+  // every FR unit of such a ticket is forced onto the first cited issue's
+  // idea (an existing idea when one holds that key, else the live issue).
+  const ideaIdByJiraKey = new Map(
+    existingIdeas.flatMap((i) =>
+      i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [[src.jiraKey, i.id] as const] : [])),
+    ),
+  );
+  const forced = new Map<string, string>();
+  for (const [key, units] of unitsByTicket) {
+    const cited = citedBy.get(key);
+    if (!cited || cited.length === 0) continue;
+    const target = ideaIdByJiraKey.get(cited[0]) ?? `jira:${cited[0]}`;
+    for (const u of units) forced.set(u.unitKey, target);
+  }
 
   const matchInputs = catalog.results
     .filter((v) => v.kind === "fr")
@@ -677,6 +744,7 @@ async function runImport(
   const match = await matchTickets(workspaceId, matchInputs, matchCandidates, {
     warmer,
     ctx: matchCtx,
+    forced,
     hooks: {
       call: (s) => trace.call(s),
       groupPhase: (groups, meta) => {
@@ -746,6 +814,8 @@ async function runImport(
 
   // Snapshots are replaced wholesale; Jira-origin ideas are upserted by key
   // so evidence matched in earlier batches survives the resync.
+  let jiraMerged = 0;
+  let jiraCited = 0;
   trace.begin("jira-sync", "db", jira.connected ? jira.sources.length : 0);
   if (jira.connected) {
     await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
@@ -770,24 +840,114 @@ async function runImport(
       where: { workspaceId, origin: "jira" },
       include: { sources: true },
     });
+    const jiraKeysOf = (i: (typeof jiraIdeas)[number]) =>
+      i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [src.jiraKey] : []));
+    /** Any Jira key → the idea holding it (a merged idea holds several). */
     const ideaByJiraKey = new Map(
-      jiraIdeas.flatMap((i) => {
-        const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
-        return key ? [[key, i] as const] : [];
-      }),
+      jiraIdeas.flatMap((i) => jiraKeysOf(i).map((k) => [k, i] as const)),
     );
     const liveKeys = new Set(jira.sources.map((s) => s.key));
-    const gone = jiraIdeas.filter((i) => {
-      const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
-      return !key || !liveKeys.has(key);
-    });
+    // An idea none of whose issues exists anymore is gone with them.
+    const gone = jiraIdeas.filter((i) => !jiraKeysOf(i).some((k) => liveKeys.has(k)));
     if (gone.length > 0) {
       await db.idea.deleteMany({
         where: { id: { in: gone.map((i) => i.id) } },
       });
     }
+    const rollover = fresh.length > 0;
+    const sourceByKey = new Map(jira.sources.map((src) => [src.key, src]));
 
+    // ——— grouped issues: one idea per group ———
+    for (const g of jiraGroups) {
+      const holders = Array.from(
+        new Set(g.members.map((k) => ideaByJiraKey.get(k)).filter((i): i is NonNullable<typeof i> => Boolean(i))),
+      );
+      // The idea to keep: the one holding the primary, else the first holder.
+      const keep = holders.find((i) => jiraKeysOf(i).includes(g.primary)) ?? holders[0];
+      const products = (sourceByKey.get(g.primary)?.products ?? []).length > 0
+        ? sourceByKey.get(g.primary)!.products
+        : ["Other"];
+      if (!keep) {
+        await db.idea.create({
+          data: {
+            workspaceId,
+            title: g.title,
+            details: g.details,
+            products: products as Prisma.InputJsonValue,
+            batchStatus: "updated",
+            decision: "pending",
+            origin: "jira",
+            batchChanges: [
+              `Merged Jira issues ${g.members.join(", ")} — same capability (${g.reason || "PMOS AI"})`,
+            ] as unknown as Prisma.InputJsonValue,
+            sources: { create: g.members.map((k) => ({ kind: "jira", jiraKey: k })) },
+          },
+        });
+        jiraMerged += g.members.length - 1;
+        continue;
+      }
+      const have = new Set(jiraKeysOf(keep));
+      const newMembers = g.members.filter((k) => !have.has(k));
+      if (newMembers.length === 0) {
+        // Group unchanged since last import: a normal existing idea.
+        await db.idea.update({
+          where: { id: keep.id },
+          data: {
+            products: products as Prisma.InputJsonValue,
+            ...(rollover
+              ? {
+                  existingVotes: keep.existingVotes + keep.newVotes,
+                  newVotes: 0,
+                  batchStatus: "unchanged",
+                  batchChanges: [] as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
+          },
+        });
+        continue;
+      }
+      // Fold the other holders into `keep`: their ticket evidence moves over,
+      // their Jira keys attach, the rows go. Text becomes the merged idea.
+      const others = holders.filter((i) => i.id !== keep.id);
+      let movedTickets = 0;
+      for (const o of others) {
+        const tickets = o.sources.filter((src) => src.kind === "zendesk" && src.ticketId);
+        for (const t of tickets) {
+          const dup = keep.sources.some((src) => src.kind === "zendesk" && src.ticketId === t.ticketId);
+          if (!dup) {
+            await db.ideaSource.create({ data: { ideaId: keep.id, kind: "zendesk", ticketId: t.ticketId } });
+            movedTickets++;
+          }
+        }
+        await db.idea.delete({ where: { id: o.id } });
+      }
+      await db.ideaSource.createMany({
+        data: newMembers.map((k) => ({ ideaId: keep.id, kind: "jira", jiraKey: k })),
+      });
+      const otherVotes = others.reduce((a, o) => a + o.existingVotes + o.newVotes, 0);
+      await db.idea.update({
+        where: { id: keep.id },
+        data: {
+          title: g.title,
+          details: g.details,
+          products: products as Prisma.InputJsonValue,
+          batchStatus: "updated",
+          decision: keep.decision === "injected" ? "pending" : keep.decision,
+          existingVotes: rollover ? keep.existingVotes + keep.newVotes : keep.existingVotes,
+          // The folded issues count as evidence (one each) and their tickets come along.
+          newVotes: (rollover ? 0 : keep.newVotes) + newMembers.length + movedTickets + (rollover ? otherVotes : 0),
+          batchChanges: mergeBatchChanges(
+            rollover ? [] : ((keep.batchChanges as string[]) ?? []),
+            [`Merged Jira issues ${newMembers.join(", ")} into ${g.primary} — same capability (${g.reason || "PMOS AI"})`],
+          ) as Prisma.InputJsonValue,
+        },
+      });
+      jiraMerged += newMembers.length;
+    }
+
+    // ——— every other issue: one idea each ———
     for (const s of jira.sources) {
+      if (memberToPrimary.has(s.key)) continue;
       const cur = ideaByJiraKey.get(s.key);
       // Same fallback as Zendesk-origin ideas: a Jira issue with no
       // components gets "Other", so every idea has a product line — the
@@ -799,7 +959,6 @@ async function runImport(
         // them as a PM-OS section, never as an overwrite of the live body. On
         // a batch with new data, last batch's vote delta becomes existing
         // and the idea re-enters as Unchanged until a match says otherwise.
-        const rollover = fresh.length > 0;
         await db.idea.update({
           where: { id: cur.id },
           data: {
@@ -833,7 +992,7 @@ async function runImport(
     }
   }
 
-  trace.end(jira.connected ? {} : { note: "skipped" });
+  trace.end(jira.connected ? (jiraMerged > 0 ? { note: `${jiraMerged} issue${jiraMerged === 1 ? "" : "s"} folded into merged ideas` } : {}) : { note: "skipped" });
 
   trace.begin("write", "db", fresh.length);
   let frs = 0;
@@ -1039,6 +1198,45 @@ async function runImport(
     }
   }
 
+  // Tickets a Jira issue cites become its evidence even when they are not
+  // feature requests (needs details, bug, question) or when the issue is a
+  // second citer: the team linked them, PM-OS keeps the link.
+  if (citedBy.size > 0) {
+    trace.begin("jira-citations", "db", citedBy.size);
+    for (const input of fresh) {
+      const cited = citedBy.get(input.key);
+      if (!cited || cited.length === 0) continue;
+      const ticket = await db.zendeskTicketRaw.findFirst({
+        where: { workspaceId, externalId: input.key },
+        select: { id: true },
+      });
+      if (!ticket) continue;
+      for (const key of cited) {
+        const idea = await db.idea.findFirst({
+          where: { workspaceId, sources: { some: { kind: "jira", jiraKey: key } } },
+          include: { sources: true },
+        });
+        if (!idea) continue;
+        if (idea.sources.some((src) => src.kind === "zendesk" && src.ticketId === ticket.id)) continue;
+        await db.ideaSource.create({ data: { ideaId: idea.id, kind: "zendesk", ticketId: ticket.id } });
+        await db.idea.update({
+          where: { id: idea.id },
+          data: {
+            batchStatus: "updated",
+            decision: idea.decision === "injected" ? "pending" : idea.decision,
+            newVotes: idea.newVotes + 1,
+            batchChanges: mergeBatchChanges(
+              idea.batchStatus === "updated" ? ((idea.batchChanges as string[]) ?? []) : [],
+              [`+1 vote (ticket ${input.key})`, `${key} cites ticket ${input.key} — linked by the team`],
+            ) as Prisma.InputJsonValue,
+          },
+        });
+        jiraCited++;
+      }
+    }
+    trace.end({ note: jiraCited > 0 ? `${jiraCited} ticket link${jiraCited === 1 ? "" : "s"} attached` : "nothing new" });
+  }
+
   const summary: ImportSummary = {
     imported: fresh.length,
     frs,
@@ -1051,6 +1249,8 @@ async function runImport(
     split: splitTicketCount,
     called: catalog.called + split.called + match.called + parse.called,
     jiraConnected: jira.connected,
+    jiraMerged,
+    jiraCited,
     jiraCount: jira.sources.length,
     batchId,
     durationMs: 0,
@@ -1340,6 +1540,29 @@ export async function mutateIdeas(
         where: { workspaceId, externalId: { in: mutation.zen } },
         select: { id: true },
       });
+      // Detaching a Jira issue from an idea that keeps another one is the PM
+      // saying "not the same item": remember the pair so the Jira-to-Jira
+      // dedupe never groups them again. Attaching one is a manual merge:
+      // forget any earlier rejection of that pair.
+      const hadJira = idea.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : []));
+      const removedJira = hadJira.filter((k) => !mutation.jira.includes(k));
+      const keptJira = mutation.jira.filter((k) => hadJira.includes(k));
+      const addedJira = mutation.jira.filter((k) => !hadJira.includes(k));
+      for (const r of removedJira) {
+        for (const k of keptJira) {
+          await db.jiraDedupeReject.upsert({
+            where: { workspaceId_pair: { workspaceId, pair: rejectPairKey(r, k) } },
+            create: { workspaceId, pair: rejectPairKey(r, k) },
+            update: {},
+          });
+        }
+      }
+      for (const a of addedJira) {
+        for (const k of mutation.jira) {
+          if (k === a) continue;
+          await db.jiraDedupeReject.deleteMany({ where: { workspaceId, pair: rejectPairKey(a, k) } });
+        }
+      }
       await db.ideaSource.deleteMany({ where: { ideaId: idea.id } });
       await db.ideaSource.createMany({
         data: [
