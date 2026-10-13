@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Check,
-  Building2,
   CheckCheck,
   ChevronDown,
   GitMerge,
@@ -1397,16 +1396,6 @@ export function IdeasView({
                                       {p}
                                     </Chip>
                                   ))}
-                                  {/* A faint building mark says "these are customers" without adding a word */}
-                                  {customers.length > 0 && (
-                                    <span
-                                      title="Customers"
-                                      className="ml-0.5 inline-flex shrink-0 items-center text-fg-faint"
-                                      aria-label="Customers"
-                                    >
-                                      <Building2 size={10.5} strokeWidth={1.75} />
-                                    </span>
-                                  )}
                                   {customers.slice(0, 2).map(customerChip)}
                                   {customers.length > 2 && (
                                     <span className="shrink-0">+{customers.length - 2}</span>
