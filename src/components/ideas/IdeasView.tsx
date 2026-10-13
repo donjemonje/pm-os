@@ -569,8 +569,9 @@ export function IdeasView({
   const scopedPending = approvable.filter(
     (i) => i.decision === "pending" && inMergeScope(i)
   ).length;
+  // Archive proposals are never written to Jira, so they don't count as ready.
   const scopedReviewed = live.filter(
-    (i) => i.decision === "reviewed" && inMergeScope(i)
+    (i) => i.decision === "reviewed" && i.batch !== "archive" && inMergeScope(i)
   ).length;
   // One approved idea is enough to sync — pending ideas never block, they
   // simply stay behind for a later sync.
@@ -580,7 +581,7 @@ export function IdeasView({
     const has = (i: Idea) => i.products.some((p) => p.toLowerCase() === name.toLowerCase());
     return {
       name,
-      approved: live.filter((i) => i.decision === "reviewed" && has(i)).length,
+      approved: live.filter((i) => i.decision === "reviewed" && i.batch !== "archive" && has(i)).length,
       pending: approvable.filter((i) => i.decision === "pending" && has(i)).length,
     };
   });
@@ -1389,6 +1390,11 @@ export function IdeasView({
                                       {jiraStatusOf(idea)}
                                     </span>
                                   )}
+                                  {idea.duplicateOf && (
+                                    <span className="shrink-0 text-[#c23767]" title="Same user pain as an older Jira issue — flagged for archive, never synced">
+                                      duplicate of {idea.duplicateOf}
+                                    </span>
+                                  )}
                                   {(firstTicket || idea.jira[0]) && <span>·</span>}
                                   {idea.products.slice(1).map((p) => productChip(p))}
                                   {(idea.platforms ?? []).map((p) => (
@@ -1535,6 +1541,11 @@ export function IdeasView({
           onToggleApprove={drawerIdea ? () => toggleApprove(drawerIdea.id) : undefined}
           onUndoPush={
             undoEnabled && drawerIdea?.undoable ? () => void undoPush(drawerIdea) : undefined
+          }
+          onNotDuplicate={
+            drawerIdea?.duplicateOf
+              ? () => void callMutate({ type: "notDuplicate", ideaId: drawerIdea.id })
+              : undefined
           }
           onSave={
             drawerIdea

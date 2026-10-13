@@ -6,6 +6,7 @@ const MUTATION_TYPES = [
   "decision",
   "edit",
   "approveAll",
+  "notDuplicate",
   "reassign",
   "approveCustomer",
   "dismissCustomer",

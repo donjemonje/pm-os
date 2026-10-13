@@ -227,6 +227,7 @@ function toClientIdea(row: IdeaRow): Idea {
     manual: row.manualScore,
     existingVotes: row.existingVotes,
     newVotes: row.newVotes,
+    duplicateOf: row.duplicateOf ?? undefined,
     zen: row.sources.flatMap((s) =>
       s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [],
     ),
@@ -678,8 +679,10 @@ async function runImport(
   // Match candidates are the CURRENT ideas list — however each idea was born
   // — plus live Jira issues not yet represented as ideas (they become ideas
   // later in this import). Jira disconnected just means fewer candidates.
+  // Duplicate Jira issues (Archive proposals) are not candidates: their pain
+  // is represented by the primary issue's idea.
   const existingIdeas = await db.idea.findMany({
-    where: { workspaceId, batchStatus: { not: "deleted" } },
+    where: { workspaceId, batchStatus: { not: "deleted" }, duplicateOf: null },
     select: {
       id: true,
       title: true,
@@ -857,18 +860,23 @@ async function runImport(
     const rollover = fresh.length > 0;
     const sourceByKey = new Map(jira.sources.map((src) => [src.key, src]));
 
-    // ——— grouped issues: one idea per group ———
+    // ——— grouped issues: the oldest issue keeps the idea, the others become
+    // Archive proposals ("Duplicate of …") that are never synced — the PM
+    // closes them in Jira by hand, or says "not a duplicate" ———
     for (const g of jiraGroups) {
-      const holders = Array.from(
-        new Set(g.members.map((k) => ideaByJiraKey.get(k)).filter((i): i is NonNullable<typeof i> => Boolean(i))),
-      );
-      // The idea to keep: the one holding the primary, else the first holder.
-      const keep = holders.find((i) => jiraKeysOf(i).includes(g.primary)) ?? holders[0];
-      const products = (sourceByKey.get(g.primary)?.products ?? []).length > 0
-        ? sourceByKey.get(g.primary)!.products
-        : ["Other"];
+      const primarySrc = sourceByKey.get(g.primary)!;
+      const products = primarySrc.products.length > 0 ? primarySrc.products : ["Other"];
+      const dupMembers = g.members.filter((k) => k !== g.primary);
+      const dupNote = (k: string) =>
+        `Duplicate of ${g.primary} — same user pain${g.reason ? ` (${g.reason})` : ""}. Flagged for archive: close ${k} in Jira by hand; PM-OS never syncs it.`;
+
+      let keep =
+        ideaByJiraKey.get(g.primary) ??
+        g.members.map((k) => ideaByJiraKey.get(k)).find((i) => i && !i.duplicateOf) ??
+        null;
+      let created = false;
       if (!keep) {
-        await db.idea.create({
+        keep = await db.idea.create({
           data: {
             workspaceId,
             title: g.title,
@@ -877,19 +885,116 @@ async function runImport(
             batchStatus: "updated",
             decision: "pending",
             origin: "jira",
-            batchChanges: [
-              `Merged Jira issues ${g.members.join(", ")} — same capability (${g.reason || "PMOS AI"})`,
-            ] as unknown as Prisma.InputJsonValue,
-            sources: { create: g.members.map((k) => ({ kind: "jira", jiraKey: k })) },
+            batchChanges: [] as unknown as Prisma.InputJsonValue,
+            sources: { create: [{ kind: "jira", jiraKey: g.primary }] },
+          },
+          include: { sources: true },
+        });
+        created = true;
+      } else {
+        // The primary's idea holds the primary key only: any other Jira key
+        // it carried (an earlier folding, a manual merge) moves to its own
+        // duplicate idea below.
+        const extra = jiraKeysOf(keep).filter((k) => k !== g.primary);
+        if (extra.length > 0) {
+          await db.ideaSource.deleteMany({
+            where: { ideaId: keep.id, kind: "jira", jiraKey: { in: extra } },
+          });
+        }
+        if (!jiraKeysOf(keep).includes(g.primary)) {
+          await db.ideaSource.create({ data: { ideaId: keep.id, kind: "jira", jiraKey: g.primary } });
+        }
+        if (keep.duplicateOf) {
+          await db.idea.update({ where: { id: keep.id }, data: { duplicateOf: null } });
+        }
+      }
+
+      const newlyFlagged: string[] = [];
+      let movedTickets = 0;
+      for (const k of dupMembers) {
+        const src = sourceByKey.get(k)!;
+        const own = ideaByJiraKey.get(k);
+        const existing = own && own.id !== keep.id ? own : null;
+        if (existing) {
+          // Its ticket evidence belongs with the pain, i.e. on the primary.
+          for (const t of existing.sources.filter((x) => x.kind === "zendesk" && x.ticketId)) {
+            const dup = await db.ideaSource.findFirst({
+              where: { ideaId: keep.id, kind: "zendesk", ticketId: t.ticketId },
+              select: { id: true },
+            });
+            if (!dup) {
+              await db.ideaSource.update({ where: { id: t.id }, data: { ideaId: keep.id } });
+              movedTickets++;
+            } else {
+              await db.ideaSource.delete({ where: { id: t.id } });
+            }
+          }
+          const wasDup = existing.duplicateOf === g.primary;
+          await db.idea.update({
+            where: { id: existing.id },
+            data: {
+              title: src.title,
+              products: products as Prisma.InputJsonValue,
+              duplicateOf: g.primary,
+              batchStatus: "archive",
+              decision: wasDup && existing.decision !== "injected" ? existing.decision : "pending",
+              existingVotes: 0,
+              newVotes: 0,
+              batchChanges: [dupNote(k)] as unknown as Prisma.InputJsonValue,
+            },
+          });
+          if (!wasDup) newlyFlagged.push(k);
+        } else {
+          await db.idea.create({
+            data: {
+              workspaceId,
+              title: src.title,
+              details: src.body,
+              products: products as Prisma.InputJsonValue,
+              batchStatus: "archive",
+              decision: "pending",
+              origin: "jira",
+              duplicateOf: g.primary,
+              batchChanges: [dupNote(k)] as unknown as Prisma.InputJsonValue,
+              sources: { create: [{ kind: "jira", jiraKey: k }] },
+            },
+          });
+          newlyFlagged.push(k);
+        }
+      }
+      jiraMerged += newlyFlagged.length;
+
+      if (created || newlyFlagged.length > 0) {
+        // The group is new or grew: the primary carries the merged text and
+        // enters review as Updated, with the folded issues and moved tickets
+        // as this import's narration.
+        await db.idea.update({
+          where: { id: keep.id },
+          data: {
+            title: g.title,
+            details: g.details,
+            products: products as Prisma.InputJsonValue,
+            batchStatus: "updated",
+            decision: keep.decision === "injected" ? "pending" : keep.decision,
+            existingVotes: rollover && !created ? keep.existingVotes + keep.newVotes : keep.existingVotes,
+            newVotes: (rollover || created ? 0 : keep.newVotes) + movedTickets,
+            batchChanges: mergeBatchChanges(
+              rollover || created ? [] : ((keep.batchChanges as string[]) ?? []),
+              [
+                ...(newlyFlagged.length > 0
+                  ? [
+                      `Jira duplicates flagged for archive: ${newlyFlagged.join(", ")} — same user pain${g.reason ? ` (${g.reason})` : ""}`,
+                    ]
+                  : []),
+                ...(movedTickets > 0
+                  ? [`${movedTickets} ticket${movedTickets === 1 ? "" : "s"} moved here from the duplicates`]
+                  : []),
+              ],
+            ) as Prisma.InputJsonValue,
           },
         });
-        jiraMerged += g.members.length - 1;
-        continue;
-      }
-      const have = new Set(jiraKeysOf(keep));
-      const newMembers = g.members.filter((k) => !have.has(k));
-      if (newMembers.length === 0) {
-        // Group unchanged since last import: a normal existing idea.
+      } else {
+        // Stable group: a normal existing idea (text stays local).
         await db.idea.update({
           where: { id: keep.id },
           data: {
@@ -904,51 +1009,20 @@ async function runImport(
               : {}),
           },
         });
-        continue;
       }
-      // Fold the other holders into `keep`: their ticket evidence moves over,
-      // their Jira keys attach, the rows go. Text becomes the merged idea.
-      const others = holders.filter((i) => i.id !== keep.id);
-      let movedTickets = 0;
-      for (const o of others) {
-        const tickets = o.sources.filter((src) => src.kind === "zendesk" && src.ticketId);
-        for (const t of tickets) {
-          const dup = keep.sources.some((src) => src.kind === "zendesk" && src.ticketId === t.ticketId);
-          if (!dup) {
-            await db.ideaSource.create({ data: { ideaId: keep.id, kind: "zendesk", ticketId: t.ticketId } });
-            movedTickets++;
-          }
-        }
-        await db.idea.delete({ where: { id: o.id } });
-      }
-      await db.ideaSource.createMany({
-        data: newMembers.map((k) => ({ ideaId: keep.id, kind: "jira", jiraKey: k })),
-      });
-      const otherVotes = others.reduce((a, o) => a + o.existingVotes + o.newVotes, 0);
-      await db.idea.update({
-        where: { id: keep.id },
-        data: {
-          title: g.title,
-          details: g.details,
-          products: products as Prisma.InputJsonValue,
-          batchStatus: "updated",
-          decision: keep.decision === "injected" ? "pending" : keep.decision,
-          existingVotes: rollover ? keep.existingVotes + keep.newVotes : keep.existingVotes,
-          // The folded issues count as evidence (one each) and their tickets come along.
-          newVotes: (rollover ? 0 : keep.newVotes) + newMembers.length + movedTickets + (rollover ? otherVotes : 0),
-          batchChanges: mergeBatchChanges(
-            rollover ? [] : ((keep.batchChanges as string[]) ?? []),
-            [`Merged Jira issues ${newMembers.join(", ")} into ${g.primary} — same capability (${g.reason || "PMOS AI"})`],
-          ) as Prisma.InputJsonValue,
-        },
-      });
-      jiraMerged += newMembers.length;
     }
 
     // ——— every other issue: one idea each ———
     for (const s of jira.sources) {
       if (memberToPrimary.has(s.key)) continue;
       const cur = ideaByJiraKey.get(s.key);
+      if (cur?.duplicateOf) {
+        // No longer in a group: back to a plain idea.
+        await db.idea.update({
+          where: { id: cur.id },
+          data: { duplicateOf: null, batchStatus: "unchanged", decision: "pending", batchChanges: [] as unknown as Prisma.InputJsonValue },
+        });
+      }
       // Same fallback as Zendesk-origin ideas: a Jira issue with no
       // components gets "Other", so every idea has a product line — the
       // product filter and the scoped merge gate can never silently miss one.
@@ -1272,6 +1346,8 @@ async function runImport(
 // real write was the demo behavior. The write-back lives in ./push.ts.
 export type IdeasMutation =
   | { type: "decision"; ideaId: string; decision: "pending" | "reviewed" }
+  /** PM verdict on a Jira-to-Jira dedupe: this issue is NOT a duplicate of its primary. */
+  | { type: "notDuplicate"; ideaId: string }
   | {
       type: "edit";
       ideaId: string;
@@ -1528,6 +1604,35 @@ export async function mutateIdeas(
           payload: { bulk: true },
         })),
       );
+      break;
+    }
+    case "notDuplicate": {
+      const idea = await db.idea.findFirst({
+        where: { id: mutation.ideaId, workspaceId },
+        include: { sources: true },
+      });
+      if (!idea?.duplicateOf) break;
+      const own = idea.sources.find((x) => x.kind === "jira" && x.jiraKey)?.jiraKey;
+      if (own) {
+        await db.jiraDedupeReject.upsert({
+          where: { workspaceId_pair: { workspaceId, pair: rejectPairKey(own, idea.duplicateOf) } },
+          create: { workspaceId, pair: rejectPairKey(own, idea.duplicateOf) },
+          update: {},
+        });
+      }
+      await db.idea.update({
+        where: { id: idea.id },
+        data: {
+          duplicateOf: null,
+          batchStatus: "unchanged",
+          decision: "pending",
+          batchChanges: [] as unknown as Prisma.InputJsonValue,
+        },
+      });
+      await logEvents(workspaceId, [
+        { ideaId: idea.id, action: "not-duplicate", payload: { of: idea.duplicateOf, key: own ?? null } },
+      ]);
+      notice = `${own ?? "Issue"} stays its own idea — PM-OS won't group it with ${idea.duplicateOf} again`;
       break;
     }
     case "reassign": {
