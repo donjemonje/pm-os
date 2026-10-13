@@ -357,6 +357,10 @@ body {
 /* Idea text inside the drawer: same type as everywhere, just less air
    above the first heading (it sits right under the import box) and between
    sections. Unlayered on purpose so it outranks the document rules above. */
+.um-doc.um-compact {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
 .um-doc.um-compact > :first-child {
   margin-top: 0;
 }

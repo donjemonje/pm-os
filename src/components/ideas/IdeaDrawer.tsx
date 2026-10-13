@@ -882,8 +882,7 @@ export function IdeaDrawer({
 
 /* ───────────────────────── Zendesk ticket view ───────────────────────── */
 
-const FIELD_LABEL =
-  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#9aa8be]";
+const FIELD_LABEL = "text-[13px] font-medium text-[#9aa8be]";
 
 function formatDate(value: string | undefined): string | null {
   if (!value) return null;
@@ -909,6 +908,32 @@ function RawChip({ label, value }: { label: string; value: string }) {
 }
 
 /** One labelled value on the ticket's header line: "Customer  Acme". */
+const URL_RE = /(https?:\/\/[^\s<>()\[\]"']+[^\s<>()\[\]"'.,;:!?])/g;
+
+/** Plain text with every http(s) URL turned into a link — raw ticket text as reporters typed it. */
+function Linkified({ text }: { text: string }) {
+  const parts = text.split(URL_RE);
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="break-all text-primary hover:underline"
+          >
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
@@ -991,7 +1016,7 @@ function JiraIssueView({
                   {k}
                 </dt>
                 <dd className={`m-0 whitespace-pre-wrap break-words ${v ? "text-foreground" : "text-[#c3ccd8]"}`}>
-                  {v ?? "—"}
+                  {v ? <Linkified text={v} /> : "—"}
                 </dd>
               </div>
             ))}
@@ -1048,14 +1073,14 @@ function TicketView({
         <div>
           <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
           <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-foreground">
-            {ticket.body}
+            <Linkified text={ticket.body} />
           </div>
         </div>
         {ticket.whyBuild && (
           <div>
             <div className={`${MONO_LABEL} mb-1.5`}>Why should we build this?</div>
             <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
-              {ticket.whyBuild}
+              <Linkified text={ticket.whyBuild} />
             </div>
           </div>
         )}
@@ -1063,7 +1088,7 @@ function TicketView({
           <div>
             <div className={`${MONO_LABEL} mb-1.5`}>What insights do we have?</div>
             <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
-              {ticket.insights}
+              <Linkified text={ticket.insights} />
             </div>
           </div>
         )}
@@ -1205,7 +1230,7 @@ function TicketView({
                         empty ? "text-[#c3ccd8]" : "text-foreground"
                       }`}
                     >
-                      {empty ? "—" : v}
+                      {empty ? "—" : <Linkified text={v} />}
                     </dd>
                   </div>
                 );
