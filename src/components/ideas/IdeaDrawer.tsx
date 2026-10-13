@@ -396,7 +396,19 @@ export function IdeaDrawer({
                   className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.4)] px-2.5 py-0.5 text-xs font-semibold"
                   style={JIRA_TAG}
                 >
-                  Jira idea <span className="font-mono">{jiraSrc.id}</span>
+                  Jira issue <span className="font-mono">{jiraSrc.id}</span>
+                  {jiraSrc.url && (
+                    <a
+                      href={jiraSrc.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open in Jira"
+                      className="ml-0.5 flex text-[#7a8aa3] hover:text-foreground"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink size={11} />
+                    </a>
+                  )}
                 </span>
               ) : (
                 badge && <Pill badge={badge} />
@@ -563,16 +575,22 @@ export function IdeaDrawer({
             />
           ) : jiraSrc ? (
             <>
-              <div>
-                <div className={`${MONO_LABEL} mb-1.5`}>Details</div>
-                <div className="whitespace-pre-line text-[13.5px] leading-relaxed text-foreground">
-                  {jiraSrc.body || "No description."}
-                </div>
-              </div>
-              <div className="flex flex-col gap-1 text-xs text-muted">
-                {jiraSrc.status && <span>Jira status: {jiraSrc.status}</span>}
+              {/* Same shape as the raw Zendesk ticket: a field row, then the description as Jira formats it */}
+              <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+                <Field label="Key">
+                  <span className="font-mono">{jiraSrc.id}</span>
+                </Field>
+                {jiraSrc.status && <Field label="Jira status">{jiraSrc.status}</Field>}
                 {jiraSrc.products.length > 0 && (
-                  <span>Product line: {jiraSrc.products.join(", ")}</span>
+                  <Field label="Product line">{jiraSrc.products.join(", ")}</Field>
+                )}
+              </div>
+              <div>
+                <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
+                {jiraSrc.body ? (
+                  <UmMarkdown content={jiraSrc.body} className="text-[13.5px] leading-relaxed" />
+                ) : (
+                  <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
                 )}
               </div>
               {jiraSrc.url && (
@@ -854,7 +872,7 @@ export function IdeaDrawer({
                     title={
                       idea.undoable?.action === "create"
                         ? `Deletes ${idea.undoable.jiraKey} in Jira (asks first)`
-                        : `Restores ${idea.undoable?.jiraKey} to its pre-merge state`
+                        : `Restores ${idea.undoable?.jiraKey} to its pre-sync state`
                     }
                   >
                     Undo merge

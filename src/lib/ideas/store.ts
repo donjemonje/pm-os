@@ -39,8 +39,12 @@ export interface IdeasState {
   ideas: Idea[];
   /** Customer catalog names — the client tells confirmed from suggested with this. */
   customerCatalog: string[];
-  /** Jira integration is set up for the workspace — gates Jira Merge. */
+  /** Jira integration is set up for the workspace — gates Sync to Jira. */
   jiraConnected: boolean;
+  /** Browse base of the connected site ("https://x.atlassian.net"); null when
+   *  not connected. The client links every issue key with it, created ones
+   *  (not yet in the snapshot) included. */
+  jiraSiteUrl: string | null;
   /** The org's CSV import mapping — the client parses uploads with it. */
   csvMapping: CsvMapping;
 }
@@ -248,6 +252,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
 
   return {
     jiraConnected: Boolean(jiraStatus?.connected),
+    jiraSiteUrl: jiraStatus?.siteUrl ?? null,
     csvMapping: mergeIdeasJiraConfig(wsRow?.ideasConfig).csv,
     tickets: ticketRows.map(toClientTicket),
     jiraSources: snapshotRows.map((s) => ({

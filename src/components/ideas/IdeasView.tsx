@@ -15,6 +15,7 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
+  ExternalLink,
 } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
@@ -73,6 +74,7 @@ interface ServerState {
   customerCatalog?: string[];
   jiraConnected?: boolean;
   csvMapping?: CsvMapping;
+  jiraSiteUrl?: string | null;
 }
 
 /** Case-insensitive lookup of a catalog color by name. */
@@ -134,6 +136,7 @@ export function IdeasView({
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [jiraSiteUrl, setJiraSiteUrl] = useState<string | null>(null);
   const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
   const [hydrated, setHydrated] = useState(false);
 
@@ -189,6 +192,7 @@ export function IdeasView({
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
+    if (state.jiraSiteUrl !== undefined) setJiraSiteUrl(state.jiraSiteUrl);
     if (state.csvMapping) setCsvMapping(state.csvMapping);
     // The sidebar's pending badge is rendered by the root layout on the
     // server; a mutation here must re-render it (client state survives).
@@ -237,7 +241,29 @@ export function IdeasView({
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
   const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
-  const jiraByKey = useMemo(() => new Map(jiraSources.map((s) => [s.key, s])), [jiraSources]);
+  // Issues a sync created exist in Jira but not in the snapshot until the next
+  // import — they get a stand-in source (idea title, browse link) so the drawer
+  // and the Merge page link them like any other Jira issue.
+  const jiraByKey = useMemo(() => {
+    const map = new Map(jiraSources.map((s) => [s.key, s]));
+    if (jiraSiteUrl) {
+      for (const idea of ideas) {
+        for (const key of idea.jira) {
+          if (!map.has(key)) {
+            map.set(key, {
+              key,
+              id: key,
+              title: idea.title,
+              body: "",
+              url: `${jiraSiteUrl}/browse/${key}`,
+              products: idea.products,
+            });
+          }
+        }
+      }
+    }
+    return map;
+  }, [jiraSources, ideas, jiraSiteUrl]);
   /** Distinct Jira statuses in the pulled backlog — the Jira status filter's options. */
   const jiraStatuses = useMemo(() => {
     const seen = new Map<string, string>();
@@ -370,7 +396,7 @@ export function IdeasView({
     const message =
       idea.undoable.action === "create"
         ? `${idea.undoable.jiraKey} will be permanently deleted in Jira — comments and edits made there are lost.`
-        : `${idea.undoable.jiraKey} goes back to how it was before the merge. Fields edited in Jira since then are left alone.`;
+        : `${idea.undoable.jiraKey} goes back to how it was before the sync. Fields edited in Jira since then are left alone.`;
     if (
       !(await confirm({
         title: "Undo the last merge?",
@@ -493,8 +519,8 @@ export function IdeasView({
     : reviewed === 0
       ? pending > 0
         ? `Approve ideas to enable exporting — ${pending} awaiting review`
-        : "All changes already exported to Jira"
-      : `Export approved changes to Jira`;
+        : "All changes already synced to Jira"
+      : `Sync approved changes to Jira`;
 
   const matches = (i: Idea): boolean => {
     if (i.batch === "deleted") return false;
@@ -539,7 +565,7 @@ export function IdeasView({
 
   const drawerIdea = drawerId ? ideas.find((i) => i.id === drawerId) : undefined;
 
-  // ——— Merge-to-Jira modal (scope → preview → execute → results) ———
+  // ——— Sync-to-Jira modal (scope → preview → execute → results) ———
   const scope = scopeSel.length > 0 ? scopeSel : null;
   const inMergeScope = (i: Idea): boolean =>
     !scope || i.products.some((p) => scope.some((s) => s.toLowerCase() === p.toLowerCase()));
@@ -549,13 +575,22 @@ export function IdeasView({
   const scopedReviewed = live.filter(
     (i) => i.decision === "reviewed" && inMergeScope(i)
   ).length;
-  // One approved idea is enough to merge — pending ideas never block, they
-  // simply stay behind for a later merge.
+  // One approved idea is enough to sync — pending ideas never block, they
+  // simply stay behind for a later sync.
   const previewDisabled = scopedReviewed === 0;
+  /** What each product line has ready: approved ideas (will sync) and pending ones (stay). */
+  const productSyncStats = allProducts.map((name) => {
+    const has = (i: Idea) => i.products.some((p) => p.toLowerCase() === name.toLowerCase());
+    return {
+      name,
+      approved: live.filter((i) => i.decision === "reviewed" && has(i)).length,
+      pending: approvable.filter((i) => i.decision === "pending" && has(i)).length,
+    };
+  });
   const previewHint =
     scopedReviewed === 0
       ? "Nothing approved in the selected product lines"
-      : `${scopedReviewed} approved change${scopedReviewed === 1 ? "" : "s"} will merge${
+      : `${scopedReviewed} approved change${scopedReviewed === 1 ? "" : "s"} will sync${
           scopedPending > 0
             ? ` — ${scopedPending} still pending stay${scopedPending === 1 ? "s" : ""} here`
             : ""
@@ -619,7 +654,7 @@ export function IdeasView({
       });
       const data = await res.json();
       if (!res.ok) {
-        setMergeError(data.error ?? "Merge failed");
+        setMergeError(data.error ?? "Sync failed");
         return;
       }
       applyState(data.state as ServerState);
@@ -629,11 +664,11 @@ export function IdeasView({
       const failCount = results.length - okCount;
       setNote(
         failCount === 0
-          ? `${okCount} change${okCount === 1 ? "" : "s"} merged to Jira`
-          : `${okCount} merged, ${failCount} failed — reopen Jira Merge to retry`
+          ? `${okCount} change${okCount === 1 ? "" : "s"} synced to Jira`
+          : `${okCount} synced, ${failCount} failed — reopen Sync to Jira to retry`
       );
     } catch {
-      setMergeError("Merge failed — is the dev server running?");
+      setMergeError("Sync failed — is the dev server running?");
     } finally {
       setPushing(false);
     }
@@ -881,8 +916,8 @@ export function IdeasView({
             {ideas.length > 0 && (
               <span title={injectHint} className="inline-flex">
                 <Button variant="primary" glow disabled={injectDisabled} onClick={openMerge}>
-                  <GitMerge size={13} strokeWidth={2.25} />
-                  Jira Merge
+                  <RefreshCw size={13} strokeWidth={2.25} />
+                  Sync to Jira
                 </Button>
               </span>
             )}
@@ -1613,32 +1648,33 @@ export function IdeasView({
         </div>
       )}
 
-      {/* Merge-to-Jira modal: scope → preview → execute → results */}
+      {/* Sync-to-Jira modal: scope → preview → execute → results */}
       {confirmOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,25,41,.42)] p-10 backdrop-blur-[6px]"
           onClick={closeMerge}
         >
           <div
-            className="glass-strong flex w-[640px] max-w-full flex-col overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]"
+            className="glass-strong flex max-h-[calc(100vh-80px)] w-[880px] max-w-full flex-col overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="h-[3px] bg-[linear-gradient(90deg,var(--app-accent),#17b26a)]" />
             {pushResults ? (
               <>
-                <div className="flex flex-col gap-4 px-[26px] pb-5 pt-[22px]">
+                <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-[26px] pb-5 pt-[22px]">
                   <div>
-                    <div className="eyebrow mb-1.5 text-primary">Jira Merge · Result</div>
+                    <div className="eyebrow mb-1.5 text-primary">Sync to Jira · Result</div>
                     <h2 className="font-title m-0 text-[22px] font-bold">
-                      {pushResults.every((r) => r.ok) ? "Merged to Jira" : "Merge finished with errors"}
+                      {pushResults.every((r) => r.ok) ? "Synced to Jira" : "Sync finished with errors"}
                     </h2>
                     <p className="mb-0 mt-1.5 text-[13.5px] leading-relaxed text-fg-3">
                       {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
-                      {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
-                      run Jira Merge again to retry just those.
+                      {pushResults.length === 1 ? "" : "s"} written.
+                      {pushResults.some((r) => !r.ok) &&
+                        " Failed ideas stay approved — Retry writes just those."}
                     </p>
                   </div>
-                  <div className="flex max-h-80 flex-col overflow-y-auto rounded-inner border border-border">
+                  <div className="flex min-h-0 flex-col overflow-y-auto rounded-inner border border-border">
                     {pushResults.map((r, k) => (
                       <div
                         key={r.ideaId}
@@ -1663,15 +1699,17 @@ export function IdeasView({
                             <span className="text-[11.5px] text-[#c23767]">{r.error}</span>
                           )}
                         </div>
-                        {r.url && (
+                        {r.jiraKey && (r.url || jiraSiteUrl) && (
                           <a
-                            href={r.url}
+                            href={r.url ?? `${jiraSiteUrl}/browse/${r.jiraKey}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="shrink-0 font-mono text-[11px] text-primary hover:underline"
+                            title="Open in Jira"
+                            className="inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-primary hover:underline"
                           >
                             {r.jiraKey}
+                            <ExternalLink size={11} />
                           </a>
                         )}
                       </div>
@@ -1679,6 +1717,14 @@ export function IdeasView({
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 border-t border-border bg-[rgba(247,250,253,.8)] px-[26px] py-3.5">
+                  {pushResults.some((r) => !r.ok) && (
+                    <Button disabled={pushing} onClick={runPush}>
+                      <RefreshCw size={13} strokeWidth={2.25} />
+                      {pushing
+                        ? "Retrying…"
+                        : `Retry failed (${pushResults.filter((r) => !r.ok).length})`}
+                    </Button>
+                  )}
                   <Button variant="primary" glow onClick={closeMerge}>
                     Done
                   </Button>
@@ -1686,36 +1732,69 @@ export function IdeasView({
               </>
             ) : (
               <>
-                <div className="flex flex-col gap-4 px-[26px] pb-5 pt-[22px]">
+                <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-[26px] pb-5 pt-[22px]">
                   <div>
                     <div className="eyebrow mb-1.5 text-primary">
-                      {plan ? "Jira Merge · Preview" : "Zendesk → Jira"}
+                      {plan ? "Sync to Jira · Preview" : "Zendesk → Jira"}
                     </div>
-                    <h2 className="font-title m-0 text-[22px] font-bold">Jira Merge</h2>
+                    <h2 className="font-title m-0 text-[22px] font-bold">Sync to Jira</h2>
                     <p className="mb-0 mt-1.5 text-[13.5px] leading-relaxed text-fg-3">
-                      Pick the product lines to merge. Only approved ideas are written — anything
-                      still pending stays here for a later merge.
+                      Pick the product lines to sync. Only approved ideas are written — anything
+                      still pending stays here for a later sync.
                     </p>
                   </div>
 
-                  {/* Scope */}
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  {/* Scope: one row per product line with what is ready to go */}
+                  <div className="overflow-hidden rounded-inner border border-border">
                     <button
                       onClick={() => {
                         setScopeSel([]);
                         setPlan(null);
                         setMergeError("");
                       }}
-                      className={chipClass(scopeSel.length === 0)}
+                      className={`flex w-full items-center gap-3 px-3 py-2 text-left text-[13px] hover:bg-[rgba(247,250,253,.9)] ${
+                        scopeSel.length === 0 ? "bg-[var(--app-accent-soft)]" : ""
+                      }`}
                     >
-                      All product lines
+                      <span
+                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                          scopeSel.length === 0 ? "border-primary bg-primary text-white" : "border-border bg-white"
+                        }`}
+                      >
+                        {scopeSel.length === 0 && <Check size={11} strokeWidth={3} />}
+                      </span>
+                      <span className="flex-1 font-semibold text-fg-2">All product lines</span>
+                      <span className="font-mono text-[11px] text-fg-muted">
+                        {reviewed} approved · {pending} pending
+                      </span>
                     </button>
-                    {allProducts.map((p) => (
-                      <button key={p} onClick={() => toggleScope(p)} className={chipClass(scopeSel.includes(p))}>
-                        {p}
-                        {scopeSel.includes(p) && <Check size={11} strokeWidth={3} />}
-                      </button>
-                    ))}
+                    {productSyncStats.map((row) => {
+                      const on = scopeSel.includes(row.name);
+                      const disabled = row.approved === 0 && !on;
+                      return (
+                        <button
+                          key={row.name}
+                          disabled={disabled}
+                          onClick={() => toggleScope(row.name)}
+                          title={disabled ? "Nothing approved in this product line" : undefined}
+                          className={`flex w-full items-center gap-3 border-t border-hairline px-3 py-2 text-left text-[13px] hover:bg-[rgba(247,250,253,.9)] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
+                            on ? "bg-[var(--app-accent-soft)]" : ""
+                          }`}
+                        >
+                          <span
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                              on ? "border-primary bg-primary text-white" : "border-border bg-white"
+                            }`}
+                          >
+                            {on && <Check size={11} strokeWidth={3} />}
+                          </span>
+                          <span className="flex-1">{productChip(row.name)}</span>
+                          <span className="font-mono text-[11px] text-fg-muted">
+                            {row.approved} approved · {row.pending} pending
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                   <div className="text-xs text-fg-3">{previewHint}</div>
 
@@ -1774,9 +1853,21 @@ export function IdeasView({
                               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg-2">
                                 {item.title}
                               </span>
-                              <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">
-                                {item.action === "create" ? "→ new issue" : item.jiraKey}
-                              </span>
+                              {item.action === "create" || !item.jiraKey ? (
+                                <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">→ new issue</span>
+                              ) : (
+                                <a
+                                  href={item.url ?? `${jiraSiteUrl ?? ""}/browse/${item.jiraKey}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  title="Open in Jira"
+                                  className="inline-flex shrink-0 items-center gap-1 font-mono text-[10.5px] text-primary hover:underline"
+                                >
+                                  {item.jiraKey}
+                                  <ExternalLink size={10} />
+                                </a>
+                              )}
                             </div>
                             <span className="pl-[66px] text-[11.5px] text-fg-muted">
                               {item.noop
@@ -1825,8 +1916,8 @@ export function IdeasView({
                       disabled={pushing || plan.blockers.length > 0 || plan.items.length === 0}
                       onClick={runPush}
                     >
-                      <GitMerge size={13} strokeWidth={2.25} />
-                      {pushing ? "Merging…" : `Confirm merge (${plan.items.length})`}
+                      <RefreshCw size={13} strokeWidth={2.25} />
+                      {pushing ? "Syncing…" : `Confirm sync (${plan.items.length})`}
                     </Button>
                   )}
                 </div>

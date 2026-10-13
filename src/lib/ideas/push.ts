@@ -33,7 +33,7 @@ async function getIdeasJiraConfig(workspaceId: string): Promise<IdeasJiraConfig>
 }
 
 /**
- * Write-back of reviewed ideas to Jira ("Jira Merge").
+ * Write-back of reviewed ideas to Jira ("Sync to Jira").
  *
  * Output semantics (Daniel, 2026-09-01 — all configurable in Admin → Ideas,
  * see jira-mapping.ts):
@@ -710,6 +710,8 @@ export async function executePush(
   // The plan is re-derived server-side — the client preview is display only.
   const { plan, writes, config } = await derivePlan(workspaceId, scope);
   if (plan.blockers.length > 0) return { ok: false, blockers: plan.blockers };
+  const status = await getJiraConnectionStatus(workspaceId);
+  if (!status) return { ok: false, blockers: ["Jira is not connected."] };
 
   // Only the LAST merge is undoable — this run's snapshots replace the
   // previous batch's wholesale.
@@ -829,7 +831,7 @@ export async function executePush(
           ok: true,
           action: "create",
           jiraKey: key,
-          url: null,
+          url: `${status.siteUrl}/browse/${key}`,
         });
       }
     } catch (err) {

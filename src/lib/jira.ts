@@ -4,6 +4,7 @@ import {
   getJiraRedirectUri,
   JIRA_OAUTH_SCOPES,
 } from "./jira-oauth-config";
+import { adfToMarkdown, markdownToAdf } from "./jira-adf";
 import { buildIssueImages, extractAttachmentIdsFromAdf } from "./jira-attachments";
 import type { JiraIssue, JiraProject, JiraVersion } from "./types";
 import { parseJsonArray } from "./utils";
@@ -257,10 +258,12 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
     ? readProductLineValue(fields[opts.productLineFieldId])
     : undefined;
   const descriptionRaw = fields.description;
+  // Markdown, so headings / bold / lists / links survive into PM-OS and the
+  // raw Jira issue reads as close to Jira as possible.
   const description =
     typeof descriptionRaw === "string"
       ? descriptionRaw
-      : adfToText(descriptionRaw);
+      : adfToMarkdown(descriptionRaw);
 
   const attachments =
     (fields.attachment as Array<{ id: string; filename: string; mimeType: string }>) ?? [];
@@ -608,22 +611,12 @@ export async function addJiraComment(
 // ————— Ideas write-back (issue create/update) —————
 
 /**
- * Minimal plain-text → ADF: each line becomes a paragraph, blank lines
- * become empty paragraphs. Deterministic on purpose — what the preview
- * shows is exactly what Jira receives.
+ * Markdown → ADF (jira-adf.ts): the idea text PMOS AI writes (## headings,
+ * lists, bold, links) lands in Jira as real headings and lists. Deterministic
+ * — what the preview shows is exactly what Jira receives.
  */
 export function textToAdf(text: string): { type: string; version: number; content: unknown[] } {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const content = lines.map((line) =>
-    line.trim().length > 0
-      ? { type: "paragraph", content: [{ type: "text", text: line }] }
-      : { type: "paragraph", content: [] }
-  );
-  return {
-    type: "doc",
-    version: 1,
-    content: content.length > 0 ? content : [{ type: "paragraph", content: [] }],
-  };
+  return markdownToAdf(text);
 }
 
 export interface JiraComponent {
@@ -686,14 +679,20 @@ export async function listAllFields(
   const data = (await jiraFetch(workspaceId, "/rest/api/3/field")) as Array<{
     id: string;
     name: string;
+    custom?: boolean;
     scope?: { type?: string; project?: { id?: string } };
   }>;
-  const byName = new Map<string, { id: string; name: string; scoped: boolean }>();
+  // Rank on a name clash: site-wide custom field > project-scoped custom
+  // field > system field. Only custom fields are mapping targets, and a
+  // customer may name theirs "Votes" next to Jira's built-in Votes.
+  const rank = (f: { custom?: boolean; scope?: { project?: { id?: string } } }) =>
+    !f.custom ? 0 : f.scope?.project ? 1 : 2;
+  const byName = new Map<string, { id: string; name: string; rank: number }>();
   for (const f of data ?? []) {
     const key = f.name.toLowerCase();
-    const scoped = Boolean(f.scope?.project);
+    const r = rank(f);
     const cur = byName.get(key);
-    if (!cur || (cur.scoped && !scoped)) byName.set(key, { id: f.id, name: f.name, scoped });
+    if (!cur || r > cur.rank) byName.set(key, { id: f.id, name: f.name, rank: r });
   }
   return new Map(Array.from(byName, ([k, v]) => [k, { id: v.id, name: v.name }]));
 }
@@ -791,7 +790,7 @@ export async function fetchIssuesRaw(
       labels: (fields.labels as string[]) ?? [],
       components: (((fields.components as Array<{ name: string }>) ?? []).map((c) => c.name)),
       descriptionAdf: raw && typeof raw === "object" ? raw : null,
-      descriptionText: typeof raw === "string" ? raw : adfToText(raw),
+      descriptionText: typeof raw === "string" ? raw : adfToMarkdown(raw),
       extra,
     };
   });

@@ -140,7 +140,7 @@ export function ProductLinesPanel({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder="Aliases, comma-separated — e.g. the Jira option name: Platform General, Platform- General"
-      title="Other names that mean this product line. Imports map any of them here; the merge to Jira writes whichever one is a Jira option."
+      title="Other names that mean this product line. Imports map any of them here; the sync to Jira writes whichever one is a Jira option."
       className={`${INPUT_CLASS} text-[13px]`}
     />
   );

@@ -214,7 +214,7 @@ export function IdeasOutputConfig({
       <section className="space-y-4">
         <div className="border-b border-slate-200 pb-2">
           <h2 className="text-base font-bold">Jira</h2>
-          <p className="mt-0.5 text-xs text-slate-500">How the connected Jira is read on import and written on merge: the pull ceiling, which Jira fields map to PM-OS attributes, and what a merge writes to the issue.</p>
+          <p className="mt-0.5 text-xs text-slate-500">How the connected Jira is read on import and written on sync: the pull ceiling, which Jira fields map to PM-OS attributes, and what a sync writes to the issue.</p>
         </div>
       {/* Jira target */}
       {issueTypes[orgId] !== null && (
@@ -282,9 +282,9 @@ export function IdeasOutputConfig({
           PM-OS attribute → Jira field (matched by display name). Product Line
           is also read on import: its Jira field is the issue&apos;s product
           line (Kela: Module), mapped to the catalog by name or alias. On
-          merge the catalog name or whichever alias is a Jira option is
+          sync the catalog name or whichever alias is a Jira option is
           written (Settings → Product Lines holds the aliases). Values with no
-          matching option are skipped with a warning in the merge preview.
+          matching option are skipped with a warning in the sync preview.
         </p>
         <div className="space-y-3">
           {MAPPED_ATTRIBUTES.map((attr) => {
@@ -333,7 +333,7 @@ export function IdeasOutputConfig({
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Description</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          On every merge the Jira description becomes the PM-OS idea text, a
+          On every sync the Jira description becomes the PM-OS idea text, a
           gap, and the supported-tickets list. The idea is where the issue&apos;s
           original text and the ticket evidence were merged.
         </p>
@@ -585,7 +585,7 @@ export function IdeasOutputConfig({
         {saved && (
           <span className="inline-flex items-center gap-1 text-sm text-green-700">
             <Check size={14} strokeWidth={2.5} />
-            Saved — applies to the next merge
+            Saved — applies to the next sync
           </span>
         )}
       </div>
