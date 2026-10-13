@@ -580,9 +580,16 @@ export function IdeaDrawer({
                 <Field label="Key">
                   <span className="font-mono">{jiraSrc.id}</span>
                 </Field>
-                {jiraSrc.status && <Field label="Jira status">{jiraSrc.status}</Field>}
+                {jiraSrc.issueType && <Field label="Type">{jiraSrc.issueType}</Field>}
+                {jiraSrc.status && <Field label="Status">{jiraSrc.status}</Field>}
+                {jiraSrc.priority && <Field label="Priority">{jiraSrc.priority}</Field>}
                 {jiraSrc.products.length > 0 && (
                   <Field label="Product line">{jiraSrc.products.join(", ")}</Field>
+                )}
+                {jiraSrc.reporter && <Field label="Reporter">{jiraSrc.reporter}</Field>}
+                {jiraSrc.assignee && <Field label="Assignee">{jiraSrc.assignee}</Field>}
+                {formatDate(jiraSrc.createdAt) && (
+                  <Field label="Created">{formatDate(jiraSrc.createdAt)}</Field>
                 )}
               </div>
               <div>
@@ -762,7 +769,7 @@ export function IdeaDrawer({
               <div>
                 <UmMarkdown
                   content={idea.details}
-                  className="text-[13.5px] leading-relaxed"
+                  className="text-[13.5px] leading-relaxed [&>h2]:mt-4 [&>h2:first-child]:mt-0 [&>h3]:mt-3 [&>p]:my-2 [&>ul]:my-2"
                 />
               </div>
               {sourceEntries.length > 0 && (

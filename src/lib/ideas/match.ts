@@ -42,7 +42,7 @@ export interface MatchHooks extends StageHooks {
  * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v7";
+export const MATCH_PROMPT_VERSION = "match-v8";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 export function getMatchModel(): string {
@@ -59,9 +59,9 @@ Decide whether the request asks for the same capability as one candidate:
 - Prefer an existing idea over a peer request when both fit — existing ideas are the settled record.
 - When torn between two candidates, pick the single best one; when none clearly fits, return no match. Never force a match.
 
-If (and only if) the request matches an EXISTING idea (not a peer request), also judge enrichment: does the request add real context the idea's description lacks (a concrete use case, a constraint, a sharper articulation of the need)? If yes, write enriched_summary: the existing idea's description, sharpened with the new context, in neutral product language. It replaces the description, so it must stand alone, keep everything still true from the original, and keep (or adopt) the IDEA TEMPLATE structure provided in the message — sections in order with their exact "##" headings, honoring their omission rules. Writing rules:
+When the request matches an EXISTING idea (not a peer request), ALWAYS write enriched_summary: the idea rewritten in the IDEA TEMPLATE provided in the message — sections in order with their exact "##" headings, honoring their omission rules — merging the existing description with what the request adds. This is where the team's own Jira text and the customer's request become ONE idea, so: keep every fact, link, key and identifier from the existing description (nothing the team wrote may disappear or change meaning; say it once when both sources say it), add what the request contributes (a concrete use case, a constraint, a sharper articulation of the need), and write it in the template even when the existing description was free text. It replaces the description and must stand alone. Writing rules:
 ${IDEA_WRITING_RULES}
-If the request adds nothing beyond a vote, or the match is a peer request, return an empty enriched_summary.
+Return an empty enriched_summary only when the match is a peer request.
 
 Return the matched candidate's key EXACTLY as listed, or an empty string for no match. Give a single short sentence of reasoning.`;
 
@@ -91,7 +91,7 @@ const MATCH_TOOL = {
       enriched_summary: {
         type: "string",
         description:
-          "Only when matched to an EXISTING idea AND the request adds real context: replacement description following the idea template. Empty string otherwise.",
+          "When matched to an EXISTING idea: the replacement description — existing text merged with the request, in the idea template, nothing from the original lost. Empty string for a peer match or no match.",
       },
       reason: {
         type: "string",

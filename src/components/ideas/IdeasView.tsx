@@ -751,7 +751,8 @@ export function IdeasView({
   // Busiest product lines: ideas per line, top three.
   const topProducts = (() => {
     const m = new Map<string, number>();
-    for (const i of live) for (const p of i.products) m.set(p, (m.get(p) ?? 0) + 1);
+    // "Other" is the unmapped bucket, not a product.
+    for (const i of live) for (const p of i.products) if (p !== "Other") m.set(p, (m.get(p) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
   })();
   // Rows grouped by first product line, in the catalog's manual order;

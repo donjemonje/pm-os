@@ -12,6 +12,8 @@ import {
  */
 
 export type FieldPolicy =
+  /** Read on import only (shown on the raw Jira issue); never written. */
+  | "read"
   /** Single-select: write only when the field is empty; never replace a
    *  value a human chose. */
   | "set_if_empty"
@@ -25,7 +27,7 @@ export interface FieldMapping {
    *  for Product Line also at pull time — the pull reads this field as the
    *  issue's product line, Components when it is empty). */
   jiraField: string;
-  type: "single_select" | "number" | "multi_select";
+  type: "single_select" | "number" | "multi_select" | "text";
   policy: FieldPolicy;
   enabled: boolean;
   /** Select fields: when a value is not yet an option of the Jira field, add
@@ -65,6 +67,10 @@ export interface IdeasJiraConfig {
     votes: FieldMapping;
     customers: FieldMapping;
     platforms: FieldMapping;
+    /** Read-only: which Jira field holds the reporter's name ("Reporter" =
+     *  the system field; Kela's demo: "P_Reporter"). */
+    reporter: FieldMapping;
+    assignee: FieldMapping;
   };
   /** Per-org CSV import mapping (see csv-mapping.ts). */
   csv: CsvMapping;
@@ -79,10 +85,10 @@ export const DEFAULT_IDEA_TEMPLATE = `## The Problem
 The user problem and who it affects — the main stakeholders (customers and internal teams alike). The core of the idea; always present.
 
 ## Proposed Solution
-Only when the ticket implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how.
+Only when the source implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how. Only the solution lives here: never a list of asks, cases or context (those go to The Problem or Additional Info).
 
 ## Additional Info
-Other important related context. When the ticket describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Omit this section when there is none.`;
+Other important related context. When the source describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Every link, issue key, document or identifier from the source that fits nowhere else goes here verbatim. Omit this section when there is none.`;
 
 export const DEFAULT_JIRA_PULL_CONFIG: JiraPullConfig = {
   maxIssues: 10_000,
@@ -132,6 +138,8 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       policy: "union",
       enabled: false,
     },
+    reporter: { jiraField: "Reporter", type: "text", policy: "read", enabled: true },
+    assignee: { jiraField: "Assignee", type: "text", policy: "read", enabled: true },
   },
 };
 
@@ -141,7 +149,14 @@ export const MAPPED_ATTRIBUTES: MappedAttribute[] = [
   "votes",
   "customers",
   "platforms",
+  "reporter",
+  "assignee",
 ];
+
+/** Attributes a sync may write (read-only mappings excluded). */
+export function writableAttributes(config: IdeasJiraConfig): MappedAttribute[] {
+  return MAPPED_ATTRIBUTES.filter((a) => config.fields[a].enabled && config.fields[a].policy !== "read");
+}
 
 /** Stored overrides merged over defaults — unknown keys ignored, partial
  *  field entries completed from the default, so old configs never crash. */
@@ -224,4 +239,6 @@ export const ATTRIBUTE_LABELS: Record<string, string> = {
   votes: "Votes",
   customers: "Customers",
   platforms: "Components",
+  reporter: "Reporter",
+  assignee: "Assignee",
 };

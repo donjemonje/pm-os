@@ -474,16 +474,22 @@ model IdeaSource {
 /// Jira live-state snapshot, replaced wholesale on every import — a render
 /// cache, not a system of record.
 model JiraIdeaSnapshot {
-  id          String    @id @default(uuid())
-  workspaceId String
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  key         String
-  title       String
-  body        String
-  status      String?
-  url         String?
-  components  Json      @default("[]")
-  syncedAt    DateTime  @default(now())
+  id              String    @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key             String
+  title           String
+  body            String
+  status          String?
+  url             String?
+  components      Json      @default("[]")
+  /// Shown on the raw Jira issue in the drawer, like the Zendesk ticket's fields.
+  issueType       String?
+  priority        String?
+  reporter        String?
+  assignee        String?
+  sourceCreatedAt DateTime?
+  syncedAt        DateTime  @default(now())
 
   @@unique([workspaceId, key])
 }

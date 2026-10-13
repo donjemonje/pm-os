@@ -16,8 +16,8 @@ import {
 } from "../jira";
 import {
   ATTRIBUTE_LABELS,
-  MAPPED_ATTRIBUTES,
   mergeIdeasJiraConfig,
+  writableAttributes,
   type IdeasJiraConfig,
   type MappedAttribute,
 } from "./jira-mapping";
@@ -420,7 +420,7 @@ async function derivePlan(
   }
 
   // Resolve the configured Jira fields (by display name) to field ids once.
-  const enabledAttrs = MAPPED_ATTRIBUTES.filter((a) => config.fields[a].enabled);
+  const enabledAttrs = writableAttributes(config);
   let fieldIdByAttr = new Map<MappedAttribute, string>();
   try {
     const allFields = await listAllFields(workspaceId);

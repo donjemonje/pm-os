@@ -113,6 +113,29 @@ const IDEA_INCLUDE = {
 } as const;
 type IdeaRow = Prisma.IdeaGetPayload<{ include: typeof IDEA_INCLUDE }>;
 
+/**
+ * Narration of what an import did to an idea, one line per kind of change:
+ * every "+1 vote (ticket X)" folds into a single "+N votes (tickets X, Y)"
+ * line at the top; other lines are deduplicated, order kept.
+ */
+export function mergeBatchChanges(prior: string[], added: string[]): string[] {
+  const tickets: string[] = [];
+  const rest: string[] = [];
+  for (const line of [...prior, ...added]) {
+    const one = line.match(/^\+1 vote \(ticket (.+)\)$/);
+    const many = line.match(/^\+\d+ votes? \(tickets? (.+)\)$/);
+    if (one) tickets.push(one[1]);
+    else if (many) tickets.push(...many[1].split(",").map((t) => t.trim()).filter(Boolean));
+    else if (!rest.includes(line)) rest.push(line);
+  }
+  const uniq = Array.from(new Set(tickets));
+  const votes =
+    uniq.length === 0
+      ? []
+      : [`+${uniq.length} vote${uniq.length === 1 ? "" : "s"} (ticket${uniq.length === 1 ? "" : "s"} ${uniq.join(", ")})`];
+  return [...votes, ...rest];
+}
+
 /** Union of string lists, first occurrence wins on casing, insertion order kept. */
 function distinct(values: string[]): string[] {
   const seen = new Map<string, string>();
@@ -261,6 +284,11 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       title: s.title,
       body: s.body,
       status: s.status ?? undefined,
+      issueType: s.issueType ?? undefined,
+      priority: s.priority ?? undefined,
+      reporter: s.reporter ?? undefined,
+      assignee: s.assignee ?? undefined,
+      createdAt: s.sourceCreatedAt?.toISOString(),
       url: s.url ?? undefined,
       products: (s.components as string[]) ?? [],
     })),
@@ -726,6 +754,11 @@ async function runImport(
         status: s.status ?? null,
         url: s.url ?? null,
         components: s.products as Prisma.InputJsonValue,
+        issueType: s.issueType ?? null,
+        priority: s.priority ?? null,
+        reporter: s.reporter ?? null,
+        assignee: s.assignee ?? null,
+        sourceCreatedAt: s.createdAt ? new Date(s.createdAt) : null,
       })),
     });
 
@@ -924,8 +957,7 @@ async function runImport(
           );
 
           const changes: string[] = [`+1 vote (ticket ${input.key})`];
-          if (m?.enrichedSummary)
-            changes.push("Summary enriched with the new ticket");
+          if (m?.enrichedSummary) changes.push("Summary updated");
           for (const p of addedProducts)
             changes.push(`Product line added: ${p}`);
           for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
@@ -947,7 +979,7 @@ async function runImport(
               decision: "pending",
               products: nextProducts as Prisma.InputJsonValue,
               platforms: nextPlatforms as Prisma.InputJsonValue,
-              batchChanges: [...prior, ...changes] as Prisma.InputJsonValue,
+              batchChanges: mergeBatchChanges(prior, changes) as Prisma.InputJsonValue,
               ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
               sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
             },

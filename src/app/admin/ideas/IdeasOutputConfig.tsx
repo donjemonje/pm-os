@@ -35,12 +35,14 @@ interface OrgRow {
 }
 
 const POLICY_LABELS: Record<string, string> = {
+  read: "Read on import — shown on the raw Jira issue, never written",
   set_if_empty: "Set only when empty (never replace a human's value)",
   increment: "Increment by this batch's new votes",
   union: "Add missing values (never remove)",
 };
 
 const TYPE_LABELS: Record<string, string> = {
+  text: "Text",
   single_select: "Single select",
   number: "Number",
   multi_select: "Multi select",
@@ -323,7 +325,7 @@ export function IdeasOutputConfig({
                 <span className="text-xs text-slate-500">
                   {POLICY_LABELS[f.policy]}
                 </span>
-                {f.type !== "number" && (
+                {(f.type === "single_select" || f.type === "multi_select") && (
                   <label
                     className="flex items-center gap-1.5 text-xs text-slate-600"
                     title="A value Jira doesn't have as an option yet is added to the field during the sync (needs the Jira configuration permission — reconnect Jira if it was connected before 2026-10-13)."

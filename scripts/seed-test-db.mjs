@@ -252,6 +252,8 @@ async function seedKelaQa() {
         pull: { maxIssues: 10000 },
         fields: {
           productLine: { jiraField: "Module", type: "single_select", policy: "set_if_empty", enabled: true },
+          reporter: { jiraField: "P_Reporter", type: "text", policy: "read", enabled: true },
+          assignee: { jiraField: "P_Assignee", type: "text", policy: "read", enabled: true },
         },
       },
     },

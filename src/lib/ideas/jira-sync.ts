@@ -51,11 +51,27 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
 
   // The field mapped as Product Line, by display name → id. Missing on this
   // site = Components only (no warning: RoomLens never had the field).
+  // Field names → ids, resolved on every pull (names are editable in Jira).
+  // Product line: the field mapped as Product Line ("Components" = built-in).
+  // Reporter / assignee: a custom text field when mapped to one, else the
+  // system user fields.
   let productLineFieldId: string | undefined;
+  let reporterFieldId: string | undefined;
+  let assigneeFieldId: string | undefined;
   const mappedName = config.fields.productLine.jiraField.trim().toLowerCase();
-  if (mappedName && mappedName !== "components") {
+  const reporterName = config.fields.reporter.jiraField.trim().toLowerCase();
+  const assigneeName = config.fields.assignee.jiraField.trim().toLowerCase();
+  const needLookup =
+    (mappedName && mappedName !== "components") ||
+    (reporterName && reporterName !== "reporter") ||
+    (assigneeName && assigneeName !== "assignee");
+  if (needLookup) {
     try {
-      productLineFieldId = (await listAllFields(workspaceId)).get(mappedName)?.id;
+      const all = await listAllFields(workspaceId);
+      if (mappedName && mappedName !== "components") productLineFieldId = all.get(mappedName)?.id;
+      const custom = (id?: string) => (id && id.startsWith("customfield_") ? id : undefined);
+      if (reporterName && reporterName !== "reporter") reporterFieldId = custom(all.get(reporterName)?.id);
+      if (assigneeName && assigneeName !== "assignee") assigneeFieldId = custom(all.get(assigneeName)?.id);
     } catch (err) {
       console.warn(
         `[ideas:jira] could not read the field list (${err instanceof Error ? err.message : "unknown error"}) — product lines fall back to Components this import.`
@@ -70,6 +86,8 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
         projectKey,
         maxResults: pull.maxIssues,
         productLineFieldId,
+        reporterFieldId,
+        assigneeFieldId,
       })),
     }))
   );
@@ -90,6 +108,11 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       title: issue.summary,
       body: issue.description,
       status: issue.status,
+      issueType: issue.issueType,
+      priority: issue.priority,
+      reporter: issue.reporter,
+      assignee: issue.assignee,
+      createdAt: issue.created,
       url: `${status.siteUrl}/browse/${issue.key}`,
       // Mapped field first (Kela: Module); Components when it is empty.
       products: (issue.productLine ? [issue.productLine] : issue.components).map((v) => {

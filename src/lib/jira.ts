@@ -217,6 +217,10 @@ const JIRA_SEARCH_FIELDS = [
   "description",
   "status",
   "issuetype",
+  "priority",
+  "reporter",
+  "assignee",
+  "created",
   "labels",
   "components",
   "parent",
@@ -224,9 +228,24 @@ const JIRA_SEARCH_FIELDS = [
 ];
 
 interface MapIssueOptions {
-  /** Custom field id whose value is the issue's product line (see
-   *  IdeasJiraConfig.pull.productLineFieldId). */
+  /** Custom field id whose value is the issue's product line (the field
+   *  mapped as Product Line in Admin → Ideas, e.g. Kela's Module). */
   productLineFieldId?: string;
+  /** Custom text fields holding the reporter / assignee NAME when the
+   *  system fields don't (an import on Jira Free can't map users; Kela's
+   *  demo keeps the names in P_Reporter / P_Assignee). Unset = system fields. */
+  reporterFieldId?: string;
+  assigneeFieldId?: string;
+}
+
+function userName(v: unknown): string | undefined {
+  if (typeof v === "string") return v.trim() || undefined;
+  if (v && typeof v === "object") {
+    const o = v as { displayName?: unknown; name?: unknown };
+    if (typeof o.displayName === "string" && o.displayName.trim()) return o.displayName.trim();
+    if (typeof o.name === "string" && o.name.trim()) return o.name.trim();
+  }
+  return undefined;
 }
 
 /**
@@ -257,6 +276,14 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
   const productLine = opts.productLineFieldId
     ? readProductLineValue(fields[opts.productLineFieldId])
     : undefined;
+  const priority = ((fields.priority as { name?: string }) ?? {}).name || undefined;
+  const reporter =
+    (opts.reporterFieldId ? userName(fields[opts.reporterFieldId]) : undefined) ??
+    userName(fields.reporter);
+  const assignee =
+    (opts.assigneeFieldId ? userName(fields[opts.assigneeFieldId]) : undefined) ??
+    userName(fields.assignee);
+  const created = typeof fields.created === "string" ? fields.created : undefined;
   const descriptionRaw = fields.description;
   // Markdown, so headings / bold / lists / links survive into PM-OS and the
   // raw Jira issue reads as close to Jira as possible.
@@ -320,6 +347,10 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
     labels,
     components,
     productLine,
+    priority,
+    reporter,
+    assignee,
+    created,
     acceptanceCriteria: extractAcceptanceCriteria(description),
     parentKey,
     epicKey,
@@ -471,6 +502,9 @@ export interface IssueScopeParams {
   maxResults?: number;
   /** Custom field id read as the issue's product line. */
   productLineFieldId?: string;
+  /** Custom text field ids read as reporter / assignee names (see MapIssueOptions). */
+  reporterFieldId?: string;
+  assigneeFieldId?: string;
 }
 
 function scopeJql(params: IssueScopeParams): string {
@@ -501,9 +535,13 @@ export async function fetchIssuesForScopePaged(
   params: IssueScopeParams
 ): Promise<PagedIssues> {
   const fieldId = params.productLineFieldId?.trim() || undefined;
+  const reporterFieldId = params.reporterFieldId?.trim() || undefined;
+  const assigneeFieldId = params.assigneeFieldId?.trim() || undefined;
   return searchJiraPaged(workspaceId, scopeJql(params), params.maxResults ?? 100, {
     productLineFieldId: fieldId,
-    extraFields: fieldId ? [fieldId] : [],
+    reporterFieldId,
+    assigneeFieldId,
+    extraFields: [fieldId, reporterFieldId, assigneeFieldId].filter((x): x is string => Boolean(x)),
   });
 }
 
