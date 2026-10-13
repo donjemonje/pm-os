@@ -1755,42 +1755,40 @@ export function IdeasView({
                       );
                     };
                     return (
-                      <div className="flex items-start gap-3">
-                        <div className="min-w-0 flex-1 overflow-hidden rounded-inner border border-border">
-                          <div className="flex items-center justify-between bg-[rgba(247,250,253,.9)] px-3 py-1.5">
-                            <span className="eyebrow text-[10px] text-fg-muted">
-                              Ready to sync · {ready.length}
-                            </span>
-                          </div>
+                      <div className="overflow-hidden rounded-inner border border-border">
+                        <div className="flex items-center justify-between bg-[rgba(247,250,253,.9)] px-3 py-1.5">
+                          <span className="eyebrow text-[10px] text-fg-muted">
+                            Ready to sync · {ready.length}
+                          </span>
+                          {ready.length > 1 && (
+                            <button
+                              onClick={() => {
+                                setPlan(null);
+                                setMergeError("");
+                                setScopeSel(allSelected ? [SCOPE_NONE] : []);
+                              }}
+                              className="text-[11.5px] font-semibold text-primary hover:underline"
+                            >
+                              {allSelected ? "Clear" : "Select all"}
+                            </button>
+                          )}
+                        </div>
                           {ready.length === 0 && (
                             <div className="px-3 py-2 text-[12.5px] text-fg-muted">
                               Nothing approved yet.
                             </div>
                           )}
                           {ready.map((r) => row(r, false))}
-                          {idle.length > 0 && (
-                            <>
-                              <div className="flex items-center justify-between border-t border-border bg-[rgba(247,250,253,.9)] px-3 py-1.5">
-                                <span className="eyebrow text-[10px] text-fg-muted">
-                                  Nothing to sync · {idle.length}
-                                </span>
-                              </div>
-                              {idle.map((r) => row(r, true))}
-                            </>
-                          )}
-                        </div>
-                        <Button
-                          disabled={ready.length === 0}
-                          onClick={() => {
-                            setPlan(null);
-                            setMergeError("");
-                            // Toggle: all ready lines ↔ none (nothing selected = nothing to preview).
-                            setScopeSel(allSelected ? [SCOPE_NONE] : []);
-                          }}
-                          title={allSelected ? "Clear the selection" : "Select every product line with approved ideas"}
-                        >
-                          {allSelected ? "Clear" : "Select all"}
-                        </Button>
+                        {idle.length > 0 && (
+                          <>
+                            <div className="flex items-center justify-between border-t border-border bg-[rgba(247,250,253,.9)] px-3 py-1.5">
+                              <span className="eyebrow text-[10px] text-fg-muted">
+                                Nothing to sync · {idle.length}
+                              </span>
+                            </div>
+                            {idle.map((r) => row(r, true))}
+                          </>
+                        )}
                       </div>
                     );
                   })()}
