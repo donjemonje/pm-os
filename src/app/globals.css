@@ -354,20 +354,27 @@ body {
   margin-top: 1.75rem;
 }
 
-/* Idea text inside the drawer: same type as everywhere, just less air
-   above the first heading (it sits right under the import box) and between
-   sections. Unlayered on purpose so it outranks the document rules above. */
-/* Raw Jira description only: the Zendesk ticket's text size. Idea text keeps
-   the document size. */
-.um-doc.um-small {
+/* Two separate looks in the drawer, on purpose — they will diverge:
+   .idea-text   = the PM-OS idea (The Problem / Proposed Solution / …)
+   .source-text = a raw source as its system shows it (today: the Jira
+                  description; Zendesk text is plain, not markdown)
+   Unlayered so they outrank the document rules above. */
+.um-doc.idea-text > :first-child {
+  margin-top: 0;
+}
+.um-doc.idea-text h2 {
+  margin-top: 1.5rem;
+}
+
+.um-doc.source-text {
   font-size: 13.5px;
   line-height: 1.6;
 }
-.um-doc.um-compact > :first-child {
+.um-doc.source-text > :first-child {
   margin-top: 0;
 }
-.um-doc.um-compact h2 {
-  margin-top: 1.5rem;
+.um-doc.source-text h2 {
+  margin-top: 1.25rem;
 }
 
 .um-doc h4 {

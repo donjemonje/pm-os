@@ -735,7 +735,7 @@ export function IdeaDrawer({
               <div>
                 <UmMarkdown
                   content={idea.details}
-                  className="um-compact text-[13.5px] leading-relaxed"
+                  className="idea-text"
                 />
               </div>
               {sourceEntries.length > 0 && (
@@ -993,7 +993,7 @@ function JiraIssueView({
       <div>
         <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
         {src.body ? (
-          <UmMarkdown content={src.body} className="um-compact um-small" />
+          <UmMarkdown content={src.body} className="source-text" />
         ) : (
           <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
         )}
