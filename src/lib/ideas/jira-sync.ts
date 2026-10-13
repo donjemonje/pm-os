@@ -101,7 +101,9 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   const unresolved = new Map<string, string>();
   const sources: JiraSource[] = perProject
     .flatMap((p) => p.issues)
-    .filter((issue) => !/^sub-?task$/i.test(issue.issueType))
+    // Sub-tasks belong to their parent; bugs are not product ideas (a Zendesk
+    // bug is parked the same way) — neither enters the backlog PM-OS reads.
+    .filter((issue) => !/^(sub-?task|bug)$/i.test(issue.issueType))
     .map((issue) => ({
       key: issue.key,
       id: issue.key,
