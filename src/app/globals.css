@@ -357,7 +357,9 @@ body {
 /* Idea text inside the drawer: same type as everywhere, just less air
    above the first heading (it sits right under the import box) and between
    sections. Unlayered on purpose so it outranks the document rules above. */
-.um-doc.um-compact {
+/* Raw Jira description only: the Zendesk ticket's text size. Idea text keeps
+   the document size. */
+.um-doc.um-small {
   font-size: 13.5px;
   line-height: 1.6;
 }

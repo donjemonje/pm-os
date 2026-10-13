@@ -993,7 +993,7 @@ function JiraIssueView({
       <div>
         <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
         {src.body ? (
-          <UmMarkdown content={src.body} className="um-compact text-[13.5px] leading-relaxed" />
+          <UmMarkdown content={src.body} className="um-compact um-small" />
         ) : (
           <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
         )}
