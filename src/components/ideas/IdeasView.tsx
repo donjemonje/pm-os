@@ -27,6 +27,7 @@ import {
   scoreOf,
   STATUS_CHIP_TO_BATCH,
   STATUS_TONES,
+  zenLabel,
 } from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
@@ -1407,7 +1408,7 @@ export function IdeasView({
                                 <span className="flex items-center gap-1.5 overflow-hidden text-[11.5px] text-fg-muted">
                                   {firstTicket ? (
                                     <span className="shrink-0 font-mono font-semibold">
-                                      {firstTicket.id}
+                                      {zenLabel(firstTicket.id)}
                                       {idea.zen.length > 1 ? ` +${idea.zen.length - 1}` : ""}
                                     </span>
                                   ) : null}

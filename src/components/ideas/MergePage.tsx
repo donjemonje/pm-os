@@ -10,6 +10,7 @@ import {
   CATALOG_KIND_LABELS,
   compareIdeas,
   STATUS_CHIP_TO_BATCH,
+  zenLabel,
 } from "@/lib/ideas/idea";
 import type {
   Idea,
@@ -351,7 +352,7 @@ export function MergePage({
                   title={kind === "zen" ? "Open ticket" : "Open Jira idea"}
                   className="shrink-0 font-mono text-[10.5px] font-bold text-primary hover:text-primary-hover hover:underline"
                 >
-                  {row.id}
+                  {kind === "zen" ? zenLabel(row.id) : row.id}
                 </button>
                 <span
                   className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-fg-2 ${

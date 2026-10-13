@@ -110,3 +110,12 @@ export const CATALOG_KIND_LABELS: Record<CatalogKind, string> = {
   ops_task: "Ops task",
   question: "Product Question",
 };
+
+/**
+ * Display label for a Zendesk ticket id: numeric ids (real Zendesk exports)
+ * read as "ZEN-3310" so a Zendesk source is as recognizable as a Jira key;
+ * synthetic ids (seed fixtures) stay as they are.
+ */
+export function zenLabel(id: string): string {
+  return /^\d+$/.test(id) ? `ZEN-${id}` : id;
+}
