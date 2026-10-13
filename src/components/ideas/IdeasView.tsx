@@ -1877,6 +1877,14 @@ export function IdeasView({
                             </span>
                           </div>
                         ))}
+                        {plan.notes.map((n) => (
+                          <div
+                            key={n}
+                            className="border-t border-hairline bg-[rgba(59,124,246,.06)] px-3 py-2 text-[12.5px] text-[#2a5fd0]"
+                          >
+                            {n}
+                          </div>
+                        ))}
                         {plan.warnings.map((w) => (
                           <div
                             key={w}

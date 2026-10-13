@@ -28,6 +28,11 @@ export interface FieldMapping {
   type: "single_select" | "number" | "multi_select";
   policy: FieldPolicy;
   enabled: boolean;
+  /** Select fields: when a value is not yet an option of the Jira field, add
+   *  the option during the sync instead of skipping the value. Customer names
+   *  arrive with every import, so a static option list can't work for them
+   *  (Daniel, 2026-10-13). Needs the manage:jira-configuration scope. */
+  createOptions?: boolean;
 }
 
 /** How the Jira backlog is read at import time. */
@@ -116,6 +121,7 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       type: "multi_select",
       policy: "union",
       enabled: true,
+      createOptions: true,
     },
     // Jira's built-in "Components" name was taken, hence P_Components.
     // Off by default (Daniel, 2026-09-03): most Jira projects have no

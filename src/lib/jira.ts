@@ -697,6 +697,42 @@ export async function listAllFields(
   return new Map(Array.from(byName, ([k, v]) => [k, { id: v.id, name: v.name }]));
 }
 
+/**
+ * Add select options to the mapped field's context that covers `projectKey`
+ * (the project-specific context when one exists, else the global one). Needs
+ * manage:jira-configuration; a 403 means the connection predates that scope.
+ * Returns the values actually added (already-present ones are skipped).
+ */
+export async function ensureFieldOptions(
+  workspaceId: string,
+  fieldId: string,
+  projectKey: string,
+  values: string[]
+): Promise<string[]> {
+  if (values.length === 0) return [];
+  const project = (await jiraFetch(workspaceId, `/rest/api/3/project/${projectKey}`)) as { id: string };
+  const mapping = (await jiraFetch(
+    workspaceId,
+    `/rest/api/3/field/${fieldId}/context/projectmapping?maxResults=100`
+  )) as { values?: Array<{ contextId: string; projectId?: string; isGlobalContext?: boolean }> };
+  const rows = mapping.values ?? [];
+  const ctx =
+    rows.find((r) => r.projectId === String(project.id)) ?? rows.find((r) => r.isGlobalContext);
+  if (!ctx) throw new Error(`Jira field ${fieldId} has no option context covering ${projectKey}`);
+  const existing = (await jiraFetch(
+    workspaceId,
+    `/rest/api/3/field/${fieldId}/context/${ctx.contextId}/option?maxResults=1000`
+  )) as { values?: Array<{ value: string }> };
+  const have = new Set((existing.values ?? []).map((o) => o.value.toLowerCase()));
+  const toAdd = values.filter((v) => !have.has(v.toLowerCase()));
+  if (toAdd.length === 0) return [];
+  await jiraFetch(workspaceId, `/rest/api/3/field/${fieldId}/context/${ctx.contextId}/option`, {
+    method: "POST",
+    body: JSON.stringify({ options: toAdd.map((value) => ({ value, disabled: false })) }),
+  });
+  return toAdd;
+}
+
 export interface JiraFieldMeta {
   /** Option names for select fields; undefined for free-typed fields. */
   allowedValues?: string[];

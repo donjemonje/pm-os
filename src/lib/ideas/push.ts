@@ -3,6 +3,7 @@ import { db } from "../db";
 import {
   addJiraCommentAdf,
   createJiraIssue,
+  ensureFieldOptions,
   fetchIssuesRaw,
   getCreateMetaFields,
   getEditMetaFields,
@@ -200,6 +201,9 @@ export interface PushPlan {
   /** Non-blocking issues: unknown Jira fields, option values Jira doesn't
    *  have yet, fields not on the screen. The write skips exactly these. */
   warnings: string[];
+  /** Things the sync will do beyond writing issues — options it adds to
+   *  Jira select fields. Informational, not a problem. */
+  notes: string[];
   skipped: { ideaId: string; title: string; reason: string }[];
   blockers: string[];
   scope: string[] | null;
@@ -270,9 +274,18 @@ interface CreateWrite {
   /** Idea.origin before markInjected flips it — restored on undo. */
   beforeOrigin: string;
 }
+/** Options to add to one Jira select field (per project context) before writing. */
+interface NewOptions {
+  fieldId: string;
+  label: string;
+  projectKey: string;
+  values: Set<string>;
+}
 interface PushWrites {
   creates: Map<string, CreateWrite>;
   updates: Map<string, UpdateWrite>;
+  /** Keyed by `${fieldId}|${projectKey}`. */
+  newOptions: Map<string, NewOptions>;
 }
 
 function ideaCustomers(row: PushIdeaRow): string[] {
@@ -312,10 +325,24 @@ async function derivePlan(
 ): Promise<{ plan: PushPlan; writes: PushWrites; config: IdeasJiraConfig }> {
   const blockers: string[] = [];
   const warnings: string[] = [];
+  const notes: string[] = [];
   const items: PushPlanItem[] = [];
   const skipped: PushPlan["skipped"] = [];
-  const writes: PushWrites = { creates: new Map(), updates: new Map() };
+  const writes: PushWrites = { creates: new Map(), updates: new Map(), newOptions: new Map() };
   const config = await getIdeasJiraConfig(workspaceId);
+  /** Queue option values a sync will add to a select field; returns them as allowed. */
+  const queueOptions = (attr: MappedAttribute, fieldId: string, projectKey: string, values: string[]) => {
+    if (values.length === 0) return;
+    const k = `${fieldId}|${projectKey}`;
+    const cur = writes.newOptions.get(k) ?? {
+      fieldId,
+      label: config.fields[attr].jiraField,
+      projectKey,
+      values: new Set<string>(),
+    };
+    for (const v of values) cur.values.add(v);
+    writes.newOptions.set(k, cur);
+  };
 
   // Row-existence gates the button; writing needs a usable token too, so the
   // preview blocker also covers a configured-but-dead connection.
@@ -326,6 +353,7 @@ async function derivePlan(
         target: null,
         items,
         warnings,
+        notes,
         skipped,
         blockers: ["Jira is not connected — connect it in Settings → Integrations."],
         scope,
@@ -385,7 +413,7 @@ async function derivePlan(
   }
   if (blockers.length > 0) {
     return {
-      plan: { target, items, warnings, skipped, blockers, scope, pendingInScope },
+      plan: { target, items, warnings, notes, skipped, blockers, scope, pendingInScope },
       writes,
       config,
     };
@@ -413,7 +441,7 @@ async function derivePlan(
       `Could not read Jira's field list: ${err instanceof Error ? err.message : "unknown error"}`
     );
     return {
-      plan: { target, items, warnings, skipped, blockers, scope, pendingInScope },
+      plan: { target, items, warnings, notes, skipped, blockers, scope, pendingInScope },
       writes,
       config,
     };
@@ -437,7 +465,7 @@ async function derivePlan(
         `Could not read the live state of ${keys.length} Jira issue${keys.length === 1 ? "" : "s"}: ${err instanceof Error ? err.message : "unknown error"}`
       );
       return {
-        plan: { target, items, warnings, skipped, blockers, scope, pendingInScope },
+        plan: { target, items, warnings, notes, skipped, blockers, scope, pendingInScope },
         writes,
         config,
       };
@@ -521,10 +549,14 @@ async function derivePlan(
         if (cur) return null;
         const wanted = ((row.products as string[]) ?? []).filter((p) => p !== "Other");
         if (wanted.length === 0) return null;
-        const { allowed } = filterAllowed(productResolver.spellings(wanted[0]), meta);
+        let { allowed } = filterAllowed(productResolver.spellings(wanted[0]), meta);
+        if (allowed.length === 0 && mapping.createOptions && meta) {
+          queueOptions(attr, fieldId, key.split("-")[0], [wanted[0]]);
+          allowed = [wanted[0]];
+        }
         if (allowed.length === 0) {
           warnings.push(
-            `${key}: "${wanted[0]}" is not an option of Jira field "${mapping.jiraField}" — add it in Jira, or add the Jira option's name as an alias in Settings → Product Lines, then re-merge.`
+            `${key}: "${wanted[0]}" is not an option of Jira field "${mapping.jiraField}" — add it in Jira, or add the Jira option's name as an alias in Settings → Product Lines, then sync again.`
           );
           return null;
         }
@@ -540,11 +572,18 @@ async function derivePlan(
           : ((row.platforms as string[]) ?? []).filter(Boolean);
       const missing = wanted.filter((w) => !cur.some((c) => c.toLowerCase() === w.toLowerCase()));
       if (missing.length === 0) return null;
-      const { allowed, rejected } = filterAllowed(missing, meta);
-      if (rejected.length > 0) {
-        warnings.push(
-          `${key}: ${rejected.map((r) => `"${r}"`).join(", ")} ${rejected.length === 1 ? "is not an option" : "are not options"} of Jira field "${mapping.jiraField}" — add ${rejected.length === 1 ? "it" : "them"} in Jira, then re-merge.`
-        );
+      const filtered = filterAllowed(missing, meta);
+      let allowed = filtered.allowed;
+      if (filtered.rejected.length > 0) {
+        if (mapping.createOptions) {
+          // The sync adds the option first, then writes the value.
+          queueOptions(attr, fieldId, key.split("-")[0], filtered.rejected);
+          allowed = [...allowed, ...filtered.rejected];
+        } else {
+          warnings.push(
+            `${key}: ${filtered.rejected.map((r) => `"${r}"`).join(", ")} ${filtered.rejected.length === 1 ? "is not an option" : "are not options"} of Jira field "${mapping.jiraField}" — add ${filtered.rejected.length === 1 ? "it" : "them"} in Jira or turn on "Create missing options" in Admin → Ideas, then sync again.`
+          );
+        }
       }
       if (allowed.length === 0) return null;
       const next = distinct([...cur, ...allowed]);
@@ -627,14 +666,19 @@ async function derivePlan(
       if (wanted.length === 0) continue;
       const candidates = attr === "productLine" ? productResolver.spellings(wanted[0]) : wanted;
       const filtered = filterAllowed(candidates, meta);
-      const allowed = filtered.allowed;
+      let allowed = filtered.allowed;
       // For the product line, "rejected" means none of its spellings is an option.
       const rejected =
         attr === "productLine" ? (allowed.length === 0 ? [wanted[0]] : []) : filtered.rejected;
       if (rejected.length > 0) {
-        warnings.push(
-          `"${row.title}": ${rejected.map((r) => `"${r}"`).join(", ")} not available in Jira field "${mapping.jiraField}" — add the option${rejected.length === 1 ? "" : "s"} in Jira, then re-merge.`
-        );
+        if (mapping.createOptions && meta && target) {
+          queueOptions(attr, fieldId, target.projectKey, rejected);
+          allowed = [...allowed, ...rejected];
+        } else {
+          warnings.push(
+            `"${row.title}": ${rejected.map((r) => `"${r}"`).join(", ")} not available in Jira field "${mapping.jiraField}" — add the option${rejected.length === 1 ? "" : "s"} in Jira or turn on "Create missing options" in Admin → Ideas, then sync again.`
+          );
+        }
       }
       if (allowed.length === 0) continue;
       if (mapping.type === "single_select") {
@@ -666,8 +710,15 @@ async function derivePlan(
     });
   }
 
+  for (const o of writes.newOptions.values()) {
+    const vals = Array.from(o.values);
+    notes.push(
+      `Adds ${vals.length} option${vals.length === 1 ? "" : "s"} to Jira field "${o.label}" (${o.projectKey}): ${vals.map((v) => `"${v}"`).join(", ")}`
+    );
+  }
+
   return {
-    plan: { target, items, warnings, skipped, blockers, scope, pendingInScope },
+    plan: { target, items, warnings, notes, skipped, blockers, scope, pendingInScope },
     writes,
     config,
   };
@@ -712,6 +763,26 @@ export async function executePush(
   if (plan.blockers.length > 0) return { ok: false, blockers: plan.blockers };
   const status = await getJiraConnectionStatus(workspaceId);
   if (!status) return { ok: false, blockers: ["Jira is not connected."] };
+
+  // Options first, all of them, before a single issue is written — a refusal
+  // here (typically 403: the connection predates the configuration scope)
+  // leaves Jira untouched and says what to do.
+  for (const o of writes.newOptions.values()) {
+    try {
+      await ensureFieldOptions(workspaceId, o.fieldId, o.projectKey, Array.from(o.values));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown error";
+      return {
+        ok: false,
+        blockers: [
+          `Could not add options to Jira field "${o.label}": ${msg}` +
+            (/\(403\)/.test(msg)
+              ? " — the Jira connection lacks the configuration permission. Reconnect Jira in Settings → Integrations (it asks for it now), then sync again."
+              : ""),
+        ],
+      };
+    }
+  }
 
   // Only the LAST merge is undoable — this run's snapshots replace the
   // previous batch's wholesale.

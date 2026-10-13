@@ -4,6 +4,10 @@ export const JIRA_OAUTH_SCOPES = [
   "read:jira-work",
   "write:jira-work",
   "read:jira-user",
+  // Lets a sync add missing select options (customer names) to the mapped
+  // Jira fields — "Create missing options" in Admin → Ideas. Connections made
+  // before 2026-10-13 lack it; reconnecting grants it.
+  "manage:jira-configuration",
   "offline_access",
 ] as const;
 

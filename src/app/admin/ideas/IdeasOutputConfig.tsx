@@ -323,6 +323,23 @@ export function IdeasOutputConfig({
                 <span className="text-xs text-slate-500">
                   {POLICY_LABELS[f.policy]}
                 </span>
+                {f.type !== "number" && (
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-slate-600"
+                    title="A value Jira doesn't have as an option yet is added to the field during the sync (needs the Jira configuration permission — reconnect Jira if it was connected before 2026-10-13)."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(f.createOptions)}
+                      onChange={(e) =>
+                        patchField(attr, { createOptions: e.target.checked })
+                      }
+                      disabled={!f.enabled}
+                      className="rounded"
+                    />
+                    Create missing options
+                  </label>
+                )}
               </div>
             );
           })}
