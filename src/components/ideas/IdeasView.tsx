@@ -76,6 +76,7 @@ interface ServerState {
   jiraConnected?: boolean;
   csvMapping?: CsvMapping;
   jiraSiteUrl?: string | null;
+  jiraProductLineField?: string;
 }
 
 /** Case-insensitive lookup of a catalog color by name. */
@@ -138,6 +139,7 @@ export function IdeasView({
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [jiraSiteUrl, setJiraSiteUrl] = useState<string | null>(null);
+  const [jiraProductLineField, setJiraProductLineField] = useState("Product line");
   const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
   const [hydrated, setHydrated] = useState(false);
 
@@ -194,6 +196,7 @@ export function IdeasView({
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
     if (state.jiraSiteUrl !== undefined) setJiraSiteUrl(state.jiraSiteUrl);
+    if (state.jiraProductLineField) setJiraProductLineField(state.jiraProductLineField);
     if (state.csvMapping) setCsvMapping(state.csvMapping);
     // The sidebar's pending badge is rendered by the root layout on the
     // server; a mutation here must re-render it (client state survives).
@@ -1531,6 +1534,7 @@ export function IdeasView({
           ticketsByKey={ticketsByKey}
           jiraByKey={jiraByKey}
           csvMapping={csvMapping}
+          jiraProductLineLabel={jiraProductLineField}
           ideasById={ideasById}
           catalogProducts={catalogProducts}
           catalogPlatforms={catalogPlatforms}

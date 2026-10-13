@@ -59,6 +59,8 @@ interface IdeaDrawerProps {
   jiraByKey: Map<string, JiraSource>;
   /** The org's CSV mapping — the ticket view reads display-only fields from the raw row with it. */
   csvMapping?: CsvMapping;
+  /** Label for the product line on the raw Jira issue — the mapped Jira field's name ("Module"). */
+  jiraProductLineLabel?: string;
   /** Every idea by id — the ticket view links the ideas it produced. */
   ideasById?: Map<string, Idea>;
   /** Catalog chip colors (palette ids) by name. */
@@ -106,6 +108,7 @@ export function IdeaDrawer({
   ticketsByKey,
   jiraByKey,
   csvMapping = DEFAULT_CSV_MAPPING,
+  jiraProductLineLabel = "Product line",
   ideasById,
   productColors = {},
   customerColors = {},
@@ -574,44 +577,7 @@ export function IdeaDrawer({
               onOpenIdea={onOpenIdea ? (id) => onOpenIdea(id, { source: srcSel }) : undefined}
             />
           ) : jiraSrc ? (
-            <>
-              {/* Same shape as the raw Zendesk ticket: a field row, then the description as Jira formats it */}
-              <div className="flex flex-wrap gap-x-5 gap-y-1.5">
-                <Field label="Key">
-                  <span className="font-mono">{jiraSrc.id}</span>
-                </Field>
-                {jiraSrc.issueType && <Field label="Type">{jiraSrc.issueType}</Field>}
-                {jiraSrc.status && <Field label="Status">{jiraSrc.status}</Field>}
-                {jiraSrc.priority && <Field label="Priority">{jiraSrc.priority}</Field>}
-                {jiraSrc.products.length > 0 && (
-                  <Field label="Product line">{jiraSrc.products.join(", ")}</Field>
-                )}
-                {jiraSrc.reporter && <Field label="Reporter">{jiraSrc.reporter}</Field>}
-                {jiraSrc.assignee && <Field label="Assignee">{jiraSrc.assignee}</Field>}
-                {formatDate(jiraSrc.createdAt) && (
-                  <Field label="Created">{formatDate(jiraSrc.createdAt)}</Field>
-                )}
-              </div>
-              <div>
-                <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
-                {jiraSrc.body ? (
-                  <UmMarkdown content={jiraSrc.body} className="text-[13.5px] leading-relaxed" />
-                ) : (
-                  <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
-                )}
-              </div>
-              {jiraSrc.url && (
-                <a
-                  href={jiraSrc.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-primary hover:text-primary-hover hover:underline"
-                >
-                  <ExternalLink size={13} />
-                  {jiraSrc.id} — View in Jira
-                </a>
-              )}
-            </>
+            <JiraIssueView src={jiraSrc} productLineLabel={jiraProductLineLabel} />
           ) : editMode ? (
             <>
               {SCORING_ENABLED && (
@@ -959,6 +925,83 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  * what PMOS inferred. Type and priority are not used by the product yet, so
  * they live only under "All fields".
  */
+/**
+ * Raw Jira issue, laid out like the raw Zendesk ticket: the fields a PM
+ * reads first on top, the description as Jira formats it, and every field in
+ * an "All fields" dropdown. The link to Jira lives in the header pill.
+ */
+function JiraIssueView({
+  src,
+  productLineLabel,
+}: {
+  src: JiraSource;
+  productLineLabel: string;
+}) {
+  const [allOpen, setAllOpen] = useState(false);
+  const created = formatDate(src.createdAt);
+  const all: [string, string | undefined][] = [
+    ["Key", src.id],
+    ["Type", src.issueType],
+    ["Status", src.status],
+    ["Priority", src.priority],
+    [productLineLabel, src.products.join(", ") || undefined],
+    ["Reporter", src.reporter],
+    ["Assignee", src.assignee],
+    ["Created", created ?? undefined],
+    ["Link", src.url],
+  ];
+  return (
+    <>
+      <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+        {src.products.length > 0 && (
+          <Field label={productLineLabel}>{src.products.join(", ")}</Field>
+        )}
+        {src.status && <Field label="Status">{src.status}</Field>}
+        <Field label="Assignee">
+          {src.assignee || <span className="font-normal text-muted">Unassigned</span>}
+        </Field>
+        <Field label="Reporter">
+          {src.reporter || <span className="font-normal text-muted">Unknown</span>}
+        </Field>
+        {created && <Field label="Created">{created}</Field>}
+      </div>
+      <div>
+        <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
+        {src.body ? (
+          <UmMarkdown content={src.body} className="um-compact text-[13.5px] leading-relaxed" />
+        ) : (
+          <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
+        )}
+      </div>
+      <div className="border-t border-[#e8eef7] pt-3">
+        <button
+          type="button"
+          onClick={() => setAllOpen((v) => !v)}
+          className="flex items-center gap-1.5 text-xs font-medium text-[#7a8aa3] hover:text-foreground"
+          aria-expanded={allOpen}
+        >
+          {allOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          All fields ({all.length})
+        </button>
+        {allOpen && (
+          <dl className="mt-2 grid grid-cols-[minmax(120px,max-content)_1fr] gap-x-4 gap-y-1 text-xs">
+            {all.map(([k, v]) => (
+              <div key={k} className="contents">
+                <dt className="truncate font-mono text-[11px] text-[#9aa8be]" title={k}>
+                  {k}
+                </dt>
+                <dd className={`m-0 whitespace-pre-wrap break-words ${v ? "text-foreground" : "text-[#c3ccd8]"}`}>
+                  {v ?? "—"}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+    </>
+  );
+}
+
 function TicketView({
   ticket,
   csvMapping,

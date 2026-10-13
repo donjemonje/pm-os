@@ -47,6 +47,9 @@ export interface IdeasState {
   jiraSiteUrl: string | null;
   /** The org's CSV import mapping — the client parses uploads with it. */
   csvMapping: CsvMapping;
+  /** Jira field name mapped as Product Line ("Module" for Kela) — the raw
+   *  Jira issue labels its product line with it. */
+  jiraProductLineField: string;
 }
 
 /** A parsed CSV row plus the original record verbatim (the raw store). */
@@ -277,6 +280,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
     jiraConnected: Boolean(jiraStatus?.connected),
     jiraSiteUrl: jiraStatus?.siteUrl ?? null,
     csvMapping: mergeIdeasJiraConfig(wsRow?.ideasConfig).csv,
+    jiraProductLineField: mergeIdeasJiraConfig(wsRow?.ideasConfig).fields.productLine.jiraField,
     tickets: ticketRows.map(toClientTicket),
     jiraSources: snapshotRows.map((s) => ({
       key: s.key,
