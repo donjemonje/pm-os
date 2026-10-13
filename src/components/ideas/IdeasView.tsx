@@ -88,14 +88,16 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
 }
 
 /** Row tags that aren't catalog values — the Label filter's options. */
-const IDEA_LABELS = ["Internal"];
+const IDEA_LABELS = ["No customer"];
 /** Jira statuses that mean "shipped" — hidden by default when nothing asks for them. */
 function isJiraDoneStatus(status: string): boolean {
   return /^(done|closed|resolved|released|shipped)$/i.test(status.trim());
 }
-/** Does the idea carry this label? Internal = no customer named on any supporting ticket. */
+/** Does the idea carry this label? "No customer" = the idea has supporting
+ *  tickets and none of them names a customer. It says nothing about who the
+ *  feature is for, and a Jira-only idea (no tickets) never carries it. */
 function hasLabel(i: Idea, label: string): boolean {
-  if (label === "Internal") return (i.customers ?? []).length === 0;
+  if (label === "No customer") return i.zen.length > 0 && (i.customers ?? []).length === 0;
   return false;
 }
 
@@ -150,7 +152,7 @@ export function IdeasView({
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   /** Jira status filter (the issue's own workflow status, e.g. Backlog / Done). */
   const [jiraStatusFilter, setJiraStatusFilter] = useState<string[]>([]);
-  /** Label filter: the row tags that aren't catalog values (Internal). */
+  /** Label filter: the row tags that aren't catalog values ("No customer"). */
   const [labelFilter, setLabelFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
 
@@ -1435,10 +1437,10 @@ export function IdeasView({
                                       {p}
                                     </Chip>
                                   ))}
-                                  {/* No customer named on any supporting ticket → an internal request */}
-                                  {customers.length === 0 && (
-                                    <Chip kind="all" title="No customer is named on the supporting tickets">
-                                      Internal
+                                  {/* Tickets exist but none names a customer. Jira-only ideas say nothing about customers. */}
+                                  {hasLabel(idea, "No customer") && (
+                                    <Chip kind="all" title="The supporting tickets name no customer">
+                                      No customer
                                     </Chip>
                                   )}
                                   {customers.slice(0, 2).map(customerChip)}

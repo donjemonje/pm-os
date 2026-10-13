@@ -30,8 +30,8 @@ import { encryptTotpSecret } from "../../src/lib/two-factor";
  *     approve mark ("Mark reviewed") approves the row: toast
  *     Approved “<title>”, the header's pending count drops, the DB flips to
  *     reviewed; "Mark unreviewed" reverses all of it.
- * FL4 RoomLens: the new Label filter — Internal narrows the list to ideas
- *     with no customer on any supporting ticket (chip "Internal ✕" clears
+ * FL4 RoomLens: the new Label filter — "No customer" narrows the list to ideas
+ *     with tickets but no customer on any of them (chip "No customer ✕" clears
  *     it). Then the ticket view inside the drawer: a source row opens the
  *     ticket with labelled Customer / Reported by / Module / Created fields,
  *     the Evaluation box with the catalog verdict, and "Split into 2 ideas"
@@ -490,7 +490,7 @@ test.describe("UI facelift v2 — confirm dialog, grouped list, Label filter, ti
     ).toBe("pending");
   });
 
-  test("FL4 Label → Internal narrows the list to ideas with no customer; the drawer's ticket view shows labelled fields, the Evaluation box and idea links with Back navigation", async ({
+  test("FL4 Label → No customer narrows the list to ideas with no customer; the drawer's ticket view shows labelled fields, the Evaluation box and idea links with Back navigation", async ({
     page,
   }) => {
     await loginAsRoomLens(page);
@@ -501,17 +501,17 @@ test.describe("UI facelift v2 — confirm dialog, grouped list, Label filter, ti
     await expect(rowA1).toBeVisible();
     await expect(rowA2).toBeVisible();
     await expect(rowB1).toBeVisible();
-    // Only the customer-less idea carries the Internal tag on its row.
-    await expect(rowA2.getByText("Internal", { exact: true })).toBeVisible();
-    await expect(rowA1.getByText("Internal", { exact: true })).toHaveCount(0);
+    // Only the customer-less idea carries the "No customer" tag on its row.
+    await expect(rowA2.getByText("No customer", { exact: true })).toBeVisible();
+    await expect(rowA1.getByText("No customer", { exact: true })).toHaveCount(0);
 
-    // Label → Internal (multi-select popover stays open; close via the backdrop).
+    // Label → No customer (multi-select popover stays open; close via the backdrop).
     await page.getByRole("button", { name: "Label", exact: true }).click();
     const popover = page.locator("div.z-\\[25\\]");
-    await popover.getByRole("button", { name: "Internal", exact: true }).click();
+    await popover.getByRole("button", { name: "No customer", exact: true }).click();
     await page.locator("div.z-\\[24\\]").click({ position: { x: 4, y: 4 } });
     await expect(popover).toHaveCount(0);
-    const chip = page.getByRole("button", { name: "Internal ✕" });
+    const chip = page.getByRole("button", { name: "No customer ✕" });
     await expect(chip).toBeVisible();
     await expect(rowA2).toBeVisible();
     await expect(rowA1).toHaveCount(0);
