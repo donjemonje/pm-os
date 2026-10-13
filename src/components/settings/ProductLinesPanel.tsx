@@ -45,9 +45,11 @@ export function ProductLinesPanel({
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [aliases, setAliases] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editAliases, setEditAliases] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,9 +76,10 @@ export function ProductLinesPanel({
 
   async function onAdd() {
     if (!name.trim()) return;
-    if (await call("POST", { name, description })) {
+    if (await call("POST", { name, description, aliases })) {
       setName("");
       setDescription("");
+      setAliases("");
       setAdding(false);
     }
   }
@@ -85,6 +88,7 @@ export function ProductLinesPanel({
     setEditingId(item.id);
     setEditName(item.name);
     setEditDescription(item.description);
+    setEditAliases((item.aliases ?? []).join(", "));
     setError(null);
   }
 
@@ -94,7 +98,9 @@ export function ProductLinesPanel({
   }
 
   async function onSaveEdit(id: string) {
-    if (await call("PATCH", { id, name: editName, description: editDescription })) {
+    if (
+      await call("PATCH", { id, name: editName, description: editDescription, aliases: editAliases })
+    ) {
       setEditingId(null);
     }
   }
@@ -127,6 +133,17 @@ export function ProductLinesPanel({
       }
     };
   }
+
+  /** Other spellings of the same product line: the customer's Jira option name, reporters' variants. */
+  const aliasesEditor = (value: string, onChange: (v: string) => void) => (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Aliases, comma-separated — e.g. the Jira option name: Platform General, Platform- General"
+      title="Other names that mean this product line. Imports map any of them here; the merge to Jira writes whichever one is a Jira option."
+      className={`${INPUT_CLASS} text-[13px]`}
+    />
+  );
 
   const descriptionEditor = (value: string, onChange: (v: string) => void) => (
     <div>
@@ -189,6 +206,7 @@ export function ProductLinesPanel({
                   className={INPUT_CLASS}
                   maxLength={80}
                 />
+                {aliasesEditor(editAliases, setEditAliases)}
                 {descriptionEditor(editDescription, setEditDescription)}
                 <div className="flex items-center justify-end gap-2">
                   <button
@@ -264,6 +282,11 @@ export function ProductLinesPanel({
                     </span>
                   )}
                 </div>
+                {(item.aliases ?? []).length > 0 && (
+                  <p className="-mt-1 mb-2 text-[12px] text-muted">
+                    Also called: {(item.aliases ?? []).join(", ")}
+                  </p>
+                )}
                 {item.description ? (
                   view === "formatted" ? (
                     <UmMarkdown content={item.description} className="text-[13px]" />
@@ -301,6 +324,7 @@ export function ProductLinesPanel({
               className={INPUT_CLASS}
               maxLength={80}
             />
+            {aliasesEditor(aliases, setAliases)}
             {descriptionEditor(description, setDescription)}
             <div className="flex items-center justify-end gap-2">
               <button

@@ -229,6 +229,20 @@ async function seedKelaQa() {
   await prisma.zendeskTicketRaw.deleteMany({ where: { workspaceId: ws.id } });
   await prisma.jiraIdeaSnapshot.deleteMany({ where: { workspaceId: ws.id } });
   await prisma.productLine.deleteMany({ where: { workspaceId: ws.id, origin: "jira" } });
+  // One hand-made row with an alias: Kela's Jira option "Platform General" is
+  // the catalog's "Platform" (the alias path on pull, Zendesk import and push).
+  const platform = await prisma.productLine.findFirst({
+    where: { workspaceId: ws.id, name: { equals: "Platform", mode: "insensitive" } },
+    select: { id: true },
+  });
+  const platformData = {
+    description:
+      "Kela's shared infrastructure and platform layer — login and account mechanics, latency, cross-module reports, unified asset inventory, licensing.",
+    aliases: ["Platform General", "Platform- General"],
+    origin: "manual",
+  };
+  if (platform) await prisma.productLine.update({ where: { id: platform.id }, data: platformData });
+  else await prisma.productLine.create({ data: { workspaceId: ws.id, name: "Platform", position: 0, ...platformData } });
 
   // Stored as the partial the app merges over its defaults (mergeIdeasJiraConfig).
   // Product Line ↔ "Module": the pull reads it, the push writes it.

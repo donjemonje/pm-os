@@ -2,6 +2,7 @@ import { db } from "../db";
 import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { catalogEntryWithAliases } from "./product-line-key";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { anthropicUsage, type StageHooks } from "./trace";
 import {
@@ -261,8 +262,8 @@ export async function prepareMatch(workspaceId: string): Promise<MatchContext> {
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      select: { name: true, description: true },
-    }),
+      select: { name: true, description: true, aliases: true },
+    }).then((rows) => rows.map(catalogEntryWithAliases)),
     db.platform.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },

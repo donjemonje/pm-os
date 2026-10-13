@@ -9,6 +9,7 @@ import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { ensureJiraProductLines, fetchJiraLiveSources } from "./jira-sync";
+import { buildProductLineResolver } from "./product-line-key";
 import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import {
@@ -338,6 +339,11 @@ async function runImport(
     const added = await ensureJiraProductLines(workspaceId, jira.sources);
     trace.end({ note: added.length > 0 ? `added ${added.join(", ")}` : "catalog complete" });
   }
+  // One taxonomy: a ticket's Module column (any spelling, aliases included)
+  // names its product line deterministically — see product-line-key.ts.
+  const resolveProductLine = buildProductLineResolver(
+    await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
+  );
 
   // Stage contexts (catalogs + template) are loaded once, and the prompt
   // prefixes known now are warmed in the provider's cache while the parse
@@ -575,6 +581,15 @@ async function runImport(
         },
       ]);
     }
+  }
+
+  // The ticket's Module is the product line when it names a catalog row —
+  // the model's pick stands only for tickets without a resolvable module.
+  for (const [key, units] of unitsByTicket) {
+    const input = fresh.find((t) => t.key === key);
+    const resolved = input?.module ? resolveProductLine.resolve(input.module) : undefined;
+    if (!resolved) continue;
+    for (const u of units) u.rewrite = { ...u.rewrite, productLines: [resolved] };
   }
 
   // Match candidates are the CURRENT ideas list — however each idea was born
@@ -936,16 +951,20 @@ async function runImport(
           });
           continue;
         }
-        // Model assignment wins; the CSV product_line column is only a fallback
-        // when the model returned nothing at all.
+        // A resolvable Module column is the product line (one taxonomy with
+        // Jira). Otherwise the model's assignment wins and the CSV
+        // product_line column is only a fallback when the model returned
+        // nothing at all.
         // A group-reconciled rewrite (match stage) wins over the unit's own
         // catalog text: it was written with every member ticket in view.
         const finalRewrite = m?.rewrite ?? unit.rewrite;
-        const products =
-          finalRewrite.productLines.length > 0
+        const moduleLine = input.module ? resolveProductLine.resolve(input.module) : undefined;
+        const products = moduleLine
+          ? [moduleLine]
+          : finalRewrite.productLines.length > 0
             ? finalRewrite.productLines
             : input.productLine
-              ? [input.productLine]
+              ? [resolveProductLine.resolve(input.productLine) ?? input.productLine]
               : ["Other"];
         // Ideas read in product voice; the customer's original wording stays
         // intact on ZendeskTicketRaw. Fallbacks guard empty model output.

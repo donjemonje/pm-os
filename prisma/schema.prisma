@@ -151,6 +151,11 @@ model ProductLine {
   /// "manual" (Settings → Ideas) or "jira" (auto-created by the Jira pull
   /// from the configured product-line field — see IdeasJiraConfig.pull).
   origin      String    @default("manual")
+  /// Other spellings that mean this product line — the customer's Jira option
+  /// name ("Platform General" for "Platform"), reporters' variants. Matched by
+  /// normalized key on import (Jira pull and Zendesk Module); on push the
+  /// alias that is a Jira option is written.
+  aliases     Json      @default("[]")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

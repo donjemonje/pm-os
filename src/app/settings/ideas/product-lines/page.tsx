@@ -27,7 +27,7 @@ export default async function ProductLinesSettingsPage() {
     db.productLine.findMany({
       where: { workspaceId: workspace.id },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      select: { id: true, name: true, description: true, color: true, origin: true },
+      select: { id: true, name: true, description: true, color: true, origin: true, aliases: true },
     }),
     db.platform.findMany({
       where: { workspaceId: workspace.id },
@@ -45,7 +45,15 @@ export default async function ProductLinesSettingsPage() {
 
   return (
     <div className="space-y-8">
-      <ProductLinesPanel initialItems={productLines} canEdit={isPmosAdmin(user)} />
+      <ProductLinesPanel
+        initialItems={productLines.map((l) => ({
+          ...l,
+          aliases: Array.isArray(l.aliases)
+            ? l.aliases.filter((a): a is string => typeof a === "string")
+            : [],
+        }))}
+        canEdit={isPmosAdmin(user)}
+      />
       {myLinesEnabled && productLines.length > 0 && (
         <MyProductLinesPanel
           options={productLines.map((l) => l.name)}

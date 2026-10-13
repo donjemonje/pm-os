@@ -20,6 +20,7 @@ import {
   type IdeasJiraConfig,
   type MappedAttribute,
 } from "./jira-mapping";
+import { buildProductLineResolver } from "./product-line-key";
 import { getIdeasState, type IdeasState } from "./store";
 
 /** The workspace's stored output config merged over defaults. */
@@ -418,6 +419,11 @@ async function derivePlan(
     };
   }
   const extraFieldIds = Array.from(fieldIdByAttr.values());
+  // Product-line spellings: the catalog name or any alias that is a Jira
+  // option is written ("Platform" → Jira option "Platform General").
+  const productResolver = buildProductLineResolver(
+    await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
+  );
 
   // Live state for updates — diffs run against Jira right now, not a snapshot.
   let liveByKey = new Map<string, Awaited<ReturnType<typeof fetchIssuesRaw>>[number]>();
@@ -515,13 +521,13 @@ async function derivePlan(
         if (cur) return null;
         const wanted = ((row.products as string[]) ?? []).filter((p) => p !== "Other");
         if (wanted.length === 0) return null;
-        const { allowed, rejected } = filterAllowed([wanted[0]], meta);
-        if (rejected.length > 0) {
+        const { allowed } = filterAllowed(productResolver.spellings(wanted[0]), meta);
+        if (allowed.length === 0) {
           warnings.push(
-            `${key}: "${rejected[0]}" is not an option of Jira field "${mapping.jiraField}" — add it in Jira, then re-merge.`
+            `${key}: "${wanted[0]}" is not an option of Jira field "${mapping.jiraField}" — add it in Jira, or add the Jira option's name as an alias in Settings → Product Lines, then re-merge.`
           );
+          return null;
         }
-        if (allowed.length === 0) return null;
         extraFields[fieldId] = { value: allowed[0] };
         undoFields[fieldId] = { kind: "single", before: null, after: allowed[0] };
         return { field: attr, label: ATTRIBUTE_LABELS[attr], from: "(empty)", to: allowed[0] };
@@ -619,7 +625,12 @@ async function derivePlan(
             ? ideaCustomers(row)
             : ((row.platforms as string[]) ?? []).filter(Boolean);
       if (wanted.length === 0) continue;
-      const { allowed, rejected } = filterAllowed(wanted, meta);
+      const candidates = attr === "productLine" ? productResolver.spellings(wanted[0]) : wanted;
+      const filtered = filterAllowed(candidates, meta);
+      const allowed = filtered.allowed;
+      // For the product line, "rejected" means none of its spellings is an option.
+      const rejected =
+        attr === "productLine" ? (allowed.length === 0 ? [wanted[0]] : []) : filtered.rejected;
       if (rejected.length > 0) {
         warnings.push(
           `"${row.title}": ${rejected.map((r) => `"${r}"`).join(", ")} not available in Jira field "${mapping.jiraField}" — add the option${rejected.length === 1 ? "" : "s"} in Jira, then re-merge.`

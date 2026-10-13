@@ -3,6 +3,7 @@ import { aiThrottleOn } from "./ai-throttle";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { catalogEntryWithAliases } from "./product-line-key";
 import { anthropicUsage, type StageHooks } from "./trace";
 import {
   getIdeasClient,
@@ -181,8 +182,8 @@ export async function prepareSplit(workspaceId: string): Promise<SplitContext> {
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      select: { name: true, description: true },
-    }),
+      select: { name: true, description: true, aliases: true },
+    }).then((rows) => rows.map(catalogEntryWithAliases)),
     db.platform.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },

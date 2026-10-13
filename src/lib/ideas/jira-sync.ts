@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { fetchIssuesForScopePaged, getJiraConnectionStatus, listAllFields } from "../jira";
 import { mergeIdeasJiraConfig, type JiraPullConfig } from "./jira-mapping";
+import { buildProductLineResolver } from "./product-line-key";
 import type { JiraSource } from "./types";
 
 export interface JiraLiveResult {
@@ -37,6 +38,11 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   if (!status?.connected || status.projectKeys.length === 0) {
     return { connected: false, sources: [], truncatedProjects: [], pull };
   }
+  // Module values land under the catalog's spelling ("Platform General" →
+  // "Platform" via its alias); unknown values stay verbatim and become rows.
+  const resolver = buildProductLineResolver(
+    await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
+  );
 
   // The field mapped as Product Line, by display name → id. Missing on this
   // site = Components only (no warning: RoomLens never had the field).
@@ -80,7 +86,9 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       status: issue.status,
       url: `${status.siteUrl}/browse/${issue.key}`,
       // Mapped field first (Kela: Module); Components when it is empty.
-      products: issue.productLine ? [issue.productLine] : issue.components,
+      products: (issue.productLine ? [issue.productLine] : issue.components).map(
+        (v) => resolver.resolve(v) ?? v
+      ),
     }));
   return { connected: true, sources, truncatedProjects, pull };
 }
@@ -107,13 +115,14 @@ export async function ensureJiraProductLines(
 
   const existing = await db.productLine.findMany({
     where: { workspaceId },
-    select: { name: true, position: true },
+    select: { name: true, aliases: true, position: true },
     orderBy: { position: "desc" },
   });
-  const known = new Set(existing.map((p) => p.name.toLowerCase()));
-  const missing = Array.from(wanted.entries())
-    .filter(([k]) => !known.has(k))
-    .map(([, name]) => name)
+  // Names AND aliases count as known — "Platform General" never becomes a row
+  // when "Platform" lists it as an alias.
+  const resolver = buildProductLineResolver(existing);
+  const missing = Array.from(wanted.values())
+    .filter((name) => resolver.resolve(name) === undefined)
     .sort((a, b) => a.localeCompare(b));
   if (missing.length === 0) return [];
 

@@ -281,9 +281,10 @@ export function IdeasOutputConfig({
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
           PM-OS attribute → Jira field (matched by display name). Product Line
           is also read on import: its Jira field is the issue&apos;s product
-          line (Kela: Module). Values that aren&apos;t options of the Jira
-          field are skipped with a warning in the merge preview — add the
-          options in Jira.
+          line (Kela: Module), mapped to the catalog by name or alias. On
+          merge the catalog name or whichever alias is a Jira option is
+          written (Settings → Product Lines holds the aliases). Values with no
+          matching option are skipped with a warning in the merge preview.
         </p>
         <div className="space-y-3">
           {MAPPED_ATTRIBUTES.map((attr) => {
