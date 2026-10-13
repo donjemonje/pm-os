@@ -453,6 +453,14 @@ export function MergePage({
                 >
                   {idea.title}
                 </span>
+                {idea.batch === "unchanged" && !gone && (
+                  <span
+                    title="Nothing touched this idea in the last import"
+                    className="shrink-0 whitespace-nowrap rounded-full border border-[#dde5ef] px-[7px] py-[1px] font-mono text-[10px] font-semibold text-[#9aa8be]"
+                  >
+                    Unchanged
+                  </span>
+                )}
                 {idea.products[0] && (
                   <Chip
                     className="hidden 2xl:inline-flex"

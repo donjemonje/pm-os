@@ -77,6 +77,9 @@ export function badgeOf(i: Idea): BadgeStyle | null {
       return { label: "Deleted", bg: "#f7eef1", fg: "#a3556b", bd: "#ecd6dd", check: false };
     case "archive":
       return { label: "Archive", bg: "#ef5a8a", fg: "#ffffff", bd: "transparent", check: false };
+    case "unchanged":
+      // Minor on purpose: the backlog that nothing touched this import.
+      return { label: "Unchanged", bg: "transparent", fg: "#9aa8be", bd: "#dde5ef", check: false };
     default:
       return null;
   }
