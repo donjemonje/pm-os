@@ -8,7 +8,7 @@ import type { JiraSource } from "./types";
 
 /**
  * Jira-to-Jira dedupe (Daniel, 2026-10-13): issues in the customer's backlog
- * that describe the same capability become ONE idea with several Jira
+ * that address the same user pain become ONE idea with several Jira
  * sources, so a Zendesk ticket matches one idea, not three (PRDT-28 / 64 / 65:
  * "notes on incidents" filed once per feed).
  *
@@ -24,23 +24,23 @@ import type { JiraSource } from "./types";
  * (JiraDedupeReject); rejected pairs are never grouped again.
  */
 
-export const JIRA_DEDUPE_PROMPT_VERSION = "jira-dedupe-v1";
+export const JIRA_DEDUPE_PROMPT_VERSION = "jira-dedupe-v2";
 
 export const JIRA_DEDUPE_SYSTEM_PROMPT = `You find duplicate items in a product team's Jira backlog.
 
-You are given the issues of ONE product line, each with a key, title and description, written by the team's own product managers. Group the issues that describe the SAME capability for the same users — items a product manager would call one thing filed more than once (often the same capability written once per screen, feed or module variant, or re-filed by someone who did not check the backlog).
+You are given the issues of ONE product line, each with a key, title and description, written by the team's own product managers. Group the issues that address the SAME USER PAIN — the problem a user has is the core of an item; the solution each issue proposes is one way to resolve it. Items a product manager would call one problem filed more than once: the same capability written once per screen, feed or module variant, two solutions to one problem, or something re-filed by someone who did not check the backlog.
 
 Rules:
-- Same capability, same need. Different wording, detail level or framing do not matter; the capability does.
-- A per-screen or per-feed variant of one capability IS the same capability (e.g. "notes on incidents", "notes on cookie incidents", "notes on market bot incidents").
-- NOT the same: a prerequisite, a complement, a follow-up, a different capability in the same area, a different user group, or a technical task behind a feature.
-- These were written by product managers — assume the distinction is deliberate unless the texts clearly describe one item. Be strict: when in doubt, do not group.
+- Same user pain. Different wording, detail level, framing or proposed solution do not matter; the problem does.
+- A per-screen or per-feed variant of one capability IS the same pain (e.g. "notes on incidents", "notes on cookie incidents", "notes on market bot incidents"). Two different solutions to one problem ARE the same pain.
+- NOT the same: a different pain in the same area, a different user group, a follow-up that only exists once the first is built, or an item that states no user pain of its own (a technical task, a data model, infrastructure) — even when it would enable another issue.
+- These were written by product managers — assume the distinction is deliberate unless the texts clearly share one problem. Be strict: when in doubt, do not group.
 - Return only groups of two or more keys. Every key at most once. Keys exactly as listed.
 - One short sentence of reasoning per group.`;
 
 const DEDUPE_TOOL = {
   name: "group_jira_issues",
-  description: "Groups of Jira issue keys that describe the same capability.",
+  description: "Groups of Jira issue keys that address the same user pain.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -50,7 +50,7 @@ const DEDUPE_TOOL = {
           type: "object",
           properties: {
             keys: { type: "array", items: { type: "string" }, description: "Two or more issue keys, exactly as listed." },
-            reason: { type: "string", description: "One short sentence: why these are one item." },
+            reason: { type: "string", description: "One short sentence naming the shared user pain." },
           },
           required: ["keys", "reason"],
         },
@@ -60,9 +60,9 @@ const DEDUPE_TOOL = {
   },
 };
 
-export const JIRA_MERGE_SYSTEM_PROMPT = `You merge several Jira issues that describe the same capability into one idea for the product team.
+export const JIRA_MERGE_SYSTEM_PROMPT = `You merge several Jira issues that address the same user pain into one idea for the product team.
 
-You are given the issues (key, title, description — written by the team's own product managers) and the IDEA TEMPLATE. Write product_title (the what, not the how) and product_summary in markdown following the template — its sections in order with their exact "##" headings, honoring their omission rules. Keep every fact, link, key, identifier and constraint from every issue (say it once when several say it); nothing a PM wrote may disappear or change meaning. Writing rules:
+You are given the issues (key, title, description — written by the team's own product managers) and the IDEA TEMPLATE. Write product_title (the problem or outcome, not an implementation) and product_summary in markdown following the template — its sections in order with their exact "##" headings, honoring their omission rules; "The Problem" is the anchor, and when the issues propose different solutions, list the distinct asks there as bullets and keep Proposed Solution to what is confidently right (or omit it). Keep every fact, link, key, identifier and constraint from every issue (say it once when several say it); nothing a PM wrote may disappear or change meaning. Writing rules:
 ${IDEA_WRITING_RULES}`;
 
 const MERGE_TOOL = {

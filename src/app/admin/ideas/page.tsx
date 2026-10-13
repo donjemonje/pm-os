@@ -56,7 +56,7 @@ export default async function AdminIdeasPage() {
           {
             id: "jira-dedupe",
             title: `Jira-to-Jira dedupe (${JIRA_DEDUPE_PROMPT_VERSION})`,
-            note: "After the Jira pull, one call per product line: which issues describe the same capability (a PM would call them one item filed more than once). Groups become one idea with several Jira sources; a pair a PM detached on the Merge page is never grouped again. Judged once per identical input.",
+            note: "After the Jira pull, one call per product line: which issues describe the same user pain (a PM would call them one problem filed more than once). Groups become one idea with several Jira sources; a pair a PM detached on the Merge page is never grouped again. Judged once per identical input.",
             text: JIRA_DEDUPE_SYSTEM_PROMPT,
           },
           {
