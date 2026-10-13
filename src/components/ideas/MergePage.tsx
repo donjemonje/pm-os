@@ -140,9 +140,9 @@ export function MergePage({
     return true;
   };
 
-  // Evidence count: every ticket counts; the Jira issue an idea lives in is
-  // its home, not a vote — only extra Jira issues beyond the first count.
-  const srcCount = (i: Idea) => i.zen.length + Math.max(0, i.jira.length - 1);
+  // Source count: every ticket and every Jira issue. (Votes are a different
+  // number — tickets only — and live on the idea, not here.)
+  const srcCount = (i: Idea) => i.zen.length + i.jira.length;
 
   const sameSet = (a: string[], b: string[]) =>
     a.length === b.length && a.every((x) => b.includes(x));
