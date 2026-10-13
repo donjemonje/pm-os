@@ -87,18 +87,9 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
   return undefined;
 }
 
-/** Row tags that aren't catalog values — the Label filter's options. */
-const IDEA_LABELS = ["No customer"];
 /** Jira statuses that mean "shipped" — hidden by default when nothing asks for them. */
 function isJiraDoneStatus(status: string): boolean {
   return /^(done|closed|resolved|released|shipped)$/i.test(status.trim());
-}
-/** Does the idea carry this label? "No customer" = the idea has supporting
- *  tickets and none of them names a customer. It says nothing about who the
- *  feature is for, and a Jira-only idea (no tickets) never carries it. */
-function hasLabel(i: Idea, label: string): boolean {
-  if (label === "No customer") return i.zen.length > 0 && (i.customers ?? []).length === 0;
-  return false;
 }
 
 /** Toggle pill (scope / Pending Review): accent-filled with a glow when on. */
@@ -152,8 +143,6 @@ export function IdeasView({
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   /** Jira status filter (the issue's own workflow status, e.g. Backlog / Done). */
   const [jiraStatusFilter, setJiraStatusFilter] = useState<string[]>([]);
-  /** Label filter: the row tags that aren't catalog values ("No customer"). */
-  const [labelFilter, setLabelFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
 
   const [page, setPage] = useState<"final" | "merge">("final");
@@ -562,7 +551,6 @@ export function IdeasView({
       // ticket is matched to it ("already shipped"), the PM wants to see it.
       return false;
     }
-    if (labelFilter.length > 0 && !labelFilter.some((l) => hasLabel(i, l))) return false;
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
   };
@@ -687,7 +675,6 @@ export function IdeasView({
     setCustomerFilter([]);
     setStatusFilter([]);
     setJiraStatusFilter([]);
-    setLabelFilter([]);
     setPendingOnly(false);
   };
 
@@ -696,7 +683,6 @@ export function IdeasView({
     platformFilter.length > 0 ||
     customerFilter.length > 0 ||
     jiraStatusFilter.length > 0 ||
-    labelFilter.length > 0 ||
     pendingOnly;
 
   const hasFilters =
@@ -706,7 +692,6 @@ export function IdeasView({
     customerFilter.length > 0 ||
     statusFilter.length > 0 ||
     jiraStatusFilter.length > 0 ||
-    labelFilter.length > 0 ||
     pendingOnly;
 
   // Esc closes the merge modal (never mid-write). Enter is deliberately not
@@ -1139,17 +1124,6 @@ export function IdeasView({
                     emptyText="No matching Jira status"
                   />
                 )}
-                <FilterPopover
-                  label="Label"
-                  accent="status"
-                  options={IDEA_LABELS}
-                  selected={labelFilter}
-                  onToggle={(o) =>
-                    setLabelFilter((prev) =>
-                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
-                    )
-                  }
-                />
                 <span className="mx-1 h-5 w-px bg-border" />
                 <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
                   Pending Review
@@ -1219,15 +1193,6 @@ export function IdeasView({
                       Jira: {option} ✕
                     </button>
                   ))}
-                  {labelFilter.map((option) => (
-                    <button
-                      key={`l-${option}`}
-                      onClick={() => setLabelFilter((prev) => prev.filter((x) => x !== option))}
-                      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.status.chip}`}
-                    >
-                      {option} ✕
-                    </button>
-                  ))}
                   {pendingOnly && (
                     <button
                       onClick={() => setPendingOnly(false)}
@@ -1274,7 +1239,6 @@ export function IdeasView({
                   customerFilter={customerFilter}
                   pendingOnly={pendingOnly}
                   statusFilter={statusFilter}
-                  labelFilter={labelFilter}
                   productColors={productColors}
                   edit={edit}
                   selectedFinalId={selectedFinalId}
@@ -1437,12 +1401,6 @@ export function IdeasView({
                                       {p}
                                     </Chip>
                                   ))}
-                                  {/* Tickets exist but none names a customer. Jira-only ideas say nothing about customers. */}
-                                  {hasLabel(idea, "No customer") && (
-                                    <Chip kind="all" title="The supporting tickets name no customer">
-                                      No customer
-                                    </Chip>
-                                  )}
                                   {customers.slice(0, 2).map(customerChip)}
                                   {customers.length > 2 && (
                                     <span className="shrink-0">+{customers.length - 2}</span>
