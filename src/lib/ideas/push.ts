@@ -578,7 +578,9 @@ async function derivePlan(
       const filtered = filterAllowed(missing, meta);
       let allowed = filtered.allowed;
       if (filtered.rejected.length > 0) {
-        if (mapping.createOptions) {
+        // Only a real select field (Jira lists its options) can take new options;
+        // a mis-mapped text/number field must not block the sync.
+        if (mapping.createOptions && Array.isArray(meta?.allowedValues)) {
           // The sync adds the option first, then writes the value.
           queueOptions(attr, fieldId, key.split("-")[0], filtered.rejected);
           allowed = [...allowed, ...filtered.rejected];
@@ -674,7 +676,7 @@ async function derivePlan(
       const rejected =
         attr === "productLine" ? (allowed.length === 0 ? [wanted[0]] : []) : filtered.rejected;
       if (rejected.length > 0) {
-        if (mapping.createOptions && meta && target) {
+        if (mapping.createOptions && Array.isArray(meta?.allowedValues) && target) {
           queueOptions(attr, fieldId, target.projectKey, rejected);
           allowed = [...allowed, ...rejected];
         } else {
@@ -768,8 +770,9 @@ export async function executePush(
   if (!status) return { ok: false, blockers: ["Jira is not connected."] };
 
   // Options first, all of them, before a single issue is written — a refusal
-  // here (typically 403: the connection predates the configuration scope)
-  // leaves Jira untouched and says what to do.
+  // here (401/403: no admin rights, or a connection that predates the
+  // configuration scope) stops the sync before any issue write; options
+  // already added for an earlier field stay (harmless, idempotent next time).
   for (const o of writes.newOptions.values()) {
     try {
       await ensureFieldOptions(workspaceId, o.fieldId, o.projectKey, Array.from(o.values));
@@ -780,7 +783,7 @@ export async function executePush(
         blockers: [
           `Could not add options to Jira field "${o.label}": ${msg}` +
             (/\((401|403)\)|scope does not match/i.test(msg)
-              ? " — the Jira connection was made before PM-OS asked for the configuration permission. Reconnect Jira in Settings → Integrations (Connect again; the project selection is kept), then sync again."
+              ? " — adding options needs Jira admin rights on the connected account, and a connection made before 2026-10-13 lacks the configuration permission: reconnect Jira in Settings → Integrations (the project selection is kept), then sync again."
               : ""),
         ],
       };

@@ -5,8 +5,9 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
 import { isAllCustomers } from "@/lib/ideas/customer-key";
+import { productLineKey } from "@/lib/ideas/product-line-key";
 
-const ITEM_SELECT = { id: true, name: true, description: true, color: true, origin: true } as const;
+const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
 const CUSTOMER_SELECT = { ...ITEM_SELECT, aliases: true } as const;
 /** Product lines carry aliases too (other spellings, the Jira option name). */
 const PRODUCT_LINE_SELECT = { ...ITEM_SELECT, aliases: true } as const;
@@ -221,6 +222,30 @@ function cleanAliases(value: unknown, name: string): string[] | undefined {
   return out;
 }
 
+/** An alias (or the name) may not collide with another product line's name or aliases —
+ *  the resolver is first-wins, so a collision would route a Module value by sort order. */
+async function aliasClash(
+  workspaceId: string,
+  aliases: string[],
+  name: string,
+  excludeId?: string
+): Promise<string | null> {
+  const rows = await db.productLine.findMany({
+    where: { workspaceId, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { name: true, aliases: true },
+  });
+  const mine = [name, ...aliases].map((a) => productLineKey(a));
+  for (const r of rows) {
+    const theirs = [r.name, ...(Array.isArray(r.aliases) ? (r.aliases as string[]) : [])];
+    for (const t of theirs) {
+      if (mine.includes(productLineKey(t))) {
+        return `"${t}" already belongs to product line "${r.name}" — a name or alias can only mean one product line`;
+      }
+    }
+  }
+  return null;
+}
+
 function cleanDescription(value: unknown): string {
   const description = typeof value === "string" ? value.trim() : "";
   return description.slice(0, MAX_DESCRIPTION);
@@ -244,6 +269,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   if (await ops.nameTaken(workspaceId, name)) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
+  }
+  if (kind === "product-lines") {
+    const clash = await aliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name);
+    if (clash) return NextResponse.json({ error: clash }, { status: 409 });
   }
 
   const color = isChipColorId(body.color)
@@ -292,6 +321,10 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
   if (await ops.nameTaken(workspaceId, name, id)) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
+  }
+  if (kind === "product-lines") {
+    const clash = await aliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name, id);
+    if (clash) return NextResponse.json({ error: clash }, { status: 409 });
   }
 
   await ops.update(

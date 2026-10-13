@@ -55,6 +55,7 @@ if (!SITE || !EMAIL || !TOKEN) {
   fail("JIRA_TEST_SITE_URL, JIRA_TEST_EMAIL and JIRA_TEST_API_TOKEN must be set (test-apphosting.yaml).");
 }
 if (KEY === SOURCE) fail(`Refusing: the test project key (${KEY}) equals the source project (${SOURCE}).`);
+if (!/^TEST/i.test(KEY)) fail(`Refusing: the test project key must start with TEST (got ${KEY}) — this script creates and deletes issues.`);
 
 const AUTH = `Basic ${Buffer.from(`${EMAIL}:${TOKEN}`).toString("base64")}`;
 

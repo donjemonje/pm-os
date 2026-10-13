@@ -21,7 +21,7 @@ import {
  * Every verdict is appended to the ledger like the other stages.
  */
 
-export const SPLIT_PROMPT_VERSION = "split-v6";
+export const SPLIT_PROMPT_VERSION = "split-v7";
 
 /** Hard bound on sub-ideas per ticket, enforced in schema AND code. */
 export const MAX_SPLITS = 6;

@@ -676,12 +676,16 @@ async function runImport(
       i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [[src.jiraKey, i.id] as const] : [])),
     ),
   );
+  // A ticket split into several asks is NOT forced: the citation says the
+  // ticket relates to the issue, not that every ask in it does — the model
+  // matches each unit, and the citation pass below still attaches the
+  // ticket as evidence on the cited issue.
   const forced = new Map<string, string>();
   for (const [key, units] of unitsByTicket) {
     const cited = citedBy.get(key);
-    if (!cited || cited.length === 0) continue;
+    if (!cited || cited.length === 0 || units.length !== 1) continue;
     const target = ideaIdByJiraKey.get(cited[0]) ?? `jira:${cited[0]}`;
-    for (const u of units) forced.set(u.unitKey, target);
+    forced.set(units[0].unitKey, target);
   }
 
   const matchInputs = catalog.results
@@ -1077,7 +1081,11 @@ async function runImport(
       if (!ticket) continue;
       for (const key of cited) {
         const idea = await db.idea.findFirst({
-          where: { workspaceId, sources: { some: { kind: "jira", jiraKey: key } } },
+          where: {
+            workspaceId,
+            batchStatus: { not: "deleted" },
+            sources: { some: { kind: "jira", jiraKey: key } },
+          },
           include: { sources: true },
         });
         if (!idea) continue;

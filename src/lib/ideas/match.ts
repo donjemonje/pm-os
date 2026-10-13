@@ -42,7 +42,7 @@ export interface MatchHooks extends StageHooks {
  * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v10";
+export const MATCH_PROMPT_VERSION = "match-v11";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 export function getMatchModel(): string {
@@ -515,7 +515,7 @@ export async function matchTickets(
     const memberInputs = job.members.map((i) => inputs[i]);
     const groupBlock = [
       anchor
-        ? `EXISTING IDEA (the group merges into it):\n[${anchor.key}] ${anchor.title}\n${clip(anchor.body || "(no description)", 1500)}`
+        ? `EXISTING IDEA (the group merges into it — keep everything in it):\n[${anchor.key}] ${anchor.title}\n${clip(anchor.body || "(no description)", 12000)}`
         : "EXISTING IDEA: none — the group becomes a new idea.",
       `GROUP REQUESTS:\n\n${memberInputs
         .map((u) => [`[${peerKey(u)}]`, renderRequest(u)].join("\n"))

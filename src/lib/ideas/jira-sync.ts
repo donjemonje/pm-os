@@ -73,8 +73,10 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       if (reporterName && reporterName !== "reporter") reporterFieldId = custom(all.get(reporterName)?.id);
       if (assigneeName && assigneeName !== "assignee") assigneeFieldId = custom(all.get(assigneeName)?.id);
     } catch (err) {
-      console.warn(
-        `[ideas:jira] could not read the field list (${err instanceof Error ? err.message : "unknown error"}) — product lines fall back to Components this import.`
+      // Silently falling back to Components would move every issue to "Other"
+      // and the resync would rewrite every idea's product line — fail loudly.
+      throw new Error(
+        `Could not read Jira's field list (${err instanceof Error ? err.message : "unknown error"}) — the import stopped before touching any idea. Retry; if it persists, reconnect Jira in Settings → Integrations.`
       );
     }
   }

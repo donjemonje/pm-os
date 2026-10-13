@@ -844,16 +844,23 @@ export async function fetchIssuesRaw(
   extraFieldIds: string[] = []
 ): Promise<JiraIssueRaw[]> {
   if (keys.length === 0) return [];
-  const data = (await jiraFetch(workspaceId, "/rest/api/3/search/jql", {
-    method: "POST",
-    body: JSON.stringify({
-      jql: `key in (${keys.join(",")})`,
-      maxResults: Math.max(keys.length, 100),
-      fields: ["summary", "description", "labels", "components", ...extraFieldIds],
-    }),
-  })) as JqlSearchPage;
+  // Jira caps a search page at 100 — more reviewed updates than that must not
+  // be reported as "no longer exists".
+  const issues: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < keys.length; i += 100) {
+    const chunk = keys.slice(i, i + 100);
+    const data = (await jiraFetch(workspaceId, "/rest/api/3/search/jql", {
+      method: "POST",
+      body: JSON.stringify({
+        jql: `key in (${chunk.join(",")})`,
+        maxResults: 100,
+        fields: ["summary", "description", "labels", "components", ...extraFieldIds],
+      }),
+    })) as JqlSearchPage;
+    issues.push(...(data.issues ?? []));
+  }
 
-  return (data.issues ?? []).map((issue) => {
+  return issues.map((issue) => {
     const fields = issue.fields as Record<string, unknown>;
     const raw = fields.description;
     const extra: Record<string, unknown> = {};
