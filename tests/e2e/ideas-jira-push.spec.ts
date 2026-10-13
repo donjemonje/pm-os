@@ -23,7 +23,8 @@ import { RESOLVED_ENV } from "./test-env";
  * - PJ3: the PM flow end to end without a Jira connection — save My
  *   Product Lines in Settings → Ideas, see them pre-applied as the Ideas
  *   filter (and removable, i.e. a default, not a hard scope), open the
- *   Jira Merge modal with the scope pre-selected, watch the
+ *   Sync to Jira dialog (was "Jira Merge" before feature/jira-support-kela)
+ *   with the scope pre-selected, watch the
  *   scope-sensitive approved/pending hints, preview into the
  *   "Jira is not connected" blocker with Confirm disabled, and prove the
  *   execute API refuses with 409 before writing anything (idea stays
@@ -127,7 +128,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       await deleteFixtures(db);
       await resetSharedState(db);
 
-      // The Jira Merge button is gated on a Jira integration existing
+      // The Sync to Jira button is gated on a Jira integration existing
       // (feature/ui_facelift_v1). A token-less row satisfies the gate; live
       // flows treat it as not-connected (no OAuth creds in the test env).
       await db.jiraConnection.upsert({
@@ -278,14 +279,16 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(
       fieldRow(page, "Components").locator('input[type="text"]')
     ).toBeDisabled();
-    await fieldRow(page, "Components").getByRole("checkbox").check();
+    // Select-type rows carry a second checkbox ("Create missing options") since
+    // feature/jira-support-kela — the enable toggle is the first one.
+    await fieldRow(page, "Components").getByRole("checkbox").first().check();
     await expect(
       fieldRow(page, "Components").locator('input[type="text"]')
     ).toBeEnabled();
     await labeledInput(page, "Prefix").fill("QA update:");
 
     await page.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByText("Saved — applies to the next merge")).toBeVisible();
+    await expect(page.getByText("Saved — applies to the next sync")).toBeVisible();
 
     // Persisted normalized: the stored config is always complete.
     const stored = await withDb(async (db) => {
@@ -308,6 +311,8 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       type: "multi_select",
       policy: "union",
       enabled: true,
+      // Default ON since feature/jira-support-kela (customer names arrive with every import).
+      createOptions: true,
     });
     expect(fields.platforms.enabled).toBe(true);
     expect(fields.votes).toEqual({
@@ -324,7 +329,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(
       fieldRow(page, "Customers").locator('input[type="text"]')
     ).toHaveValue("QA_Customers");
-    await expect(fieldRow(page, "Components").getByRole("checkbox")).toBeChecked();
+    await expect(fieldRow(page, "Components").getByRole("checkbox").first()).toBeChecked();
 
     // PUT normalization: garbage in, complete valid config out — the same
     // mergeIdeasJiraConfig the push path runs, so a stored config can never
@@ -495,34 +500,40 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await page.getByRole("button", { name: `${LINE_A} ✕` }).click();
     await expect(rowB).toBeVisible();
 
-    // Merge modal: scope opens pre-selected to my line.
-    await page.getByRole("button", { name: "Jira Merge" }).click();
+    // Sync dialog: scope opens pre-selected to my line.
+    await page.getByRole("button", { name: "Sync to Jira" }).click();
     const modal = page.locator("div.fixed.inset-0.z-50");
-    await expect(modal.getByText("Jira Merge", { exact: true })).toBeVisible();
-    await expect(modal.getByRole("button", { name: LINE_A, exact: true })).toHaveClass(
-      /bg-primary/
-    );
-    await expect(modal.getByText("1 approved change will merge")).toBeVisible();
+    await expect(modal.getByRole("heading", { name: "Sync to Jira" })).toBeVisible();
+    // Since feature/jira-support-kela the scope is a Ready / Nothing to sync
+    // list: a line row is a button carrying its counts, "on" = accent-soft
+    // background; lines with nothing approved are disabled rows that show
+    // their pending count (pending never blocks, it stays behind).
+    const lineRow = (name: string) => modal.getByRole("button").filter({ hasText: name });
+    await expect(lineRow(LINE_A)).toHaveClass(/app-accent-soft/);
+    await expect(lineRow(LINE_A)).toContainText("1 approved");
+    await expect(modal.getByText("1 approved change will sync", { exact: true })).toBeVisible();
+    await expect(lineRow(LINE_B)).toBeDisabled();
+    await expect(lineRow(LINE_B)).toContainText("1 pending");
+    // The idle count includes the clone's own catalog lines — assert the header, not the number.
+    await expect(modal.getByText(/^Nothing to sync · \d+$/)).toBeVisible();
 
-    // Scope drives the gate: only-Beta has nothing approved and preview is
-    // disabled; Beta+Alpha merges the approved one while the pending one
-    // stays behind (partial merge, pending never blocks).
-    await modal.getByRole("button", { name: LINE_A, exact: true }).click(); // deselect
-    await modal.getByRole("button", { name: LINE_B, exact: true }).click();
+    // Scope drives the gate: deselecting the only ready line leaves nothing
+    // approved and preview is disabled; reselecting it brings the one
+    // approved change back.
+    await lineRow(LINE_A).click(); // deselect
+    await expect(lineRow(LINE_A)).not.toHaveClass(/app-accent-soft/);
     await expect(
       modal.getByText("Nothing approved in the selected product lines")
     ).toBeVisible();
     await expect(modal.getByRole("button", { name: "Preview changes" })).toBeDisabled();
-    await modal.getByRole("button", { name: LINE_A, exact: true }).click(); // reselect
-    await expect(
-      modal.getByText("1 approved change will merge — 1 still pending stays here")
-    ).toBeVisible();
+    await lineRow(LINE_A).click(); // reselect
+    await expect(modal.getByText("1 approved change will sync", { exact: true })).toBeVisible();
 
     // Preview without a Jira connection: the blocker renders and the
     // confirm button never opens.
     await modal.getByRole("button", { name: "Preview changes" }).click();
     await expect(modal.getByText(NOT_CONNECTED_BLOCKER)).toBeVisible();
-    await expect(modal.getByRole("button", { name: /^Confirm merge/ })).toBeDisabled();
+    await expect(modal.getByRole("button", { name: /^Confirm sync/ })).toBeDisabled();
 
     // Esc closes the modal (Enter deliberately does nothing here).
     await page.keyboard.press("Escape");
