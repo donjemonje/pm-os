@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  Building2,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -459,17 +458,7 @@ export function IdeaDrawer({
                 ))}
                 {/* Affected customers from the supporting tickets (All Customers is
                     one of them); palette chip when cataloged, amber suggestion
-                    with approve/dismiss when not. A faint building mark in front
-                    says "customers" without a word. */}
-                {(idea.customers ?? []).length > 0 && (
-                  <span
-                    title="Customers"
-                    aria-label="Customers"
-                    className="ml-1 inline-flex shrink-0 items-center text-fg-faint"
-                  >
-                    <Building2 size={11} strokeWidth={1.75} />
-                  </span>
-                )}
+                    with approve/dismiss when not. */}
                 {(idea.customers ?? []).map((c) => {
                   const suggested = !customerCatalog.some(
                     (k) => k.toLowerCase() === c.toLowerCase(),
