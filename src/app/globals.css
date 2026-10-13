@@ -354,32 +354,14 @@ body {
   margin-top: 1.75rem;
 }
 
-/* Compact variant for idea text inside the drawer: document headings are
-   section labels there, not chapter titles. Unlayered on purpose — it must
-   outrank the document rules above, which utilities (layered) cannot. */
+/* Idea text inside the drawer: same type as everywhere, just less air
+   above the first heading (it sits right under the import box) and between
+   sections. Unlayered on purpose so it outranks the document rules above. */
 .um-doc.um-compact > :first-child {
   margin-top: 0;
 }
 .um-doc.um-compact h2 {
-  font-size: 0.95rem;
-  margin-top: 1rem;
-  margin-bottom: 0.35rem;
-  padding-bottom: 0.2rem;
-}
-.um-doc.um-compact h3 {
-  font-size: 0.9rem;
-  margin-top: 0.75rem;
-  margin-bottom: 0.25rem;
-}
-.um-doc.um-compact p {
-  margin: 0.4rem 0;
-}
-.um-doc.um-compact ul,
-.um-doc.um-compact ol {
-  margin: 0.4rem 0;
-}
-.um-doc.um-compact li {
-  margin-bottom: 0.2rem;
+  margin-top: 1.5rem;
 }
 
 .um-doc h4 {
