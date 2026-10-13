@@ -5,9 +5,13 @@ import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
 import { isAllCustomers } from "@/lib/ideas/customer-key";
+import { productLineKey } from "@/lib/ideas/product-line-key";
 
 const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
 const CUSTOMER_SELECT = { ...ITEM_SELECT, aliases: true } as const;
+/** Product lines carry aliases too (other spellings, the Jira option name). */
+const PRODUCT_LINE_SELECT = { ...ITEM_SELECT, aliases: true } as const;
+const MAX_ALIASES = 20;
 const MAX_NAME = 80;
 const MAX_DESCRIPTION = 2000;
 
@@ -25,9 +29,21 @@ interface ListOps {
   exists(workspaceId: string, id: string): Promise<boolean>;
   /** All colors in use — the next new row gets the least-used palette color. */
   colors(workspaceId: string): Promise<(string | null)[]>;
-  create(workspaceId: string, name: string, description: string, color: string): Promise<unknown>;
-  /** `color` undefined = unchanged. */
-  update(id: string, name: string, description: string, color?: string): Promise<unknown>;
+  create(
+    workspaceId: string,
+    name: string,
+    description: string,
+    color: string,
+    aliases?: string[]
+  ): Promise<unknown>;
+  /** `color` undefined = unchanged; `aliases` undefined = unchanged (product lines only). */
+  update(
+    id: string,
+    name: string,
+    description: string,
+    color?: string,
+    aliases?: string[]
+  ): Promise<unknown>;
   setColor(id: string, color: string): Promise<unknown>;
   remove(workspaceId: string, id: string): Promise<number>;
 }
@@ -38,7 +54,7 @@ const KINDS: Record<string, ListOps> = {
       db.productLine.findMany({
         where: { workspaceId },
         orderBy: [{ position: "asc" }, { name: "asc" }],
-        select: ITEM_SELECT,
+        select: PRODUCT_LINE_SELECT,
       }),
     nameTaken: async (workspaceId, name, excludeId) =>
       Boolean(
@@ -55,18 +71,28 @@ const KINDS: Record<string, ListOps> = {
       Boolean(await db.productLine.findFirst({ where: { id, workspaceId }, select: { id: true } })),
     colors: async (workspaceId) =>
       (await db.productLine.findMany({ where: { workspaceId }, select: { color: true } })).map((r) => r.color),
-    create: async (workspaceId, name, description, color) => {
+    create: async (workspaceId, name, description, color, aliases) => {
       const last = await db.productLine.findFirst({
         where: { workspaceId },
         orderBy: { position: "desc" },
         select: { position: true },
       });
       return db.productLine.create({
-        data: { workspaceId, name, description, color, position: (last?.position ?? -1) + 1 },
+        data: {
+          workspaceId,
+          name,
+          description,
+          color,
+          position: (last?.position ?? -1) + 1,
+          aliases: aliases ?? [],
+        },
       });
     },
-    update: (id, name, description, color) =>
-      db.productLine.update({ where: { id }, data: { name, description, ...(color ? { color } : {}) } }),
+    update: (id, name, description, color, aliases) =>
+      db.productLine.update({
+        where: { id },
+        data: { name, description, ...(color ? { color } : {}), ...(aliases ? { aliases } : {}) },
+      }),
     setColor: (id, color) => db.productLine.update({ where: { id }, data: { color } }),
     remove: async (workspaceId, id) =>
       (await db.productLine.deleteMany({ where: { id, workspaceId } })).count,
@@ -175,6 +201,51 @@ function cleanName(value: unknown): string | NextResponse {
   return name;
 }
 
+/** Aliases: array or comma-separated string → trimmed, deduped, the name itself dropped. */
+function cleanAliases(value: unknown, name: string): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+  const seen = new Set<string>([name.toLowerCase()]);
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== "string") continue;
+    const a = v.trim().slice(0, MAX_NAME);
+    if (!a || seen.has(a.toLowerCase())) continue;
+    seen.add(a.toLowerCase());
+    out.push(a);
+    if (out.length >= MAX_ALIASES) break;
+  }
+  return out;
+}
+
+/** An alias (or the name) may not collide with another product line's name or aliases —
+ *  the resolver is first-wins, so a collision would route a Module value by sort order. */
+async function aliasClash(
+  workspaceId: string,
+  aliases: string[],
+  name: string,
+  excludeId?: string
+): Promise<string | null> {
+  const rows = await db.productLine.findMany({
+    where: { workspaceId, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { name: true, aliases: true },
+  });
+  const mine = [name, ...aliases].map((a) => productLineKey(a));
+  for (const r of rows) {
+    const theirs = [r.name, ...(Array.isArray(r.aliases) ? (r.aliases as string[]) : [])];
+    for (const t of theirs) {
+      if (mine.includes(productLineKey(t))) {
+        return `"${t}" already belongs to product line "${r.name}" — a name or alias can only mean one product line`;
+      }
+    }
+  }
+  return null;
+}
+
 function cleanDescription(value: unknown): string {
   const description = typeof value === "string" ? value.trim() : "";
   return description.slice(0, MAX_DESCRIPTION);
@@ -189,7 +260,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
 export async function POST(request: NextRequest, context: RouteContext) {
   const auth = await guard(context, { write: true });
   if (auth instanceof NextResponse) return auth;
-  const { ops, workspaceId } = auth;
+  const { ops, kind, workspaceId } = auth;
 
   const body = await readJson(request);
   if (body instanceof NextResponse) return body;
@@ -199,11 +270,21 @@ export async function POST(request: NextRequest, context: RouteContext) {
   if (await ops.nameTaken(workspaceId, name)) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
   }
+  if (kind === "product-lines") {
+    const clash = await aliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name);
+    if (clash) return NextResponse.json({ error: clash }, { status: 409 });
+  }
 
   const color = isChipColorId(body.color)
     ? body.color
     : nextChipColor(await ops.colors(workspaceId));
-  await ops.create(workspaceId, name, cleanDescription(body.description), color);
+  await ops.create(
+    workspaceId,
+    name,
+    cleanDescription(body.description),
+    color,
+    kind === "product-lines" ? cleanAliases(body.aliases, name) : undefined
+  );
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }
 
@@ -241,12 +322,17 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (await ops.nameTaken(workspaceId, name, id)) {
     return NextResponse.json({ error: `"${name}" already exists` }, { status: 409 });
   }
+  if (kind === "product-lines") {
+    const clash = await aliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name, id);
+    if (clash) return NextResponse.json({ error: clash }, { status: 409 });
+  }
 
   await ops.update(
     id,
     name,
     cleanDescription(body.description),
     isChipColorId(body.color) ? body.color : undefined,
+    kind === "product-lines" ? cleanAliases(body.aliases, name) : undefined,
   );
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }

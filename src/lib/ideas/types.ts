@@ -67,9 +67,15 @@ export interface JiraSource {
   title: string;
   body: string;
   status?: string;
+  issueType?: string;
+  priority?: string;
+  reporter?: string;
+  assignee?: string;
+  /** ISO timestamp of the issue's creation in Jira. */
+  createdAt?: string;
   /** Browse URL on the connected Jira site. */
   url?: string;
-  /** Product lines derived from Jira components. */
+  /** Product lines: the mapped field (Kela: Module) or Components. */
   products: string[];
 }
 

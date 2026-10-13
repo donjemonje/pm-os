@@ -10,6 +10,7 @@ import {
   CATALOG_KIND_LABELS,
   compareIdeas,
   STATUS_CHIP_TO_BATCH,
+  zenLabel,
 } from "@/lib/ideas/idea";
 import type {
   Idea,
@@ -32,7 +33,6 @@ interface MergePageProps {
   /** Shared Status filter from the toolbar (chip labels; empty = all except Unchanged). */
   statusFilter: string[];
   /** Shared Label filter (Internal); empty = no restriction. */
-  labelFilter?: string[];
   edit: MergeEdit | null;
   selectedFinalId: string | null;
   onStartEdit: (id: string) => void;
@@ -85,7 +85,6 @@ export function MergePage({
   customerFilter,
   pendingOnly,
   statusFilter,
-  labelFilter = [],
   edit,
   selectedFinalId,
   onStartEdit,
@@ -131,15 +130,12 @@ export function MergePage({
       !(i.customers ?? []).some((c) => customerFilter.includes(c))
     )
       return false;
-    if (labelFilter.length > 0) {
-      const internal = (i.customers ?? []).length === 0;
-      const ok = labelFilter.some((l) => (l === "Internal" ? internal : false));
-      if (!ok) return false;
-    }
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
   };
 
+  // Source count: every ticket and every Jira issue. (Votes are a different
+  // number — tickets only — and live on the idea, not here.)
   const srcCount = (i: Idea) => i.zen.length + i.jira.length;
 
   const sameSet = (a: string[], b: string[]) =>
@@ -349,7 +345,7 @@ export function MergePage({
                   title={kind === "zen" ? "Open ticket" : "Open Jira idea"}
                   className="shrink-0 font-mono text-[10.5px] font-bold text-primary hover:text-primary-hover hover:underline"
                 >
-                  {row.id}
+                  {kind === "zen" ? zenLabel(row.id) : row.id}
                 </button>
                 <span
                   className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-fg-2 ${
@@ -457,6 +453,14 @@ export function MergePage({
                 >
                   {idea.title}
                 </span>
+                {idea.batch === "unchanged" && !gone && (
+                  <span
+                    title="Nothing touched this idea in the last import"
+                    className="shrink-0 whitespace-nowrap rounded-full border border-[#dde5ef] px-[7px] py-[1px] font-mono text-[10px] font-semibold text-[#9aa8be]"
+                  >
+                    Unchanged
+                  </span>
+                )}
                 {idea.products[0] && (
                   <Chip
                     className="hidden 2xl:inline-flex"

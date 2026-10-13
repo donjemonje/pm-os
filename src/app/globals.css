@@ -354,6 +354,29 @@ body {
   margin-top: 1.75rem;
 }
 
+/* Two separate looks in the drawer, on purpose — they will diverge:
+   .idea-text   = the PM-OS idea (The Problem / Proposed Solution / …)
+   .source-text = a raw source as its system shows it (today: the Jira
+                  description; Zendesk text is plain, not markdown)
+   Unlayered so they outrank the document rules above. */
+.um-doc.idea-text > :first-child {
+  margin-top: 0;
+}
+.um-doc.idea-text h2 {
+  margin-top: 1.5rem;
+}
+
+.um-doc.source-text {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.um-doc.source-text > :first-child {
+  margin-top: 0;
+}
+.um-doc.source-text h2 {
+  margin-top: 1.25rem;
+}
+
 .um-doc h4 {
   font-size: 0.8rem;
   text-transform: uppercase;
@@ -404,7 +427,22 @@ body {
   margin: 2rem 0;
 }
 
+.um-doc ul {
+  list-style: disc;
+  padding-left: 1.35rem;
+  margin: 0.5rem 0;
+}
+
+.um-doc ul li {
+  margin-bottom: 0.35rem;
+}
+
+.um-doc ul li::marker {
+  color: var(--primary);
+}
+
 .um-doc ol {
+  list-style: decimal;
   padding-left: 1.35rem;
 }
 

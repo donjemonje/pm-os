@@ -59,6 +59,8 @@ interface IdeaDrawerProps {
   jiraByKey: Map<string, JiraSource>;
   /** The org's CSV mapping — the ticket view reads display-only fields from the raw row with it. */
   csvMapping?: CsvMapping;
+  /** Label for the product line on the raw Jira issue — the mapped Jira field's name ("Module"). */
+  jiraProductLineLabel?: string;
   /** Every idea by id — the ticket view links the ideas it produced. */
   ideasById?: Map<string, Idea>;
   /** Catalog chip colors (palette ids) by name. */
@@ -106,6 +108,7 @@ export function IdeaDrawer({
   ticketsByKey,
   jiraByKey,
   csvMapping = DEFAULT_CSV_MAPPING,
+  jiraProductLineLabel = "Product line",
   ideasById,
   productColors = {},
   customerColors = {},
@@ -396,7 +399,19 @@ export function IdeaDrawer({
                   className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.4)] px-2.5 py-0.5 text-xs font-semibold"
                   style={JIRA_TAG}
                 >
-                  Jira idea <span className="font-mono">{jiraSrc.id}</span>
+                  Jira issue <span className="font-mono">{jiraSrc.id}</span>
+                  {jiraSrc.url && (
+                    <a
+                      href={jiraSrc.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open in Jira"
+                      className="ml-0.5 flex text-[#7a8aa3] hover:text-foreground"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink size={11} />
+                    </a>
+                  )}
                 </span>
               ) : (
                 badge && <Pill badge={badge} />
@@ -562,31 +577,7 @@ export function IdeaDrawer({
               onOpenIdea={onOpenIdea ? (id) => onOpenIdea(id, { source: srcSel }) : undefined}
             />
           ) : jiraSrc ? (
-            <>
-              <div>
-                <div className={`${MONO_LABEL} mb-1.5`}>Details</div>
-                <div className="whitespace-pre-line text-[13.5px] leading-relaxed text-foreground">
-                  {jiraSrc.body || "No description."}
-                </div>
-              </div>
-              <div className="flex flex-col gap-1 text-xs text-muted">
-                {jiraSrc.status && <span>Status: {jiraSrc.status}</span>}
-                {jiraSrc.products.length > 0 && (
-                  <span>Components: {jiraSrc.products.join(", ")}</span>
-                )}
-              </div>
-              {jiraSrc.url && (
-                <a
-                  href={jiraSrc.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-primary hover:text-primary-hover hover:underline"
-                >
-                  <ExternalLink size={13} />
-                  {jiraSrc.id} — View in Jira
-                </a>
-              )}
-            </>
+            <JiraIssueView src={jiraSrc} productLineLabel={jiraProductLineLabel} />
           ) : editMode ? (
             <>
               {SCORING_ENABLED && (
@@ -744,7 +735,7 @@ export function IdeaDrawer({
               <div>
                 <UmMarkdown
                   content={idea.details}
-                  className="text-[13.5px] leading-relaxed"
+                  className="idea-text"
                 />
               </div>
               {sourceEntries.length > 0 && (
@@ -854,10 +845,10 @@ export function IdeaDrawer({
                     title={
                       idea.undoable?.action === "create"
                         ? `Deletes ${idea.undoable.jiraKey} in Jira (asks first)`
-                        : `Restores ${idea.undoable?.jiraKey} to its pre-merge state`
+                        : `Restores ${idea.undoable?.jiraKey} to its pre-sync state`
                     }
                   >
-                    Undo merge
+                    Undo sync
                   </Button>
                 )}
                 {onMerge && (
@@ -891,8 +882,7 @@ export function IdeaDrawer({
 
 /* ───────────────────────── Zendesk ticket view ───────────────────────── */
 
-const FIELD_LABEL =
-  "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#9aa8be]";
+const FIELD_LABEL = "text-[13px] font-medium text-[#9aa8be]";
 
 function formatDate(value: string | undefined): string | null {
   if (!value) return null;
@@ -918,6 +908,32 @@ function RawChip({ label, value }: { label: string; value: string }) {
 }
 
 /** One labelled value on the ticket's header line: "Customer  Acme". */
+const URL_RE = /(https?:\/\/[^\s<>()\[\]"']+[^\s<>()\[\]"'.,;:!?])/g;
+
+/** Plain text with every http(s) URL turned into a link — raw ticket text as reporters typed it. */
+function Linkified({ text }: { text: string }) {
+  const parts = text.split(URL_RE);
+  return (
+    <>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <a
+            key={i}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="break-all text-primary hover:underline"
+          >
+            {part}
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
@@ -934,6 +950,83 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  * what PMOS inferred. Type and priority are not used by the product yet, so
  * they live only under "All fields".
  */
+/**
+ * Raw Jira issue, laid out like the raw Zendesk ticket: the fields a PM
+ * reads first on top, the description as Jira formats it, and every field in
+ * an "All fields" dropdown. The link to Jira lives in the header pill.
+ */
+function JiraIssueView({
+  src,
+  productLineLabel,
+}: {
+  src: JiraSource;
+  productLineLabel: string;
+}) {
+  const [allOpen, setAllOpen] = useState(false);
+  const created = formatDate(src.createdAt);
+  const all: [string, string | undefined][] = [
+    ["Key", src.id],
+    ["Type", src.issueType],
+    ["Status", src.status],
+    ["Priority", src.priority],
+    [productLineLabel, src.products.join(", ") || undefined],
+    ["Reporter", src.reporter],
+    ["Assignee", src.assignee],
+    ["Created", created ?? undefined],
+    ["Link", src.url],
+  ];
+  return (
+    <>
+      <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+        {src.products.length > 0 && (
+          <Field label={productLineLabel}>{src.products.join(", ")}</Field>
+        )}
+        {src.status && <Field label="Status">{src.status}</Field>}
+        <Field label="Assignee">
+          {src.assignee || <span className="font-normal text-muted">Unassigned</span>}
+        </Field>
+        <Field label="Reporter">
+          {src.reporter || <span className="font-normal text-muted">Unknown</span>}
+        </Field>
+        {created && <Field label="Created">{created}</Field>}
+      </div>
+      <div>
+        <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
+        {src.body ? (
+          <UmMarkdown content={src.body} className="source-text" />
+        ) : (
+          <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
+        )}
+      </div>
+      <div className="border-t border-[#e8eef7] pt-3">
+        <button
+          type="button"
+          onClick={() => setAllOpen((v) => !v)}
+          className="flex items-center gap-1.5 text-xs font-medium text-[#7a8aa3] hover:text-foreground"
+          aria-expanded={allOpen}
+        >
+          {allOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          All fields ({all.length})
+        </button>
+        {allOpen && (
+          <dl className="mt-2 grid grid-cols-[minmax(120px,max-content)_1fr] gap-x-4 gap-y-1 text-xs">
+            {all.map(([k, v]) => (
+              <div key={k} className="contents">
+                <dt className="truncate font-mono text-[11px] text-[#9aa8be]" title={k}>
+                  {k}
+                </dt>
+                <dd className={`m-0 whitespace-pre-wrap break-words ${v ? "text-foreground" : "text-[#c3ccd8]"}`}>
+                  {v ? <Linkified text={v} /> : "—"}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </div>
+    </>
+  );
+}
+
 function TicketView({
   ticket,
   csvMapping,
@@ -980,14 +1073,14 @@ function TicketView({
         <div>
           <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
           <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-foreground">
-            {ticket.body}
+            <Linkified text={ticket.body} />
           </div>
         </div>
         {ticket.whyBuild && (
           <div>
             <div className={`${MONO_LABEL} mb-1.5`}>Why should we build this?</div>
             <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
-              {ticket.whyBuild}
+              <Linkified text={ticket.whyBuild} />
             </div>
           </div>
         )}
@@ -995,7 +1088,7 @@ function TicketView({
           <div>
             <div className={`${MONO_LABEL} mb-1.5`}>What insights do we have?</div>
             <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
-              {ticket.insights}
+              <Linkified text={ticket.insights} />
             </div>
           </div>
         )}
@@ -1137,7 +1230,7 @@ function TicketView({
                         empty ? "text-[#c3ccd8]" : "text-foreground"
                       }`}
                     >
-                      {empty ? "—" : v}
+                      {empty ? "—" : <Linkified text={v} />}
                     </dd>
                   </div>
                 );

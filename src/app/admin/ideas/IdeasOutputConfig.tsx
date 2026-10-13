@@ -5,8 +5,10 @@ import { Check, Loader2 } from "lucide-react";
 import {
   ATTRIBUTE_LABELS,
   DEFAULT_IDEA_TEMPLATE,
+  JIRA_PULL_MAX_ISSUES,
   MAPPED_ATTRIBUTES,
   type IdeasJiraConfig,
+  type JiraPullConfig,
   type MappedAttribute,
 } from "@/lib/ideas/jira-mapping";
 import {
@@ -33,12 +35,14 @@ interface OrgRow {
 }
 
 const POLICY_LABELS: Record<string, string> = {
+  read: "Read on import — shown on the raw Jira issue, never written",
   set_if_empty: "Set only when empty (never replace a human's value)",
   increment: "Increment by this batch's new votes",
   union: "Add missing values (never remove)",
 };
 
 const TYPE_LABELS: Record<string, string> = {
+  text: "Text",
   single_select: "Single select",
   number: "Number",
   multi_select: "Multi select",
@@ -92,6 +96,14 @@ export function IdeasOutputConfig({
           [attr]: { ...prev[orgId].fields[attr], ...next },
         },
       },
+    }));
+  };
+
+  const patchPull = (next: Partial<JiraPullConfig>) => {
+    setSaved(false);
+    setConfigs((prev) => ({
+      ...prev,
+      [orgId]: { ...prev[orgId], pull: { ...prev[orgId].pull, ...next } },
     }));
   };
 
@@ -192,9 +204,20 @@ export function IdeasOutputConfig({
         </select>
       </label>
 
+      <section className="space-y-4">
+        <div className="border-b border-slate-200 pb-2">
+          <h2 className="text-base font-bold">Stats</h2>
+          <p className="mt-0.5 text-xs text-slate-500">Import runs for this organization — health, duration and AI cost of the pipeline, newest first.</p>
+        </div>
       {/* Import run history — health and cost of the pipeline for this org */}
       <ImportRuns orgId={orgId} />
 
+      </section>
+      <section className="space-y-4">
+        <div className="border-b border-slate-200 pb-2">
+          <h2 className="text-base font-bold">Jira</h2>
+          <p className="mt-0.5 text-xs text-slate-500">How the connected Jira is read on import and written on sync: the pull ceiling, which Jira fields map to PM-OS attributes, and what a sync writes to the issue.</p>
+        </div>
       {/* Jira target */}
       {issueTypes[orgId] !== null && (
         <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -222,12 +245,116 @@ export function IdeasOutputConfig({
         </section>
       )}
 
+      {/* Jira pull — how the backlog is read at import */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-sm font-bold">Jira pull</h2>
+        <p className="mb-4 mt-0.5 text-xs text-slate-500">
+          The connected projects are read in full on every import, every
+          status included. Each issue&apos;s product line is the Jira field
+          mapped as Product Line below (Kela: Module), Components when that
+          field is empty — matched to the catalog by name or alias; a value
+          with no match lands in Other and is listed in the import run.
+        </p>
+        <label className="flex flex-col gap-1 text-sm sm:w-72">
+          <span className="text-xs font-medium text-slate-600">
+            Max issues per project (ceiling {JIRA_PULL_MAX_ISSUES.toLocaleString()})
+          </span>
+          <input
+            type="number"
+            min={1}
+            max={JIRA_PULL_MAX_ISSUES}
+            value={config.pull.maxIssues}
+            onChange={(e) =>
+              patchPull({
+                maxIssues: Math.min(
+                  JIRA_PULL_MAX_ISSUES,
+                  Math.max(1, parseInt(e.target.value, 10) || 1),
+                ),
+              })
+            }
+            className={inputCls}
+          />
+        </label>
+      </section>
+
+      {/* Field mapping */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-sm font-bold">Jira field mapping</h2>
+        <p className="mb-4 mt-0.5 text-xs text-slate-500">
+          PM-OS attribute → Jira field (matched by display name). Product Line
+          is also read on import: its Jira field is the issue&apos;s product
+          line (Kela: Module), mapped to the catalog by name or alias. On
+          sync the catalog name or whichever alias is a Jira option is
+          written (Settings → Product Lines holds the aliases). Values with no
+          matching option are skipped with a warning in the sync preview.
+        </p>
+        <div className="space-y-3">
+          {MAPPED_ATTRIBUTES.map((attr) => {
+            const f = config.fields[attr];
+            return (
+              <div
+                key={attr}
+                className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 px-3 py-2.5"
+              >
+                <label className="flex w-40 items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={f.enabled}
+                    onChange={(e) =>
+                      patchField(attr, { enabled: e.target.checked })
+                    }
+                    className="rounded"
+                  />
+                  {ATTRIBUTE_LABELS[attr]}
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <span className="text-xs text-slate-500">Jira field</span>
+                  <input
+                    type="text"
+                    value={f.jiraField}
+                    onChange={(e) =>
+                      patchField(attr, { jiraField: e.target.value })
+                    }
+                    disabled={!f.enabled}
+                    className={`${inputCls} w-44 disabled:opacity-50`}
+                  />
+                </label>
+                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                  {TYPE_LABELS[f.type]}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {POLICY_LABELS[f.policy]}
+                </span>
+                {(f.type === "single_select" || f.type === "multi_select") && (
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-slate-600"
+                    title="A value Jira doesn't have as an option yet is added to the field during the sync (needs the Jira configuration permission — reconnect Jira if it was connected before 2026-10-13)."
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(f.createOptions)}
+                      onChange={(e) =>
+                        patchField(attr, { createOptions: e.target.checked })
+                      }
+                      disabled={!f.enabled}
+                      className="rounded"
+                    />
+                    Create missing options
+                  </label>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       {/* Description format */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Description</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          On every merge the Jira description is replaced with the PM-OS
-          details, a gap, and the supported-tickets list.
+          On every sync the Jira description becomes the PM-OS idea text, a
+          gap, and the supported-tickets list. The idea is where the issue&apos;s
+          original text and the ticket evidence were merged.
         </p>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
@@ -281,57 +408,44 @@ export function IdeasOutputConfig({
         </div>
       </section>
 
-      {/* Field mapping */}
+      {/* Update comment */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-bold">Jira field mapping</h2>
+        <h2 className="text-sm font-bold">Update comment</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          PM-OS attribute → Jira field (matched by display name). Values that
-          aren&apos;t options of the Jira field are skipped with a warning in
-          the merge preview — add the options in Jira.
+          Added to the Jira issue after every update, listing the affected
+          fields.
         </p>
-        <div className="space-y-3">
-          {MAPPED_ATTRIBUTES.map((attr) => {
-            const f = config.fields[attr];
-            return (
-              <div
-                key={attr}
-                className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 px-3 py-2.5"
-              >
-                <label className="flex w-40 items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    checked={f.enabled}
-                    onChange={(e) =>
-                      patchField(attr, { enabled: e.target.checked })
-                    }
-                    className="rounded"
-                  />
-                  {ATTRIBUTE_LABELS[attr]}
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <span className="text-xs text-slate-500">Jira field</span>
-                  <input
-                    type="text"
-                    value={f.jiraField}
-                    onChange={(e) =>
-                      patchField(attr, { jiraField: e.target.value })
-                    }
-                    disabled={!f.enabled}
-                    className={`${inputCls} w-44 disabled:opacity-50`}
-                  />
-                </label>
-                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                  {TYPE_LABELS[f.type]}
-                </span>
-                <span className="text-xs text-slate-500">
-                  {POLICY_LABELS[f.policy]}
-                </span>
-              </div>
-            );
-          })}
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={config.updateComment}
+              onChange={(e) => patch({ updateComment: e.target.checked })}
+              className="rounded"
+            />
+            Post a comment on updates
+          </label>
+          <label className="flex flex-1 items-center gap-2 text-sm">
+            <span className="whitespace-nowrap text-xs text-slate-500">
+              Prefix
+            </span>
+            <input
+              type="text"
+              value={config.commentPrefix}
+              onChange={(e) => patch({ commentPrefix: e.target.value })}
+              disabled={!config.updateComment}
+              className={`${inputCls} w-full min-w-56 disabled:opacity-50`}
+            />
+          </label>
         </div>
       </section>
 
+      </section>
+      <section className="space-y-4">
+        <div className="border-b border-slate-200 pb-2">
+          <h2 className="text-base font-bold">Zendesk</h2>
+          <p className="mt-0.5 text-xs text-slate-500">How this organization&apos;s support data comes in — today a CSV export; a live Zendesk connection is the next step.</p>
+        </div>
       {/* CSV import mapping */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">CSV import mapping</h2>
@@ -387,6 +501,12 @@ export function IdeasOutputConfig({
         </div>
       </section>
 
+      </section>
+      <section className="space-y-4">
+        <div className="border-b border-slate-200 pb-2">
+          <h2 className="text-base font-bold">AI</h2>
+          <p className="mt-0.5 text-xs text-slate-500">Everything PMOS AI does in the pipeline: field parsing, the idea template it writes to, and the prompts of every stage.</p>
+        </div>
       {/* AI field parsing */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Field parsing (AI)</h2>
@@ -470,38 +590,7 @@ export function IdeasOutputConfig({
         </div>
       </section>
 
-      {/* Update comment */}
-      <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-bold">Update comment</h2>
-        <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          Added to the Jira issue after every update, listing the affected
-          fields.
-        </p>
-        <div className="flex flex-wrap items-center gap-4">
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              checked={config.updateComment}
-              onChange={(e) => patch({ updateComment: e.target.checked })}
-              className="rounded"
-            />
-            Post a comment on updates
-          </label>
-          <label className="flex flex-1 items-center gap-2 text-sm">
-            <span className="whitespace-nowrap text-xs text-slate-500">
-              Prefix
-            </span>
-            <input
-              type="text"
-              value={config.commentPrefix}
-              onChange={(e) => patch({ commentPrefix: e.target.value })}
-              disabled={!config.updateComment}
-              className={`${inputCls} w-full min-w-56 disabled:opacity-50`}
-            />
-          </label>
-        </div>
       </section>
-
       {error && <div className="text-sm text-red-600">{error}</div>}
       <div className="flex items-center gap-3">
         <button
@@ -515,7 +604,7 @@ export function IdeasOutputConfig({
         {saved && (
           <span className="inline-flex items-center gap-1 text-sm text-green-700">
             <Check size={14} strokeWidth={2.5} />
-            Saved — applies to the next merge
+            Saved — applies to the next sync
           </span>
         )}
       </div>

@@ -77,6 +77,9 @@ export function badgeOf(i: Idea): BadgeStyle | null {
       return { label: "Deleted", bg: "#f7eef1", fg: "#a3556b", bd: "#ecd6dd", check: false };
     case "archive":
       return { label: "Archive", bg: "#ef5a8a", fg: "#ffffff", bd: "transparent", check: false };
+    case "unchanged":
+      // Minor on purpose: the backlog that nothing touched this import.
+      return { label: "Unchanged", bg: "transparent", fg: "#9aa8be", bd: "#dde5ef", check: false };
     default:
       return null;
   }
@@ -110,3 +113,12 @@ export const CATALOG_KIND_LABELS: Record<CatalogKind, string> = {
   ops_task: "Ops task",
   question: "Product Question",
 };
+
+/**
+ * Display label for a Zendesk ticket id: numeric ids (real Zendesk exports)
+ * read as "ZEN-3310" so a Zendesk source is as recognizable as a Jira key;
+ * synthetic ids (seed fixtures) stay as they are.
+ */
+export function zenLabel(id: string): string {
+  return /^\d+$/.test(id) ? `ZEN-${id}` : id;
+}

@@ -4,6 +4,7 @@ import {
   getJiraRedirectUri,
   JIRA_OAUTH_SCOPES,
 } from "./jira-oauth-config";
+import { adfToMarkdown, markdownToAdf } from "./jira-adf";
 import { buildIssueImages, extractAttachmentIdsFromAdf } from "./jira-attachments";
 import type { JiraIssue, JiraProject, JiraVersion } from "./types";
 import { parseJsonArray } from "./utils";
@@ -105,9 +106,41 @@ export async function hasValidJiraConnection(workspaceId: string): Promise<boole
   }
 }
 
+type JiraConnectionRow = NonNullable<
+  Awaited<ReturnType<typeof db.jiraConnection.findUnique>>
+>;
+
+/**
+ * Two auth styles share every call below:
+ * - "oauth" (product): Bearer token against api.atlassian.com/ex/jira/<cloudId>.
+ * - "basic" (QA only): email + API token (stored base64-encoded in
+ *   accessToken) against the site URL itself. Lets the e2e suite hold a
+ *   connection to the TEST project across DB resets — OAuth refresh tokens
+ *   rotate on use, so a seeded one would die after the first refresh.
+ */
+function authHeader(connection: JiraConnectionRow): string {
+  return connection.authType === "basic"
+    ? `Basic ${connection.accessToken}`
+    : `Bearer ${connection.accessToken}`;
+}
+
+function apiBase(connection: JiraConnectionRow): string {
+  return connection.authType === "basic"
+    ? connection.siteUrl.replace(/\/+$/, "")
+    : `${ATLASSIAN_API_URL}/ex/jira/${connection.cloudId}`;
+}
+
+/** Value for JiraConnection.accessToken when authType is "basic". */
+export function basicAuthToken(email: string, apiToken: string): string {
+  return Buffer.from(`${email.trim()}:${apiToken.trim()}`, "utf8").toString("base64");
+}
+
 async function getValidConnection(workspaceId: string) {
   const connection = await db.jiraConnection.findUnique({ where: { workspaceId } });
   if (!connection) return null;
+
+  // API tokens don't expire on a schedule — nothing to refresh.
+  if (connection.authType === "basic") return connection;
 
   if (connection.expiresAt.getTime() <= Date.now() + 60_000) {
     // Without Atlassian OAuth credentials a refresh is impossible; report
@@ -138,11 +171,11 @@ async function jiraFetch(workspaceId: string, path: string, init?: RequestInit) 
     throw new Error("Jira not connected");
   }
 
-  const url = `${ATLASSIAN_API_URL}/ex/jira/${connection.cloudId}${path}`;
+  const url = `${apiBase(connection)}${path}`;
   const response = await fetch(url, {
     ...init,
     headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
+      Authorization: authHeader(connection),
       Accept: "application/json",
       "Content-Type": "application/json",
       ...init?.headers,
@@ -184,20 +217,80 @@ const JIRA_SEARCH_FIELDS = [
   "description",
   "status",
   "issuetype",
+  "priority",
+  "reporter",
+  "assignee",
+  "created",
   "labels",
   "components",
   "parent",
   "attachment",
 ];
 
-function mapIssue(issue: Record<string, unknown>): JiraIssue {
+interface MapIssueOptions {
+  /** Custom field id whose value is the issue's product line (the field
+   *  mapped as Product Line in Admin → Ideas, e.g. Kela's Module). */
+  productLineFieldId?: string;
+  /** Custom text fields holding the reporter / assignee NAME when the
+   *  system fields don't (an import on Jira Free can't map users; Kela's
+   *  demo keeps the names in P_Reporter / P_Assignee). Unset = system fields. */
+  reporterFieldId?: string;
+  assigneeFieldId?: string;
+}
+
+function userName(v: unknown): string | undefined {
+  if (typeof v === "string") return v.trim() || undefined;
+  if (v && typeof v === "object") {
+    const o = v as { displayName?: unknown; name?: unknown };
+    if (typeof o.displayName === "string" && o.displayName.trim()) return o.displayName.trim();
+    if (typeof o.name === "string" && o.name.trim()) return o.name.trim();
+  }
+  return undefined;
+}
+
+/**
+ * Read a product-line value whatever shape Jira stores it in: single-select
+ * option ({value}), name-bearing object ({name}), plain string, or an array
+ * of those (multi-select / labels-style). Anything else → undefined.
+ */
+export function readProductLineValue(raw: unknown): string | undefined {
+  const one = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v.trim() || undefined;
+    if (v && typeof v === "object") {
+      const o = v as { value?: unknown; name?: unknown };
+      if (typeof o.value === "string" && o.value.trim()) return o.value.trim();
+      if (typeof o.name === "string" && o.name.trim()) return o.name.trim();
+    }
+    return undefined;
+  };
+  if (Array.isArray(raw)) {
+    const first = raw.map(one).find(Boolean);
+    return first;
+  }
+  return one(raw);
+}
+
+function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): JiraIssue {
   const fields = issue.fields as Record<string, unknown>;
   const issueKey = String(issue.key);
+  const productLine = opts.productLineFieldId
+    ? readProductLineValue(fields[opts.productLineFieldId])
+    : undefined;
+  const priority = ((fields.priority as { name?: string }) ?? {}).name || undefined;
+  const reporter =
+    (opts.reporterFieldId ? userName(fields[opts.reporterFieldId]) : undefined) ??
+    userName(fields.reporter);
+  const assignee =
+    (opts.assigneeFieldId ? userName(fields[opts.assigneeFieldId]) : undefined) ??
+    userName(fields.assignee);
+  const created = typeof fields.created === "string" ? fields.created : undefined;
   const descriptionRaw = fields.description;
+  // Markdown, so headings / bold / lists / links survive into PM-OS and the
+  // raw Jira issue reads as close to Jira as possible.
   const description =
     typeof descriptionRaw === "string"
       ? descriptionRaw
-      : adfToText(descriptionRaw);
+      : adfToMarkdown(descriptionRaw);
 
   const attachments =
     (fields.attachment as Array<{ id: string; filename: string; mimeType: string }>) ?? [];
@@ -253,6 +346,11 @@ function mapIssue(issue: Record<string, unknown>): JiraIssue {
     issueType,
     labels,
     components,
+    productLine,
+    priority,
+    reporter,
+    assignee,
+    created,
     acceptanceCriteria: extractAcceptanceCriteria(description),
     parentKey,
     epicKey,
@@ -275,7 +373,7 @@ export async function fetchJiraAttachmentBytes(
 
   const response = await fetch(meta.content, {
     headers: {
-      Authorization: `Bearer ${connection.accessToken}`,
+      Authorization: authHeader(connection),
       Accept: "*/*",
     },
   });
@@ -322,19 +420,40 @@ interface JqlSearchPage {
   nextPageToken?: string;
 }
 
-async function searchJira(
+interface SearchOptions extends MapIssueOptions {
+  /** Extra field ids to request on top of JIRA_SEARCH_FIELDS. */
+  extraFields?: string[];
+}
+
+export interface PagedIssues {
+  issues: JiraIssue[];
+  /** True when the cap stopped the walk while Jira still had more pages —
+   *  the caller reports it; nothing is dropped silently. */
+  truncated: boolean;
+}
+
+/**
+ * Walk the JQL search pages (Jira serves at most 100 per page) up to
+ * maxResults issues. The cap is a ceiling, never a page size.
+ */
+async function searchJiraPaged(
   workspaceId: string,
   jql: string,
-  maxResults = 100
-): Promise<JiraIssue[]> {
+  maxResults = 100,
+  opts: SearchOptions = {}
+): Promise<PagedIssues> {
   const issues: JiraIssue[] = [];
   let nextPageToken: string | undefined;
+  let truncated = false;
+  const fields = opts.extraFields?.length
+    ? Array.from(new Set([...JIRA_SEARCH_FIELDS, ...opts.extraFields]))
+    : JIRA_SEARCH_FIELDS;
 
   while (issues.length < maxResults) {
     const body: Record<string, unknown> = {
       jql,
       maxResults: Math.min(100, maxResults - issues.length),
-      fields: JIRA_SEARCH_FIELDS,
+      fields,
     };
     if (nextPageToken) {
       body.nextPageToken = nextPageToken;
@@ -346,15 +465,30 @@ async function searchJira(
     })) as JqlSearchPage;
 
     const page = data.issues ?? [];
-    issues.push(...page.map(mapIssue));
+    issues.push(...page.map((issue) => mapIssue(issue, opts)));
 
     if (data.isLast || !data.nextPageToken || page.length === 0) {
       break;
     }
     nextPageToken = data.nextPageToken;
+    if (issues.length >= maxResults) truncated = true;
   }
 
-  return issues.slice(0, maxResults);
+  return { issues: issues.slice(0, maxResults), truncated };
+}
+
+async function searchJira(
+  workspaceId: string,
+  jql: string,
+  maxResults = 100,
+  opts: SearchOptions = {}
+): Promise<JiraIssue[]> {
+  return (await searchJiraPaged(workspaceId, jql, maxResults, opts)).issues;
+}
+
+/** JQL string literal — Jira's escape is a backslash before quote/backslash. */
+function jqlString(value: string): string {
+  return `"${value.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
 }
 
 export interface IssueScopeParams {
@@ -362,16 +496,22 @@ export interface IssueScopeParams {
   versionName?: string;
   epicKey?: string;
   statuses?: string[];
+  /** Status names to leave out (`status not in (…)`). */
+  excludeStatuses?: string[];
+  /** Ceiling on issues returned; default 100 for the legacy callers. */
+  maxResults?: number;
+  /** Custom field id read as the issue's product line. */
+  productLineFieldId?: string;
+  /** Custom text field ids read as reporter / assignee names (see MapIssueOptions). */
+  reporterFieldId?: string;
+  assigneeFieldId?: string;
 }
 
-export async function fetchIssuesForScope(
-  workspaceId: string,
-  params: IssueScopeParams
-): Promise<JiraIssue[]> {
-  const clauses: string[] = [`project = "${params.projectKey}"`];
+function scopeJql(params: IssueScopeParams): string {
+  const clauses: string[] = [`project = ${jqlString(params.projectKey)}`];
 
   if (params.versionName) {
-    clauses.push(`fixVersion = "${params.versionName}"`);
+    clauses.push(`fixVersion = ${jqlString(params.versionName)}`);
   }
 
   if (params.epicKey) {
@@ -379,12 +519,37 @@ export async function fetchIssuesForScope(
   }
 
   if (params.statuses?.length) {
-    const statusList = params.statuses.map((s) => `"${s}"`).join(", ");
-    clauses.push(`status in (${statusList})`);
+    clauses.push(`status in (${params.statuses.map(jqlString).join(", ")})`);
   }
 
-  const jql = `${clauses.join(" AND ")} ORDER BY issuetype ASC, key ASC`;
-  return searchJira(workspaceId, jql, 100);
+  if (params.excludeStatuses?.length) {
+    clauses.push(`status not in (${params.excludeStatuses.map(jqlString).join(", ")})`);
+  }
+
+  return `${clauses.join(" AND ")} ORDER BY issuetype ASC, key ASC`;
+}
+
+/** Same as fetchIssuesForScope, plus whether the cap cut the result. */
+export async function fetchIssuesForScopePaged(
+  workspaceId: string,
+  params: IssueScopeParams
+): Promise<PagedIssues> {
+  const fieldId = params.productLineFieldId?.trim() || undefined;
+  const reporterFieldId = params.reporterFieldId?.trim() || undefined;
+  const assigneeFieldId = params.assigneeFieldId?.trim() || undefined;
+  return searchJiraPaged(workspaceId, scopeJql(params), params.maxResults ?? 100, {
+    productLineFieldId: fieldId,
+    reporterFieldId,
+    assigneeFieldId,
+    extraFields: [fieldId, reporterFieldId, assigneeFieldId].filter((x): x is string => Boolean(x)),
+  });
+}
+
+export async function fetchIssuesForScope(
+  workspaceId: string,
+  params: IssueScopeParams
+): Promise<JiraIssue[]> {
+  return (await fetchIssuesForScopePaged(workspaceId, params)).issues;
 }
 
 export async function fetchEpicsForProject(
@@ -484,22 +649,12 @@ export async function addJiraComment(
 // ————— Ideas write-back (issue create/update) —————
 
 /**
- * Minimal plain-text → ADF: each line becomes a paragraph, blank lines
- * become empty paragraphs. Deterministic on purpose — what the preview
- * shows is exactly what Jira receives.
+ * Markdown → ADF (jira-adf.ts): the idea text PMOS AI writes (## headings,
+ * lists, bold, links) lands in Jira as real headings and lists. Deterministic
+ * — what the preview shows is exactly what Jira receives.
  */
 export function textToAdf(text: string): { type: string; version: number; content: unknown[] } {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const content = lines.map((line) =>
-    line.trim().length > 0
-      ? { type: "paragraph", content: [{ type: "text", text: line }] }
-      : { type: "paragraph", content: [] }
-  );
-  return {
-    type: "doc",
-    version: 1,
-    content: content.length > 0 ? content : [{ type: "paragraph", content: [] }],
-  };
+  return markdownToAdf(text);
 }
 
 export interface JiraComponent {
@@ -551,17 +706,69 @@ export async function listProjectIssueTypes(
 }
 
 /** All fields on the site, keyed by lower-cased display name → field id.
- *  Custom fields ("Votes", "P_Components", …) can only be written by id. */
+ *  Custom fields ("Votes", "P_Components", …) can only be written by id.
+ *  Team-managed projects own project-scoped fields that may share a name with
+ *  a site-wide one (RoomLens's "P_Votes" vs the global "P_Votes" written on
+ *  PRDT) — the global field wins a name clash, since only it can sit on a
+ *  company-managed project's screens. */
 export async function listAllFields(
   workspaceId: string
 ): Promise<Map<string, { id: string; name: string }>> {
   const data = (await jiraFetch(workspaceId, "/rest/api/3/field")) as Array<{
     id: string;
     name: string;
+    custom?: boolean;
+    scope?: { type?: string; project?: { id?: string } };
   }>;
-  const byName = new Map<string, { id: string; name: string }>();
-  for (const f of data ?? []) byName.set(f.name.toLowerCase(), { id: f.id, name: f.name });
-  return byName;
+  // Rank on a name clash: site-wide custom field > project-scoped custom
+  // field > system field. Only custom fields are mapping targets, and a
+  // customer may name theirs "Votes" next to Jira's built-in Votes.
+  const rank = (f: { custom?: boolean; scope?: { project?: { id?: string } } }) =>
+    !f.custom ? 0 : f.scope?.project ? 1 : 2;
+  const byName = new Map<string, { id: string; name: string; rank: number }>();
+  for (const f of data ?? []) {
+    const key = f.name.toLowerCase();
+    const r = rank(f);
+    const cur = byName.get(key);
+    if (!cur || r > cur.rank) byName.set(key, { id: f.id, name: f.name, rank: r });
+  }
+  return new Map(Array.from(byName, ([k, v]) => [k, { id: v.id, name: v.name }]));
+}
+
+/**
+ * Add select options to the mapped field's context that covers `projectKey`
+ * (the project-specific context when one exists, else the global one). Needs
+ * manage:jira-configuration; a 403 means the connection predates that scope.
+ * Returns the values actually added (already-present ones are skipped).
+ */
+export async function ensureFieldOptions(
+  workspaceId: string,
+  fieldId: string,
+  projectKey: string,
+  values: string[]
+): Promise<string[]> {
+  if (values.length === 0) return [];
+  const project = (await jiraFetch(workspaceId, `/rest/api/3/project/${projectKey}`)) as { id: string };
+  const mapping = (await jiraFetch(
+    workspaceId,
+    `/rest/api/3/field/${fieldId}/context/projectmapping?maxResults=100`
+  )) as { values?: Array<{ contextId: string; projectId?: string; isGlobalContext?: boolean }> };
+  const rows = mapping.values ?? [];
+  const ctx =
+    rows.find((r) => r.projectId === String(project.id)) ?? rows.find((r) => r.isGlobalContext);
+  if (!ctx) throw new Error(`Jira field ${fieldId} has no option context covering ${projectKey}`);
+  const existing = (await jiraFetch(
+    workspaceId,
+    `/rest/api/3/field/${fieldId}/context/${ctx.contextId}/option?maxResults=1000`
+  )) as { values?: Array<{ value: string }> };
+  const have = new Set((existing.values ?? []).map((o) => o.value.toLowerCase()));
+  const toAdd = values.filter((v) => !have.has(v.toLowerCase()));
+  if (toAdd.length === 0) return [];
+  await jiraFetch(workspaceId, `/rest/api/3/field/${fieldId}/context/${ctx.contextId}/option`, {
+    method: "POST",
+    body: JSON.stringify({ options: toAdd.map((value) => ({ value, disabled: false })) }),
+  });
+  return toAdd;
 }
 
 export interface JiraFieldMeta {
@@ -637,16 +844,23 @@ export async function fetchIssuesRaw(
   extraFieldIds: string[] = []
 ): Promise<JiraIssueRaw[]> {
   if (keys.length === 0) return [];
-  const data = (await jiraFetch(workspaceId, "/rest/api/3/search/jql", {
-    method: "POST",
-    body: JSON.stringify({
-      jql: `key in (${keys.join(",")})`,
-      maxResults: Math.max(keys.length, 100),
-      fields: ["summary", "description", "labels", "components", ...extraFieldIds],
-    }),
-  })) as JqlSearchPage;
+  // Jira caps a search page at 100 — more reviewed updates than that must not
+  // be reported as "no longer exists".
+  const issues: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < keys.length; i += 100) {
+    const chunk = keys.slice(i, i + 100);
+    const data = (await jiraFetch(workspaceId, "/rest/api/3/search/jql", {
+      method: "POST",
+      body: JSON.stringify({
+        jql: `key in (${chunk.join(",")})`,
+        maxResults: 100,
+        fields: ["summary", "description", "labels", "components", ...extraFieldIds],
+      }),
+    })) as JqlSearchPage;
+    issues.push(...(data.issues ?? []));
+  }
 
-  return (data.issues ?? []).map((issue) => {
+  return issues.map((issue) => {
     const fields = issue.fields as Record<string, unknown>;
     const raw = fields.description;
     const extra: Record<string, unknown> = {};
@@ -657,7 +871,7 @@ export async function fetchIssuesRaw(
       labels: (fields.labels as string[]) ?? [],
       components: (((fields.components as Array<{ name: string }>) ?? []).map((c) => c.name)),
       descriptionAdf: raw && typeof raw === "object" ? raw : null,
-      descriptionText: typeof raw === "string" ? raw : adfToText(raw),
+      descriptionText: typeof raw === "string" ? raw : adfToMarkdown(raw),
       extra,
     };
   });

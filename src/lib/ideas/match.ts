@@ -2,6 +2,7 @@ import { db } from "../db";
 import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { catalogEntryWithAliases } from "./product-line-key";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { anthropicUsage, type StageHooks } from "./trace";
 import {
@@ -41,10 +42,10 @@ export interface MatchHooks extends StageHooks {
  * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v7";
+export const MATCH_PROMPT_VERSION = "match-v11";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
-function getMatchModel(): string {
+export function getMatchModel(): string {
   return process.env.IDEAS_MATCH_MODEL?.trim() || "claude-opus-5";
 }
 
@@ -52,23 +53,23 @@ export const MATCH_SYSTEM_PROMPT = `You match an incoming feature request agains
 
 You are given ONE feature request (a product-voiced title and summary, plus the original support-ticket text) and the full list of candidates, each with a key, title, and description. The list can contain ideas synced from the team's Jira backlog, ideas created from earlier support tickets, and OTHER REQUESTS FROM THIS SAME IMPORT (keys starting with "unit:") — those are peers being matched at the same time, and claiming one is how two tickets that ask for the same thing get merged. The same list is shown to every request of the import, so it also contains THIS request under its own key (given with the request) — never match a request to itself.
 
-Decide whether the request asks for the same capability as one candidate:
-- A match means the same underlying capability and need — a customer voting for something already asked for. Different wording, narrower phrasing, or extra detail do not prevent a match when the capability is the same.
-- Related is NOT matched: same product area but a different capability, a complement, or a prerequisite is not a match.
+Decide whether the request comes from the SAME USER PAIN as one candidate. The pain — the problem a user has, stated or clearly implied — is the core of a feature request; the capability a reporter proposes is only one way to resolve it.
+- A match means the same pain: a customer voting for a problem already on the list. Different wording, a different proposed solution, a narrower or wider ask, or extra detail do not prevent a match when the underlying problem is the same (a report of domain usage and a domain counter in settings both come from "licensing counts what the product cannot count").
+- NOT a match: a different pain in the same product area, or an item that states no user pain of its own (an internal task, a data-model or infrastructure change) — even when it would enable the request.
 - Prefer an existing idea over a peer request when both fit — existing ideas are the settled record.
-- When torn between two candidates, pick the single best one; when none clearly fits, return no match. Never force a match.
+- When torn between two candidates, pick the single best one; when none clearly shares the pain, return no match. Never force a match.
 
-If (and only if) the request matches an EXISTING idea (not a peer request), also judge enrichment: does the request add real context the idea's description lacks (a concrete use case, a constraint, a sharper articulation of the need)? If yes, write enriched_summary: the existing idea's description, sharpened with the new context, in neutral product language. It replaces the description, so it must stand alone, keep everything still true from the original, and keep (or adopt) the IDEA TEMPLATE structure provided in the message — sections in order with their exact "##" headings, honoring their omission rules. Writing rules:
+When the request matches an EXISTING idea (not a peer request), ALWAYS write enriched_summary: the idea rewritten in the IDEA TEMPLATE provided in the message — sections in order with their exact "##" headings, honoring their omission rules — merging the existing description with what the request adds. This is where the team's own Jira text and the customer's request become ONE idea, so: keep every fact, link, key and identifier from the existing description (nothing the team wrote may disappear or change meaning; say it once when both sources say it), add what the request contributes (a concrete use case, a constraint, a sharper articulation of the need), and write it in the template even when the existing description was free text. It replaces the description and must stand alone. Writing rules:
 ${IDEA_WRITING_RULES}
-If the request adds nothing beyond a vote, or the match is a peer request, return an empty enriched_summary.
+Return an empty enriched_summary only when the match is a peer request.
 
 Return the matched candidate's key EXACTLY as listed, or an empty string for no match. Give a single short sentence of reasoning.`;
 
-export const MATCH_GROUP_SYSTEM_PROMPT = `You reconcile a group of support-ticket requests that were each judged to ask for the same thing.
+export const MATCH_GROUP_SYSTEM_PROMPT = `You reconcile a group of support-ticket requests that were each judged to come from the same user pain.
 
 You are given the group's requests (each with a key, product-voiced title and summary, and the original ticket text) and, when the group merges into an existing idea, that idea's current title and description. Your job:
-- Confirm which requests truly share ONE underlying capability and need. If a request does not belong (a related-but-different capability, a complement, a prerequisite), split it out into its own group. Requests that were chained together transitively may not all belong together — judge every pair on the same capability, not on topic proximity.
-- For every resulting group, write the merged idea: product_title (the what, not the how — no implementation baked in) and product_summary in markdown that follows the IDEA TEMPLATE provided in the message — its sections, in order, with its exact "##" headings, honoring each section's omission rules. The text covers only this group's capability — never fold in asks that belong to other requests of the same tickets (a sibling sub-idea stays its own idea), and never claim a precedent or scope the tickets do not state. Writing rules:
+- Confirm which requests truly share ONE underlying user pain. Different proposed solutions to the same problem belong together; a different problem in the same area does not. If a request does not belong, split it out into its own group. Requests that were chained together transitively may not all belong together — judge every pair on the shared pain, not on topic proximity.
+- For every resulting group, write the merged idea: product_title (the problem or outcome, not an implementation) and product_summary in markdown that follows the IDEA TEMPLATE provided in the message — "The Problem" is the anchor; when the members propose different solutions, list the distinct asks there as bullets and keep Proposed Solution to what is confidently right (or omit it) — its sections, in order, with its exact "##" headings, honoring each section's omission rules. The text covers only this group's capability — never fold in asks that belong to other requests of the same tickets (a sibling sub-idea stays its own idea), and never claim a precedent or scope the tickets do not state. Writing rules:
 ${IDEA_WRITING_RULES}
   When the group merges into an existing idea, product_summary is that idea's description sharpened with everything the group adds (it replaces the description and must stand alone).
 - product_lines: the group's product line(s) from the catalog; ["Other"] when none fits. platforms: only when the requests state or clearly imply them; empty when the platform catalog is empty.
@@ -85,16 +86,16 @@ const MATCH_TOOL = {
       matched_key: {
         type: "string",
         description:
-          "Key of the single candidate this request duplicates, exactly as listed. Empty string when none matches.",
+          "Key of the single candidate that shares this request's user pain, exactly as listed. Empty string when none does.",
       },
       enriched_summary: {
         type: "string",
         description:
-          "Only when matched to an EXISTING idea AND the request adds real context: replacement description following the idea template. Empty string otherwise.",
+          "When matched to an EXISTING idea: the replacement description — existing text merged with the request, in the idea template, nothing from the original lost. Empty string for a peer match or no match.",
       },
       reason: {
         type: "string",
-        description: "One short sentence explaining the match or non-match.",
+        description: "One short sentence naming the shared pain (or why none is shared).",
       },
     },
     required: ["matched_key", "enriched_summary", "reason"],
@@ -261,8 +262,8 @@ export async function prepareMatch(workspaceId: string): Promise<MatchContext> {
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      select: { name: true, description: true },
-    }),
+      select: { name: true, description: true, aliases: true },
+    }).then((rows) => rows.map(catalogEntryWithAliases)),
     db.platform.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },
@@ -300,6 +301,12 @@ export interface MatchRunOptions {
   hooks?: MatchHooks;
   warmer?: PrefixWarmer;
   ctx?: MatchContext;
+  /**
+   * Unit key → candidate key decided outside the model (a Jira issue that
+   * cites the ticket). The unit skips the pairwise judgment and merges into
+   * that candidate; the reconciliation prompt still writes the merged text.
+   */
+  forced?: Map<string, string>;
 }
 
 export async function matchTickets(
@@ -366,7 +373,17 @@ export async function matchTickets(
     enrichedSummary: string;
     reason: string;
   }[] = new Array(inputs.length);
+  const forced = options.forced ?? new Map<string, string>();
   await runPool(inputs, poolSize, async (input, i) => {
+    const forcedKey = forced.get(input.key);
+    if (forcedKey && anchorKeys.has(forcedKey)) {
+      pairwise[i] = {
+        target: forcedKey,
+        enrichedSummary: "",
+        reason: `Cited by Jira issue ${forcedKey.replace(/^jira:/, "")} — linked by the team, not judged.`,
+      };
+      return;
+    }
     const requestBlock = renderRequest(input, peerKey(input));
     const userMessage = `${pairwiseShared}\n\n${requestBlock}`;
     called++;
@@ -468,7 +485,9 @@ export async function matchTickets(
   const groupJobs: { terminal: string; members: number[] }[] = [];
   for (const [t, members] of groupsByTerminal) {
     members.sort((a, b) => a - b);
-    if (members.length === 1) {
+    // A forced single unit still goes through reconciliation: that prompt
+    // writes the idea text merged with the request; the pairwise step didn't.
+    if (members.length === 1 && !forced.has(inputs[members[0]].key)) {
       const i = members[0];
       // Standalone, or a single unit merging into an existing idea.
       results[i].matchedKey = anchorKeys.has(t) ? t : null;
@@ -496,7 +515,7 @@ export async function matchTickets(
     const memberInputs = job.members.map((i) => inputs[i]);
     const groupBlock = [
       anchor
-        ? `EXISTING IDEA (the group merges into it):\n[${anchor.key}] ${anchor.title}\n${clip(anchor.body || "(no description)", 1500)}`
+        ? `EXISTING IDEA (the group merges into it — keep everything in it):\n[${anchor.key}] ${anchor.title}\n${clip(anchor.body || "(no description)", 12000)}`
         : "EXISTING IDEA: none — the group becomes a new idea.",
       `GROUP REQUESTS:\n\n${memberInputs
         .map((u) => [`[${peerKey(u)}]`, renderRequest(u)].join("\n"))

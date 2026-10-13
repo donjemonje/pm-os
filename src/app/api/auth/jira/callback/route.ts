@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
       },
       update: {
+        authType: "oauth",
         cloudId: site.id,
         siteUrl: site.url,
         accessToken: tokens.access_token,

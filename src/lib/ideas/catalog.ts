@@ -2,6 +2,7 @@ import { db } from "../db";
 import { aiThrottleOn } from "./ai-throttle";
 import { IDEA_WRITING_RULES } from "./idea-voice";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { catalogEntryWithAliases } from "./product-line-key";
 import { ledgerKey, recordVerdict } from "./ledger";
 import { anthropicUsage, type StageHooks } from "./trace";
 import {
@@ -21,7 +22,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v13";
+export const CATALOG_PROMPT_VERSION = "catalog-v15";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -310,8 +311,8 @@ export async function prepareCatalog(
     db.productLine.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },
-      select: { name: true, description: true },
-    }),
+      select: { name: true, description: true, aliases: true },
+    }).then((rows) => rows.map(catalogEntryWithAliases)),
     db.platform.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },

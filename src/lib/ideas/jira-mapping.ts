@@ -12,6 +12,8 @@ import {
  */
 
 export type FieldPolicy =
+  /** Read on import only (shown on the raw Jira issue); never written. */
+  | "read"
   /** Single-select: write only when the field is empty; never replace a
    *  value a human chose. */
   | "set_if_empty"
@@ -21,17 +23,36 @@ export type FieldPolicy =
   | "union";
 
 export interface FieldMapping {
-  /** Jira field name as shown in Jira (resolved to the field id at push time). */
+  /** Jira field name as shown in Jira (resolved to the field id at push time;
+   *  for Product Line also at pull time — the pull reads this field as the
+   *  issue's product line, Components when it is empty). */
   jiraField: string;
-  type: "single_select" | "number" | "multi_select";
+  type: "single_select" | "number" | "multi_select" | "text";
   policy: FieldPolicy;
   enabled: boolean;
+  /** Select fields: when a value is not yet an option of the Jira field, add
+   *  the option during the sync instead of skipping the value. Customer names
+   *  arrive with every import, so a static option list can't work for them
+   *  (Daniel, 2026-10-13). Needs the manage:jira-configuration scope. */
+  createOptions?: boolean;
+}
+
+/** How the Jira backlog is read at import time. */
+export interface JiraPullConfig {
+  /** Safety ceiling per project (Jira pages at 100). The pull warns when it
+   *  is reached instead of truncating silently. */
+  maxIssues: number;
 }
 
 export interface IdeasJiraConfig {
-  /** "overwrite": replace the Jira description with PM-OS details + ticket
-   *  list. This is the customer's chosen semantics (2026-09-01). */
+  /**
+   * The Jira description IS the PM-OS idea text plus the tickets list — one
+   * rule, no modes (Daniel, 2026-10-12: the idea is where the merge of the
+   * Jira text and the ticket evidence happens; the push just writes it).
+   */
   descriptionMode: "overwrite";
+  /** How the Jira backlog is pulled at import. */
+  pull: JiraPullConfig;
   /** Blank lines between the details text and the tickets block. */
   descriptionGapLines: number;
   supportedTicketsHeading: string;
@@ -46,6 +67,10 @@ export interface IdeasJiraConfig {
     votes: FieldMapping;
     customers: FieldMapping;
     platforms: FieldMapping;
+    /** Read-only: which Jira field holds the reporter's name ("Reporter" =
+     *  the system field; Kela's demo: "P_Reporter"). */
+    reporter: FieldMapping;
+    assignee: FieldMapping;
   };
   /** Per-org CSV import mapping (see csv-mapping.ts). */
   csv: CsvMapping;
@@ -60,16 +85,24 @@ export const DEFAULT_IDEA_TEMPLATE = `## The Problem
 The user problem and who it affects — the main stakeholders (customers and internal teams alike). The core of the idea; always present.
 
 ## Proposed Solution
-Only when the ticket implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. Describe the what, not the how.
+Only when the source implies an implementation AND there is high confidence it is the right one — otherwise omit this section entirely. One to three sentences on the what, not the how. No lists, no asks, no cases, no context — those go to The Problem (asks) or Additional Info (cases, references).
 
 ## Additional Info
-Other important related context. When the ticket describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Omit this section when there is none.`;
+Other important related context. When the source describes a REAL case that actually happened (a specific incident or situation a customer hit), include a short summary — that is evidence for the need. Never carry over illustrative or hypothetical examples the reporter invented to explain the ask ("for example, if a score drops overnight…") — they are not evidence and add nothing. Every link, issue key, document or identifier from the source that fits nowhere else goes here verbatim. Omit this section when there is none.`;
+
+export const DEFAULT_JIRA_PULL_CONFIG: JiraPullConfig = {
+  maxIssues: 10_000,
+};
+
+/** Hard ceiling on the configurable per-project pull cap. */
+export const JIRA_PULL_MAX_ISSUES = 10_000;
 
 export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   ideaTemplate: DEFAULT_IDEA_TEMPLATE,
   fieldParsing: { customers: true },
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
+  pull: DEFAULT_JIRA_PULL_CONFIG,
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
   zendeskTicketUrlTemplate: "",
@@ -94,6 +127,7 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       type: "multi_select",
       policy: "union",
       enabled: true,
+      createOptions: true,
     },
     // Jira's built-in "Components" name was taken, hence P_Components.
     // Off by default (Daniel, 2026-09-03): most Jira projects have no
@@ -104,6 +138,8 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       policy: "union",
       enabled: false,
     },
+    reporter: { jiraField: "Reporter", type: "text", policy: "read", enabled: true },
+    assignee: { jiraField: "Assignee", type: "text", policy: "read", enabled: true },
   },
 };
 
@@ -113,7 +149,14 @@ export const MAPPED_ATTRIBUTES: MappedAttribute[] = [
   "votes",
   "customers",
   "platforms",
+  "reporter",
+  "assignee",
 ];
+
+/** Attributes a sync may write (read-only mappings excluded). */
+export function writableAttributes(config: IdeasJiraConfig): MappedAttribute[] {
+  return MAPPED_ATTRIBUTES.filter((a) => config.fields[a].enabled && config.fields[a].policy !== "read");
+}
 
 /** Stored overrides merged over defaults — unknown keys ignored, partial
  *  field entries completed from the default, so old configs never crash. */
@@ -145,11 +188,23 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
       fields[attr] = { ...DEFAULT_IDEAS_JIRA_CONFIG.fields[attr], ...f };
     }
   }
+  const storedPull = (
+    stored.pull && typeof stored.pull === "object" ? stored.pull : {}
+  ) as Partial<JiraPullConfig>;
+  const pull: JiraPullConfig = {
+    maxIssues:
+      typeof storedPull.maxIssues === "number" &&
+      Number.isFinite(storedPull.maxIssues) &&
+      storedPull.maxIssues >= 1
+        ? Math.min(Math.floor(storedPull.maxIssues), JIRA_PULL_MAX_ISSUES)
+        : DEFAULT_JIRA_PULL_CONFIG.maxIssues,
+  };
   return {
     csv,
     ideaTemplate,
     fieldParsing,
     descriptionMode: "overwrite",
+    pull,
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&
       stored.descriptionGapLines >= 0
@@ -184,4 +239,6 @@ export const ATTRIBUTE_LABELS: Record<string, string> = {
   votes: "Votes",
   customers: "Customers",
   platforms: "Components",
+  reporter: "Reporter",
+  assignee: "Assignee",
 };

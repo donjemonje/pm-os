@@ -7,6 +7,7 @@ import {
   loginExpecting2fa,
   passTwoFactorChallenge,
   TEST_ADMIN_TOTP_SECRET,
+  TEST_KELA_TOTP_SECRET,
   TEST_TOTP_SECRET,
 } from "./two-factor-helpers";
 
@@ -42,6 +43,42 @@ export async function loginAsRoomLens(page: Page): Promise<void> {
  * /dashboard like any user — admin-ness only matters on /admin routes. */
 export async function loginAsRoomLensAdmin(page: Page): Promise<void> {
   await loginWithTotp(page, { ...QA_ADMIN, totpSecret: TEST_ADMIN_TOTP_SECRET });
+}
+
+/**
+ * Kela QA organization (slug "kela-qa"), seeded by scripts/seed-test-db.mjs:
+ * ideas enabled per org, Jira connected with an API token to the TEST project
+ * (a copy of Kela's 66 PRDT issues) when the JIRA_TEST_* env is present —
+ * the live-Jira specs. Synthetic only.
+ */
+export const QA_KELA = {
+  email: "qa+kela@pm-os.io",
+  password: "kela-qa-pass1",
+  slug: "kela-qa",
+};
+
+/** Same login flow as loginAsRoomLens, for the Kela QA user. */
+export async function loginAsKelaQa(page: Page): Promise<void> {
+  await loginWithTotp(page, { ...QA_KELA, totpSecret: TEST_KELA_TOTP_SECRET });
+}
+
+/** The JIRA_TEST_* env the live-Jira specs need; undefined → those specs skip. */
+export function jiraTestEnv():
+  | { siteUrl: string; email: string; apiToken: string; projectKey: string; moduleFieldId: string }
+  | undefined {
+  const siteUrl = RESOLVED_ENV.JIRA_TEST_SITE_URL?.trim();
+  const email = RESOLVED_ENV.JIRA_TEST_EMAIL?.trim();
+  const apiToken = RESOLVED_ENV.JIRA_TEST_API_TOKEN?.trim();
+  if (!siteUrl || !email || !apiToken) return undefined;
+  return {
+    siteUrl: siteUrl.replace(/\/+$/, ""),
+    email,
+    apiToken,
+    projectKey: RESOLVED_ENV.JIRA_TEST_PROJECT_KEY?.trim() || "TEST",
+    // Id of the Module field on the test site — only the TEST seeding script
+    // writes by id; the app resolves the mapped name "Module" itself.
+    moduleFieldId: RESOLVED_ENV.JIRA_TEST_PRODUCT_LINE_FIELD_ID?.trim() || "customfield_10319",
+  };
 }
 
 /**
