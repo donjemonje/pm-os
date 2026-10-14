@@ -456,6 +456,12 @@ export function IdeaDrawer({
                     {p}
                   </Chip>
                 ))}
+                {/* A hairline between the product side (lines, platforms) and the
+                    customer side of the row. */}
+                {(idea.products.length > 0 || (idea.platforms ?? []).length > 0) &&
+                  (idea.customers ?? []).length > 0 && (
+                    <span aria-hidden className="mx-0.5 h-3 w-px shrink-0 bg-[#dde5ef]" />
+                  )}
                 {/* Affected customers from the supporting tickets (All Customers is
                     one of them); palette chip when cataloged, amber suggestion
                     with approve/dismiss when not. */}
@@ -734,7 +740,7 @@ export function IdeaDrawer({
                 )}
               <div>
                 <UmMarkdown
-                  content={idea.details}
+                  content={autolinkBareUrls(idea.details)}
                   className="idea-text"
                 />
               </div>
@@ -910,6 +916,20 @@ function RawChip({ label, value }: { label: string; value: string }) {
 /** One labelled value on the ticket's header line: "Customer  Acme". */
 const URL_RE = /(https?:\/\/[^\s<>()\[\]"']+[^\s<>()\[\]"'.,;:!?])/g;
 
+/**
+ * Markdown with every bare http(s) URL wrapped as a CommonMark autolink
+ * (`<https://…>`), so it renders clickable like a `[text](url)` link. URLs
+ * already inside link syntax, autolinks, quotes or code are left alone.
+ * Jira bodies (ADF inline cards, pasted links) and the idea's "Supported
+ * tickets" list are mostly bare URLs.
+ */
+function autolinkBareUrls(md: string): string {
+  return md.replace(URL_RE, (url, _m, offset: number) => {
+    const prev = offset > 0 ? md[offset - 1] : "";
+    return /[(<\["'=`]/.test(prev) ? url : `<${url}>`;
+  });
+}
+
 /** Plain text with every http(s) URL turned into a link — raw ticket text as reporters typed it. */
 function Linkified({ text }: { text: string }) {
   const parts = text.split(URL_RE);
@@ -993,7 +1013,7 @@ function JiraIssueView({
       <div>
         <div className={`${MONO_LABEL} mb-1.5`}>Description</div>
         {src.body ? (
-          <UmMarkdown content={src.body} className="source-text" />
+          <UmMarkdown content={autolinkBareUrls(src.body)} className="source-text" />
         ) : (
           <p className="m-0 text-[13.5px] italic text-muted">No description.</p>
         )}
