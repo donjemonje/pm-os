@@ -8,15 +8,15 @@ datasource db {
 }
 
 model Organization {
-  id         String   @id @default(uuid())
-  name       String
-  slug       String   @unique
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
   /// Per-organization feature overrides, e.g. {"ideas": true}. A key that is
   /// present wins; a missing key falls back to the env default (IDEAS_ENABLED
   /// etc.). Managed in PM-OS Admin → Configurations.
-  features   Json     @default("{}")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  features  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   users     User[]
   workspace Workspace?
@@ -31,28 +31,28 @@ enum UserRole {
 }
 
 model User {
-  id               String        @id @default(uuid())
-  email            String        @unique
-  passwordHash     String?
-  name             String
-  role             UserRole      @default(USER)
+  id                  String        @id @default(uuid())
+  email               String        @unique
+  passwordHash        String?
+  name                String
+  role                UserRole      @default(USER)
   /// Soft-deactivation: set = user cannot log in and active sessions are
   /// rejected. Cleared to reactivate. No hard delete from Admin.
-  deactivatedAt    DateTime?
+  deactivatedAt       DateTime?
   /// AES-256-GCM encrypted TOTP secret; null until 2FA enrollment starts.
-  totpSecretEnc    String?
+  totpSecretEnc       String?
   /// Set when the user confirms their first TOTP code; null = 2FA off.
-  totpEnabledAt    DateTime?
+  totpEnabledAt       DateTime?
   /// Highest TOTP time-step already consumed — codes are strictly single-use.
   /// Recovery is admin-side (clear the totp fields), not backup codes.
-  totpLastUsedStep Int?
+  totpLastUsedStep    Int?
   /// Optional per-user default Product Line filter for the Ideas screen —
   /// names from the workspace catalog. Empty = no default filter.
-  defaultProductLines Json @default("[]")
-  organizationId   String?
-  organization     Organization? @relation(fields: [organizationId], references: [id])
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  defaultProductLines Json          @default("[]")
+  organizationId      String?
+  organization        Organization? @relation(fields: [organizationId], references: [id])
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   sessions            Session[]
   accounts            OAuthAccount[]
@@ -148,6 +148,14 @@ model ProductLine {
   position    Int       @default(0)
   /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
   color       String?
+  /// "manual" (Settings → Ideas) or "jira" (auto-created by the Jira pull
+  /// from the configured product-line field — see IdeasJiraConfig.pull).
+  origin      String    @default("manual")
+  /// Other spellings that mean this product line — the customer's Jira option
+  /// name ("Platform General" for "Platform"), reporters' variants. Matched by
+  /// normalized key on import (Jira pull and Zendesk Module); on push the
+  /// alias that is a Jira option is written.
+  aliases     Json      @default("[]")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -191,23 +199,29 @@ model Platform {
 }
 
 model JiraConnection {
-  id           String    @id @default(uuid())
-  workspaceId  String    @unique
-  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  cloudId      String
-  siteUrl      String
-  accessToken  String
-  refreshToken String
-  expiresAt    DateTime
-  projectKeys  String    @default("[]")
-  prdSource    String    @default("epic_description")
+  id              String    @id @default(uuid())
+  workspaceId     String    @unique
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  cloudId         String
+  siteUrl         String
+  accessToken     String
+  refreshToken    String
+  expiresAt       DateTime
+  /// "oauth" (Atlassian 3LO, the product path) or "basic" (email + API
+  /// token, QA only: OAuth refresh tokens rotate on use and the test DB is
+  /// wiped per run). For "basic", accessToken holds base64(email:token),
+  /// refreshToken is empty, expiresAt is far future, and requests go to
+  /// siteUrl directly instead of api.atlassian.com/ex/jira/<cloudId>.
+  authType        String    @default("oauth")
+  projectKeys     String    @default("[]")
+  prdSource       String    @default("epic_description")
   /// Ideas write-back target: new ideas become issues of this type in this
   /// project. Must be one of projectKeys so the next import sees what we
   /// created. Null + a single selected project = that project.
   ideasProjectKey String?
-  ideasIssueType  String  @default("Story")
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  ideasIssueType  String    @default("Story")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }
 
 model GoogleDriveConnection {
@@ -311,53 +325,53 @@ model QALog {
 /// Raw Zendesk store — tickets exactly as received (PRD). The scrub gate
 /// operates on `raw` before anything leaves this store.
 model ZendeskTicketRaw {
-  id              String     @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  externalId      String
-  subject         String
-  body            String
-  requester       String?
+  id                  String     @id @default(uuid())
+  workspaceId         String
+  workspace           Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  externalId          String
+  subject             String
+  body                String
+  requester           String?
   /// Customers the catalog stage matched in the ticket text (from the
   /// Customer catalog). Idea-level lists are derived from sources, so this
   /// per-ticket verdict is the single source of truth. Never edited by
   /// review actions — dismissals live in dismissedCustomers so they are
   /// always reversible.
-  affectedCustomers Json     @default("[]")
+  affectedCustomers   Json       @default("[]")
   /// Names a PM dismissed from the idea view; subtracted from the derived
   /// idea list at read time and restorable at any time.
-  dismissedCustomers Json    @default("[]")
-  tags            Json       @default("[]")
-  productLine     String?
+  dismissedCustomers  Json       @default("[]")
+  tags                Json       @default("[]")
+  productLine         String?
   /// Reporter-chosen module/product hint (e.g. Zendesk "Module" field) —
   /// a metadata hint for classification, never an override.
-  module          String?
+  module              String?
   /// Customer named by the reporter in a dedicated field — treated as truth.
-  customerName    String?
+  customerName        String?
   /// The reporter marked the ticket as affecting all customers (parsed from
   /// values like "All customers" in the customer fields).
-  affectsAllCustomers Boolean @default(false)
+  affectsAllCustomers Boolean    @default(false)
   /// Reporter's "why should we build this" text — interpretation, same
   /// grain of salt as the rest of the ticket.
-  whyBuild        String?
+  whyBuild            String?
   /// Reporter's "what insights do we have" text — interpretation.
-  insights        String?
+  insights            String?
   /// e.g. Yes / No / Helpful — deal linkage as reported.
-  dealRelated     String?
+  dealRelated         String?
   /// e.g. Customer / POC.
-  customerType    String?
+  customerType        String?
   /// Direct link to the source ticket; preferred over the URL template.
-  url             String?
-  sourceCreatedAt String?
+  url                 String?
+  sourceCreatedAt     String?
   /// What the match stage decided per FR unit of this ticket:
   /// [{ unit, ideaId, merged, reason }] — the PM-facing "why" next to the idea link.
-  matchNotes      Json       @default("[]")
-  raw             Json
-  batchId         String?
-  batch           IdeaBatch? @relation(fields: [batchId], references: [id])
-  importedAt      DateTime   @default(now())
-  catalogKind     String?
-  catalogReason   String?
+  matchNotes          Json       @default("[]")
+  raw                 Json
+  batchId             String?
+  batch               IdeaBatch? @relation(fields: [batchId], references: [id])
+  importedAt          DateTime   @default(now())
+  catalogKind         String?
+  catalogReason       String?
 
   sources IdeaSource[]
 
@@ -393,12 +407,18 @@ model IdeaBatch {
   startedAt   DateTime  @default(now())
   completedAt DateTime?
   stats       Json?
-  /** running | completed | failed | aborted (server stopped mid-import). */
+  /**
+   * running | completed | failed | aborted (server stopped mid-import).
+   */
   status      String    @default("running")
   error       String?
-  /** Touched after every model call and stage; a stale beat on a running batch = dead run. */
+  /**
+   * Touched after every model call and stage; a stale beat on a running batch = dead run.
+   */
   heartbeatAt DateTime  @default(now())
-  /** Per-stage timings, call counts, token usage — see src/lib/ideas/trace.ts. */
+  /**
+   * Per-stage timings, call counts, token usage — see src/lib/ideas/trace.ts.
+   */
   trace       Json?
 
   tickets ZendeskTicketRaw[]
@@ -407,28 +427,28 @@ model IdeaBatch {
 }
 
 model Idea {
-  id            String    @id @default(uuid())
-  workspaceId   String
-  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  title         String
-  details       String
-  products      Json      @default("[]")
-  platforms     Json      @default("[]")
-  batchStatus   String
-  decision      String
-  origin        String
+  id             String    @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  title          String
+  details        String
+  products       Json      @default("[]")
+  platforms      Json      @default("[]")
+  batchStatus    String
+  decision       String
+  origin         String
   /// Human-readable narration of what this import did to an Updated idea
   /// (votes, enrichment, added product lines/platforms). Cleared on rollover.
-  batchChanges  Json      @default("[]")
+  batchChanges   Json      @default("[]")
   /// Customers a PM added by hand (names). Ticket-derived customers are
   /// never stored here; removing one of those is a dismissal on its tickets.
-  addedCustomers Json     @default("[]")
-  pmScore       Int?
-  manualScore   Int?
-  existingVotes Int       @default(0)
-  newVotes      Int       @default(0)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  addedCustomers Json      @default("[]")
+  pmScore        Int?
+  manualScore    Int?
+  existingVotes  Int       @default(0)
+  newVotes       Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   sources IdeaSource[]
   events  ReviewEvent[]
@@ -454,16 +474,22 @@ model IdeaSource {
 /// Jira live-state snapshot, replaced wholesale on every import — a render
 /// cache, not a system of record.
 model JiraIdeaSnapshot {
-  id          String    @id @default(uuid())
-  workspaceId String
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  key         String
-  title       String
-  body        String
-  status      String?
-  url         String?
-  components  Json      @default("[]")
-  syncedAt    DateTime  @default(now())
+  id              String    @id @default(uuid())
+  workspaceId     String
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  key             String
+  title           String
+  body            String
+  status          String?
+  url             String?
+  components      Json      @default("[]")
+  /// Shown on the raw Jira issue in the drawer, like the Zendesk ticket's fields.
+  issueType       String?
+  priority        String?
+  reporter        String?
+  assignee        String?
+  sourceCreatedAt DateTime?
+  syncedAt        DateTime  @default(now())
 
   @@unique([workspaceId, key])
 }

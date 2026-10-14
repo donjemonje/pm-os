@@ -15,6 +15,8 @@ export interface SettingsListItem {
   color?: string | null;
   /** Spellings merged into this entry (customers only). */
   aliases?: string[];
+  /** "jira" when the Jira pull created the row (product lines only). */
+  origin?: string;
 }
 
 const INPUT_CLASS =

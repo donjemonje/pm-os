@@ -70,3 +70,20 @@ env:
     value: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"
     availability:
       - RUNTIME
+
+  # --- Live Jira for the e2e suite (optional; feature/jira-support-kela) ---
+  # The Kela QA org (scripts/seed-test-db.mjs) connects to a TEST project on
+  # the demo Atlassian site with an API token (basic auth; OAuth refresh tokens
+  # would rotate away on a wiped DB). Unset → the Kela QA org is seeded without
+  # a Jira connection and the live-Jira specs skip. Create the TEST project
+  # with scripts/jira-test-project.mjs (see its header). Never commit the token.
+  # - variable: JIRA_TEST_SITE_URL
+  #   value: "https://d3east.atlassian.net"
+  # - variable: JIRA_TEST_EMAIL
+  #   value: "you@example.com"
+  # - variable: JIRA_TEST_API_TOKEN
+  #   value: "<api token>"
+  # - variable: JIRA_TEST_PROJECT_KEY
+  #   value: "TEST"
+  # - variable: JIRA_TEST_PRODUCT_LINE_FIELD_ID
+  #   value: "customfield_10319"

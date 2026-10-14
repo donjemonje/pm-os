@@ -30,9 +30,8 @@ import { encryptTotpSecret } from "../../src/lib/two-factor";
  *     approve mark ("Mark reviewed") approves the row: toast
  *     Approved “<title>”, the header's pending count drops, the DB flips to
  *     reviewed; "Mark unreviewed" reverses all of it.
- * FL4 RoomLens: the new Label filter — Internal narrows the list to ideas
- *     with no customer on any supporting ticket (chip "Internal ✕" clears
- *     it). Then the ticket view inside the drawer: a source row opens the
+ * FL4 RoomLens: the ticket view inside the drawer (the Label filter it also
+ *     covered was removed 2026-10-13): a source row opens the
  *     ticket with labelled Customer / Reported by / Module / Created fields,
  *     the Evaluation box with the catalog verdict, and "Split into 2 ideas"
  *     as link pills; a pill opens that idea with a back chevron ("Back")
@@ -490,7 +489,7 @@ test.describe("UI facelift v2 — confirm dialog, grouped list, Label filter, ti
     ).toBe("pending");
   });
 
-  test("FL4 Label → Internal narrows the list to ideas with no customer; the drawer's ticket view shows labelled fields, the Evaluation box and idea links with Back navigation", async ({
+  test("FL4 the drawer's ticket view shows labelled fields, the Evaluation box and idea links with Back navigation", async ({
     page,
   }) => {
     await loginAsRoomLens(page);
@@ -501,27 +500,6 @@ test.describe("UI facelift v2 — confirm dialog, grouped list, Label filter, ti
     await expect(rowA1).toBeVisible();
     await expect(rowA2).toBeVisible();
     await expect(rowB1).toBeVisible();
-    // Only the customer-less idea carries the Internal tag on its row.
-    await expect(rowA2.getByText("Internal", { exact: true })).toBeVisible();
-    await expect(rowA1.getByText("Internal", { exact: true })).toHaveCount(0);
-
-    // Label → Internal (multi-select popover stays open; close via the backdrop).
-    await page.getByRole("button", { name: "Label", exact: true }).click();
-    const popover = page.locator("div.z-\\[25\\]");
-    await popover.getByRole("button", { name: "Internal", exact: true }).click();
-    await page.locator("div.z-\\[24\\]").click({ position: { x: 4, y: 4 } });
-    await expect(popover).toHaveCount(0);
-    const chip = page.getByRole("button", { name: "Internal ✕" });
-    await expect(chip).toBeVisible();
-    await expect(rowA2).toBeVisible();
-    await expect(rowA1).toHaveCount(0);
-    await expect(rowB1).toHaveCount(0);
-    // Clearing via the chip brings the customer-backed ideas back.
-    await chip.click();
-    await expect(chip).toHaveCount(0);
-    await expect(rowA1).toBeVisible();
-    await expect(rowB1).toBeVisible();
-
     // Drawer → source row → the ticket view.
     await rowA1.click();
     const d = drawer(page);

@@ -8,7 +8,10 @@ import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus } from "../jira";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
+import { primaryJiraKey } from "./jira-keys";
+import { citationsByTicket } from "./jira-links";
 import { fetchJiraLiveSources } from "./jira-sync";
+import { buildProductLineResolver } from "./product-line-key";
 import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import {
@@ -38,10 +41,17 @@ export interface IdeasState {
   ideas: Idea[];
   /** Customer catalog names — the client tells confirmed from suggested with this. */
   customerCatalog: string[];
-  /** Jira integration is set up for the workspace — gates Jira Merge. */
+  /** Jira integration is set up for the workspace — gates Sync to Jira. */
   jiraConnected: boolean;
+  /** Browse base of the connected site ("https://x.atlassian.net"); null when
+   *  not connected. The client links every issue key with it, created ones
+   *  (not yet in the snapshot) included. */
+  jiraSiteUrl: string | null;
   /** The org's CSV import mapping — the client parses uploads with it. */
   csvMapping: CsvMapping;
+  /** Jira field name mapped as Product Line ("Module" for Kela) — the raw
+   *  Jira issue labels its product line with it. */
+  jiraProductLineField: string;
 }
 
 /** A parsed CSV row plus the original record verbatim (the raw store). */
@@ -81,6 +91,8 @@ export interface ImportSummary {
   called: number;
   jiraConnected: boolean;
   jiraCount: number;
+  /** Tickets attached to a Jira idea because the issue cites them. */
+  jiraCited: number;
   /** The batch row holding this run's trace (Admin/monitoring). */
   batchId: string;
   /** Server-side wall time of the whole import. */
@@ -107,6 +119,29 @@ const IDEA_INCLUDE = {
   },
 } as const;
 type IdeaRow = Prisma.IdeaGetPayload<{ include: typeof IDEA_INCLUDE }>;
+
+/**
+ * Narration of what an import did to an idea, one line per kind of change:
+ * every "+1 vote (ticket X)" folds into a single "+N votes (tickets X, Y)"
+ * line at the top; other lines are deduplicated, order kept.
+ */
+export function mergeBatchChanges(prior: string[], added: string[]): string[] {
+  const tickets: string[] = [];
+  const rest: string[] = [];
+  for (const line of [...prior, ...added]) {
+    const one = line.match(/^\+1 vote \(ticket (.+)\)$/);
+    const many = line.match(/^\+\d+ votes? \(tickets? (.+)\)$/);
+    if (one) tickets.push(one[1]);
+    else if (many) tickets.push(...many[1].split(",").map((t) => t.trim()).filter(Boolean));
+    else if (!rest.includes(line)) rest.push(line);
+  }
+  const uniq = Array.from(new Set(tickets));
+  const votes =
+    uniq.length === 0
+      ? []
+      : [`+${uniq.length} vote${uniq.length === 1 ? "" : "s"} (ticket${uniq.length === 1 ? "" : "s"} ${uniq.join(", ")})`];
+  return [...votes, ...rest];
+}
 
 /** Union of string lists, first occurrence wins on casing, insertion order kept. */
 function distinct(values: string[]): string[] {
@@ -193,9 +228,10 @@ function toClientIdea(row: IdeaRow): Idea {
     zen: row.sources.flatMap((s) =>
       s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [],
     ),
-    jira: row.sources.flatMap((s) =>
-      s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [],
-    ),
+    // Oldest issue first: the primary a sync writes to, the key rows show.
+    jira: row.sources
+      .flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : []))
+      .sort((a, b) => (primaryJiraKey([a, b]) === a ? -1 : 1)),
   };
 }
 
@@ -247,7 +283,9 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
 
   return {
     jiraConnected: Boolean(jiraStatus?.connected),
+    jiraSiteUrl: jiraStatus?.siteUrl ?? null,
     csvMapping: mergeIdeasJiraConfig(wsRow?.ideasConfig).csv,
+    jiraProductLineField: mergeIdeasJiraConfig(wsRow?.ideasConfig).fields.productLine.jiraField,
     tickets: ticketRows.map(toClientTicket),
     jiraSources: snapshotRows.map((s) => ({
       key: s.key,
@@ -255,6 +293,11 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       title: s.title,
       body: s.body,
       status: s.status ?? undefined,
+      issueType: s.issueType ?? undefined,
+      priority: s.priority ?? undefined,
+      reporter: s.reporter ?? undefined,
+      assignee: s.assignee ?? undefined,
+      createdAt: s.sourceCreatedAt?.toISOString(),
       url: s.url ?? undefined,
       products: (s.components as string[]) ?? [],
     })),
@@ -323,9 +366,25 @@ async function runImport(
   const jira = await fetchJiraLiveSources(workspaceId);
   trace.end({
     note: jira.connected
-      ? `${jira.sources.length} live issues`
+      ? `${jira.sources.length} live issues` +
+        (jira.truncatedProjects.length > 0
+          ? ` · CAPPED at ${jira.pull.maxIssues} in ${jira.truncatedProjects.join(", ")}`
+          : "") +
+        (jira.unresolvedProductLines.length > 0
+          ? ` · to Other (no product line or alias): ${jira.unresolvedProductLines.join(", ")}`
+          : "")
       : "Jira not connected",
   });
+
+  // One taxonomy: a ticket's Module column (any spelling, aliases included)
+  // names its product line deterministically — see product-line-key.ts. A
+  // module no row or alias matches is "Other", same as on the Jira pull.
+  const resolveProductLine = buildProductLineResolver(
+    await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
+  );
+
+  /** Zendesk ticket id → Jira keys whose issue text cites it. */
+  const citedBy = citationsByTicket(jira.sources);
 
   // Stage contexts (catalogs + template) are loaded once, and the prompt
   // prefixes known now are warmed in the provider's cache while the parse
@@ -565,6 +624,17 @@ async function runImport(
     }
   }
 
+  // The ticket's Module is the product line — a catalog row or alias when it
+  // matches one, "Other" when it doesn't. The model's pick stands only for
+  // tickets with no module at all.
+  const moduleProductLine = (module?: string): string | undefined =>
+    module?.trim() ? (resolveProductLine.resolve(module) ?? "Other") : undefined;
+  for (const [key, units] of unitsByTicket) {
+    const line = moduleProductLine(fresh.find((t) => t.key === key)?.module);
+    if (!line) continue;
+    for (const u of units) u.rewrite = { ...u.rewrite, productLines: [line] };
+  }
+
   // Match candidates are the CURRENT ideas list — however each idea was born
   // — plus live Jira issues not yet represented as ideas (they become ideas
   // later in this import). Jira disconnected just means fewer candidates.
@@ -598,6 +668,25 @@ async function runImport(
         body: src.body,
       })),
   ];
+  // Tickets a Jira issue cites are matched by that citation, not by the model:
+  // every FR unit of such a ticket is forced onto the first cited issue's
+  // idea (an existing idea when one holds that key, else the live issue).
+  const ideaIdByJiraKey = new Map(
+    existingIdeas.flatMap((i) =>
+      i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [[src.jiraKey, i.id] as const] : [])),
+    ),
+  );
+  // A ticket split into several asks is NOT forced: the citation says the
+  // ticket relates to the issue, not that every ask in it does — the model
+  // matches each unit, and the citation pass below still attaches the
+  // ticket as evidence on the cited issue.
+  const forced = new Map<string, string>();
+  for (const [key, units] of unitsByTicket) {
+    const cited = citedBy.get(key);
+    if (!cited || cited.length === 0 || units.length !== 1) continue;
+    const target = ideaIdByJiraKey.get(cited[0]) ?? `jira:${cited[0]}`;
+    forced.set(units[0].unitKey, target);
+  }
 
   const matchInputs = catalog.results
     .filter((v) => v.kind === "fr")
@@ -615,6 +704,7 @@ async function runImport(
   const match = await matchTickets(workspaceId, matchInputs, matchCandidates, {
     warmer,
     ctx: matchCtx,
+    forced,
     hooks: {
       call: (s) => trace.call(s),
       groupPhase: (groups, meta) => {
@@ -684,6 +774,7 @@ async function runImport(
 
   // Snapshots are replaced wholesale; Jira-origin ideas are upserted by key
   // so evidence matched in earlier batches survives the resync.
+  let jiraCited = 0;
   trace.begin("jira-sync", "db", jira.connected ? jira.sources.length : 0);
   if (jira.connected) {
     await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
@@ -696,6 +787,11 @@ async function runImport(
         status: s.status ?? null,
         url: s.url ?? null,
         components: s.products as Prisma.InputJsonValue,
+        issueType: s.issueType ?? null,
+        priority: s.priority ?? null,
+        reporter: s.reporter ?? null,
+        assignee: s.assignee ?? null,
+        sourceCreatedAt: s.createdAt ? new Date(s.createdAt) : null,
       })),
     });
 
@@ -703,22 +799,21 @@ async function runImport(
       where: { workspaceId, origin: "jira" },
       include: { sources: true },
     });
+    const jiraKeysOf = (i: (typeof jiraIdeas)[number]) =>
+      i.sources.flatMap((src) => (src.kind === "jira" && src.jiraKey ? [src.jiraKey] : []));
+    /** Any Jira key → the idea holding it (a merged idea holds several). */
     const ideaByJiraKey = new Map(
-      jiraIdeas.flatMap((i) => {
-        const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
-        return key ? [[key, i] as const] : [];
-      }),
+      jiraIdeas.flatMap((i) => jiraKeysOf(i).map((k) => [k, i] as const)),
     );
     const liveKeys = new Set(jira.sources.map((s) => s.key));
-    const gone = jiraIdeas.filter((i) => {
-      const key = i.sources.find((s) => s.kind === "jira")?.jiraKey;
-      return !key || !liveKeys.has(key);
-    });
+    // An idea none of whose issues exists anymore is gone with them.
+    const gone = jiraIdeas.filter((i) => !jiraKeysOf(i).some((k) => liveKeys.has(k)));
     if (gone.length > 0) {
       await db.idea.deleteMany({
         where: { id: { in: gone.map((i) => i.id) } },
       });
     }
+    const rollover = fresh.length > 0;
 
     for (const s of jira.sources) {
       const cur = ideaByJiraKey.get(s.key);
@@ -732,7 +827,6 @@ async function runImport(
         // them as a PM-OS section, never as an overwrite of the live body. On
         // a batch with new data, last batch's vote delta becomes existing
         // and the idea re-enters as Unchanged until a match says otherwise.
-        const rollover = fresh.length > 0;
         await db.idea.update({
           where: { id: cur.id },
           data: {
@@ -894,8 +988,7 @@ async function runImport(
           );
 
           const changes: string[] = [`+1 vote (ticket ${input.key})`];
-          if (m?.enrichedSummary)
-            changes.push("Summary enriched with the new ticket");
+          if (m?.enrichedSummary) changes.push("Summary updated");
           for (const p of addedProducts)
             changes.push(`Product line added: ${p}`);
           for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
@@ -917,23 +1010,27 @@ async function runImport(
               decision: "pending",
               products: nextProducts as Prisma.InputJsonValue,
               platforms: nextPlatforms as Prisma.InputJsonValue,
-              batchChanges: [...prior, ...changes] as Prisma.InputJsonValue,
+              batchChanges: mergeBatchChanges(prior, changes) as Prisma.InputJsonValue,
               ...(m && m.enrichedSummary ? { details: m.enrichedSummary } : {}),
               sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
             },
           });
           continue;
         }
-        // Model assignment wins; the CSV product_line column is only a fallback
-        // when the model returned nothing at all.
+        // A Module column is the product line (one taxonomy with Jira; no
+        // match = Other). Otherwise the model's assignment wins and the CSV
+        // product_line column is only a fallback when the model returned
+        // nothing at all.
         // A group-reconciled rewrite (match stage) wins over the unit's own
         // catalog text: it was written with every member ticket in view.
         const finalRewrite = m?.rewrite ?? unit.rewrite;
-        const products =
-          finalRewrite.productLines.length > 0
+        const moduleLine = moduleProductLine(input.module);
+        const products = moduleLine
+          ? [moduleLine]
+          : finalRewrite.productLines.length > 0
             ? finalRewrite.productLines
             : input.productLine
-              ? [input.productLine]
+              ? [resolveProductLine.resolve(input.productLine) ?? input.productLine]
               : ["Other"];
         // Ideas read in product voice; the customer's original wording stays
         // intact on ZendeskTicketRaw. Fallbacks guard empty model output.
@@ -969,6 +1066,49 @@ async function runImport(
     }
   }
 
+  // Tickets a Jira issue cites become its evidence even when they are not
+  // feature requests (needs details, bug, question) or when the issue is a
+  // second citer: the team linked them, PM-OS keeps the link.
+  if (citedBy.size > 0) {
+    trace.begin("jira-citations", "db", citedBy.size);
+    for (const input of fresh) {
+      const cited = citedBy.get(input.key);
+      if (!cited || cited.length === 0) continue;
+      const ticket = await db.zendeskTicketRaw.findFirst({
+        where: { workspaceId, externalId: input.key },
+        select: { id: true },
+      });
+      if (!ticket) continue;
+      for (const key of cited) {
+        const idea = await db.idea.findFirst({
+          where: {
+            workspaceId,
+            batchStatus: { not: "deleted" },
+            sources: { some: { kind: "jira", jiraKey: key } },
+          },
+          include: { sources: true },
+        });
+        if (!idea) continue;
+        if (idea.sources.some((src) => src.kind === "zendesk" && src.ticketId === ticket.id)) continue;
+        await db.ideaSource.create({ data: { ideaId: idea.id, kind: "zendesk", ticketId: ticket.id } });
+        await db.idea.update({
+          where: { id: idea.id },
+          data: {
+            batchStatus: "updated",
+            decision: idea.decision === "injected" ? "pending" : idea.decision,
+            newVotes: idea.newVotes + 1,
+            batchChanges: mergeBatchChanges(
+              idea.batchStatus === "updated" ? ((idea.batchChanges as string[]) ?? []) : [],
+              [`+1 vote (ticket ${input.key})`, `${key} cites ticket ${input.key} — linked by the team`],
+            ) as Prisma.InputJsonValue,
+          },
+        });
+        jiraCited++;
+      }
+    }
+    trace.end({ note: jiraCited > 0 ? `${jiraCited} ticket link${jiraCited === 1 ? "" : "s"} attached` : "nothing new" });
+  }
+
   const summary: ImportSummary = {
     imported: fresh.length,
     frs,
@@ -981,6 +1121,7 @@ async function runImport(
     split: splitTicketCount,
     called: catalog.called + split.called + match.called + parse.called,
     jiraConnected: jira.connected,
+    jiraCited,
     jiraCount: jira.sources.length,
     batchId,
     durationMs: 0,

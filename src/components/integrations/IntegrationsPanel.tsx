@@ -85,13 +85,24 @@ function IntegrationRow({
 
         <div className="flex shrink-0 items-center gap-2">
           {connected ? (
-            <button
-              type="button"
-              onClick={onToggle}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
-            >
-              {expanded ? "Hide" : "Manage"}
-            </button>
+            <>
+              {oauthReady && (
+                <a
+                  href={connectHref}
+                  title="Run the authorization again — needed when PM-OS asks for a new permission. Project selection is kept."
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
+                >
+                  Reconnect
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={onToggle}
+                className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
+              >
+                {expanded ? "Hide" : "Manage"}
+              </button>
+            </>
           ) : oauthReady ? (
             <a
               href={connectHref}

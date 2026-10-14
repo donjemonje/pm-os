@@ -15,6 +15,7 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
+  ExternalLink,
 } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
@@ -26,6 +27,7 @@ import {
   scoreOf,
   STATUS_CHIP_TO_BATCH,
   STATUS_TONES,
+  zenLabel,
 } from "@/lib/ideas/idea";
 import type { PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
@@ -73,6 +75,8 @@ interface ServerState {
   customerCatalog?: string[];
   jiraConnected?: boolean;
   csvMapping?: CsvMapping;
+  jiraSiteUrl?: string | null;
+  jiraProductLineField?: string;
 }
 
 /** Case-insensitive lookup of a catalog color by name. */
@@ -83,12 +87,11 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
   return undefined;
 }
 
-/** Row tags that aren't catalog values — the Label filter's options. */
-const IDEA_LABELS = ["Internal"];
-/** Does the idea carry this label? Internal = no customer named on any supporting ticket. */
-function hasLabel(i: Idea, label: string): boolean {
-  if (label === "Internal") return (i.customers ?? []).length === 0;
-  return false;
+/** Sync scope sentinel: the user cleared every product line (vs. [] = all). */
+const SCOPE_NONE = "__none__";
+/** Jira statuses that mean "shipped" — hidden by default when nothing asks for them. */
+function isJiraDoneStatus(status: string): boolean {
+  return /^(done|closed|resolved|released|shipped)$/i.test(status.trim());
 }
 
 /** Toggle pill (scope / Pending Review): accent-filled with a glow when on. */
@@ -130,6 +133,8 @@ export function IdeasView({
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [jiraSiteUrl, setJiraSiteUrl] = useState<string | null>(null);
+  const [jiraProductLineField, setJiraProductLineField] = useState("Product line");
   const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
   const [hydrated, setHydrated] = useState(false);
 
@@ -138,8 +143,8 @@ export function IdeasView({
   const [platformFilter, setPlatformFilter] = useState<string[]>([]);
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  /** Label filter: the row tags that aren't catalog values (Internal). */
-  const [labelFilter, setLabelFilter] = useState<string[]>([]);
+  /** Jira status filter (the issue's own workflow status, e.g. Backlog / Done). */
+  const [jiraStatusFilter, setJiraStatusFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
 
   const [page, setPage] = useState<"final" | "merge">("final");
@@ -183,6 +188,8 @@ export function IdeasView({
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
+    if (state.jiraSiteUrl !== undefined) setJiraSiteUrl(state.jiraSiteUrl);
+    if (state.jiraProductLineField) setJiraProductLineField(state.jiraProductLineField);
     if (state.csvMapping) setCsvMapping(state.csvMapping);
     // The sidebar's pending badge is rendered by the root layout on the
     // server; a mutation here must re-render it (client state survives).
@@ -231,7 +238,40 @@ export function IdeasView({
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
   const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
-  const jiraByKey = useMemo(() => new Map(jiraSources.map((s) => [s.key, s])), [jiraSources]);
+  // Issues a sync created exist in Jira but not in the snapshot until the next
+  // import — they get a stand-in source (idea title, browse link) so the drawer
+  // and the Merge page link them like any other Jira issue.
+  const jiraByKey = useMemo(() => {
+    const map = new Map(jiraSources.map((s) => [s.key, s]));
+    if (jiraSiteUrl) {
+      for (const idea of ideas) {
+        for (const key of idea.jira) {
+          if (!map.has(key)) {
+            map.set(key, {
+              key,
+              id: key,
+              title: idea.title,
+              body: "",
+              url: `${jiraSiteUrl}/browse/${key}`,
+              products: idea.products,
+            });
+          }
+        }
+      }
+    }
+    return map;
+  }, [jiraSources, ideas, jiraSiteUrl]);
+  /** Distinct Jira statuses in the pulled backlog — the Jira status filter's options. */
+  const jiraStatuses = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const s of jiraSources) {
+      if (s.status && !seen.has(s.status.toLowerCase())) seen.set(s.status.toLowerCase(), s.status);
+    }
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [jiraSources]);
+  /** The idea's Jira status: the status of its first linked issue (ideas hold one). */
+  const jiraStatusOf = (i: Idea): string | undefined =>
+    i.jira.map((k) => jiraByKey.get(k)?.status).find(Boolean);
   // Catalog names first, in the admin's manual order (their casing also wins
   // over idea-derived duplicates); names only found on ideas trail after,
   // alphabetically.
@@ -353,7 +393,7 @@ export function IdeasView({
     const message =
       idea.undoable.action === "create"
         ? `${idea.undoable.jiraKey} will be permanently deleted in Jira — comments and edits made there are lost.`
-        : `${idea.undoable.jiraKey} goes back to how it was before the merge. Fields edited in Jira since then are left alone.`;
+        : `${idea.undoable.jiraKey} goes back to how it was before the sync. Fields edited in Jira since then are left alone.`;
     if (
       !(await confirm({
         title: "Undo the last merge?",
@@ -476,8 +516,8 @@ export function IdeasView({
     : reviewed === 0
       ? pending > 0
         ? `Approve ideas to enable exporting — ${pending} awaiting review`
-        : "All changes already exported to Jira"
-      : `Export approved changes to Jira`;
+        : "All changes already synced to Jira"
+      : `Sync approved changes to Jira`;
 
   const matches = (i: Idea): boolean => {
     if (i.batch === "deleted") return false;
@@ -504,7 +544,15 @@ export function IdeasView({
       // unchanged ideas need no review, so they show only via their chip.
       return false;
     }
-    if (labelFilter.length > 0 && !labelFilter.some((l) => hasLabel(i, l))) return false;
+    const jiraStatus = jiraStatusOf(i);
+    if (jiraStatusFilter.length > 0) {
+      const wanted = jiraStatusFilter.map((s) => s.toLowerCase());
+      if (!jiraStatus || !wanted.includes(jiraStatus.toLowerCase())) return false;
+    } else if (jiraStatus && isJiraDoneStatus(jiraStatus) && i.zen.length === 0) {
+      // Shipped in Jira and no ticket asks for it: hidden by default. Once a
+      // ticket is matched to it ("already shipped"), the PM wants to see it.
+      return false;
+    }
     if (pendingOnly && i.decision !== "pending") return false;
     return true;
   };
@@ -513,23 +561,34 @@ export function IdeasView({
 
   const drawerIdea = drawerId ? ideas.find((i) => i.id === drawerId) : undefined;
 
-  // ——— Merge-to-Jira modal (scope → preview → execute → results) ———
-  const scope = scopeSel.length > 0 ? scopeSel : null;
+  // ——— Sync-to-Jira modal (scope → preview → execute → results) ———
+  // Scope: [] = every product line; SCOPE_NONE = nothing selected (after "Clear").
+  const scope = scopeSel.includes(SCOPE_NONE) ? [SCOPE_NONE] : scopeSel.length > 0 ? scopeSel : null;
   const inMergeScope = (i: Idea): boolean =>
     !scope || i.products.some((p) => scope.some((s) => s.toLowerCase() === p.toLowerCase()));
   const scopedPending = approvable.filter(
     (i) => i.decision === "pending" && inMergeScope(i)
   ).length;
+  // Archive proposals are never written to Jira, so they don't count as ready.
   const scopedReviewed = live.filter(
-    (i) => i.decision === "reviewed" && inMergeScope(i)
+    (i) => i.decision === "reviewed" && i.batch !== "archive" && inMergeScope(i)
   ).length;
-  // One approved idea is enough to merge — pending ideas never block, they
-  // simply stay behind for a later merge.
+  // One approved idea is enough to sync — pending ideas never block, they
+  // simply stay behind for a later sync.
   const previewDisabled = scopedReviewed === 0;
+  /** What each product line has ready: approved ideas (will sync) and pending ones (stay). */
+  const productSyncStats = allProducts.map((name) => {
+    const has = (i: Idea) => i.products.some((p) => p.toLowerCase() === name.toLowerCase());
+    return {
+      name,
+      approved: live.filter((i) => i.decision === "reviewed" && i.batch !== "archive" && has(i)).length,
+      pending: approvable.filter((i) => i.decision === "pending" && has(i)).length,
+    };
+  });
   const previewHint =
     scopedReviewed === 0
       ? "Nothing approved in the selected product lines"
-      : `${scopedReviewed} approved change${scopedReviewed === 1 ? "" : "s"} will merge${
+      : `${scopedReviewed} approved change${scopedReviewed === 1 ? "" : "s"} will sync${
           scopedPending > 0
             ? ` — ${scopedPending} still pending stay${scopedPending === 1 ? "s" : ""} here`
             : ""
@@ -550,14 +609,6 @@ export function IdeasView({
     setPlan(null);
     setPushResults(null);
     setMergeError("");
-  };
-
-  const toggleScope = (name: string) => {
-    setPlan(null); // a changed scope must be re-previewed before it can run
-    setMergeError("");
-    setScopeSel((prev) =>
-      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
-    );
   };
 
   const loadPlan = async () => {
@@ -593,7 +644,7 @@ export function IdeasView({
       });
       const data = await res.json();
       if (!res.ok) {
-        setMergeError(data.error ?? "Merge failed");
+        setMergeError(data.error ?? "Sync failed");
         return;
       }
       applyState(data.state as ServerState);
@@ -603,11 +654,11 @@ export function IdeasView({
       const failCount = results.length - okCount;
       setNote(
         failCount === 0
-          ? `${okCount} change${okCount === 1 ? "" : "s"} merged to Jira`
-          : `${okCount} merged, ${failCount} failed — reopen Jira Merge to retry`
+          ? `${okCount} change${okCount === 1 ? "" : "s"} synced to Jira`
+          : `${okCount} synced, ${failCount} failed — reopen Sync to Jira to retry`
       );
     } catch {
-      setMergeError("Merge failed — is the dev server running?");
+      setMergeError("Sync failed — is the dev server running?");
     } finally {
       setPushing(false);
     }
@@ -619,7 +670,7 @@ export function IdeasView({
     setPlatformFilter([]);
     setCustomerFilter([]);
     setStatusFilter([]);
-    setLabelFilter([]);
+    setJiraStatusFilter([]);
     setPendingOnly(false);
   };
 
@@ -627,7 +678,7 @@ export function IdeasView({
     productFilter.length > 0 ||
     platformFilter.length > 0 ||
     customerFilter.length > 0 ||
-    labelFilter.length > 0 ||
+    jiraStatusFilter.length > 0 ||
     pendingOnly;
 
   const hasFilters =
@@ -636,7 +687,7 @@ export function IdeasView({
     platformFilter.length > 0 ||
     customerFilter.length > 0 ||
     statusFilter.length > 0 ||
-    labelFilter.length > 0 ||
+    jiraStatusFilter.length > 0 ||
     pendingOnly;
 
   // Esc closes the merge modal (never mid-write). Enter is deliberately not
@@ -687,7 +738,8 @@ export function IdeasView({
   // Busiest product lines: ideas per line, top three.
   const topProducts = (() => {
     const m = new Map<string, number>();
-    for (const i of live) for (const p of i.products) m.set(p, (m.get(p) ?? 0) + 1);
+    // "Other" is the unmapped bucket, not a product.
+    for (const i of live) for (const p of i.products) if (p !== "Other") m.set(p, (m.get(p) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3);
   })();
   // Rows grouped by first product line, in the catalog's manual order;
@@ -852,8 +904,8 @@ export function IdeasView({
             {ideas.length > 0 && (
               <span title={injectHint} className="inline-flex">
                 <Button variant="primary" glow disabled={injectDisabled} onClick={openMerge}>
-                  <GitMerge size={13} strokeWidth={2.25} />
-                  Jira Merge
+                  <RefreshCw size={13} strokeWidth={2.25} />
+                  Sync to Jira
                 </Button>
               </span>
             )}
@@ -1054,17 +1106,20 @@ export function IdeasView({
                   selected={statusFilter}
                   onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))}
                 />
-                <FilterPopover
-                  label="Label"
-                  accent="status"
-                  options={IDEA_LABELS}
-                  selected={labelFilter}
-                  onToggle={(o) =>
-                    setLabelFilter((prev) =>
-                      prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
-                    )
-                  }
-                />
+                {jiraStatuses.length > 0 && (
+                  <FilterPopover
+                    label="Jira Status"
+                    accent="status"
+                    options={jiraStatuses}
+                    selected={jiraStatusFilter}
+                    onToggle={(o) =>
+                      setJiraStatusFilter((prev) =>
+                        prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]
+                      )
+                    }
+                    emptyText="No matching Jira status"
+                  />
+                )}
                 <span className="mx-1 h-5 w-px bg-border" />
                 <button onClick={() => setPendingOnly((v) => !v)} className={chipClass(pendingOnly)}>
                   Pending Review
@@ -1125,13 +1180,13 @@ export function IdeasView({
                       {option} ✕
                     </button>
                   ))}
-                  {labelFilter.map((option) => (
+                  {jiraStatusFilter.map((option) => (
                     <button
-                      key={`l-${option}`}
-                      onClick={() => setLabelFilter((prev) => prev.filter((x) => x !== option))}
+                      key={`js-${option}`}
+                      onClick={() => setJiraStatusFilter((prev) => prev.filter((x) => x !== option))}
                       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] font-mono text-[11px] font-semibold text-white ${FILTER_ACCENTS.status.chip}`}
                     >
-                      {option} ✕
+                      Jira: {option} ✕
                     </button>
                   ))}
                   {pendingOnly && (
@@ -1180,7 +1235,6 @@ export function IdeasView({
                   customerFilter={customerFilter}
                   pendingOnly={pendingOnly}
                   statusFilter={statusFilter}
-                  labelFilter={labelFilter}
                   productColors={productColors}
                   edit={edit}
                   selectedFinalId={selectedFinalId}
@@ -1319,13 +1373,21 @@ export function IdeasView({
                                 <span className="flex items-center gap-1.5 overflow-hidden text-[11.5px] text-fg-muted">
                                   {firstTicket ? (
                                     <span className="shrink-0 font-mono font-semibold">
-                                      {firstTicket.id}
+                                      {zenLabel(firstTicket.id)}
                                       {idea.zen.length > 1 ? ` +${idea.zen.length - 1}` : ""}
                                     </span>
                                   ) : null}
                                   {idea.jira[0] && (
                                     <span className="shrink-0 font-mono font-semibold text-[#2a5fd0]">
                                       {idea.jira[0]}
+                                    </span>
+                                  )}
+                                  {jiraStatusOf(idea) && (
+                                    <span
+                                      className="shrink-0 rounded bg-[#eef3fb] px-1.5 py-px text-[10.5px] font-medium text-[#2a5fd0]"
+                                      title="Status in Jira"
+                                    >
+                                      {jiraStatusOf(idea)}
                                     </span>
                                   )}
                                   {(firstTicket || idea.jira[0]) && <span>·</span>}
@@ -1335,12 +1397,6 @@ export function IdeasView({
                                       {p}
                                     </Chip>
                                   ))}
-                                  {/* No customer named on any supporting ticket → an internal request */}
-                                  {customers.length === 0 && (
-                                    <Chip kind="all" title="No customer is named on the supporting tickets">
-                                      Internal
-                                    </Chip>
-                                  )}
                                   {customers.slice(0, 2).map(customerChip)}
                                   {customers.length > 2 && (
                                     <span className="shrink-0">+{customers.length - 2}</span>
@@ -1434,6 +1490,7 @@ export function IdeasView({
           ticketsByKey={ticketsByKey}
           jiraByKey={jiraByKey}
           csvMapping={csvMapping}
+          jiraProductLineLabel={jiraProductLineField}
           ideasById={ideasById}
           catalogProducts={catalogProducts}
           catalogPlatforms={catalogPlatforms}
@@ -1553,32 +1610,33 @@ export function IdeasView({
         </div>
       )}
 
-      {/* Merge-to-Jira modal: scope → preview → execute → results */}
+      {/* Sync-to-Jira modal: scope → preview → execute → results */}
       {confirmOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,25,41,.42)] p-10 backdrop-blur-[6px]"
           onClick={closeMerge}
         >
           <div
-            className="glass-strong flex w-[640px] max-w-full flex-col overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]"
+            className="glass-strong flex max-h-[calc(100vh-80px)] w-[880px] max-w-full flex-col overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="h-[3px] bg-[linear-gradient(90deg,var(--app-accent),#17b26a)]" />
             {pushResults ? (
               <>
-                <div className="flex flex-col gap-4 px-[26px] pb-5 pt-[22px]">
+                <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-[26px] pb-5 pt-[22px]">
                   <div>
-                    <div className="eyebrow mb-1.5 text-primary">Jira Merge · Result</div>
+                    <div className="eyebrow mb-1.5 text-primary">Sync to Jira · Result</div>
                     <h2 className="font-title m-0 text-[22px] font-bold">
-                      {pushResults.every((r) => r.ok) ? "Merged to Jira" : "Merge finished with errors"}
+                      {pushResults.every((r) => r.ok) ? "Synced to Jira" : "Sync finished with errors"}
                     </h2>
                     <p className="mb-0 mt-1.5 text-[13.5px] leading-relaxed text-fg-3">
                       {pushResults.filter((r) => r.ok).length} of {pushResults.length} change
-                      {pushResults.length === 1 ? "" : "s"} written. Failed ideas stay approved —
-                      run Jira Merge again to retry just those.
+                      {pushResults.length === 1 ? "" : "s"} written.
+                      {pushResults.some((r) => !r.ok) &&
+                        " Failed ideas stay approved — Retry writes just those."}
                     </p>
                   </div>
-                  <div className="flex max-h-80 flex-col overflow-y-auto rounded-inner border border-border">
+                  <div className="flex min-h-0 flex-col overflow-y-auto rounded-inner border border-border">
                     {pushResults.map((r, k) => (
                       <div
                         key={r.ideaId}
@@ -1603,15 +1661,17 @@ export function IdeasView({
                             <span className="text-[11.5px] text-[#c23767]">{r.error}</span>
                           )}
                         </div>
-                        {r.url && (
+                        {r.jiraKey && (r.url || jiraSiteUrl) && (
                           <a
-                            href={r.url}
+                            href={r.url ?? `${jiraSiteUrl}/browse/${r.jiraKey}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             onClick={(e) => e.stopPropagation()}
-                            className="shrink-0 font-mono text-[11px] text-primary hover:underline"
+                            title="Open in Jira"
+                            className="inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-primary hover:underline"
                           >
                             {r.jiraKey}
+                            <ExternalLink size={11} />
                           </a>
                         )}
                       </div>
@@ -1619,6 +1679,14 @@ export function IdeasView({
                   </div>
                 </div>
                 <div className="flex justify-end gap-2 border-t border-border bg-[rgba(247,250,253,.8)] px-[26px] py-3.5">
+                  {pushResults.some((r) => !r.ok) && (
+                    <Button disabled={pushing} onClick={runPush}>
+                      <RefreshCw size={13} strokeWidth={2.25} />
+                      {pushing
+                        ? "Retrying…"
+                        : `Retry failed (${pushResults.filter((r) => !r.ok).length})`}
+                    </Button>
+                  )}
                   <Button variant="primary" glow onClick={closeMerge}>
                     Done
                   </Button>
@@ -1626,37 +1694,105 @@ export function IdeasView({
               </>
             ) : (
               <>
-                <div className="flex flex-col gap-4 px-[26px] pb-5 pt-[22px]">
+                <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-[26px] pb-5 pt-[22px]">
                   <div>
                     <div className="eyebrow mb-1.5 text-primary">
-                      {plan ? "Jira Merge · Preview" : "Zendesk → Jira"}
+                      {plan ? "Sync to Jira · Preview" : "Zendesk → Jira"}
                     </div>
-                    <h2 className="font-title m-0 text-[22px] font-bold">Jira Merge</h2>
+                    <h2 className="font-title m-0 text-[22px] font-bold">Sync to Jira</h2>
                     <p className="mb-0 mt-1.5 text-[13.5px] leading-relaxed text-fg-3">
-                      Pick the product lines to merge. Only approved ideas are written — anything
-                      still pending stays here for a later merge.
+                      Pick the product lines to sync. Only approved ideas are written — anything
+                      still pending stays here for a later sync.
                     </p>
                   </div>
 
-                  {/* Scope */}
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      onClick={() => {
-                        setScopeSel([]);
-                        setPlan(null);
-                        setMergeError("");
-                      }}
-                      className={chipClass(scopeSel.length === 0)}
-                    >
-                      All product lines
-                    </button>
-                    {allProducts.map((p) => (
-                      <button key={p} onClick={() => toggleScope(p)} className={chipClass(scopeSel.includes(p))}>
-                        {p}
-                        {scopeSel.includes(p) && <Check size={11} strokeWidth={3} />}
-                      </button>
-                    ))}
-                  </div>
+                  {/* Scope: product lines with something approved, then the ones with nothing */}
+                  {(() => {
+                    const ready = productSyncStats.filter((r) => r.approved > 0);
+                    const idle = productSyncStats.filter((r) => r.approved === 0);
+                    const allSelected =
+                      !scopeSel.includes(SCOPE_NONE) &&
+                      (scopeSel.length === 0 ||
+                        (ready.length > 0 && ready.every((r) => scopeSel.includes(r.name))));
+                    const row = (r: (typeof productSyncStats)[number], disabled: boolean) => {
+                      const on = !disabled && (scopeSel.length === 0 || scopeSel.includes(r.name));
+                      return (
+                        <button
+                          key={r.name}
+                          disabled={disabled}
+                          onClick={() => {
+                            // Explicit picks: "all" (empty scope) becomes the full ready list minus this one.
+                            setPlan(null);
+                            setMergeError("");
+                            setScopeSel((prev) => {
+                              const picked = prev.filter((x) => x !== SCOPE_NONE);
+                              const base = prev.length === 0 ? ready.map((x) => x.name) : picked;
+                              const next = base.includes(r.name) ? base.filter((x) => x !== r.name) : [...base, r.name];
+                              return next.length === 0 ? [SCOPE_NONE] : next;
+                            });
+                          }}
+                          className={`flex w-full items-center gap-3 px-3 py-2 text-left text-[13px] hover:bg-[rgba(247,250,253,.9)] disabled:cursor-default disabled:hover:bg-transparent ${
+                            on ? "bg-[var(--app-accent-soft)]" : ""
+                          }`}
+                        >
+                          {!disabled && (
+                            <span
+                              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                on ? "border-primary bg-primary text-white" : "border-border bg-white"
+                              }`}
+                            >
+                              {on && <Check size={11} strokeWidth={3} />}
+                            </span>
+                          )}
+                          <span className={`flex-1 ${disabled ? "opacity-50" : ""}`}>{productChip(r.name)}</span>
+                          <span className="font-mono text-[11px] text-fg-muted">
+                            {disabled
+                              ? r.pending > 0
+                                ? `${r.pending} pending`
+                                : "no changes"
+                              : `${r.approved} approved${r.pending > 0 ? ` · ${r.pending} pending` : ""}`}
+                          </span>
+                        </button>
+                      );
+                    };
+                    return (
+                      <div className="overflow-hidden rounded-inner border border-border">
+                        <div className="flex items-center justify-between bg-[rgba(247,250,253,.9)] px-3 py-1.5">
+                          <span className="eyebrow text-[10px] text-fg-muted">
+                            Ready to sync · {ready.length}
+                          </span>
+                          {ready.length > 1 && (
+                            <button
+                              onClick={() => {
+                                setPlan(null);
+                                setMergeError("");
+                                setScopeSel(allSelected ? [SCOPE_NONE] : []);
+                              }}
+                              className="text-[11.5px] font-semibold text-primary hover:underline"
+                            >
+                              {allSelected ? "Clear" : "Select all"}
+                            </button>
+                          )}
+                        </div>
+                          {ready.length === 0 && (
+                            <div className="px-3 py-2 text-[12.5px] text-fg-muted">
+                              Nothing approved yet.
+                            </div>
+                          )}
+                          {ready.map((r) => row(r, false))}
+                        {idle.length > 0 && (
+                          <>
+                            <div className="flex items-center justify-between border-t border-border bg-[rgba(247,250,253,.9)] px-3 py-1.5">
+                              <span className="eyebrow text-[10px] text-fg-muted">
+                                Nothing to sync · {idle.length}
+                              </span>
+                            </div>
+                            {idle.map((r) => row(r, true))}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="text-xs text-fg-3">{previewHint}</div>
 
                   {/* Preview */}
@@ -1714,9 +1850,21 @@ export function IdeasView({
                               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg-2">
                                 {item.title}
                               </span>
-                              <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">
-                                {item.action === "create" ? "→ new issue" : item.jiraKey}
-                              </span>
+                              {item.action === "create" || !item.jiraKey ? (
+                                <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">→ new issue</span>
+                              ) : (
+                                <a
+                                  href={item.url ?? `${jiraSiteUrl ?? ""}/browse/${item.jiraKey}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  title="Open in Jira"
+                                  className="inline-flex shrink-0 items-center gap-1 font-mono text-[10.5px] text-primary hover:underline"
+                                >
+                                  {item.jiraKey}
+                                  <ExternalLink size={10} />
+                                </a>
+                              )}
                             </div>
                             <span className="pl-[66px] text-[11.5px] text-fg-muted">
                               {item.noop
@@ -1724,6 +1872,14 @@ export function IdeasView({
                                 : item.changes.map((c) => c.label).join(", ")}
                               {item.votes > 0 ? ` · ${item.votes} vote${item.votes === 1 ? "" : "s"}` : ""}
                             </span>
+                          </div>
+                        ))}
+                        {plan.notes.map((n) => (
+                          <div
+                            key={n}
+                            className="border-t border-hairline bg-[rgba(59,124,246,.06)] px-3 py-2 text-[12.5px] text-[#2a5fd0]"
+                          >
+                            {n}
                           </div>
                         ))}
                         {plan.warnings.map((w) => (
@@ -1765,8 +1921,8 @@ export function IdeasView({
                       disabled={pushing || plan.blockers.length > 0 || plan.items.length === 0}
                       onClick={runPush}
                     >
-                      <GitMerge size={13} strokeWidth={2.25} />
-                      {pushing ? "Merging…" : `Confirm merge (${plan.items.length})`}
+                      <RefreshCw size={13} strokeWidth={2.25} />
+                      {pushing ? "Syncing…" : `Confirm sync (${plan.items.length})`}
                     </Button>
                   )}
                 </div>

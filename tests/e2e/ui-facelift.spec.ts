@@ -10,7 +10,7 @@ import { LOCAL_BASE_URL } from "./test-env";
  * UF1 Ideas page: the one-row filter toolbar (search + popover filters on
  *     one line), the single-select Status popover whose "All" option also
  *     reveals the unchanged Jira backlog, the review card titled "Review in
- *     Progress", the "Jira Merge" button disabled (with its hint) while no
+ *     Progress", the "Sync to Jira" button (was "Jira Merge") disabled (with its hint) while no
  *     Jira integration exists, and — scoring being parked — no "score"
  *     label / "No score yet" text anywhere on the list or in the drawer.
  * UF2 Settings → Ideas → Customers: every row carries a "Chip color for
@@ -243,7 +243,7 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     await expect(ideaRow(page, NEW_TITLE)).toBeVisible();
   }
 
-  test("UF1 ideas page: one-row toolbar, Status popover with All, Review in Progress card, Jira Merge disabled, no score text", async ({
+  test("UF1 ideas page: one-row toolbar, Status popover with All, Review in Progress card, Sync to Jira disabled, no score text", async ({
     page,
   }) => {
     await loginAsRoomLens(page);
@@ -251,7 +251,7 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
 
     // Review card title + the Jira gate: no integration → disabled, hinted.
     await expect(page.getByText("Review in Progress", { exact: true })).toBeVisible();
-    const jiraMerge = page.getByRole("button", { name: "Jira Merge" });
+    const jiraMerge = page.getByRole("button", { name: "Sync to Jira" });
     await expect(jiraMerge).toBeVisible();
     await expect(jiraMerge).toBeDisabled();
     await expect(page.locator(`span[title="${NOT_CONNECTED_HINT}"]`)).toBeVisible();
@@ -485,7 +485,8 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
 
     await loginAsRoomLensAdmin(page);
     await page.goto("/admin/ideas");
-    const runsCard = page.locator("section", {
+    // Cards are nested inside group <section>s since feature/jira-support-kela.
+    const runsCard = page.locator("section.rounded-xl", {
       has: page.getByRole("heading", { name: "Import runs" }),
     });
     await expect(runsCard).toBeVisible();

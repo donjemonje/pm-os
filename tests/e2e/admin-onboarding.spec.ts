@@ -274,7 +274,9 @@ test.describe("PM-OS Admin: onboarding, CSV mapping, import runs (ADM-02, ADM-08
     });
 
     await page.goto("/admin/ideas");
-    const runsCard = page.locator("section", { has: page.getByRole("heading", { name: "Import runs" }) });
+    // Cards are nested inside the Stats / Jira / Zendesk / AI group <section>s since
+    // feature/jira-support-kela — root on the card class, not any <section>.
+    const runsCard = page.locator("section.rounded-xl", { has: page.getByRole("heading", { name: "Import runs" }) });
     await expect(runsCard).toBeVisible();
     // Hydration anchor before touching the <select> (UF4's lesson).
     await expect(

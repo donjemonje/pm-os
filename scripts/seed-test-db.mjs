@@ -164,7 +164,131 @@ async function main() {
   });
   if (signups > 0) console.log(`• Deleted ${signups} qa+signup* user(s).`);
 
+  await seedKelaQa();
+
   console.log("Done.");
+}
+
+// ————— Kela QA org (feature/jira-support-kela, 2026-10-12) —————
+
+// Must match QA_KELA in tests/e2e/helpers.ts and TEST_KELA_TOTP_SECRET in
+// tests/e2e/two-factor-helpers.ts.
+const KELA_SLUG = "kela-qa";
+const KELA_NAME = "Kela QA";
+const KELA_EMAIL = "qa+kela@pm-os.io";
+const KELA_PASSWORD = "kela-qa-pass1";
+const TEST_KELA_TOTP_SECRET = "MFRGGZDFMZTWQ2LKMFRGGZDFMZTWQ2LK";
+
+/**
+ * A second QA organization shaped like Kela: ideas on per org, Product Line
+ * mapped to the Jira "Module" field (read on pull, written on push), and — when the
+ * JIRA_TEST_* env is present — a live Jira connection (API token, basic auth)
+ * to the TEST project (scripts/jira-test-project.mjs). Without the env the
+ * org is seeded unconnected and the live-Jira specs skip.
+ *
+ * Reset every run: ideas, tickets, snapshots and undo rows go (the tests
+ * import into a clean org). Product lines stay — the catalog is curated, a
+ * pull never grows it (unmatched Module values land in "Other").
+ */
+async function seedKelaQa() {
+  let org = await prisma.organization.findUnique({
+    where: { slug: KELA_SLUG },
+    include: { workspace: true },
+  });
+  if (!org) {
+    org = await prisma.organization.create({
+      data: {
+        name: KELA_NAME,
+        slug: KELA_SLUG,
+        workspace: { create: { name: `${KELA_NAME} Workspace` } },
+      },
+      include: { workspace: true },
+    });
+    console.log(`✓ Organization "${KELA_NAME}" created (slug: ${KELA_SLUG})`);
+  }
+  const ws = org.workspace;
+  await prisma.organization.update({ where: { id: org.id }, data: { features: { ideas: true } } });
+
+  await upsertQaUser(org.id, KELA_EMAIL, "QA Kela", {
+    role: "USER",
+    deactivatedAt: null,
+    totpSecretEnc: encryptTotpSecret(TEST_KELA_TOTP_SECRET),
+    totpEnabledAt: new Date(),
+    totpLastUsedStep: null,
+  });
+  // The seed's upsert sets the shared RoomLens password; Kela has its own.
+  await prisma.user.update({
+    where: { email: KELA_EMAIL },
+    data: { passwordHash: hashPassword(KELA_PASSWORD) },
+  });
+  await prisma.session.deleteMany({ where: { user: { email: KELA_EMAIL } } });
+
+  // Clean import state.
+  await prisma.ideasPushUndo.deleteMany({ where: { workspaceId: ws.id } });
+  await prisma.idea.deleteMany({ where: { workspaceId: ws.id } });
+  await prisma.zendeskTicketRaw.deleteMany({ where: { workspaceId: ws.id } });
+  await prisma.jiraIdeaSnapshot.deleteMany({ where: { workspaceId: ws.id } });
+  // One hand-made row with an alias: Kela's Jira option "Platform General" is
+  // the catalog's "Platform" (the alias path on pull, Zendesk import and push).
+  const platform = await prisma.productLine.findFirst({
+    where: { workspaceId: ws.id, name: { equals: "Platform", mode: "insensitive" } },
+    select: { id: true },
+  });
+  const platformData = {
+    description:
+      "Kela's shared infrastructure and platform layer — login and account mechanics, latency, cross-module reports, unified asset inventory, licensing.",
+    aliases: ["Platform General", "Platform- General", "API"],
+    origin: "manual",
+  };
+  if (platform) await prisma.productLine.update({ where: { id: platform.id }, data: platformData });
+  else await prisma.productLine.create({ data: { workspaceId: ws.id, name: "Platform", position: 0, ...platformData } });
+
+  // Stored as the partial the app merges over its defaults (mergeIdeasJiraConfig).
+  // Product Line ↔ "Module": the pull reads it, the push writes it.
+  await prisma.workspace.update({
+    where: { id: ws.id },
+    data: {
+      ideasConfig: {
+        pull: { maxIssues: 10000 },
+        fields: {
+          productLine: { jiraField: "Module", type: "single_select", policy: "set_if_empty", enabled: true },
+          reporter: { jiraField: "P_Reporter", type: "text", policy: "read", enabled: true },
+          assignee: { jiraField: "P_Assignee", type: "text", policy: "read", enabled: true },
+        },
+      },
+    },
+  });
+
+  const siteUrl = process.env.JIRA_TEST_SITE_URL?.trim().replace(/\/+$/, "");
+  const email = process.env.JIRA_TEST_EMAIL?.trim();
+  const token = process.env.JIRA_TEST_API_TOKEN?.trim();
+  const projectKey = process.env.JIRA_TEST_PROJECT_KEY?.trim() || "TEST";
+  if (siteUrl && email && token) {
+    // Same shape src/lib/jira.ts expects for authType "basic" (basicAuthToken).
+    const accessToken = Buffer.from(`${email}:${token}`, "utf8").toString("base64");
+    const data = {
+      authType: "basic",
+      cloudId: "",
+      siteUrl,
+      accessToken,
+      refreshToken: "",
+      expiresAt: new Date("2099-01-01T00:00:00Z"),
+      projectKeys: JSON.stringify([projectKey]),
+      ideasProjectKey: projectKey,
+      ideasIssueType: "Story",
+    };
+    await prisma.jiraConnection.upsert({
+      where: { workspaceId: ws.id },
+      create: { workspaceId: ws.id, ...data },
+      update: data,
+    });
+    console.log(`✓ Kela QA: Jira connected to ${siteUrl} project ${projectKey} (API token, basic auth).`);
+  } else {
+    const { count } = await prisma.jiraConnection.deleteMany({ where: { workspaceId: ws.id } });
+    console.log(
+      `• Kela QA: no JIRA_TEST_* env — seeded without a Jira connection${count ? ` (removed ${count})` : ""}; live-Jira specs will skip.`
+    );
+  }
 }
 
 main()
