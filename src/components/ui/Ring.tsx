@@ -41,7 +41,13 @@ export function Ring({
         />
       </svg>
       {label && (
-        <span className="font-title font-bold text-foreground" style={{ fontSize: size * 0.3 }}>
+        // "100%" is a character wider than every other value and overflowed
+        // the ring's hole at the base scale; four characters get a smaller
+        // size so the label always sits inside the stroke.
+        <span
+          className="font-title font-bold leading-none text-foreground"
+          style={{ fontSize: size * (`${v}%`.length > 3 ? 0.24 : 0.3), letterSpacing: "-0.01em" }}
+        >
           {v}%
         </span>
       )}
