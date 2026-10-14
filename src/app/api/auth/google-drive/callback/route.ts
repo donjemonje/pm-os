@@ -6,7 +6,8 @@ export async function GET(request: NextRequest) {
   const gated = await orgFeatureDisabledResponse("docs");
   if (gated) return gated;
   const url = new URL(request.url);
-  const target = new URL("/api/auth/oauth/google/callback", url.origin);
+  // The public app URL, not the host the server listens on (0.0.0.0 inside App Hosting).
+  const target = new URL("/api/auth/oauth/google/callback", process.env.NEXT_PUBLIC_APP_URL?.trim() || url.origin);
   url.searchParams.forEach((value, key) => target.searchParams.set(key, value));
   return NextResponse.redirect(target);
 }

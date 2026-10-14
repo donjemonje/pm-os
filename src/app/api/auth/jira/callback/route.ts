@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { exchangeJiraCode, getAccessibleResources } from "@/lib/jira";
+import { getAppBaseUrl } from "@/lib/jira-oauth-config";
+
+/** Redirect target after the OAuth round trip. The request URL is the host the
+ *  server listens on — inside App Hosting that is 0.0.0.0 — so the browser is
+ *  sent to the public app URL instead. */
+function back(request: NextRequest, path: string): NextResponse {
+  return NextResponse.redirect(new URL(path, getAppBaseUrl() ?? request.url));
+}
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
@@ -9,13 +17,11 @@ export async function GET(request: NextRequest) {
   const error = request.nextUrl.searchParams.get("error");
 
   if (error) {
-    return NextResponse.redirect(
-      new URL(`/settings/jira?error=${encodeURIComponent(error)}`, request.url)
-    );
+    return back(request, `/settings/jira?error=${encodeURIComponent(error)}`);
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(new URL("/settings/jira?error=missing_code", request.url));
+    return back(request, "/settings/jira?error=missing_code");
   }
 
   const cookieStore = await cookies();
@@ -23,12 +29,12 @@ export async function GET(request: NextRequest) {
   cookieStore.delete("jira_oauth_state");
 
   if (!stored) {
-    return NextResponse.redirect(new URL("/settings/jira?error=invalid_state", request.url));
+    return back(request, "/settings/jira?error=invalid_state");
   }
 
   const [storedState, workspaceId] = stored.split(":");
   if (storedState !== state) {
-    return NextResponse.redirect(new URL("/settings/jira?error=state_mismatch", request.url));
+    return back(request, "/settings/jira?error=state_mismatch");
   }
 
   try {
@@ -37,7 +43,7 @@ export async function GET(request: NextRequest) {
     const site = resources[0];
 
     if (!site) {
-      return NextResponse.redirect(new URL("/settings/jira?error=no_site", request.url));
+      return back(request, "/settings/jira?error=no_site");
     }
 
     await db.jiraConnection.upsert({
@@ -60,8 +66,8 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    return NextResponse.redirect(new URL("/settings/jira?connected=1", request.url));
+    return back(request, "/settings/jira?connected=1");
   } catch {
-    return NextResponse.redirect(new URL("/settings/jira?error=oauth_token_failed", request.url));
+    return back(request, "/settings/jira?error=oauth_token_failed");
   }
 }
