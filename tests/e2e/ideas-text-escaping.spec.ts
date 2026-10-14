@@ -44,6 +44,10 @@ const JIRA_TITLE = "QA-XS jira <u>title</u>";
 const TICKET_URL = "https://example.com/qa-xs/ticket?x=1";
 const JIRA_SAFE_URL = "https://example.com/qa-xs/jira";
 const IDEA_URL = "https://example.com/qa-xs/idea";
+// Bare URLs (no markdown link syntax) must render clickable too — Jira
+// bodies and "Supported tickets" lists are mostly bare.
+const IDEA_BARE_URL = "https://example.com/qa-xs/idea-bare?x=1";
+const JIRA_BARE_URL = "https://example.com/qa-xs/jira-bare";
 
 const SCRIPT_TICKET = `<script>window.__qaXss = "ticket"</script>`;
 const SCRIPT_JIRA = `<script>window.__qaXss = "jira"</script>`;
@@ -57,6 +61,8 @@ const JIRA_BODY = [
   `${SCRIPT_JIRA} ${IMG_PAYLOAD}`,
   ``,
   `[safe link](${JIRA_SAFE_URL}) and [evil link](javascript:window.__qaXss='href')`,
+  ``,
+  `Bare ${JIRA_BARE_URL}, pasted.`,
 ].join("\n");
 // A line that starts with <script> opens a CommonMark HTML block that swallows
 // the rest of its paragraph (rendered as text, which is the point) — so the
@@ -67,6 +73,8 @@ const IDEA_DETAILS = [
   `${SCRIPT_IDEA} ${IMG_PAYLOAD}`,
   ``,
   `See [the doc](${IDEA_URL}).`,
+  ``,
+  `Supported tickets: ${IDEA_BARE_URL}.`,
 ].join("\n");
 
 let workspaceId: string;
@@ -170,6 +178,8 @@ test.describe("Ideas — customer and Jira text is escaped (REV-14)", () => {
     await expect(ideaText.getByText(IMG_PAYLOAD, { exact: false })).toBeVisible();
     await expect(ideaText.locator("script, img")).toHaveCount(0);
     await expect(ideaText.locator(`a[href="${IDEA_URL}"]`)).toHaveText("the doc");
+    // A bare URL is a link whose text is the URL; the trailing "." stays outside.
+    await expect(ideaText.locator(`a[href="${IDEA_BARE_URL}"]`)).toHaveText(IDEA_BARE_URL);
 
     // ——— Surface 2: raw Jira issue description (ADF → markdown, .source-text) ———
     await drawer.getByRole("button", { name: new RegExp(JIRA_KEY) }).click();
@@ -183,6 +193,7 @@ test.describe("Ideas — customer and Jira text is escaped (REV-14)", () => {
     await expect(jiraText.getByText(IMG_PAYLOAD, { exact: false })).toBeVisible();
     await expect(jiraText.locator("script, img")).toHaveCount(0);
     await expect(jiraText.getByRole("link", { name: "safe link" })).toHaveAttribute("href", JIRA_SAFE_URL);
+    await expect(jiraText.locator(`a[href="${JIRA_BARE_URL}"]`)).toHaveText(JIRA_BARE_URL);
     const evil = jiraText.getByText("evil link", { exact: true });
     await expect(evil).toBeVisible();
     // React Markdown's default urlTransform drops unsafe protocols: the link
