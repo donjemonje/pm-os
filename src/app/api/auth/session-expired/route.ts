@@ -26,17 +26,17 @@ export async function GET(request: NextRequest) {
   const state = await getLiveSessionState();
 
   if (state === "pending") {
-    const challenge = new URL("/login/2fa", request.url);
+    const challenge = new URL("/login/2fa", process.env.NEXT_PUBLIC_APP_URL?.trim() || request.url);
     if (from) challenge.searchParams.set("from", from);
     return NextResponse.redirect(challenge);
   }
 
   if (state === "verified") {
-    return NextResponse.redirect(new URL(from ?? "/", request.url));
+    return NextResponse.redirect(new URL(from ?? "/", process.env.NEXT_PUBLIC_APP_URL?.trim() || request.url));
   }
 
   // "dead" or "none": land on /login; clear whatever stale cookies exist.
-  const login = new URL("/login", request.url);
+  const login = new URL("/login", process.env.NEXT_PUBLIC_APP_URL?.trim() || request.url);
   if (from) login.searchParams.set("from", from);
   const response = NextResponse.redirect(login);
   for (const name of [SESSION_COOKIE, TWO_FACTOR_PENDING_COOKIE]) {
