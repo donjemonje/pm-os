@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Sparkles, X } from "lucide-react";
+import { Check, Brain, X } from "lucide-react";
 import { JiraMark, ZendeskMark } from "@/components/brand/SourceIcons";
 import { ApproveMark } from "@/components/ui/ApproveMark";
 import { Chip } from "@/components/ui/Chip";
@@ -400,7 +400,7 @@ export function MergePage({
       {columnFrame(
         "Final",
         finals.length,
-        <Sparkles size={13} strokeWidth={2.25} />,
+        <Brain size={13} strokeWidth={2.25} />,
         <>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
