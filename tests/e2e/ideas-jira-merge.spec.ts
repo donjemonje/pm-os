@@ -17,8 +17,9 @@ import { RESOLVED_ENV } from "./test-env";
  *   shared Status filter is the only scope): unchanged ideas and the Jira
  *   sources backing only unchanged ideas hide by default and show under
  *   Unchanged / All; edit mode always shows the full source pool. Entering
- *   the view no longer auto-starts an edit — clicking a Final row does, and
- *   that row grows discard (×) / save (✓) icon buttons.
+ *   the view no longer auto-starts an edit — clicking a row's "N src" chip
+ *   does (the row itself opens the drawer), and that row grows discard (×) /
+ *   save (✓) icon buttons.
  * - A manual reassign on the merge page recomputes status and votes: adding
  *   ticket evidence to a Jira-origin idea flips it to Updated and moves
  *   newVotes by the zendesk-source delta; removing it flips it back.
@@ -416,7 +417,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await pickStatus(page, "All");
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toHaveCount(0);
     const updatedRow = finalCol.locator("div.cursor-pointer", { hasText: UPDATED_TITLE });
-    await updatedRow.click();
+    await updatedRow.getByTitle("Edit sources").click();
     await expect(updatedRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_B })).toBeVisible();
@@ -439,10 +440,10 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     const targetRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
 
     // Start editing the unchanged Jira idea (visible only under Status:
-    // Unchanged) by clicking its row, and attach the orphan ticket as
+    // Unchanged) by clicking its src chip, and attach the orphan ticket as
     // evidence. The save (✓) icon appears only once the edit is dirty.
     await pickStatus(page, "Unchanged");
-    await targetRow.click();
+    await targetRow.getByTitle("Edit sources").click();
     await expect(targetRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await expect(targetRow.getByTitle(SAVE_TITLE)).toHaveCount(0);
     await orphanRow.click();
@@ -476,7 +477,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     // Reverse it: detach the ticket → back to Unchanged, delta gone.
     await pageToggle(page, "Merge").click();
     const updatedRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
-    await updatedRow.click();
+    await updatedRow.getByTitle("Edit sources").click();
     await expect(updatedRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await orphanRow.click();
     await expect(updatedRow.getByTitle(SAVE_TITLE)).toBeVisible();

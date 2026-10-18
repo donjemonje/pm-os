@@ -413,7 +413,8 @@ export function MergePage({
             return (
               <div
                 key={idea.id}
-                onClick={() => onStartEdit(idea.id)}
+                onClick={() => onOpenIdea(idea.id)}
+                title="Open idea"
                 className={`${ROW} hover:bg-white/60`}
                 style={{
                   ...(sel && !gone ? SELECTED_ROW : {}),
@@ -472,9 +473,9 @@ export function MergePage({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onOpenIdea(idea.id);
+                    onStartEdit(idea.id);
                   }}
-                  title="Open idea"
+                  title="Edit sources"
                   className="shrink-0 whitespace-nowrap rounded-full px-[7px] py-[2px] font-mono text-[10px] font-semibold hover:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                   style={{
                     background: gone
