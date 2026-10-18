@@ -77,7 +77,7 @@ test.describe("PM-OS Admin", () => {
   test.beforeAll(resetAdminFixtures);
   test.afterAll(resetAdminFixtures);
 
-  test("A1 role changes are script-only: API rejects role PATCH, UI has no role controls, deactivation guardrails hold", async ({
+  test("A1 pmos-admin role is script-only: API rejects PMOS_ADMIN PATCH, UI has no pmos-admin controls, customer-admin toggles, deactivation guardrails hold", async ({
     page,
   }) => {
 
@@ -94,10 +94,11 @@ test.describe("PM-OS Admin", () => {
     await expect(own.getByText("pmos-admin", { exact: true })).toBeVisible();
     await expect(target.getByText("user", { exact: true })).toBeVisible();
 
-    // …and the page offers NO role-change affordances (removed 2026-08-27,
-    // Daniel's security call: roles move only via scripts/set-user-role.mjs).
-    // The actions column IS rendered (Deactivate is there), so the
-    // zero-counts below can't pass vacuously on an unrendered table.
+    // …and the page offers NO pmos-admin affordances (removed 2026-08-27,
+    // Daniel's security call). The only role control is the customer-admin
+    // toggle (2026-10-18), absent on a pmos-admin's own row. The actions
+    // column IS rendered (Deactivate is there), so the zero-counts below
+    // can't pass vacuously on an unrendered table.
     await expect(
       target.getByRole("button", { name: "Deactivate" })
     ).toBeVisible();
@@ -107,8 +108,15 @@ test.describe("PM-OS Admin", () => {
     await expect(
       page.getByRole("button", { name: "Remove admin" })
     ).toHaveCount(0);
+    await expect(own.getByRole("button", { name: /customer admin|Make user/ })).toHaveCount(0);
 
-    // API-level: even a valid admin session cannot change roles.
+    // Customer admin: grant from the UI, badge follows, revoke, badge follows.
+    await target.getByRole("button", { name: "Make customer admin", exact: true }).click();
+    await expect(target.getByText("customer-admin", { exact: true })).toBeVisible();
+    await target.getByRole("button", { name: "Make user", exact: true }).click();
+    await expect(target.getByText("user", { exact: true })).toBeVisible();
+
+    // API-level: even a valid admin session cannot grant PMOS_ADMIN.
     // page.request rides the logged-in admin's cookies; the request is
     // rejected loudly (400 + script pointer), not silently ignored.
     const orgsRes = await page.request.get("/api/admin/organizations");
@@ -123,9 +131,13 @@ test.describe("PM-OS Admin", () => {
       data: { role: "PMOS_ADMIN" },
     });
     expect(promote.status()).toBe(400);
-    expect((await promote.json()).error).toBe(
-      "Role changes are not available through the API. Use scripts/set-user-role.mjs."
-    );
+    expect((await promote.json()).error).toContain("Only USER and CUSTOMER_ADMIN");
+    // A pmos-admin's own role is untouchable here, in either direction.
+    const ownId = organizations
+      .flatMap((org: { members: { id: string; email: string }[] }) => org.members)
+      .find((member: { email: string }) => member.email === QA_ADMIN.email)?.id;
+    const demote = await page.request.patch(`/api/admin/users/${ownId}`, { data: { role: "USER" } });
+    expect(demote.status()).toBe(400);
 
     // Bundling `role` with an otherwise-valid change is rejected whole —
     // no partial application of the deactivation half.

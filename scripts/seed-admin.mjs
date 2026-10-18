@@ -15,8 +15,8 @@
  *   ADMIN_EMAIL=daniel@pm-os.io ADMIN_PASSWORD='...' node scripts/seed-admin.mjs
  * Optional: ADMIN_NAME="Daniel East" ADMIN_ORG_NAME="PM-OS"
  *
- * Further role changes (either direction) go through scripts/set-user-role.mjs
- * — never the UI or API.
+ * Demoting a pmos-admin is a manual DB step — never the UI or API. The
+ * customer-admin role (own-org settings) is granted from Admin → Users.
  * Hashing matches src/lib/auth.ts (scrypt, "salt:hash").
  */
 import { PrismaClient } from "@prisma/client";

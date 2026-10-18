@@ -11,6 +11,7 @@ import {
   Trash2,
   UserPlus,
   UserX,
+  ShieldCheck,
 } from "lucide-react";
 import { ORG_DELETE_CONFIRMATION } from "@/lib/admin-guard";
 import { cn } from "@/lib/utils";
@@ -70,7 +71,10 @@ export function UserManagement({
     }
   }
 
-  async function patchMember(member: Member, change: { deactivated: boolean }) {
+  async function patchMember(
+    member: Member,
+    change: { deactivated: boolean } | { role: "USER" | "CUSTOMER_ADMIN" }
+  ) {
     setBusyUserId(member.id);
     setActionError("");
     try {
@@ -103,6 +107,11 @@ export function UserManagement({
       return;
     }
     await patchMember(member, { deactivated });
+  }
+
+  /** USER ↔ CUSTOMER_ADMIN only; a pmos-admin's row offers no role control. */
+  async function setCustomerAdmin(member: Member, customerAdmin: boolean) {
+    await patchMember(member, { role: customerAdmin ? "CUSTOMER_ADMIN" : "USER" });
   }
 
   async function resendInvite(member: Member) {
@@ -152,9 +161,10 @@ export function UserManagement({
     }
   }
 
-  // Role changes are deliberately absent from this UI (and rejected by the
-  // API): they happen only via scripts/set-user-role.mjs — Daniel's call,
-  // 2026-08-27. The role badge below is display-only.
+  // The pmos-admin role is deliberately not changeable from this UI (and
+  // rejected by the API): it moves only via scripts/seed-admin.mjs — Daniel's
+  // call, 2026-08-27. Customer admin (own-org settings, no /admin) is the one
+  // role an admin may grant and revoke here (2026-10-18).
 
   return (
     <div className="space-y-6">
@@ -351,6 +361,22 @@ export function UserManagement({
                                 <UserX className="h-3.5 w-3.5" />
                               )}
                               Deactivate
+                            </button>
+                          )}
+                          {member.role !== "PMOS_ADMIN" && (
+                            <button
+                              type="button"
+                              onClick={() => setCustomerAdmin(member, member.role !== "CUSTOMER_ADMIN")}
+                              disabled={busyUserId === member.id}
+                              className="ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                              title={
+                                member.role === "CUSTOMER_ADMIN"
+                                  ? "Back to a plain member: no organization settings"
+                                  : "Lets them manage their organization's settings (product lines); no PM-OS Admin access"
+                              }
+                            >
+                              <ShieldCheck className="h-3.5 w-3.5" />
+                              {member.role === "CUSTOMER_ADMIN" ? "Make user" : "Make customer admin"}
                             </button>
                           )}
                           {!member.deactivatedAt && !member.activated && (
