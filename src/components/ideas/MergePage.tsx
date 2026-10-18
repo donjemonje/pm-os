@@ -398,9 +398,9 @@ export function MergePage({
 
       {/* Final column */}
       {columnFrame(
-        "Final",
+        "PM-OS Ideas",
         finals.length,
-        <Brain size={13} strokeWidth={2.25} />,
+        <Brain size={13} strokeWidth={2.25} fill="currentColor" fillOpacity={0.3} />,
         <>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
