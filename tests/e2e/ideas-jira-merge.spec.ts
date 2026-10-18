@@ -268,7 +268,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
   const SAVE_TITLE = "Save source changes";
 
   /** A merge-board column (glass card), scoped by its header label. */
-  function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "Final") {
+  function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "PM-OS Ideas") {
     return page
       .locator("div.overflow-hidden.rounded-card")
       .filter({ has: page.getByText(label, { exact: true }) });
@@ -386,7 +386,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     // Jira keys that back only it are hidden.
     await pageToggle(page, "Merge").click();
     const jiraCol = mergeColumn(page, "Jira");
-    const finalCol = mergeColumn(page, "Final");
+    const finalCol = mergeColumn(page, "PM-OS Ideas");
     await expect(finalCol.getByText(UPDATED_TITLE)).toBeVisible();
     await expect(finalCol.getByTitle(DISCARD_TITLE)).toHaveCount(0);
     await expect(jiraCol.getByRole("button", { name: JIRA_C })).toBeVisible();
@@ -434,7 +434,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await pageToggle(page, "Merge").click();
 
     const zenCol = mergeColumn(page, "Zendesk");
-    const finalCol = mergeColumn(page, "Final");
+    const finalCol = mergeColumn(page, "PM-OS Ideas");
     const orphanRow = zenCol.locator("div.cursor-pointer", { hasText: TICKET_ORPHAN_SUBJECT });
     const targetRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
 
