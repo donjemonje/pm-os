@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { MyProductLinesPanel } from "@/components/ideas/MyProductLinesPanel";
 import { ProductLinesPanel } from "@/components/settings/ProductLinesPanel";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
-import { isPmosAdmin } from "@/lib/admin-auth";
+import { canManageOrgSettings } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
@@ -52,7 +52,7 @@ export default async function ProductLinesSettingsPage() {
             ? l.aliases.filter((a): a is string => typeof a === "string")
             : [],
         }))}
-        canEdit={isPmosAdmin(user)}
+        canEdit={canManageOrgSettings(user)}
       />
       {myLinesEnabled && productLines.length > 0 && (
         <MyProductLinesPanel

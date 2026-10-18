@@ -46,6 +46,19 @@ export async function loginAsRoomLensAdmin(page: Page): Promise<void> {
 }
 
 /**
+ * Seeded CUSTOMER_ADMIN user in the RoomLens org: may change the org's product
+ * lines, has no /admin access. Shares QA_USER's TOTP secret.
+ */
+export const QA_CUSTOMER_ADMIN = {
+  email: "qa+roomlens-customer-admin@pm-os.io",
+  password: "roomlens-qa-pass1",
+};
+
+export async function loginAsRoomLensCustomerAdmin(page: Page): Promise<void> {
+  await loginWithTotp(page, { ...QA_CUSTOMER_ADMIN, totpSecret: TEST_TOTP_SECRET });
+}
+
+/**
  * Kela QA organization (slug "kela-qa"), seeded by scripts/seed-test-db.mjs:
  * ideas enabled per org, Jira connected with an API token to the TEST project
  * (a copy of Kela's 66 PRDT issues) when the JIRA_TEST_* env is present —

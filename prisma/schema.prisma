@@ -22,11 +22,12 @@ model Organization {
   workspace Workspace?
 }
 
-/// Minimized IAM. PMOS_ADMIN (not plain "admin" — that name is reserved for a
-/// future customer-admin role) grants access to PM-OS Admin. Default USER =
-/// deny-by-default.
+/// Minimized IAM. PMOS_ADMIN grants access to PM-OS Admin. CUSTOMER_ADMIN is a
+/// plain user who may also change their own organization's settings (product
+/// lines) — never /admin. Default USER = deny-by-default.
 enum UserRole {
   USER
+  CUSTOMER_ADMIN
   PMOS_ADMIN
 }
 

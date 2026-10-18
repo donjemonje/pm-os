@@ -20,7 +20,7 @@ type Member = {
   id: string;
   email: string;
   name: string;
-  role: "USER" | "PMOS_ADMIN";
+  role: "USER" | "CUSTOMER_ADMIN" | "PMOS_ADMIN";
   hasPassword: boolean;
   providers: string[];
   activated: boolean;
@@ -286,10 +286,16 @@ export function UserManagement({
                               "rounded-full px-2 py-0.5 text-xs font-medium",
                               member.role === "PMOS_ADMIN"
                                 ? "bg-violet-50 text-violet-700"
-                                : "bg-slate-100 text-slate-600"
+                                : member.role === "CUSTOMER_ADMIN"
+                                  ? "bg-sky-50 text-sky-700"
+                                  : "bg-slate-100 text-slate-600"
                             )}
                           >
-                            {member.role === "PMOS_ADMIN" ? "pmos-admin" : "user"}
+                            {member.role === "PMOS_ADMIN"
+                              ? "pmos-admin"
+                              : member.role === "CUSTOMER_ADMIN"
+                                ? "customer-admin"
+                                : "user"}
                           </span>
                         </td>
                         <td className="px-5 py-3">

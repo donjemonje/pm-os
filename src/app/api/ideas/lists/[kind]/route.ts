@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
-import { isPmosAdmin } from "@/lib/admin-auth";
+import { canManageOrgSettings } from "@/lib/admin-auth";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
@@ -162,16 +162,17 @@ async function guard(
   const ops = KINDS[kind];
   if (!ops) return NextResponse.json({ error: "Unknown list" }, { status: 404 });
   // Product lines are the AI's ground truth: readable by everyone in the
-  // workspace, changed only by a PM-OS admin. The chip color is
-  // presentation, not ground truth — any workspace user may pick it.
+  // workspace, changed only by an admin (the org's customer admin or a
+  // PM-OS admin). The chip color is presentation, not ground truth — any
+  // workspace user may pick it.
   if (
     opts.write &&
     !opts.colorOnly &&
     kind === "product-lines" &&
-    !isPmosAdmin(await getCurrentUser())
+    !canManageOrgSettings(await getCurrentUser())
   ) {
     return NextResponse.json(
-      { error: "Only a PM-OS admin can change product lines" },
+      { error: "Only an admin can change product lines" },
       { status: 403 }
     );
   }

@@ -183,7 +183,7 @@ export function ProductLinesPanel({
         tickets. The order here is the order filters list them in.{" "}
         {canEdit
           ? "Markdown is supported."
-          : "Managed by your PM-OS admin; read-only for members."}
+          : "Managed by your organization's admin; read-only for members."}
       </p>
 
       {error && (
