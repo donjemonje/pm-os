@@ -231,16 +231,31 @@ export function ProductLinesPanel({
           <div
             key={item.id}
             onDragOver={(e) => {
-              if (dragId && dragId !== item.id) e.preventDefault();
+              if (!dragId || dragId === item.id) return;
+              e.preventDefault();
+              if (overId !== item.id) setOverId(item.id);
+            }}
+            onDragLeave={(e) => {
+              // Leaving to a child element fires too — only clear when the
+              // pointer really left the card.
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null) && overId === item.id)
+                setOverId(null);
             }}
             onDrop={(e) => {
               e.preventDefault();
               void dropOn(item.id);
             }}
             className={cn(
-              "rounded-xl border border-border bg-white px-5 py-4 transition-shadow",
-              dragId === item.id && "opacity-50",
-              dragId && dragId !== item.id && "hover:shadow-[0_-2px_0_0_var(--app-accent)]",
+              "relative rounded-xl border border-border bg-white px-5 py-4 transition-[box-shadow,opacity,border-color]",
+              dragId === item.id && "opacity-40",
+              // The row the dragged line will take the place of: accent frame
+              // plus an insertion bar on the side it will land on.
+              dragId && overId === item.id && "border-primary shadow-[0_0_0_2px_var(--app-accent-soft)]",
+              dragId &&
+                overId === item.id &&
+                (items.findIndex((i) => i.id === dragId) < items.findIndex((i) => i.id === item.id)
+                  ? "after:absolute after:inset-x-3 after:-bottom-[7px] after:h-[3px] after:rounded-full after:bg-primary after:content-['']"
+                  : "before:absolute before:inset-x-3 before:-top-[7px] before:h-[3px] before:rounded-full before:bg-primary before:content-['']"),
             )}
           >
             {editingId === item.id ? (
@@ -295,7 +310,10 @@ export function ProductLinesPanel({
                           setDragId(item.id);
                           e.dataTransfer.effectAllowed = "move";
                         }}
-                        onDragEnd={() => setDragId(null)}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverId(null);
+                        }}
                         title="Drag to reorder"
                         className="flex h-7 w-7 cursor-grab items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground active:cursor-grabbing"
                       >
