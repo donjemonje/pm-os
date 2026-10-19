@@ -17,6 +17,7 @@ import {
   Upload,
   ExternalLink,
   Undo2,
+  Share2,
 } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
@@ -1307,7 +1308,7 @@ export function IdeasView({
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">
-                    <GitMerge size={14} className="text-primary" />
+                    <Share2 size={14} className="text-primary" />
                     Click an idea src chip to edit its sources
                   </div>
                 )}
