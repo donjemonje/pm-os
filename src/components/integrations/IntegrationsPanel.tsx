@@ -1,5 +1,8 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+
 import { useState } from "react";
 import { ArrowRight, CheckCircle2, Circle, Loader2, ExternalLink } from "lucide-react";
 import { formatIntegrationError } from "@/lib/integration-errors";
@@ -59,6 +62,10 @@ function IntegrationRow({
   expanded,
   onToggle,
   children,
+  flat = false,
+  needsReconnect = false,
+  headerAction,
+  onDisconnect,
 }: {
   name: string;
   connected: boolean;
@@ -76,6 +83,8 @@ function IntegrationRow({
   needsReconnect?: boolean;
   /** Extra control on the header row (e.g. an Open-in-Jira link). */
   headerAction?: React.ReactNode;
+  /** Shown as a Disconnect button when set (asks first). */
+  onDisconnect?: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-card">
@@ -115,6 +124,15 @@ function IntegrationRow({
                   {expanded ? "Hide" : "Manage"}
                 </button>
               )}
+              {onDisconnect && (
+                <button
+                  type="button"
+                  onClick={onDisconnect}
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted hover:border-[#c23767] hover:text-[#c23767]"
+                >
+                  Disconnect
+                </button>
+              )}
             </>
           ) : oauthReady ? (
             <a
@@ -151,6 +169,29 @@ export function IntegrationsPanel({
   driveEnabled = true,
 }: IntegrationsPanelProps) {
   const [jiraExpanded, setJiraExpanded] = useState(true);
+  const router = useRouter();
+  const { confirm } = useConfirm();
+  const [jiraDisconnectError, setJiraDisconnectError] = useState("");
+  async function disconnectJira() {
+    if (
+      !(await confirm({
+        title: "Disconnect Jira?",
+        message:
+          "Imports stop matching against the Jira backlog and Sync to Jira is off until someone connects again. Ideas already created stay as they are.",
+        confirmLabel: "Disconnect",
+        tone: "danger",
+      }))
+    )
+      return;
+    setJiraDisconnectError("");
+    const res = await fetch("/api/jira/settings", { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: undefined }));
+      setJiraDisconnectError(data.error ?? "Disconnect failed");
+      return;
+    }
+    router.refresh();
+  }
   const [driveExpanded, setDriveExpanded] = useState(Boolean(driveStatus?.connected));
   const [driveConnected, setDriveConnected] = useState(Boolean(driveStatus?.connected));
   const [driveEmail, setDriveEmail] = useState(driveStatus?.email);
@@ -190,6 +231,7 @@ export function IntegrationsPanel({
         onToggle={() => setJiraExpanded((v) => !v)}
         flat
         needsReconnect={jiraNeedsReconnect}
+        onDisconnect={jiraStatus?.connected ? disconnectJira : undefined}
         headerAction={
           jiraStatus?.connected && jiraStatus.siteUrl ? (
             <a
@@ -204,6 +246,7 @@ export function IntegrationsPanel({
           ) : null
         }
       >
+        {jiraDisconnectError && <div className="text-sm text-[#c94266]">{jiraDisconnectError}</div>}
         {jiraStatus?.connected && ideasEnabled && (
           <div className="text-sm">
             {(
