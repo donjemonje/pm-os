@@ -143,27 +143,6 @@ export function IdeaDrawer({
   const editMode = editSection !== null;
   // Esc closes the drawer (standing rule: Esc = cancel). Window-level so it
   // works wherever focus sits; the drawer is the topmost layer while open.
-  useEffect(() => {
-    if (editMode) return; // Esc cancels the edit instead (onEditKeyDown).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, editMode]);
-  const [editTitle, setEditTitle] = useState("");
-  const [editManual, setEditManual] = useState("");
-  const [editDetails, setEditDetails] = useState("");
-  const [editProducts, setEditProducts] = useState<string[]>([]);
-  const [editPlatforms, setEditPlatforms] = useState<string[]>([]);
-  /** Customers as shown while editing (ticket-derived + manual, minus removed). */
-  const [editCustomers, setEditCustomers] = useState<string[]>([]);
-  const [editAdded, setEditAdded] = useState<string[]>([]);
-  const [editRemoved, setEditRemoved] = useState<string[]>([]);
-  const [newCustomer, setNewCustomer] = useState("");
   const [customerListOpen, setCustomerListOpen] = useState(false);
   /** Product-line multi-select dropdown (tags edit); closes on outside click. */
   const [productMenuOpen, setProductMenuOpen] = useState(false);
@@ -177,6 +156,31 @@ export function IdeaDrawer({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [productMenuOpen]);
+  // Esc peels one layer per press, innermost first, wherever focus sits:
+  // open menu → tags/text edit → the drawer. Element handlers that take Esc
+  // themselves stop propagation, so this sees only what nobody else took.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (productMenuOpen) setProductMenuOpen(false);
+      else if (customerListOpen) setCustomerListOpen(false);
+      else if (editSection !== null) setEditSection(null);
+      else onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, editSection, productMenuOpen, customerListOpen]);
+  const [editTitle, setEditTitle] = useState("");
+  const [editManual, setEditManual] = useState("");
+  const [editDetails, setEditDetails] = useState("");
+  const [editProducts, setEditProducts] = useState<string[]>([]);
+  const [editPlatforms, setEditPlatforms] = useState<string[]>([]);
+  /** Customers as shown while editing (ticket-derived + manual, minus removed). */
+  const [editCustomers, setEditCustomers] = useState<string[]>([]);
+  const [editAdded, setEditAdded] = useState<string[]>([]);
+  const [editRemoved, setEditRemoved] = useState<string[]>([]);
+  const [newCustomer, setNewCustomer] = useState("");
   const [showDismissed, setShowDismissed] = useState(false);
 
   const ticket =
@@ -410,6 +414,7 @@ export function IdeaDrawer({
                   setCustomerListOpen(true);
                 }}
                 onFocus={() => setCustomerListOpen(true)}
+                onClick={() => setCustomerListOpen(true)}
                 onBlur={() => setTimeout(() => setCustomerListOpen(false), 120)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
