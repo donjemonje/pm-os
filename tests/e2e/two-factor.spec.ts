@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
-import { QA_USER } from "./helpers";
+import { QA_KELA, QA_USER } from "./helpers";
 import { RESOLVED_ENV } from "./test-env";
 import {
   apiStatus,
@@ -9,7 +9,9 @@ import {
   INVALID_CODE_ERROR,
   loginExpecting2fa,
   logout,
+  passTwoFactorChallenge,
   submitTwoFactorCode,
+  TEST_KELA_TOTP_SECRET,
   TEST_TOTP_SECRET,
   totpFor,
   USER_A,
@@ -21,6 +23,8 @@ import {
  * `npm run test:db:setup` seeds the users):
  *   USER_A qa+roomlens@pm-os.io    enrolled (fixed TEST_TOTP_SECRET)
  *   USER_B qa+roomlens-2@pm-os.io  un-enrolled — T6 walks the QR enrollment
+ *   QA_KELA qa+kela@pm-os.io       enrolled, Kela QA org (ideas ON per org) —
+ *                                  T5b fences /api/ideas for an Ideas org
  *
  * The beforeAll below resets both users' totp state + sessions directly in
  * the test DB, so T6 is rerunnable and T2-T4 are immune to a leftover
@@ -166,12 +170,70 @@ test.describe("2FA login", () => {
     expect(meStatus).toBe(401);
     expect(docsStatus).toBe(401);
 
-    await page.goto("/dashboard");
+    // AUTH-06 (spec audit 2026-10-19): every page is fenced at the edge —
+    // Ideas and Admin included. src/proxy.ts runs the pending-2FA check
+    // before the admin branch and before any page renders, and carries the
+    // requested path as ?from= so the challenge can return there. Asserting
+    // `from` proves the fence saw the exact path, not just "some redirect".
+    for (const path of ["/dashboard", "/ideas", "/admin"]) {
+      await page.goto(path);
+      await page.waitForURL(/\/login\/2fa/);
+      expect(
+        new URL(page.url()).searchParams.get("from"),
+        `${path} should be fenced with from=${path}`
+      ).toBe(path);
+      await expect(
+        page.getByRole("heading", { name: "Two-factor check" })
+      ).toBeVisible();
+      await expect(page.locator("aside")).toHaveCount(0);
+    }
+  });
+
+  test("T5b Ideas org: pending session is refused on /ideas and /api/ideas; the same session gets in after the challenge", async ({
+    page,
+  }) => {
+    // The RoomLens user in T5 can't prove the /api/ideas fence: ideas is env-off
+    // for RoomLens, so the route 404s for a verified user too. The Kela QA org
+    // has ideas ON per org, so the contrast below (pending → refused, verified
+    // → 200 with the ideas state) proves the refusal is the 2FA fence.
+    //
+    // Why the pending status is 404 and not 401: the proxy leaves APIs alone,
+    // and /api/ideas (src/app/api/ideas/route.ts) checks the org feature gate
+    // before auth. A pending session is no user at all to getCurrentUser, so
+    // the org override is invisible and the gate falls to the env default —
+    // IDEAS_ENABLED=false in this env (pinned by global-setup.ts) → 404 with
+    // an { error } body and no data. Same limitation gating-isolation XC-02
+    // records for anonymous callers. If the gate order ever changes this
+    // becomes 401 — update the status here, not the no-data assertions.
+    await loginExpecting2fa(page, QA_KELA.email, QA_KELA.password);
+
+    const pending = await page.request.get("/api/ideas");
+    const pendingBody = await pending.json();
+    console.log(
+      `[T5b] pending /api/ideas=${pending.status()} body=${JSON.stringify(pendingBody)}`
+    );
+    expect(pending.status()).toBe(404);
+    expect(Object.keys(pendingBody)).toEqual(["error"]);
+
+    await page.goto("/ideas");
     await page.waitForURL(/\/login\/2fa/);
+    expect(new URL(page.url()).searchParams.get("from")).toBe("/ideas");
     await expect(
       page.getByRole("heading", { name: "Two-factor check" })
     ).toBeVisible();
-    await expect(page.locator("aside")).toHaveCount(0);
+
+    // Same user, same cookie jar: pass the challenge and the fence opens.
+    await passTwoFactorChallenge(page, TEST_KELA_TOTP_SECRET, page.locator("aside"));
+    const verified = await page.request.get("/api/ideas");
+    const state = await verified.json();
+    console.log(
+      `[T5b] verified /api/ideas=${verified.status()} keys=${Object.keys(state).join(",")}`
+    );
+    expect(verified.status()).toBe(200);
+    expect(state).not.toHaveProperty("error");
+    expect(Array.isArray(state.ideas)).toBe(true);
+    await page.goto("/ideas");
+    await expect(page.getByRole("heading", { name: "Ideas" })).toBeVisible();
   });
 
   test("T6 un-enrolled user is forced through enrollment and it works", async ({

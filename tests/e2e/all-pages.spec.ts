@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
+import {
+  expectAppPageRenders,
+  loginAsRoomLens,
+  loginWithTotp,
+  seedQaOrgWithUser,
+  withTestDb,
+} from "./helpers";
 
 /**
  * Page-coverage suite: log in once as the seeded RoomLens user, then visit
@@ -7,11 +13,15 @@ import { expectAppPageRenders, loginAsRoomLens } from "./helpers";
  * page-specific element, no bounce to /login, no 404 / error boundary).
  *
  * Route inventory (src/app/**\/page.tsx) and why some are not visited here:
- * - /                       covered: redirects a logged-in user to /dashboard.
- * - /login                  covered as a redirect: middleware sends a
- *                           logged-in user to /dashboard. The logged-out
- *                           /login render lives in auth.spec.ts. (No
- *                           /register: sign-up is invite-only.)
+ * - /                       covered: sends a signed-in user to their landing
+ *                           page (first ON surface in menu order,
+ *                           src/lib/landing.ts) — /ideas for an Ideas org,
+ *                           see the AUTH-21 block below.
+ * - /login                  covered as a redirect: the login page sends a
+ *                           signed-in user through "/" to the same landing.
+ *                           The logged-out /login render lives in
+ *                           auth.spec.ts. (No /register: sign-up is
+ *                           invite-only.)
  * - /admin, /admin/users,   skipped as app pages: PM-OS Admin requires
  *   /admin/enablements,     User.role === PMOS_ADMIN; the seeded RoomLens
  *   /admin/ideas
@@ -72,18 +82,64 @@ test("logged-in user can open every app page", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 });
 
-test("root and auth routes send a logged-in user to the dashboard", async ({
-  page,
-}) => {
-  await loginAsRoomLens(page);
+// AUTH-21 "Signed-in user on / and /login" (spec audit 2026-10-19). Landing
+// = the first ON surface in menu order (src/lib/landing.ts). Since 2.0.0 the
+// env default for dashboard is off, so an org with Ideas on lands on /ideas.
+// The suite's env pins DASHBOARD_ENABLED on (the sweep above asserts the
+// page renders), which is why RoomLens — and the Kela QA org, whose override
+// only sets ideas — land on /dashboard HERE; the old version of this test
+// asserted /dashboard and passed for that env reason, not the product rule.
+// To observe the rule, this block seeds an org with the prod-parity override
+// (ideas on; dashboard, docs, chat off — the same per-org mechanism Admin →
+// Enablements uses) and its own TOTP user, and removes both afterwards.
+// RoomLens' dashboard landing stays covered by loginAsRoomLens (waits for the
+// Dashboard heading) and admin-delete-user-org.spec AD4 (overrides cleared →
+// "/" → /dashboard).
+const LANDING_ORG = { orgName: "QA-LANDING Org", slug: "qa-landing-org" };
+const LANDING_FEATURES = { ideas: true, dashboard: false, docs: false, chat: false };
+const LANDING_USER = {
+  name: "QA Landing User",
+  email: "qa+landing@pm-os.io",
+  password: "Landing-qa-pass1",
+  totpSecret: "MFXGSZLTNRQW4ZDJNZTSA5DFON2CAU3F", // synthetic, test-only
+};
 
-  for (const path of ["/", "/login"]) {
-    await page.goto(path);
-    await page.waitForURL("**/dashboard");
-    await expect(
-      page.getByRole("heading", { name: "Dashboard" })
-    ).toBeVisible();
-  }
+test.describe("AUTH-21 landing for an Ideas org", () => {
+  test.beforeAll(async () => {
+    await withTestDb((db) =>
+      seedQaOrgWithUser(db, {
+        ...LANDING_ORG,
+        features: LANDING_FEATURES,
+        user: LANDING_USER,
+      })
+    );
+  });
+
+  test.afterAll(async () => {
+    await withTestDb(async (db) => {
+      await db.user.deleteMany({
+        where: {
+          OR: [{ email: LANDING_USER.email }, { organization: { slug: LANDING_ORG.slug } }],
+        },
+      });
+      await db.organization.deleteMany({ where: { slug: LANDING_ORG.slug } });
+    });
+  });
+
+  test("root and auth routes send a signed-in user of an Ideas org to /ideas", async ({
+    page,
+  }) => {
+    // Login itself resolves through "/" after the 2FA challenge.
+    await loginWithTotp(page, LANDING_USER);
+    await expect(page).toHaveURL(/\/ideas$/);
+
+    for (const path of ["/", "/login"]) {
+      await page.goto(path);
+      await page.waitForURL("**/ideas");
+      await expect(page.getByRole("heading", { name: "Ideas" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Dashboard" })).toHaveCount(0);
+    }
+  });
 });
 
 // Replaces the former CRM auth-realm test: the CRM (own login, own cookie)
