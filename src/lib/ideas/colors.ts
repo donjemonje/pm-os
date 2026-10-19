@@ -11,39 +11,42 @@ import type { CSSProperties } from "react";
 export interface ChipColor {
   id: string;
   label: string;
+  /** Chip tint (translucent) and text color — legible on white. */
   bg: string;
   fg: string;
+  /** The solid, saturated color shown in pickers and dots (monday.com hexes). */
+  swatch: string;
 }
 
 export const CHIP_PALETTE: readonly ChipColor[] = [
   // Row 1 — blues / teals
-  { id: "blue", label: "Bright blue", bg: "rgba(0,115,234,.16)", fg: "#0a5bc4" },
-  { id: "navy", label: "Navy", bg: "rgba(34,80,160,.18)", fg: "#1f3f86" },
-  { id: "sky", label: "Sky", bg: "rgba(102,204,255,.26)", fg: "#0b6aa0" },
-  { id: "cyan", label: "Chili blue", bg: "rgba(38,190,230,.22)", fg: "#0b6e8f" },
-  { id: "teal", label: "Aquamarine", bg: "rgba(78,204,200,.24)", fg: "#0f7a6a" },
-  { id: "steel", label: "Steel", bg: "rgba(74,120,160,.2)", fg: "#2f5676" },
+  { id: "blue", label: "Bright blue", swatch: "#0073ea", bg: "rgba(0,115,234,.16)", fg: "#0a5bc4" },
+  { id: "navy", label: "Navy", swatch: "#225091", bg: "rgba(34,80,145,.18)", fg: "#1f3f86" },
+  { id: "sky", label: "Chili blue", swatch: "#66ccff", bg: "rgba(102,204,255,.28)", fg: "#0b6aa0" },
+  { id: "cyan", label: "Dark blue", swatch: "#0086c0", bg: "rgba(0,134,192,.2)", fg: "#0b6e8f" },
+  { id: "teal", label: "Aquamarine", swatch: "#4eccc6", bg: "rgba(78,204,198,.26)", fg: "#0f7a6a" },
+  { id: "steel", label: "River", swatch: "#68a1bd", bg: "rgba(104,161,189,.26)", fg: "#2f5676" },
   // Row 2 — greens / yellows
-  { id: "green", label: "Done green", bg: "rgba(0,200,117,.2)", fg: "#0f7a3f" },
-  { id: "grass", label: "Grass", bg: "rgba(3,127,76,.2)", fg: "#0a6a3f" },
-  { id: "mint", label: "Bright green", bg: "rgba(156,217,74,.3)", fg: "#4a7a0f" },
-  { id: "lime", label: "Saladish", bg: "rgba(202,220,60,.34)", fg: "#5a6e12" },
-  { id: "yellow", label: "Egg yolk", bg: "rgba(255,203,0,.3)", fg: "#8a6200" },
-  { id: "amber", label: "Working orange", bg: "rgba(253,171,61,.28)", fg: "#8a5a00" },
+  { id: "green", label: "Done green", swatch: "#00c875", bg: "rgba(0,200,117,.22)", fg: "#0f7a3f" },
+  { id: "grass", label: "Grass green", swatch: "#037f4c", bg: "rgba(3,127,76,.2)", fg: "#0a6a3f" },
+  { id: "mint", label: "Bright green", swatch: "#9cd326", bg: "rgba(156,211,38,.3)", fg: "#4a7a0f" },
+  { id: "lime", label: "Saladish", swatch: "#cab641", bg: "rgba(202,182,65,.32)", fg: "#6a5e12" },
+  { id: "yellow", label: "Egg yolk", swatch: "#ffcb00", bg: "rgba(255,203,0,.3)", fg: "#8a6200" },
+  { id: "amber", label: "Working orange", swatch: "#fdab3d", bg: "rgba(253,171,61,.3)", fg: "#8a5a00" },
   // Row 3 — oranges / reds / pinks
-  { id: "orange", label: "Dark orange", bg: "rgba(255,100,43,.22)", fg: "#9a3f10" },
-  { id: "peach", label: "Peach", bg: "rgba(255,173,173,.34)", fg: "#a0433a" },
-  { id: "red", label: "Stuck red", bg: "rgba(226,68,92,.2)", fg: "#a32a2a" },
-  { id: "crimson", label: "Dark red", bg: "rgba(189,52,56,.22)", fg: "#8a1f23" },
-  { id: "pink", label: "Lipstick", bg: "rgba(255,90,145,.22)", fg: "#a0246a" },
-  { id: "magenta", label: "Sofia pink", bg: "rgba(255,21,142,.18)", fg: "#9a0f5e" },
+  { id: "orange", label: "Dark orange", swatch: "#ff642e", bg: "rgba(255,100,46,.22)", fg: "#9a3f10" },
+  { id: "peach", label: "Sunset", swatch: "#ff7575", bg: "rgba(255,117,117,.26)", fg: "#a0433a" },
+  { id: "red", label: "Stuck red", swatch: "#e2445c", bg: "rgba(226,68,92,.2)", fg: "#a32a2a" },
+  { id: "crimson", label: "Dark red", swatch: "#bb3354", bg: "rgba(187,51,84,.22)", fg: "#8a1f3a" },
+  { id: "pink", label: "Lipstick", swatch: "#ff5ac4", bg: "rgba(255,90,196,.22)", fg: "#a0246a" },
+  { id: "magenta", label: "Sofia pink", swatch: "#ff158a", bg: "rgba(255,21,138,.18)", fg: "#9a0f5e" },
   // Row 4 — purples / neutrals
-  { id: "purple", label: "Purple", bg: "rgba(162,93,220,.22)", fg: "#5e2d9a" },
-  { id: "violet", label: "Dark purple", bg: "rgba(120,75,209,.22)", fg: "#4a2d8f" },
-  { id: "indigo", label: "Indigo", bg: "rgba(87,98,220,.22)", fg: "#3f47b8" },
-  { id: "lavender", label: "Lavender", bg: "rgba(168,152,235,.3)", fg: "#5a4aa0" },
-  { id: "brown", label: "Coffee", bg: "rgba(173,120,80,.24)", fg: "#6e4a2a" },
-  { id: "slate", label: "Slate", bg: "#e6eaf1", fg: "#4a5b74" },
+  { id: "purple", label: "Purple", swatch: "#a25ddc", bg: "rgba(162,93,220,.22)", fg: "#5e2d9a" },
+  { id: "violet", label: "Dark purple", swatch: "#784bd1", bg: "rgba(120,75,209,.22)", fg: "#4a2d8f" },
+  { id: "indigo", label: "Indigo", swatch: "#5559df", bg: "rgba(85,89,223,.22)", fg: "#3f47b8" },
+  { id: "lavender", label: "Berry", swatch: "#7e3b8a", bg: "rgba(126,59,138,.2)", fg: "#5a2a66" },
+  { id: "brown", label: "Brown", swatch: "#7f5347", bg: "rgba(127,83,71,.22)", fg: "#6e4a2a" },
+  { id: "slate", label: "American gray", swatch: "#808080", bg: "#e6eaf1", fg: "#4a5b74" },
 ];
 
 const BY_ID = new Map(CHIP_PALETTE.map((c) => [c.id, c]));
@@ -61,12 +64,18 @@ export function chipStyle(
   return { background: c.bg, color: c.fg };
 }
 
+/** The solid swatch color for a palette id; `fallback`'s when the entry has none. */
+export function swatchColor(colorId: string | null | undefined, fallback: ChipColor): string {
+  return ((colorId && BY_ID.get(colorId)) || fallback).swatch;
+}
+
 /** Neutral defaults for chips whose catalog entry has no color (or isn't cataloged). */
 export const PRODUCT_CHIP_DEFAULT: ChipColor = {
   id: "",
   label: "",
   bg: "var(--background)",
   fg: "var(--primary)",
+  swatch: "var(--primary)",
 };
 export const CUSTOMER_CHIP_DEFAULT: ChipColor = BY_ID.get("teal")!;
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check } from "lucide-react";
-import { CHIP_PALETTE, chipStyle, type ChipColor } from "@/lib/ideas/colors";
+import { CHIP_PALETTE, swatchColor, type ChipColor } from "@/lib/ideas/colors";
 
 /**
  * A catalog row's color: a small swatch that opens the curated palette.
@@ -40,11 +40,13 @@ export function ColorSwatch({
     };
   }, [open]);
 
-  const style = chipStyle(color, fallback);
+  // The dot and the picker show the solid, saturated swatch color (monday.com
+  // style); chips keep the legible tint + text pair.
+  const current = swatchColor(color, fallback);
   const swatch = (
     <span
-      className="block h-4 w-4 rounded-md border border-black/10"
-      style={{ background: style.color as string }}
+      className="block h-4 w-4 rounded-full border border-black/10"
+      style={{ background: current }}
     />
   );
   if (!canEdit) {
@@ -80,8 +82,8 @@ export function ColorSwatch({
                   setOpen(false);
                   void onPick(c.id);
                 }}
-                className="flex h-5 w-5 items-center justify-center rounded-md border border-black/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-                style={{ background: c.fg }}
+                className="flex h-5 w-5 items-center justify-center rounded-full border border-black/10 hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                style={{ background: c.swatch }}
               >
                 {active && <Check size={12} color="#fff" strokeWidth={3} />}
               </button>
