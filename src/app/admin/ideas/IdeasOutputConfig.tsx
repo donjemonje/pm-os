@@ -62,6 +62,14 @@ export function IdeasOutputConfig({
   const [issueTypes, setIssueTypes] = useState<Record<string, string | null>>(
     Object.fromEntries(organizations.map((o) => [o.id, o.ideasIssueType])),
   );
+  // What the server holds, per org — Save is enabled only when the form
+  // differs from it; a successful save moves the baseline.
+  const [savedConfigs, setSavedConfigs] = useState<Record<string, IdeasJiraConfig>>(
+    Object.fromEntries(organizations.map((o) => [o.id, o.config])),
+  );
+  const [savedIssueTypes, setSavedIssueTypes] = useState<Record<string, string | null>>(
+    Object.fromEntries(organizations.map((o) => [o.id, o.ideasIssueType])),
+  );
   const [saving, setSaving] = useState(false);
   const [remapping, setRemapping] = useState(false);
   const [remapResult, setRemapResult] = useState("");
@@ -70,6 +78,9 @@ export function IdeasOutputConfig({
 
   const org = organizations.find((o) => o.id === orgId);
   const config = configs[orgId];
+  const dirty =
+    JSON.stringify(config) !== JSON.stringify(savedConfigs[orgId]) ||
+    (issueTypes[orgId] ?? null) !== (savedIssueTypes[orgId] ?? null);
   if (!org || !config) {
     return (
       <p className="text-sm text-slate-500">
@@ -172,9 +183,14 @@ export function IdeasOutputConfig({
         return;
       }
       setConfigs((prev) => ({ ...prev, [orgId]: data.config }));
+      setSavedConfigs((prev) => ({ ...prev, [orgId]: data.config }));
       setIssueTypes((prev) => ({
         ...prev,
         [orgId]: data.ideasIssueType ?? prev[orgId],
+      }));
+      setSavedIssueTypes((prev) => ({
+        ...prev,
+        [orgId]: data.ideasIssueType ?? issueTypes[orgId] ?? null,
       }));
       setSaved(true);
     } catch {
@@ -595,7 +611,8 @@ export function IdeasOutputConfig({
       <div className="flex items-center gap-3">
         <button
           onClick={save}
-          disabled={saving}
+          disabled={saving || !dirty}
+          title={dirty ? undefined : "No changes to save"}
           className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
           {saving && <Loader2 size={14} className="animate-spin" />}
