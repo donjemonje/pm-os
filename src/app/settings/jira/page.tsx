@@ -1,3 +1,4 @@
+import { PageView } from "@/lib/analytics/PageView";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import {
   featureEnabledForCurrentUser,
@@ -40,6 +41,8 @@ export default async function IntegrationsSettingsPage({
     ? (await getJiraHealth(workspace.id)).status === "reconnect"
     : false;
   return (
+    <>
+    <PageView name="settings_integrations" />
     <div>
       <IntegrationsPanel
         jiraStatus={jiraStatus}
@@ -59,5 +62,6 @@ export default async function IntegrationsSettingsPage({
         }}
       />
     </div>
+    </>
   );
 }

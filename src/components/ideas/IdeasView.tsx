@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
+import { track } from "@/lib/analytics/track";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
   badgeOf,
@@ -156,7 +157,11 @@ export function IdeasView({
   const [jiraStatusFilter, setJiraStatusFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
 
-  const [page, setPage] = useState<"final" | "merge">("final");
+  const [page, setPageState] = useState<"final" | "merge">("final");
+  const setPage = (p: "final" | "merge") => {
+    track("page_toggle", { to: p });
+    setPageState(p);
+  };
   const [edit, setEdit] = useState<MergeEdit | null>(null);
   const [selectedFinalId, setSelectedFinalId] = useState<string | null>(null);
 
@@ -213,6 +218,17 @@ export function IdeasView({
   // and goes away a moment later, so the first real edit is as instant as
   // the second (Daniel, 2026-10-19).
   const [warmEditor, setWarmEditor] = useState(true);
+  useEffect(() => {
+    track("page_view", { name: "ideas" });
+  }, []);
+  // Searches: one event per settled query (not per keystroke).
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) return;
+    const t = setTimeout(() => track("search", { query: q.slice(0, 80), page }), 900);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
   useEffect(() => {
     const t = setTimeout(() => setWarmEditor(false), 4000);
     return () => clearTimeout(t);
@@ -329,6 +345,8 @@ export function IdeasView({
     setError("");
     setImporting(true);
     setImportStep(0);
+    track("import_start", { bytes: file.size });
+    const importStarted = Date.now();
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
       const text = await file.text();
@@ -381,9 +399,11 @@ export function IdeasView({
       const data = await res.json();
       if (!res.ok) {
         setError(`Import failed: ${data.error ?? res.statusText}`);
+        track("import_failed", { ms: Date.now() - importStarted });
         return;
       }
       setImportStep(3);
+      track("import_done", { ms: Date.now() - importStarted, tickets: result.tickets.length, skipJira });
       await sleep(800);
       // The KPI panel and the grouped list tell the whole story — no
       // summary line.
@@ -647,6 +667,7 @@ export function IdeasView({
         }`;
 
   const openMerge = () => {
+    track("sync_open");
     // Default the scope to the PM's own product lines when they have any.
     setScopeSel(defaultProducts.filter((p) => allProducts.some((a) => a.toLowerCase() === p.toLowerCase())));
     setPlan(null);
@@ -1391,6 +1412,7 @@ export function IdeasView({
                     setDrawerSrc(null);
                   }}
                   onOpenSource={(kind, key) => {
+                    track("source_open", { kind, from: "merge" });
                     setDrawerHistory([]);
                     setDrawerSrc({ kind, key });
                     setDrawerId(null);
@@ -1471,6 +1493,7 @@ export function IdeasView({
                             <div
                               key={idea.id}
                               onClick={() => {
+                                track("drawer_open", { from: "final", ideaId: idea.id });
                                 setDrawerHistory([]);
                                 setDrawerId(idea.id);
                               }}

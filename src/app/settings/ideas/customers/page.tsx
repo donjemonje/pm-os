@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { db } from "@/lib/db";
+import { PageView } from "@/lib/analytics/PageView";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { ensureCatalogColors } from "@/lib/ideas/catalog-colors";
@@ -25,6 +26,8 @@ export default async function CustomersSettingsPage() {
   });
 
   return (
+    <>
+    <PageView name="settings_customers" />
     <SettingsListPanel
       title="Customers"
       blurb="PMOS tags ideas with customers from this list and suggests new names it finds in tickets — approving a suggestion adds it here."
@@ -40,5 +43,6 @@ export default async function CustomersSettingsPage() {
         usage: usageOf(usage.customers, c.name),
       }))}
     />
+    </>
   );
 }

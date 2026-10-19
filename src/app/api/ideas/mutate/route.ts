@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
+import { apiAuthContext, ideasDisabledResponse } from "@/lib/api-auth";
 import { mutateIdeas, type IdeasMutation } from "@/lib/ideas/store";
 
 const MUTATION_TYPES = [
@@ -18,8 +18,9 @@ const MUTATION_TYPES = [
 export async function POST(request: NextRequest) {
   const disabled = await ideasDisabledResponse();
   if (disabled) return disabled;
-  const workspaceResult = await apiWorkspaceId();
-  if (workspaceResult instanceof NextResponse) return workspaceResult;
+  const auth = await apiAuthContext();
+  if (auth instanceof NextResponse) return auth;
+  const workspaceResult = auth.workspaceId;
 
   let mutation: IdeasMutation;
   try {
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { state, notice } = await mutateIdeas(workspaceResult, mutation);
+    const { state, notice } = await mutateIdeas(workspaceResult, mutation, auth.userId);
     return NextResponse.json({ state, notice });
   } catch (err) {
     return NextResponse.json(

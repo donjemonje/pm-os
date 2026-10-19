@@ -5,6 +5,7 @@ import { ProductLinesPanel } from "@/components/settings/ProductLinesPanel";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
 import { canManageOrgSettings } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { PageView } from "@/lib/analytics/PageView";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
@@ -46,6 +47,8 @@ export default async function ProductLinesSettingsPage() {
   );
 
   return (
+    <>
+    <PageView name="settings_product_lines" />
     <div className="space-y-8">
       <ProductLinesPanel
         initialItems={productLines.map((l) => ({
@@ -75,5 +78,6 @@ export default async function ProductLinesSettingsPage() {
         />
       )}
     </div>
+    </>
   );
 }

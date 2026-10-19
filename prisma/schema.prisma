@@ -115,6 +115,7 @@ model Workspace {
   jiraIdeaSnapshots     JiraIdeaSnapshot[]
   reviewEvents          ReviewEvent[]
   productLines          ProductLine[]
+  usageEvents           UsageEvent[]
   platforms             Platform[]
   customers             Customer[]
   ideasPushUndos        IdeasPushUndo[]
@@ -517,9 +518,33 @@ model ReviewEvent {
   idea        Idea      @relation(fields: [ideaId], references: [id], onDelete: Cascade)
   action      String
   payload     Json?
+  /// Who did it (null for events logged before 2026-10-19 or by jobs).
+  userId      String?
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId, ideaId])
+  @@index([workspaceId, createdAt])
+}
+
+/// Product-usage telemetry (Admin → Analytics): one narrow append-only row
+/// per client event — page views, drawer opens, filters, searches, imports.
+/// Behaviour only; decisions and edits are ReviewEvents. Same Postgres for
+/// now (one customer, a few thousand rows a day at most); the client batches
+/// writes, rows older than the retention window are purged on admin read.
+model UsageEvent {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String?
+  /// Client tab id for the browsing session (not the auth session).
+  sessionId   String?
+  event       String
+  path        String?
+  props       Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, event, createdAt])
 }
 
 /// Single-use password-reset tokens (forgot-password email links). Only the

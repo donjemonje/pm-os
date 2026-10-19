@@ -1351,6 +1351,9 @@ async function customerCatalogLower(workspaceId: string): Promise<Set<string>> {
   return new Set(rows.map((c) => c.name.toLowerCase()));
 }
 
+/** The user behind the current mutateIdeas call (Admin → Analytics attributes events to them). */
+let currentActorId: string | null = null;
+
 async function logEvents(
   workspaceId: string,
   events: { ideaId: string; action: string; payload?: unknown }[],
@@ -1361,6 +1364,7 @@ async function logEvents(
       workspaceId,
       ideaId: e.ideaId,
       action: e.action,
+      userId: currentActorId,
       payload: (e.payload ?? undefined) as Prisma.InputJsonValue | undefined,
     })),
   });
@@ -1375,7 +1379,9 @@ export interface MutateResult {
 export async function mutateIdeas(
   workspaceId: string,
   mutation: IdeasMutation,
+  actorId: string | null = null,
 ): Promise<MutateResult> {
+  currentActorId = actorId;
   let notice: string | undefined;
   switch (mutation.type) {
     case "decision": {
