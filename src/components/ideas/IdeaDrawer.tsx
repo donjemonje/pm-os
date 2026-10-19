@@ -29,11 +29,7 @@ import {
   extractMappedFields,
   type CsvMapping,
 } from "@/lib/ideas/csv-mapping";
-import {
-  chipStyle,
-  CUSTOMER_CHIP_DEFAULT,
-  PRODUCT_CHIP_DEFAULT,
-} from "@/lib/ideas/colors";
+import { chipStyle, CUSTOMER_CHIP_DEFAULT, PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { PmosMark } from "@/components/brand/PmosMark";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
@@ -141,9 +137,14 @@ export function IdeaDrawer({
   });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
 
+  /** Which part is being edited: the text (title + details) or the tags
+   *  (product lines, platforms, customers). null = viewing. */
+  const [editSection, setEditSection] = useState<null | "details" | "tags">(null);
+  const editMode = editSection !== null;
   // Esc closes the drawer (standing rule: Esc = cancel). Window-level so it
   // works wherever focus sits; the drawer is the topmost layer while open.
   useEffect(() => {
+    if (editMode) return; // Esc cancels the edit instead (onEditKeyDown).
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -152,8 +153,7 @@ export function IdeaDrawer({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const [editMode, setEditMode] = useState(false);
+  }, [onClose, editMode]);
   const [editTitle, setEditTitle] = useState("");
   const [editManual, setEditManual] = useState("");
   const [editDetails, setEditDetails] = useState("");
@@ -164,6 +164,7 @@ export function IdeaDrawer({
   const [editAdded, setEditAdded] = useState<string[]>([]);
   const [editRemoved, setEditRemoved] = useState<string[]>([]);
   const [newCustomer, setNewCustomer] = useState("");
+  const [customerListOpen, setCustomerListOpen] = useState(false);
   const [showDismissed, setShowDismissed] = useState(false);
 
   const ticket =
@@ -175,7 +176,7 @@ export function IdeaDrawer({
   const score = idea ? scoreOf(idea) : null;
   const votes = idea ? votesLabel(idea) : null;
 
-  const startEdit = () => {
+  const startEdit = (section: "details" | "tags" = "details") => {
     if (!idea) return;
     setEditTitle(idea.title);
     setEditManual(idea.manual != null ? String(idea.manual) : "");
@@ -186,7 +187,8 @@ export function IdeaDrawer({
     setEditAdded([...(idea.addedCustomers ?? [])]);
     setEditRemoved([]);
     setNewCustomer("");
-    setEditMode(true);
+    setCustomerListOpen(false);
+    setEditSection(section);
   };
   const saveEdit = () => {
     if (!idea) return;
@@ -201,9 +203,9 @@ export function IdeaDrawer({
       addedCustomers: editAdded,
       removeCustomers: editRemoved,
     });
-    setEditMode(false);
+    setEditSection(null);
   };
-  const cancelEdit = () => setEditMode(false);
+  const cancelEdit = () => setEditSection(null);
   // Keyboard for the whole edit (title, score, customers, Details editor):
   // Esc cancels the edit and must not also close the drawer; ⌘↵ saves. Inputs
   // that handle these keys themselves (the editor's link bar) stop propagation.
@@ -464,7 +466,7 @@ export function IdeaDrawer({
             </button>
           </div>
 
-          {editMode && !viewingSource ? (
+          {editSection === "details" && !viewingSource ? (
             <input
               type="text"
               value={editTitle}
@@ -472,7 +474,15 @@ export function IdeaDrawer({
               className="font-title w-full rounded-control border border-primary px-3 py-2 text-[17px] font-bold shadow-[0_0_0_2px_var(--app-accent-soft)] outline-none"
             />
           ) : (
-            <h2 className="font-title m-0 text-[19px] font-bold leading-[1.3] text-foreground">
+            <h2
+              className={`font-title m-0 text-[19px] font-bold leading-[1.3] text-foreground ${
+                !viewingSource && idea && !editMode ? "cursor-text rounded-md hover:bg-[rgba(12,25,41,.04)]" : ""
+              }`}
+              title={!viewingSource && idea && !editMode ? "Click to edit" : undefined}
+              onClick={() => {
+                if (!viewingSource && idea && !editMode) startEdit("details");
+              }}
+            >
               {ticket ? ticket.subject : jiraSrc ? jiraSrc.title : idea?.title}
             </h2>
           )}
@@ -482,7 +492,8 @@ export function IdeaDrawer({
             (idea.products.length > 0 ||
               (idea.platforms ?? []).length > 0 ||
               (idea.customers ?? []).length > 0) && (
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                 {idea.products.map((p) => (
                   <Chip key={p} dot style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}>
                     {p}
@@ -546,6 +557,18 @@ export function IdeaDrawer({
                     </span>
                   );
                 })}
+              </div>
+              {!editMode && (
+                <button
+                  type="button"
+                  onClick={() => startEdit("tags")}
+                  title="Edit product lines and customers"
+                  aria-label="Edit product lines and customers"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
               </div>
             )}
 
@@ -624,6 +647,8 @@ export function IdeaDrawer({
             <JiraIssueView src={jiraSrc} productLineLabel={jiraProductLineLabel} />
           ) : editMode ? (
             <>
+              {editSection === "tags" && (
+              <>
               {SCORING_ENABLED && (
               <div className="flex w-[140px] flex-col gap-1.5">
                 <span className={MONO_LABEL}>Manual score</span>
@@ -717,32 +742,75 @@ export function IdeaDrawer({
                       </span>
                     );
                   })}
-                  <input
-                    type="text"
-                    list="idea-customer-options"
-                    value={newCustomer}
-                    onChange={(e) => setNewCustomer(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addCustomer(newCustomer);
-                      }
-                    }}
-                    placeholder="Add customer…"
-                    className="min-w-[140px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
-                  />
-                  <datalist id="idea-customer-options">
-                    {customerCatalog
+                  {(() => {
+                    const q = newCustomer.trim().toLowerCase();
+                    const options = customerCatalog
                       .filter((k) => !editCustomers.some((c) => sameName(c, k)))
-                      .map((k) => (
-                        <option key={k} value={k} />
-                      ))}
-                  </datalist>
+                      .filter((k) => !q || k.toLowerCase().includes(q))
+                      .slice(0, 8);
+                    return (
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={newCustomer}
+                          onChange={(e) => {
+                            setNewCustomer(e.target.value);
+                            setCustomerListOpen(true);
+                          }}
+                          onFocus={() => setCustomerListOpen(true)}
+                          onBlur={() => setTimeout(() => setCustomerListOpen(false), 120)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              // Enter takes the first match when the typed text
+                              // is a prefix of it; otherwise the text as typed.
+                              const first = options[0];
+                              addCustomer(
+                                first && q && first.toLowerCase().startsWith(q) ? first : newCustomer,
+                              );
+                              setCustomerListOpen(false);
+                            } else if (e.key === "Escape" && customerListOpen) {
+                              e.stopPropagation();
+                              setCustomerListOpen(false);
+                            }
+                          }}
+                          placeholder="Add customer…"
+                          className="min-w-[180px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
+                        />
+                        {customerListOpen && options.length > 0 && (
+                          <ul className="absolute left-0 top-full z-20 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
+                            {options.map((k) => (
+                              <li key={k}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    addCustomer(k);
+                                    setCustomerListOpen(false);
+                                  }}
+                                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)]"
+                                >
+                                  <span
+                                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                    style={{ background: swatchColor(colorOf(customerColors, k), CUSTOMER_CHIP_DEFAULT) }}
+                                  />
+                                  <span className="truncate">{k}</span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <span className="text-[11px] text-[#9aa8be]">
                   Enter adds. A name outside the catalog is kept as a suggestion until approved.
                 </span>
               </div>
+              </>
+              )}
+              {editSection === "details" && (
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
                 <IdeaDetailsEditor
@@ -754,6 +822,7 @@ export function IdeaDrawer({
                   ⌘B bold · ⌘I italic · ⌘K link · ⌘↵ saves · Esc cancels
                 </span>
               </div>
+              )}
             </>
           ) : idea ? (
             <>
@@ -778,7 +847,11 @@ export function IdeaDrawer({
                     </ul>
                   </div>
                 )}
-              <div>
+              <div
+                onClick={() => startEdit("details")}
+                title="Click to edit"
+                className="-mx-2 cursor-text rounded-lg px-2 py-1 hover:bg-[rgba(12,25,41,.03)]"
+              >
                 <UmMarkdown
                   content={autolinkBareUrls(idea.details)}
                   className="idea-text"
@@ -786,8 +859,21 @@ export function IdeaDrawer({
               </div>
               {sourceEntries.length > 0 && (
                 <div>
-                  <div className={`${MONO_LABEL} mb-2`}>
+                  <div className={`${MONO_LABEL} mb-2 flex items-center gap-1.5`}>
+                    <Share2 size={12} strokeWidth={2.25} className="text-primary" />
                     Sources · {sourceEntries.length}
+                    {onMerge && (
+                      <button
+                        type="button"
+                        onClick={onMerge}
+                        title="Edit sources on the Merge board"
+                        aria-label="Edit sources on the Merge board"
+                        className="ml-auto flex h-6 items-center gap-1 rounded-[7px] px-1.5 text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+                      >
+                        <Pencil size={12} />
+                        <ExternalLink size={11} />
+                      </button>
+                    )}
                   </div>
                   <div className="flex flex-col gap-2">
                     {sourceEntries.map((src) => (
@@ -897,16 +983,6 @@ export function IdeaDrawer({
                     Undo sync
                   </Button>
                 )}
-                {onMerge && (
-                  <Button onClick={onMerge}>
-                    <Share2 size={13} strokeWidth={2.25} />
-                    Merge
-                  </Button>
-                )}
-                <Button onClick={startEdit}>
-                  <Pencil size={13} />
-                  Edit
-                </Button>
                 {needsApproval(idea) &&
                   idea.decision === "pending" &&
                   (idea.customers ?? []).some(

@@ -400,7 +400,9 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     await expect(drawer.getByText(CATALOGED, { exact: true })).toBeVisible();
     await expect(drawer.getByText(PRODUCT_LINE, { exact: true })).toHaveCount(0);
 
-    await drawer.getByRole("button", { name: "Edit", exact: true }).click();
+    // Sectioned edit (2026-10-19): the pencil on the chips row opens the
+    // product-lines + customers editor; the text is edited by clicking it.
+    await drawer.getByRole("button", { name: "Edit product lines and customers" }).click();
 
     // While editing, the header keeps showing the SAVED chips — the edit
     // list is the "Customers" section below, so scope to it.

@@ -344,11 +344,11 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await expect(rowA.getByTitle("Mark reviewed")).toHaveCount(0);
     await expect(rowA.getByTitle("Mark unreviewed")).toHaveCount(0);
 
-    // Its drawer has no Approve button either (Merge/Edit still render).
+    // Its drawer has no Approve button either (the sources pencil still renders).
     await rowA.click();
     const drawer = page.locator("div.fixed.bottom-0.right-0.top-0");
     await expect(drawer.getByRole("heading", { name: UNCHANGED_A_TITLE })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: "Merge" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Edit sources on the Merge board" })).toBeVisible();
     await expect(drawer.getByRole("button", { name: /^Approved?$/ })).toHaveCount(0);
 
     // Belt and braces: the API itself refuses decision "reviewed" for an
