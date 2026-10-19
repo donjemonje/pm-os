@@ -934,7 +934,6 @@ export function IdeasView({
         {/* Header */}
         <div className="mb-4 flex items-center gap-3.5">
           <div>
-            <div className="eyebrow mb-1 text-primary">Zendesk → Ideas → Jira</div>
             <h1 className="font-title m-0 text-[26px] font-bold leading-none tracking-[-0.02em]">
               Ideas
             </h1>
