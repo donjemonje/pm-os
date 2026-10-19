@@ -432,7 +432,8 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     await expect(customersEdit.getByText(CATALOGED, { exact: true })).toHaveCount(0);
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
 
-    // Toggle the product-line chip on.
+    // Product lines: the selected chip opens a multi-select menu; pick the line there.
+    await drawer.getByRole("button", { name: /▾$/ }).first().click();
     const lineChip = drawer.getByRole("button", { name: PRODUCT_LINE, exact: true });
     await expect(lineChip).toHaveAttribute("aria-pressed", "false");
     saved = mutate();

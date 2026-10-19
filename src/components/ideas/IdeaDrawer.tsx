@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
   Check,
@@ -165,6 +165,18 @@ export function IdeaDrawer({
   const [editRemoved, setEditRemoved] = useState<string[]>([]);
   const [newCustomer, setNewCustomer] = useState("");
   const [customerListOpen, setCustomerListOpen] = useState(false);
+  /** Product-line multi-select dropdown (tags edit); closes on outside click. */
+  const [productMenuOpen, setProductMenuOpen] = useState(false);
+  const productMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!productMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (productMenuRef.current && !productMenuRef.current.contains(e.target as Node))
+        setProductMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [productMenuOpen]);
   const [showDismissed, setShowDismissed] = useState(false);
 
   const ticket =
@@ -250,6 +262,7 @@ export function IdeaDrawer({
   };
   const toggleProduct = (p: string) => {
     const next = toggleIn(editProducts, p);
+    if (next.length === 0) return; // one product line is mandatory
     setEditProducts(next);
     commitTags({ products: next });
   };
@@ -286,26 +299,57 @@ export function IdeaDrawer({
    *  drawer stays as it is (Daniel, 2026-10-19). */
   const tagsEditor = (
     <div className="flex flex-wrap items-center gap-1.5" onKeyDown={onEditKeyDown}>
-      {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
-        const on = editProducts.some((x) => sameName(x, p));
-        return (
+      <div ref={productMenuRef} className="relative flex flex-wrap items-center gap-1.5">
+        {editProducts.map((p) => (
           <button
             key={`edit-product-${p}`}
             type="button"
-            onClick={() => toggleProduct(p)}
-            aria-pressed={on}
-            title={on ? "Click to remove this product line" : "Click to add this product line"}
-            className={
-              on
-                ? "rounded-chip border border-transparent px-[7px] py-[2px] font-mono text-[11px] font-semibold ring-1 ring-black/10"
-                : "rounded-chip border border-dashed border-[#c9d3e0] px-[7px] py-[2px] font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
-            }
-            style={on ? chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) : undefined}
+            onClick={() => setProductMenuOpen((v) => !v)}
+            title="Click to change product lines"
+            className="rounded-chip border border-transparent px-[7px] py-[2px] font-mono text-[11px] font-semibold ring-1 ring-black/10 hover:ring-primary"
+            style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}
           >
-            {p}
+            {p} ▾
           </button>
-        );
-      })}
+        ))}
+        {productMenuOpen && (
+          <ul
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setProductMenuOpen(false);
+              }
+            }}
+            className="absolute left-0 top-full z-20 mt-1 max-h-64 w-60 overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]"
+          >
+            {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
+              const on = editProducts.some((x) => sameName(x, p));
+              const last = on && editProducts.length === 1;
+              return (
+                <li key={`product-option-${p}`}>
+                  <button
+                    type="button"
+                    onClick={() => toggleProduct(p)}
+                    disabled={last}
+                    aria-pressed={on}
+                    title={last ? "At least one product line stays" : undefined}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-[#c9d3e0] bg-white">
+                      {on && <Check size={10} strokeWidth={3} className="text-primary" />}
+                    </span>
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: swatchColor(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) }}
+                    />
+                    <span className="truncate">{p}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
       {(catalogPlatforms.length > 0 || editPlatforms.length > 0) &&
         [...new Set([...catalogPlatforms, ...editPlatforms])].map((p) => {
           const on = editPlatforms.some((x) => sameName(x, p));
