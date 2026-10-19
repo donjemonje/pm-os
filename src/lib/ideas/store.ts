@@ -1074,10 +1074,10 @@ async function runImport(
           let nextProducts: string[];
           const changes: string[] = [`+1 vote (ticket ${input.key})`];
           if (givenLine) {
+            // Silent even when it fills in "Other": given data is never
+            // narrated as something this import did.
             nextProducts =
               curReal.length > 0 || givenLine === "Other" ? curProducts : [givenLine];
-            if (nextProducts !== curProducts)
-              changes.push(`Product line set from the ticket's Module: ${givenLine}`);
           } else {
             nextProducts = distinct([...curProducts, ...unit.rewrite.productLines]);
             // A real product line replaces the "Other" placeholder.
