@@ -75,7 +75,7 @@ interface ServerState {
   customerCatalog?: string[];
   jiraConnected?: boolean;
   jiraEnabled?: boolean;
-  jiraHealth?: "not_connected" | "ok" | "reconnect";
+  jiraHealth?: "not_connected" | "ok" | "reconnect" | "not_configured";
   csvMapping?: CsvMapping;
   jiraSiteUrl?: string | null;
   jiraProductLineField?: string;
@@ -136,7 +136,7 @@ export function IdeasView({
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
   const [jiraEnabled, setJiraEnabled] = useState(false);
-  const [jiraHealth, setJiraHealth] = useState<"not_connected" | "ok" | "reconnect">("ok");
+  const [jiraHealth, setJiraHealth] = useState<"not_connected" | "ok" | "reconnect" | "not_configured">("ok");
   const [jiraSiteUrl, setJiraSiteUrl] = useState<string | null>(null);
   const [jiraProductLineField, setJiraProductLineField] = useState("Product line");
   const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
@@ -329,7 +329,8 @@ export function IdeasView({
         const health = await fetch("/api/jira/health")
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null);
-        const status: "not_connected" | "ok" | "reconnect" = health?.status ?? "reconnect";
+        const status: "not_connected" | "ok" | "reconnect" | "not_configured" =
+          health?.status ?? "reconnect";
         setJiraHealth(status);
         if (status !== "ok") {
           setImporting(false);

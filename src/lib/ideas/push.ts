@@ -378,17 +378,23 @@ async function derivePlan(
     };
   }
 
+  // The org's one Jira project and work type come from Admin → Ideas → Jira
+  // (Daniel, 2026-10-19: one project per customer at this stage). The
+  // connection's own fields are the fallback for orgs the admin has not
+  // onboarded (QA seeds); the type the pulled issues share, then "Story",
+  // close the chain.
   const targetProject =
-    status.ideasProjectKey ?? (status.projectKeys.length === 1 ? status.projectKeys[0] : null);
-  // Issue type for NEW ideas: the saved choice (Settings → Integrations) when
-  // one exists; otherwise the type of the Jira origin — when every pulled
-  // issue of the project shares one type that type is obvious and no
-  // choice is shown (Daniel, 2026-10-19); "Story" only as the last resort.
+    config.jiraProject ||
+    status.ideasProjectKey ||
+    (status.projectKeys.length === 1 ? status.projectKeys[0] : null);
   const target = targetProject
     ? {
         projectKey: targetProject,
         issueType:
-          status.ideasIssueType || (await pulledIssueType(workspaceId, targetProject)) || "Story",
+          config.jiraIssueType ||
+          status.ideasIssueType ||
+          (await pulledIssueType(workspaceId, targetProject)) ||
+          "Story",
       }
     : null;
 
@@ -425,12 +431,17 @@ async function derivePlan(
   }
   if (creates.length > 0 && !target) {
     blockers.push(
-      "Pick which Jira project new ideas are created in (Settings → Integrations → Jira)."
+      "The Jira project for new ideas is not set — a PM-OS admin sets it in Admin → Ideas → Jira."
     );
   }
-  if (creates.length > 0 && target && !status.projectKeys.includes(target.projectKey)) {
+  if (
+    creates.length > 0 &&
+    target &&
+    !config.jiraProject &&
+    !status.projectKeys.includes(target.projectKey)
+  ) {
     blockers.push(
-      `Ideas target project ${target.projectKey} is not in the connected project list — the next import would not see created issues. Fix it in Settings → Integrations → Jira.`
+      `Ideas target project ${target.projectKey} is not in the connected project list — the next import would not see created issues.`
     );
   }
   if (blockers.length > 0) {

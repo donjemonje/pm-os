@@ -1,9 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowRight, CheckCircle2, Circle, Loader2 } from "lucide-react";
+import { ArrowRight, CheckCircle2, Circle, Loader2, ExternalLink } from "lucide-react";
 import { formatIntegrationError } from "@/lib/integration-errors";
-import { JiraProjectsPanel } from "@/components/jira/JiraConnect";
 import { GoogleDriveManagePanel } from "@/components/google-drive/GoogleDriveConnect";
 
 type JiraStatus = {
@@ -32,8 +31,9 @@ type IntegrationsPanelProps = {
   };
   /** Ideas feature flag for the caller's org — shows the write-back target picker. */
   ideasEnabled?: boolean;
-  /** Issue types seen in the pulled backlog, per project key. */
-  pulledIssueTypes?: Record<string, string[]>;
+  /** The org's Jira project and work type, set by the PM-OS admin (Admin → Ideas). */
+  jiraProject?: string;
+  jiraIssueType?: string;
   /** False = Drive is off for this org (follows the Docs flag): no card, no banners. */
   driveEnabled?: boolean;
 };
@@ -133,7 +133,8 @@ export function IntegrationsPanel({
   driveOauthReady,
   banners,
   ideasEnabled = false,
-  pulledIssueTypes = {},
+  jiraProject = "",
+  jiraIssueType = "",
   driveEnabled = true,
 }: IntegrationsPanelProps) {
   const [jiraExpanded, setJiraExpanded] = useState(Boolean(jiraStatus?.connected));
@@ -176,14 +177,37 @@ export function IntegrationsPanel({
         onToggle={() => setJiraExpanded((v) => !v)}
       >
         {jiraStatus?.connected && (
-          <JiraProjectsPanel
-            initialProjectKeys={jiraStatus.projectKeys ?? []}
-            siteUrl={jiraStatus.siteUrl}
-            showIdeasTarget={ideasEnabled}
-            initialIdeasProjectKey={jiraStatus.ideasProjectKey ?? null}
-            initialIdeasIssueType={jiraStatus.ideasIssueType ?? ""}
-            pulledIssueTypes={pulledIssueTypes}
-          />
+          <div className="px-5 py-4 text-sm">
+            {jiraStatus.siteUrl && (
+              <a
+                href={jiraStatus.siteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mb-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                Open Jira
+                <ExternalLink size={12} />
+              </a>
+            )}
+            {ideasEnabled && (
+              <p className="text-muted">
+                {jiraProject ? (
+                  <>
+                    Ideas are read from and written to{" "}
+                    <span className="font-mono text-primary">{jiraProject}</span>
+                    {jiraIssueType ? (
+                      <>
+                        ; new ideas are created as <span className="font-medium text-foreground">{jiraIssueType}</span>
+                      </>
+                    ) : null}
+                    . Set by your PM-OS admin.
+                  </>
+                ) : (
+                  "The Jira project for ideas is not set yet — your PM-OS admin sets it."
+                )}
+              </p>
+            )}
+          </div>
         )}
       </IntegrationRow>
 

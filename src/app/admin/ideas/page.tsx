@@ -1,5 +1,6 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { envFeatureDefault, resolveFeature } from "@/lib/feature-flags";
 import {
   CATALOG_PROMPT_VERSION,
   CATALOG_SYSTEM_PROMPT,
@@ -28,7 +29,7 @@ export default async function AdminIdeasPage() {
         select: {
           id: true,
           ideasConfig: true,
-          jiraConnection: { select: { ideasIssueType: true } },
+          jiraConnection: { select: { id: true } },
         },
       },
     },
@@ -80,9 +81,8 @@ export default async function AdminIdeasPage() {
             name: org.name,
             slug: org.slug,
             config: mergeIdeasJiraConfig(org.workspace?.ideasConfig),
-            // null = no Jira connection yet; the issue-type control is hidden.
-            ideasIssueType:
-              org.workspace?.jiraConnection?.ideasIssueType ?? null,
+            jiraEnabled: resolveFeature(org.features, "jira", envFeatureDefault("jira")),
+            jiraConnected: Boolean(org.workspace?.jiraConnection),
           }))}
       />
     </AdminShell>

@@ -39,11 +39,9 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   ]);
   const config = mergeIdeasJiraConfig(wsRow?.ideasConfig);
   const pull = config.pull;
-  // Admin → Ideas → Jira projects restricts the pull to the org's keys.
-  const projectKeys =
-    config.jiraProjects.length > 0
-      ? (status?.projectKeys ?? []).filter((k) => config.jiraProjects.includes(k))
-      : (status?.projectKeys ?? []);
+  // Admin → Ideas → Jira: the org's one project; the connection's own
+  // selection only when the admin has not set it (QA seeds, RoomLens).
+  const projectKeys = config.jiraProject ? [config.jiraProject] : (status?.projectKeys ?? []);
   if (!status?.connected || projectKeys.length === 0) {
     return { connected: false, sources: [], truncatedProjects: [], unresolvedProductLines: [], pull };
   }

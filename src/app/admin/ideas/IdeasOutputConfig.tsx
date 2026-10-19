@@ -30,8 +30,9 @@ interface OrgRow {
   name: string;
   slug: string;
   config: IdeasJiraConfig;
-  /** Jira issue type created ideas get; null when Jira isn't connected. */
-  ideasIssueType: string | null;
+  /** Admin → Enablements "Jira integration" for the org — makes the Jira onboarding mandatory. */
+  jiraEnabled: boolean;
+  jiraConnected: boolean;
 }
 
 const POLICY_LABELS: Record<string, string> = {
@@ -59,36 +60,42 @@ export function IdeasOutputConfig({
   const [configs, setConfigs] = useState<Record<string, IdeasJiraConfig>>(
     Object.fromEntries(organizations.map((o) => [o.id, o.config])),
   );
-  const [issueTypes, setIssueTypes] = useState<Record<string, string | null>>(
-    Object.fromEntries(organizations.map((o) => [o.id, o.ideasIssueType])),
-  );
   // What the server holds, per org — Save is enabled only when the form
   // differs from it; a successful save moves the baseline.
   const [savedConfigs, setSavedConfigs] = useState<Record<string, IdeasJiraConfig>>(
     Object.fromEntries(organizations.map((o) => [o.id, o.config])),
   );
-  const [savedIssueTypes, setSavedIssueTypes] = useState<Record<string, string | null>>(
-    Object.fromEntries(organizations.map((o) => [o.id, o.ideasIssueType])),
-  );
   const [saving, setSaving] = useState(false);
-  /** The selected org's Jira projects (undefined = loading; [] = not connected). */
-  const [orgProjects, setOrgProjects] = useState<{ key: string; name: string }[] | undefined>(undefined);
+  /** The selected org's Jira data, read through ITS connection (undefined = loading). */
+  const [orgJira, setOrgJira] = useState<
+    | { projects: { key: string; name: string }[]; issueTypes: string[]; defaultIssueType: string }
+    | undefined
+  >(undefined);
+  const selectedProject = configs[orgId]?.jiraProject ?? "";
   useEffect(() => {
     let stale = false;
-    setOrgProjects(undefined);
+    setOrgJira(undefined);
     if (!orgId) return;
-    fetch(`/api/admin/organizations/${orgId}/jira-projects`)
-      .then((r) => (r.ok ? r.json() : { projects: [] }))
+    const q = selectedProject ? `?project=${encodeURIComponent(selectedProject)}` : "";
+    fetch(`/api/admin/organizations/${orgId}/jira-projects${q}`)
+      .then((r): Promise<Partial<{ projects: { key: string; name: string }[]; issueTypes: string[]; defaultIssueType: string }>> =>
+        r.ok ? r.json() : Promise.resolve({}),
+      )
       .then((data) => {
-        if (!stale) setOrgProjects(data.projects ?? []);
+        if (stale) return;
+        setOrgJira({
+          projects: data.projects ?? [],
+          issueTypes: data.issueTypes ?? [],
+          defaultIssueType: data.defaultIssueType ?? "",
+        });
       })
       .catch(() => {
-        if (!stale) setOrgProjects([]);
+        if (!stale) setOrgJira({ projects: [], issueTypes: [], defaultIssueType: "" });
       });
     return () => {
       stale = true;
     };
-  }, [orgId]);
+  }, [orgId, selectedProject]);
   const [remapping, setRemapping] = useState(false);
   const [remapResult, setRemapResult] = useState("");
   const [saved, setSaved] = useState(false);
@@ -96,9 +103,7 @@ export function IdeasOutputConfig({
 
   const org = organizations.find((o) => o.id === orgId);
   const config = configs[orgId];
-  const dirty =
-    JSON.stringify(config) !== JSON.stringify(savedConfigs[orgId]) ||
-    (issueTypes[orgId] ?? null) !== (savedIssueTypes[orgId] ?? null);
+  const dirty = JSON.stringify(config) !== JSON.stringify(savedConfigs[orgId]);
   if (!org || !config) {
     return (
       <p className="text-sm text-slate-500">
@@ -189,10 +194,7 @@ export function IdeasOutputConfig({
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...config,
-            ideasIssueType: issueTypes[orgId] ?? undefined,
-          }),
+          body: JSON.stringify(config),
         },
       );
       const data = await res.json().catch(() => ({}));
@@ -202,14 +204,6 @@ export function IdeasOutputConfig({
       }
       setConfigs((prev) => ({ ...prev, [orgId]: data.config }));
       setSavedConfigs((prev) => ({ ...prev, [orgId]: data.config }));
-      setIssueTypes((prev) => ({
-        ...prev,
-        [orgId]: data.ideasIssueType ?? prev[orgId],
-      }));
-      setSavedIssueTypes((prev) => ({
-        ...prev,
-        [orgId]: data.ideasIssueType ?? issueTypes[orgId] ?? null,
-      }));
       setSaved(true);
     } catch {
       setError("Save failed");
@@ -252,69 +246,101 @@ export function IdeasOutputConfig({
           <h2 className="text-base font-bold">Jira</h2>
           <p className="mt-0.5 text-xs text-slate-500">How the connected Jira is read on import and written on sync: the pull ceiling, which Jira fields map to PM-OS attributes, and what a sync writes to the issue.</p>
         </div>
-      {/* Jira projects — the org's keys; everything else is hidden from it */}
+      {/* Jira onboarding — the org's one project and the work type new ideas get */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-bold">Jira projects</h2>
+        <h2 className="text-sm font-bold">Jira project &amp; work type</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          The projects this organization works with. Settings → Integrations shows
-          only these and selects them by default; the import reads only these.
-          Empty = every project the connection can see. New ideas are created with
-          the type the pulled issues of the target project share; when the
-          project mixes types the organization picks one in Settings → Integrations.
+          The one Jira project this organization manages its ideas in: imports read it,
+          Sync to Jira writes to it, and new ideas are created there as the work type
+          below. Set once when enabling Jira for the organization; members see it
+          read-only in Settings → Integrations.
         </p>
-        {orgProjects === undefined ? (
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <Loader2 size={12} className="animate-spin" /> Loading the organization&apos;s Jira projects…
+        {org.jiraEnabled && !config.jiraProject && (
+          <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Jira integration is ON for this organization but no project is set — imports run
+            without Jira and the Ideas page shows a warning until this is saved.
           </div>
-        ) : orgProjects.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {orgProjects.map((p) => {
-              const on = config.jiraProjects.includes(p.key);
-              return (
-                <label
-                  key={p.key}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${
-                    on ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white hover:border-slate-500"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onChange={() =>
-                      patch({
-                        jiraProjects: on
-                          ? config.jiraProjects.filter((k) => k !== p.key)
-                          : [...config.jiraProjects, p.key],
-                      })
-                    }
-                    className="sr-only"
-                  />
-                  <span className="font-mono text-xs">{p.key}</span>
-                  <span className={on ? "text-slate-200" : "text-slate-600"}>{p.name}</span>
-                </label>
-              );
-            })}
-          </div>
-        ) : (
-          <label className="flex items-center gap-3 text-sm">
-            <span className="text-xs font-medium text-slate-600">Project keys</span>
-            <input
-              type="text"
-              value={config.jiraProjects.join(", ")}
-              onChange={(e) =>
-                patch({
-                  jiraProjects: e.target.value
-                    .split(/[,\s]+/)
-                    .map((k) => k.trim().toUpperCase())
-                    .filter(Boolean),
-                })
-              }
-              placeholder="PRDT"
-              title="Jira is not connected for this organization yet — type the keys, comma-separated."
-              className={`${inputCls} w-64`}
-            />
-          </label>
         )}
+        {!org.jiraConnected && (
+          <div className="mb-3 text-xs text-slate-500">
+            Jira is not connected for this organization yet — type the project key and work
+            type; they apply as soon as a member connects Jira.
+          </div>
+        )}
+        <div className="flex flex-wrap items-start gap-6">
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-slate-600">Project</div>
+            {org.jiraConnected && orgJira === undefined ? (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <Loader2 size={12} className="animate-spin" /> Loading…
+              </div>
+            ) : org.jiraConnected && orgJira && orgJira.projects.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {orgJira.projects.map((p) => {
+                  const on = config.jiraProject === p.key;
+                  return (
+                    <label
+                      key={p.key}
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${
+                        on
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-300 bg-white hover:border-slate-500"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="jira-project"
+                        checked={on}
+                        onChange={() => patch({ jiraProject: p.key, jiraIssueType: "" })}
+                        className="sr-only"
+                      />
+                      <span className="font-mono text-xs">{p.key}</span>
+                      <span className={on ? "text-slate-200" : "text-slate-600"}>{p.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : (
+              <input
+                type="text"
+                value={config.jiraProject}
+                onChange={(e) => patch({ jiraProject: e.target.value.toUpperCase() })}
+                placeholder="PRDT"
+                className={`${inputCls} w-40`}
+              />
+            )}
+          </div>
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-slate-600">Work type for new ideas</div>
+            {org.jiraConnected && orgJira && orgJira.issueTypes.length > 0 ? (
+              <select
+                value={config.jiraIssueType || orgJira.defaultIssueType}
+                onChange={(e) => patch({ jiraIssueType: e.target.value })}
+                className={`${inputCls} w-44`}
+              >
+                {orgJira.issueTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                    {t === orgJira.defaultIssueType && !config.jiraIssueType ? " (default)" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                value={config.jiraIssueType}
+                onChange={(e) => patch({ jiraIssueType: e.target.value })}
+                placeholder="Story"
+                className={`${inputCls} w-44`}
+              />
+            )}
+            {org.jiraConnected && orgJira && orgJira.defaultIssueType && !config.jiraIssueType && (
+              <div className="mt-1 text-[11px] text-slate-500">
+                Default: {orgJira.defaultIssueType} — the type the pulled issues use most.
+              </div>
+            )}
+          </div>
+        </div>
       </section>
 
       {/* Jira pull — how the backlog is read at import */}

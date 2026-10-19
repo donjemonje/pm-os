@@ -3,8 +3,8 @@ import {
   featureEnabledForCurrentUser,
   ideasEnabledForCurrentUser,
 } from "@/lib/org-features";
-import { db } from "@/lib/db";
 import { getJiraConnectionStatus } from "@/lib/jira";
+import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { getGoogleDriveConnectionStatus } from "@/lib/google-drive";
 import { getJiraOAuthSetupStatus } from "@/lib/jira-oauth-config";
 import { getGoogleDriveOAuthSetupStatus } from "@/lib/google-drive-oauth-config";
@@ -35,22 +35,7 @@ export default async function IntegrationsSettingsPage({
   const jiraOauthSetup = getJiraOAuthSetupStatus();
   const driveOauthSetup = getGoogleDriveOAuthSetupStatus();
   const params = await searchParams;
-  // Issue types seen in the pulled backlog, per project — one type means the
-  // write-back type is obvious and the picker stays hidden.
-  const pulledIssueTypes: Record<string, string[]> = {};
-  if (jiraStatus?.connected) {
-    const rows = await db.jiraIdeaSnapshot.findMany({
-      where: { workspaceId: workspace.id },
-      select: { key: true, issueType: true },
-    });
-    for (const r of rows) {
-      if (!r.issueType) continue;
-      const project = r.key.split("-")[0];
-      const list = (pulledIssueTypes[project] ??= []);
-      if (!list.includes(r.issueType)) list.push(r.issueType);
-    }
-  }
-
+  const jiraCfg = mergeIdeasJiraConfig(workspace.ideasConfig);
   return (
     <div>
       <p className="mb-6 text-sm text-muted">
@@ -64,7 +49,8 @@ export default async function IntegrationsSettingsPage({
         driveStatus={driveStatus}
         driveEnabled={driveEnabled}
         ideasEnabled={ideasEnabled}
-        pulledIssueTypes={pulledIssueTypes}
+        jiraProject={jiraCfg.jiraProject}
+        jiraIssueType={jiraCfg.jiraIssueType}
         jiraOauthReady={jiraOauthSetup.ready}
         driveOauthReady={driveOauthSetup.ready}
         banners={{

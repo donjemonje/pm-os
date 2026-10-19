@@ -53,10 +53,13 @@ export interface IdeasJiraConfig {
   descriptionMode: "overwrite";
   /** How the Jira backlog is pulled at import. */
   pull: JiraPullConfig;
-  /** Project keys this org works with (Admin → Ideas; Kela: ["PRDT"]). Empty =
-   *  no restriction. Settings → Integrations lists only these, and the pull
-   *  reads only these. */
-  jiraProjects: string[];
+  /** The one Jira project this org manages its ideas in (Admin → Ideas →
+   *  Jira; Kela: "PRDT"). Read on import, written on sync. "" = not set
+   *  (falls back to the connection's own selection, e.g. QA seeds). */
+  jiraProject: string;
+  /** Work type new ideas are created as in that project ("" = not set →
+   *  the connection's saved type, else the type the pulled issues share). */
+  jiraIssueType: string;
   /** Blank lines between the details text and the tickets block. */
   descriptionGapLines: number;
   supportedTicketsHeading: string;
@@ -107,7 +110,8 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   pull: DEFAULT_JIRA_PULL_CONFIG,
-  jiraProjects: [],
+  jiraProject: "",
+  jiraIssueType: "",
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
   zendeskTicketUrlTemplate: "",
@@ -204,21 +208,26 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
         ? Math.min(Math.floor(storedPull.maxIssues), JIRA_PULL_MAX_ISSUES)
         : DEFAULT_JIRA_PULL_CONFIG.maxIssues,
   };
-  const jiraProjects = Array.from(
-    new Set(
-      (Array.isArray(stored.jiraProjects) ? stored.jiraProjects : [])
-        .filter((k): k is string => typeof k === "string")
-        .map((k) => k.trim().toUpperCase())
-        .filter((k) => /^[A-Z][A-Z0-9_]{0,19}$/.test(k)),
-    ),
-  ).slice(0, 20);
+  const legacy = (stored as { jiraProjects?: unknown }).jiraProjects;
+  const rawProject =
+    typeof stored.jiraProject === "string"
+      ? stored.jiraProject
+      : Array.isArray(legacy) && typeof legacy[0] === "string"
+        ? legacy[0]
+        : "";
+  const jiraProject = /^[A-Z][A-Z0-9_]{0,19}$/.test(rawProject.trim().toUpperCase())
+    ? rawProject.trim().toUpperCase()
+    : "";
+  const jiraIssueType =
+    typeof stored.jiraIssueType === "string" ? stored.jiraIssueType.trim().slice(0, 60) : "";
   return {
     csv,
     ideaTemplate,
     fieldParsing,
     descriptionMode: "overwrite",
     pull,
-    jiraProjects,
+    jiraProject,
+    jiraIssueType,
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&
       stored.descriptionGapLines >= 0

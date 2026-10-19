@@ -48,8 +48,9 @@ export interface IdeasState {
   jiraConnected: boolean;
   /** Admin → Enablements "Jira integration" for the org: Jira is expected. */
   jiraEnabled: boolean;
-  /** Connection health at read time (one refresh attempt at most). */
-  jiraHealth: "not_connected" | "ok" | "reconnect";
+  /** Connection health at read time (one refresh attempt at most);
+   *  not_configured = connected but the admin has not set the org's project. */
+  jiraHealth: "not_connected" | "ok" | "reconnect" | "not_configured";
   /** Browse base of the connected site ("https://x.atlassian.net"); null when
    *  not connected. The client links every issue key with it, created ones
    *  (not yet in the snapshot) included. */
@@ -308,7 +309,11 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
     "jira",
     envFeatureDefault("jira"),
   );
-  const jiraHealth = (await getJiraHealth(workspaceId)).status;
+  const rawHealth = (await getJiraHealth(workspaceId)).status;
+  const jiraHealth =
+    rawHealth === "ok" && jiraEnabled && !mergeIdeasJiraConfig(wsRow?.ideasConfig).jiraProject
+      ? "not_configured"
+      : rawHealth;
 
   const jiraCustomersByKey: JiraCustomerMap = new Map(snapshotRows.map((r) => [r.key, r]));
   const undoByIdea = new Map(

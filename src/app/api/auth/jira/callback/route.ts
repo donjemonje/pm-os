@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 import { exchangeJiraCode, getAccessibleResources } from "@/lib/jira";
+import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { getAppBaseUrl } from "@/lib/jira-oauth-config";
 
 /** Redirect target after the OAuth round trip. The request URL is the host the
@@ -46,6 +47,17 @@ export async function GET(request: NextRequest) {
       return back(request, "/settings/jira?error=no_site");
     }
 
+    // The org's project and work type are set by the PM-OS admin (Admin →
+    // Ideas → Jira); a fresh connection takes them so nothing is chosen here.
+    const ws = await db.workspace.findUnique({ where: { id: workspaceId }, select: { ideasConfig: true } });
+    const cfg = mergeIdeasJiraConfig(ws?.ideasConfig);
+    const onboarding = cfg.jiraProject
+      ? {
+          projectKeys: JSON.stringify([cfg.jiraProject]),
+          ideasProjectKey: cfg.jiraProject,
+          ...(cfg.jiraIssueType ? { ideasIssueType: cfg.jiraIssueType } : {}),
+        }
+      : {};
     await db.jiraConnection.upsert({
       where: { workspaceId },
       create: {
@@ -55,6 +67,7 @@ export async function GET(request: NextRequest) {
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+        ...onboarding,
       },
       update: {
         authType: "oauth",
@@ -63,6 +76,7 @@ export async function GET(request: NextRequest) {
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+        ...onboarding,
       },
     });
 
