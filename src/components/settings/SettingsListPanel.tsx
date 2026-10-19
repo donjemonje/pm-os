@@ -17,6 +17,8 @@ export interface SettingsListItem {
   aliases?: string[];
   /** "jira" when the Jira pull created the row (product lines only). */
   origin?: string;
+  /** Part of PM-OS (e.g. the All Customers row): color only — no edit, delete or merge. */
+  builtIn?: boolean;
 }
 
 const INPUT_CLASS =
@@ -121,9 +123,11 @@ export function SettingsListPanel({
   // Same company under two spellings: the normalized key says so, the PM
   // decides which spelling survives.
   const duplicateOf = (item: SettingsListItem): SettingsListItem | null => {
-    if (!mergeEndpoint) return null;
+    if (!mergeEndpoint || item.builtIn) return null;
     const key = customerKey(item.name);
-    return items.find((o) => o.id !== item.id && customerKey(o.name) === key) ?? null;
+    return (
+      items.find((o) => o.id !== item.id && !o.builtIn && customerKey(o.name) === key) ?? null
+    );
   };
   async function onMerge(keep: SettingsListItem, merge: SettingsListItem) {
     if (
@@ -238,7 +242,17 @@ export function SettingsListPanel({
                     onPick={(color) => call("PATCH", { id: item.id, color })}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-foreground">{item.name}</div>
+                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                      {item.name}
+                      {item.builtIn && (
+                        <span
+                          title="Part of PM-OS: tickets that affect everyone land here. Pick its color; it can't be renamed or deleted."
+                          className="rounded-full border border-[#dde5ef] bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] text-[#7a8496]"
+                        >
+                          Built-in
+                        </span>
+                      )}
+                    </div>
                     {item.description && (
                       <div className="mt-0.5 text-sm text-muted">{item.description}</div>
                     )}
@@ -282,22 +296,26 @@ export function SettingsListPanel({
                       ) : null;
                     })()}
                   </div>
-                  <button
-                    onClick={() => startEdit(item)}
-                    disabled={busy}
-                    className="rounded-md p-2 text-muted hover:bg-background hover:text-foreground"
-                    aria-label={`Edit ${item.name}`}
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    onClick={() => onDelete(item)}
-                    disabled={busy}
-                    className="rounded-md p-2 text-muted hover:bg-background hover:text-red-600"
-                    aria-label={`Delete ${item.name}`}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  {!item.builtIn && (
+                    <>
+                      <button
+                        onClick={() => startEdit(item)}
+                        disabled={busy}
+                        className="rounded-md p-2 text-muted hover:bg-background hover:text-foreground"
+                        aria-label={`Edit ${item.name}`}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={() => onDelete(item)}
+                        disabled={busy}
+                        className="rounded-md p-2 text-muted hover:bg-background hover:text-red-600"
+                        aria-label={`Delete ${item.name}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </li>

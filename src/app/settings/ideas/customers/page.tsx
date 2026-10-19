@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { ensureCatalogColors } from "@/lib/ideas/catalog-colors";
+import { isAllCustomers } from "@/lib/ideas/customer-key";
 
 export const metadata: Metadata = {
   title: "Customers — PM-OS",
@@ -30,7 +31,11 @@ export default async function CustomersSettingsPage() {
       namePlaceholder="Customer name"
       descriptionPlaceholder="Anything that helps recognize them in tickets, e.g. aliases or tier (optional)"
       emptyLabel="No customers yet. Add the first one above."
-      initialItems={customers.map((c) => ({ ...c, aliases: (c.aliases as string[]) ?? [] }))}
+      initialItems={customers.map((c) => ({
+        ...c,
+        aliases: (c.aliases as string[]) ?? [],
+        builtIn: isAllCustomers(c.name),
+      }))}
     />
   );
 }
