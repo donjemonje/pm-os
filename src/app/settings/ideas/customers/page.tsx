@@ -32,7 +32,7 @@ export default async function CustomersSettingsPage() {
       mergeEndpoint="/api/ideas/lists/customers/merge"
       namePlaceholder="Customer name"
       aliasesPlaceholder="Aliases, comma-separated (optional)"
-      emptyLabel="No customers yet. Add the first one above."
+      emptyLabel="No customers yet. Add the first one with the button above."
       initialItems={customers.map((c) => ({
         ...c,
         aliases: (c.aliases as string[]) ?? [],

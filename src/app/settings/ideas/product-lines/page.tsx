@@ -70,7 +70,7 @@ export default async function ProductLinesSettingsPage() {
           endpoint="/api/ideas/lists/platforms"
           namePlaceholder="e.g. iOS"
           descriptionPlaceholder="What does this platform cover? (optional)"
-          emptyLabel="No platforms yet. Add the first one above."
+          emptyLabel="No platforms yet. Add the first one with the button above."
           initialItems={platforms}
         />
       )}

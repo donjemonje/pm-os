@@ -35,6 +35,7 @@ export function SettingsListPanel({
   namePlaceholder,
   descriptionPlaceholder,
   aliasesPlaceholder,
+  addLabel,
   emptyLabel,
   initialItems,
 }: {
@@ -49,6 +50,8 @@ export function SettingsListPanel({
   descriptionPlaceholder?: string;
   /** When set, the add/edit forms take comma-separated aliases (customers). */
   aliasesPlaceholder?: string;
+  /** Header button label; the add form opens under the header when clicked. */
+  addLabel?: string;
   emptyLabel: string;
   initialItems: SettingsListItem[];
 }) {
@@ -58,6 +61,9 @@ export function SettingsListPanel({
   const [description, setDescription] = useState("");
   const [aliases, setAliases] = useState("");
   const [editAliases, setEditAliases] = useState("");
+  /** Add form open (same pattern as Product Lines: header button → form on top). */
+  const [adding, setAdding] = useState(false);
+  const addButtonLabel = addLabel ?? `Add ${title.toLowerCase().replace(/s$/, "")}`;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -107,6 +113,7 @@ export function SettingsListPanel({
       })
     ) {
       setAliases("");
+      setAdding(false);
       setName("");
       setDescription("");
     }
@@ -180,11 +187,32 @@ export function SettingsListPanel({
   return (
     <section className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-5 py-4">
-        <div className="font-medium text-foreground">{title}</div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="font-medium text-foreground">{title}</div>
+          {!adding && (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-white px-3 text-[12px] font-medium hover:border-primary"
+            >
+              <Plus size={13} /> {addButtonLabel}
+            </button>
+          )}
+        </div>
         <p className="mt-1 text-sm text-muted">{blurb}</p>
       </div>
 
-      <form onSubmit={onAdd} className="flex items-start gap-2 border-b border-border px-5 py-4">
+      {adding && (
+      <form
+        onSubmit={onAdd}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setAdding(false);
+          }
+        }}
+        className="flex items-start gap-2 border-b border-border px-5 py-4"
+      >
         <div className="w-48 shrink-0">
           <input
             type="text"
@@ -193,6 +221,7 @@ export function SettingsListPanel({
             placeholder={namePlaceholder}
             className={INPUT_CLASS}
             disabled={busy}
+            autoFocus
           />
         </div>
         {aliasesPlaceholder && (
@@ -217,6 +246,14 @@ export function SettingsListPanel({
           />
         )}
         <button
+          type="button"
+          onClick={() => setAdding(false)}
+          disabled={busy}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
+        >
+          <X size={13} /> Cancel
+        </button>
+        <button
           type="submit"
           disabled={busy || !name.trim()}
           className="inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3.5 text-[13px] font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
@@ -225,6 +262,7 @@ export function SettingsListPanel({
           Add
         </button>
       </form>
+      )}
 
       {error && <div className="px-5 pt-3 text-sm text-red-600">{error}</div>}
 
