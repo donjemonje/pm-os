@@ -31,8 +31,9 @@ export function ProductLinesPanel({
 }) {
   const { confirm } = useConfirm();
   const [items, setItems] = useState(initialItems);
-  /** Row being dragged (drag & drop reorder). */
+  /** Row being dragged (drag & drop reorder) and the row it would replace. */
   const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -107,6 +108,7 @@ export function ProductLinesPanel({
     const from = items.findIndex((i) => i.id === dragId);
     const to = items.findIndex((i) => i.id === targetId);
     setDragId(null);
+    setOverId(null);
     if (from < 0 || to < 0 || from === to) return;
     const next = [...items];
     const [moved] = next.splice(from, 1);
