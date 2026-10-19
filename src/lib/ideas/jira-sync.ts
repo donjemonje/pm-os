@@ -39,7 +39,12 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   ]);
   const config = mergeIdeasJiraConfig(wsRow?.ideasConfig);
   const pull = config.pull;
-  if (!status?.connected || status.projectKeys.length === 0) {
+  // Admin → Ideas → Jira projects restricts the pull to the org's keys.
+  const projectKeys =
+    config.jiraProjects.length > 0
+      ? (status?.projectKeys ?? []).filter((k) => config.jiraProjects.includes(k))
+      : (status?.projectKeys ?? []);
+  if (!status?.connected || projectKeys.length === 0) {
     return { connected: false, sources: [], truncatedProjects: [], unresolvedProductLines: [], pull };
   }
   // Module values land under the catalog's spelling ("Platform General" →
@@ -82,7 +87,7 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   }
 
   const perProject = await Promise.all(
-    status.projectKeys.map(async (projectKey) => ({
+    projectKeys.map(async (projectKey) => ({
       projectKey,
       ...(await fetchIssuesForScopePaged(workspaceId, {
         projectKey,

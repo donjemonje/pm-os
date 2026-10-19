@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import {
   ATTRIBUTE_LABELS,
@@ -71,6 +71,24 @@ export function IdeasOutputConfig({
     Object.fromEntries(organizations.map((o) => [o.id, o.ideasIssueType])),
   );
   const [saving, setSaving] = useState(false);
+  /** The selected org's Jira projects (undefined = loading; [] = not connected). */
+  const [orgProjects, setOrgProjects] = useState<{ key: string; name: string }[] | undefined>(undefined);
+  useEffect(() => {
+    let stale = false;
+    setOrgProjects(undefined);
+    if (!orgId) return;
+    fetch(`/api/admin/organizations/${orgId}/jira-projects`)
+      .then((r) => (r.ok ? r.json() : { projects: [] }))
+      .then((data) => {
+        if (!stale) setOrgProjects(data.projects ?? []);
+      })
+      .catch(() => {
+        if (!stale) setOrgProjects([]);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [orgId]);
   const [remapping, setRemapping] = useState(false);
   const [remapResult, setRemapResult] = useState("");
   const [saved, setSaved] = useState(false);
@@ -234,32 +252,69 @@ export function IdeasOutputConfig({
           <h2 className="text-base font-bold">Jira</h2>
           <p className="mt-0.5 text-xs text-slate-500">How the connected Jira is read on import and written on sync: the pull ceiling, which Jira fields map to PM-OS attributes, and what a sync writes to the issue.</p>
         </div>
-      {/* Jira target */}
-      {issueTypes[orgId] !== null && (
-        <section className="rounded-xl border border-slate-200 bg-white p-5">
-          <h2 className="text-sm font-bold">Jira target</h2>
-          <p className="mb-4 mt-0.5 text-xs text-slate-500">
-            New ideas are created as this work type in the connected project
-            (also settable in Settings → Jira). The name must match a work type
-            of the project exactly.
-          </p>
+      {/* Jira projects — the org's keys; everything else is hidden from it */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-sm font-bold">Jira projects</h2>
+        <p className="mb-4 mt-0.5 text-xs text-slate-500">
+          The projects this organization works with. Settings → Integrations shows
+          only these and selects them by default; the import reads only these.
+          Empty = every project the connection can see. (New ideas are created
+          as Story; the write-back type is fixed for now.)
+        </p>
+        {orgProjects === undefined ? (
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <Loader2 size={12} className="animate-spin" /> Loading the organization&apos;s Jira projects…
+          </div>
+        ) : orgProjects.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {orgProjects.map((p) => {
+              const on = config.jiraProjects.includes(p.key);
+              return (
+                <label
+                  key={p.key}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${
+                    on ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 bg-white hover:border-slate-500"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={() =>
+                      patch({
+                        jiraProjects: on
+                          ? config.jiraProjects.filter((k) => k !== p.key)
+                          : [...config.jiraProjects, p.key],
+                      })
+                    }
+                    className="sr-only"
+                  />
+                  <span className="font-mono text-xs">{p.key}</span>
+                  <span className={on ? "text-slate-200" : "text-slate-600"}>{p.name}</span>
+                </label>
+              );
+            })}
+          </div>
+        ) : (
           <label className="flex items-center gap-3 text-sm">
-            <span className="text-xs font-medium text-slate-600">
-              Issue type
-            </span>
+            <span className="text-xs font-medium text-slate-600">Project keys</span>
             <input
               type="text"
-              value={issueTypes[orgId] ?? ""}
-              onChange={(e) => {
-                setSaved(false);
-                setIssueTypes((prev) => ({ ...prev, [orgId]: e.target.value }));
-              }}
-              placeholder="Story"
-              className={`${inputCls} w-44`}
+              value={config.jiraProjects.join(", ")}
+              onChange={(e) =>
+                patch({
+                  jiraProjects: e.target.value
+                    .split(/[,\s]+/)
+                    .map((k) => k.trim().toUpperCase())
+                    .filter(Boolean),
+                })
+              }
+              placeholder="PRDT"
+              title="Jira is not connected for this organization yet — type the keys, comma-separated."
+              className={`${inputCls} w-64`}
             />
           </label>
-        </section>
-      )}
+        )}
+      </section>
 
       {/* Jira pull — how the backlog is read at import */}
       <section className="rounded-xl border border-slate-200 bg-white p-5">

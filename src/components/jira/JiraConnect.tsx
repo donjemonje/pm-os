@@ -38,7 +38,15 @@ export function JiraProjectsPanel({
     setLoading(true);
     fetch("/api/jira/projects")
       .then((r) => r.json())
-      .then((data) => setProjects(data.projects ?? []))
+      .then((data) => {
+        const list: Project[] = data.projects ?? [];
+        setProjects(list);
+        // An admin-restricted list (Admin → Ideas → Jira projects) is the
+        // selection by default — one less thing for the customer to click.
+        if (data.restricted && list.length > 0) {
+          setSelected((cur) => (cur.length === 0 ? list.map((p) => p.key) : cur));
+        }
+      })
       .finally(() => setLoading(false));
   }, []);
 

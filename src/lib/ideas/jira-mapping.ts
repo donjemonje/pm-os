@@ -53,6 +53,10 @@ export interface IdeasJiraConfig {
   descriptionMode: "overwrite";
   /** How the Jira backlog is pulled at import. */
   pull: JiraPullConfig;
+  /** Project keys this org works with (Admin → Ideas; Kela: ["PRDT"]). Empty =
+   *  no restriction. Settings → Integrations lists only these, and the pull
+   *  reads only these. */
+  jiraProjects: string[];
   /** Blank lines between the details text and the tickets block. */
   descriptionGapLines: number;
   supportedTicketsHeading: string;
@@ -103,6 +107,7 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   pull: DEFAULT_JIRA_PULL_CONFIG,
+  jiraProjects: [],
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
   zendeskTicketUrlTemplate: "",
@@ -199,12 +204,21 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
         ? Math.min(Math.floor(storedPull.maxIssues), JIRA_PULL_MAX_ISSUES)
         : DEFAULT_JIRA_PULL_CONFIG.maxIssues,
   };
+  const jiraProjects = Array.from(
+    new Set(
+      (Array.isArray(stored.jiraProjects) ? stored.jiraProjects : [])
+        .filter((k): k is string => typeof k === "string")
+        .map((k) => k.trim().toUpperCase())
+        .filter((k) => /^[A-Z][A-Z0-9_]{0,19}$/.test(k)),
+    ),
+  ).slice(0, 20);
   return {
     csv,
     ideaTemplate,
     fieldParsing,
     descriptionMode: "overwrite",
     pull,
+    jiraProjects,
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&
       stored.descriptionGapLines >= 0

@@ -176,7 +176,7 @@ export function IntegrationsPanel({
           <JiraProjectsPanel
             initialProjectKeys={jiraStatus.projectKeys ?? []}
             siteUrl={jiraStatus.siteUrl}
-            showIdeasTarget={ideasEnabled}
+            showIdeasTarget={false /* Story only for now (Daniel 2026-10-19); rebuilt when a customer needs it */}
             initialIdeasProjectKey={jiraStatus.ideasProjectKey ?? null}
             initialIdeasIssueType={jiraStatus.ideasIssueType ?? "Story"}
           />
