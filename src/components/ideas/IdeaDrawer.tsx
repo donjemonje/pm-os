@@ -9,10 +9,10 @@ import {
   ChevronRight,
   ExternalLink,
   Flag,
-  GitMerge,
   Pencil,
   RotateCcw,
   X,
+  Share2,
 } from "lucide-react";
 import {
   badgeOf,
@@ -899,7 +899,7 @@ export function IdeaDrawer({
                 )}
                 {onMerge && (
                   <Button onClick={onMerge}>
-                    <GitMerge size={13} strokeWidth={2.25} />
+                    <Share2 size={13} strokeWidth={2.25} />
                     Merge
                   </Button>
                 )}
