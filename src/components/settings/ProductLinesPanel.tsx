@@ -178,7 +178,7 @@ export function ProductLinesPanel({
           )}
         </div>
       </div>
-      <p className="mb-4 text-[13px] text-muted">
+      <p className="mb-4 text-sm text-muted">
         The products ideas can belong to — this text is the ground truth PMOS AI uses to classify
         tickets. The order here is the order filters list them in.{" "}
         {canEdit
