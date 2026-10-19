@@ -203,6 +203,13 @@ export function IdeasView({
     if (opts.refreshShell) router.refresh();
   };
 
+  // The drawer's text editor (Tiptap + toolbar icons) is a lazy chunk; fetch
+  // it once the Ideas page is up so the first click into an edit is instant
+  // (Daniel, 2026-10-19: the first edit of a session showed a blank beat).
+  useEffect(() => {
+    void import("@/components/ideas/IdeaDetailsEditor");
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
