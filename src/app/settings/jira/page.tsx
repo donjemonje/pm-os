@@ -41,12 +41,6 @@ export default async function IntegrationsSettingsPage({
     : false;
   return (
     <div>
-      <p className="mb-6 text-sm text-muted">
-        {driveEnabled
-          ? "Connect Jira and Google Drive to import tickets and PRDs."
-          : "Connect Jira to import tickets."}
-      </p>
-
       <IntegrationsPanel
         jiraStatus={jiraStatus}
         driveStatus={driveStatus}
