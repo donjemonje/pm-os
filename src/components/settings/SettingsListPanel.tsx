@@ -235,7 +235,7 @@ export function SettingsListPanel({
           {items.map((item) => (
             <li
               key={item.id}
-              className="flex items-center gap-2 border-b border-border px-5 py-3 last:border-b-0"
+              className="flex items-start gap-2 border-b border-border px-5 py-3 last:border-b-0"
             >
               {editingId === item.id ? (
                 <>
@@ -275,7 +275,7 @@ export function SettingsListPanel({
                   <button
                     onClick={() => onSaveEdit(item.id)}
                     disabled={busy || !editName.trim()}
-                    className="rounded-md p-2 text-primary hover:bg-background disabled:opacity-50"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-primary hover:bg-background disabled:opacity-50"
                     aria-label="Save"
                   >
                     <Check size={15} />
@@ -283,7 +283,7 @@ export function SettingsListPanel({
                   <button
                     onClick={() => setEditingId(null)}
                     disabled={busy}
-                    className="rounded-md p-2 text-muted hover:bg-background"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-background"
                     aria-label="Cancel"
                   >
                     <X size={15} />
@@ -299,7 +299,7 @@ export function SettingsListPanel({
                     onPick={(color) => call("PATCH", { id: item.id, color })}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <div className="flex min-h-7 items-center gap-2 text-sm font-medium text-foreground">
                       {item.name}
                       {item.usage && <UsageCounts {...item.usage} />}
                       {item.builtIn && (
@@ -359,7 +359,7 @@ export function SettingsListPanel({
                       <button
                         onClick={() => startEdit(item)}
                         disabled={busy}
-                        className="rounded-md p-2 text-muted hover:bg-background hover:text-foreground"
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-background hover:text-foreground"
                         aria-label={`Edit ${item.name}`}
                       >
                         <Pencil size={15} />
@@ -367,7 +367,7 @@ export function SettingsListPanel({
                       <button
                         onClick={() => onDelete(item)}
                         disabled={busy}
-                        className="rounded-md p-2 text-muted hover:bg-background hover:text-red-600"
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-background hover:text-red-600"
                         aria-label={`Delete ${item.name}`}
                       >
                         <Trash2 size={15} />
