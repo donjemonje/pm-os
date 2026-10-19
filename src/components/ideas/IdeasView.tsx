@@ -1355,7 +1355,7 @@ export function IdeasView({
                       ) : (
                         <>
                           <b className="font-semibold">No changes</b>. Tick a Zendesk or Jira row to add it,
-                          untick to remove; search finds tickets and issues. Esc leaves.
+                          untick to remove.
                         </>
                       )}
                     </span>
