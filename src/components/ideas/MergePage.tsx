@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Brain, X } from "lucide-react";
+import { Check, Brain, X, Flag } from "lucide-react";
 import { JiraMark, ZendeskMark } from "@/components/brand/SourceIcons";
 import { ApproveMark } from "@/components/ui/ApproveMark";
 import { Chip } from "@/components/ui/Chip";
@@ -485,6 +485,14 @@ export function MergePage({
                 >
                   {idea.title}
                 </span>
+                {idea.sourcesChanged && !gone && (
+                  <span
+                    title="Sources changed by a PM — rewrite or keep the text before approving"
+                    className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[var(--app-warn-fg)]"
+                  >
+                    <Flag size={9} /> sources changed
+                  </span>
+                )}
                 {idea.batch === "unchanged" && !gone && (
                   <span
                     title="Nothing touched this idea in the last import"
