@@ -2,9 +2,11 @@ import type { CSSProperties } from "react";
 
 /**
  * The curated chip palette for catalog entries (product lines, customers):
- * twelve tints that stay legible on white and next to each other, so every
- * organization's chips read as one system. Catalog rows store the palette
- * id, never a hex — "consistent across orgs" is the whole point.
+ * twenty-four tints in the monday.com spirit (livelier, more choice —
+ * Daniel 2026-10-19) that stay legible on white and next to each other, so
+ * every organization's chips read as one system. Catalog rows store the
+ * palette id, never a hex. The original twelve ids are kept (stored rows),
+ * only retinted.
  */
 export interface ChipColor {
   id: string;
@@ -14,18 +16,34 @@ export interface ChipColor {
 }
 
 export const CHIP_PALETTE: readonly ChipColor[] = [
-  { id: "blue", label: "Blue", bg: "rgba(122,167,255,.18)", fg: "#2f5fc4" },
-  { id: "teal", label: "Teal", bg: "rgba(47,160,143,.16)", fg: "#0f7a6a" },
-  { id: "green", label: "Green", bg: "rgba(88,176,96,.18)", fg: "#2a7a34" },
-  { id: "lime", label: "Lime", bg: "rgba(160,190,60,.22)", fg: "#5a6e12" },
-  { id: "amber", label: "Amber", bg: "rgba(240,180,60,.22)", fg: "#8a5a00" },
-  { id: "orange", label: "Orange", bg: "rgba(245,140,70,.2)", fg: "#9a4a10" },
-  { id: "red", label: "Red", bg: "rgba(230,90,90,.16)", fg: "#a32a2a" },
-  { id: "pink", label: "Pink", bg: "rgba(230,110,170,.18)", fg: "#a0246a" },
-  { id: "indigo", label: "Indigo", bg: "rgba(110,120,230,.18)", fg: "#3f47b8" },
-  { id: "cyan", label: "Cyan", bg: "rgba(60,180,220,.18)", fg: "#0b6e8f" },
-  { id: "brown", label: "Brown", bg: "rgba(170,120,80,.18)", fg: "#6e4a2a" },
-  { id: "slate", label: "Slate", bg: "#eef1f6", fg: "#4a5b74" },
+  // Row 1 — blues / teals
+  { id: "blue", label: "Bright blue", bg: "rgba(0,115,234,.16)", fg: "#0a5bc4" },
+  { id: "navy", label: "Navy", bg: "rgba(34,80,160,.18)", fg: "#1f3f86" },
+  { id: "sky", label: "Sky", bg: "rgba(102,204,255,.26)", fg: "#0b6aa0" },
+  { id: "cyan", label: "Chili blue", bg: "rgba(38,190,230,.22)", fg: "#0b6e8f" },
+  { id: "teal", label: "Aquamarine", bg: "rgba(78,204,200,.24)", fg: "#0f7a6a" },
+  { id: "steel", label: "Steel", bg: "rgba(74,120,160,.2)", fg: "#2f5676" },
+  // Row 2 — greens / yellows
+  { id: "green", label: "Done green", bg: "rgba(0,200,117,.2)", fg: "#0f7a3f" },
+  { id: "grass", label: "Grass", bg: "rgba(3,127,76,.2)", fg: "#0a6a3f" },
+  { id: "mint", label: "Bright green", bg: "rgba(156,217,74,.3)", fg: "#4a7a0f" },
+  { id: "lime", label: "Saladish", bg: "rgba(202,220,60,.34)", fg: "#5a6e12" },
+  { id: "yellow", label: "Egg yolk", bg: "rgba(255,203,0,.3)", fg: "#8a6200" },
+  { id: "amber", label: "Working orange", bg: "rgba(253,171,61,.28)", fg: "#8a5a00" },
+  // Row 3 — oranges / reds / pinks
+  { id: "orange", label: "Dark orange", bg: "rgba(255,100,43,.22)", fg: "#9a3f10" },
+  { id: "peach", label: "Peach", bg: "rgba(255,173,173,.34)", fg: "#a0433a" },
+  { id: "red", label: "Stuck red", bg: "rgba(226,68,92,.2)", fg: "#a32a2a" },
+  { id: "crimson", label: "Dark red", bg: "rgba(189,52,56,.22)", fg: "#8a1f23" },
+  { id: "pink", label: "Lipstick", bg: "rgba(255,90,145,.22)", fg: "#a0246a" },
+  { id: "magenta", label: "Sofia pink", bg: "rgba(255,21,142,.18)", fg: "#9a0f5e" },
+  // Row 4 — purples / neutrals
+  { id: "purple", label: "Purple", bg: "rgba(162,93,220,.22)", fg: "#5e2d9a" },
+  { id: "violet", label: "Dark purple", bg: "rgba(120,75,209,.22)", fg: "#4a2d8f" },
+  { id: "indigo", label: "Indigo", bg: "rgba(87,98,220,.22)", fg: "#3f47b8" },
+  { id: "lavender", label: "Lavender", bg: "rgba(168,152,235,.3)", fg: "#5a4aa0" },
+  { id: "brown", label: "Coffee", bg: "rgba(173,120,80,.24)", fg: "#6e4a2a" },
+  { id: "slate", label: "Slate", bg: "#e6eaf1", fg: "#4a5b74" },
 ];
 
 const BY_ID = new Map(CHIP_PALETTE.map((c) => [c.id, c]));
@@ -50,7 +68,7 @@ export const PRODUCT_CHIP_DEFAULT: ChipColor = {
   bg: "var(--background)",
   fg: "var(--primary)",
 };
-export const CUSTOMER_CHIP_DEFAULT: ChipColor = CHIP_PALETTE[1];
+export const CUSTOMER_CHIP_DEFAULT: ChipColor = BY_ID.get("teal")!;
 
 /** The least-used palette color (ties → palette order) — new rows get one automatically. */
 export function nextChipColor(used: (string | null | undefined)[]): string {
