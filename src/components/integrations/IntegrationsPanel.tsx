@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 import { useState } from "react";
-import { ArrowRight, CheckCircle2, Circle, Loader2, ExternalLink } from "lucide-react";
+import { ArrowRight, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { formatIntegrationError } from "@/lib/integration-errors";
 import { GoogleDriveManagePanel } from "@/components/google-drive/GoogleDriveConnect";
 
@@ -66,6 +66,7 @@ function IntegrationRow({
   needsReconnect = false,
   headerAction,
   onDisconnect,
+  detailHref,
 }: {
   name: string;
   connected: boolean;
@@ -81,8 +82,10 @@ function IntegrationRow({
   flat?: boolean;
   /** Connected but the token is dead: status reads "Needs reconnecting" and Reconnect shows. */
   needsReconnect?: boolean;
-  /** Extra control on the header row (e.g. an Open-in-Jira link). */
+  /** Extra control on the header row. */
   headerAction?: React.ReactNode;
+  /** When set, `detail` renders as a link opening in a new tab. */
+  detailHref?: string;
   /** Shown as a Disconnect button when set (asks first). */
   onDisconnect?: () => void;
 }) {
@@ -97,9 +100,26 @@ function IntegrationRow({
               {connected ? (needsReconnect ? "Needs reconnecting" : "Connected") : "Not connected"}
             </span>
             {connected && detail && (
-              <span className="truncate text-muted">· {detail}</span>
+              <span className="truncate text-muted">
+                ·{" "}
+                {detailHref ? (
+                  <a
+                    href={detailHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    {detail}
+                  </a>
+                ) : (
+                  detail
+                )}
+              </span>
             )}
           </div>
+          {/* Flat card: the extra line lives in the left column, so the
+              actions on the right centre on the whole card. */}
+          {flat && connected && children && <div className="mt-2">{children}</div>}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -148,9 +168,6 @@ function IntegrationRow({
         </div>
       </div>
 
-      {/* `children` is an array even when every item is false — gate on the
-          connection so a not-connected card has no empty padded footer. */}
-      {flat && connected && children && <div className="px-5 pb-4">{children}</div>}
       {!flat && expanded && children && (
         <div className="border-t border-border px-5 py-4">{children}</div>
       )}
@@ -234,19 +251,7 @@ export function IntegrationsPanel({
         flat
         needsReconnect={jiraNeedsReconnect}
         onDisconnect={jiraStatus?.connected ? disconnectJira : undefined}
-        headerAction={
-          jiraStatus?.connected && jiraStatus.siteUrl ? (
-            <a
-              href={jiraStatus.siteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
-            >
-              Open Jira
-              <ExternalLink size={12} />
-            </a>
-          ) : null
-        }
+        detailHref={jiraStatus?.siteUrl}
       >
         {jiraDisconnectError && <div className="text-sm text-[#c94266]">{jiraDisconnectError}</div>}
         {jiraStatus?.connected && ideasEnabled && (
