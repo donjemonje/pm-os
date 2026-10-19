@@ -99,10 +99,19 @@ const MONO_LABEL =
 
 // The WYSIWYG Details editor (Tiptap) is loaded only when a PM clicks Edit —
 // the Ideas page itself never pays for it.
-const IdeaDetailsEditor = dynamic(
-  () => import("@/components/ideas/IdeaDetailsEditor"),
-  { ssr: false, loading: () => <div className="idea-editor idea-editor-loading" /> },
-);
+/** The editor chunk (Tiptap) loads lazily; `preloadEditor` fetches it as
+ *  soon as a drawer opens so the first click on the text does not show an
+ *  empty box while the chunk arrives. */
+const loadEditor = () => import("@/components/ideas/IdeaDetailsEditor");
+const preloadEditor = () => {
+  void loadEditor();
+};
+const IdeaDetailsEditor = dynamic(loadEditor, {
+  ssr: false,
+  // While the chunk loads (first open only), the text stays visible instead
+  // of an empty box.
+  loading: () => null,
+});
 
 const ZEN_TAG = { background: "#e6eaf2", color: "#4a5b74" };
 const JIRA_TAG = { background: "rgba(59,124,246,.15)", color: "#2a5fd0" };
@@ -156,6 +165,10 @@ export function IdeaDrawer({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [productMenuOpen]);
+  useEffect(() => {
+    preloadEditor();
+  }, []);
+
   // Esc peels one layer per press, innermost first, wherever focus sits:
   // open menu → tags/text edit → the drawer. Element handlers that take Esc
   // themselves stop propagation, so this sees only what nobody else took.
