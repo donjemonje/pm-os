@@ -18,6 +18,7 @@ import {
   Undo2,
   Share2,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
@@ -68,6 +69,11 @@ const IMPORT_STEPS: { label: string; hint: string; pmos?: boolean }[] = [
   },
   { label: "Preparing ideas for review", hint: "Almost there" },
 ];
+
+const WarmDetailsEditor = dynamic(() => import("@/components/ideas/IdeaDetailsEditor"), {
+  ssr: false,
+  loading: () => null,
+});
 
 interface ServerState {
   tickets: ZendeskTicket[];
@@ -203,11 +209,15 @@ export function IdeasView({
     if (opts.refreshShell) router.refresh();
   };
 
-  // The drawer's text editor (Tiptap + toolbar icons) is a lazy chunk; fetch
-  // it once the Ideas page is up so the first click into an edit is instant
-  // (Daniel, 2026-10-19: the first edit of a session showed a blank beat).
+  // The drawer's text editor (Tiptap) pays a one-time cost the first time it
+  // mounts in a page: chunk fetch (and compile in dev), schema and extension
+  // setup, first layout. A hidden instance mounts right after the page is up
+  // and goes away a moment later, so the first real edit is as instant as
+  // the second (Daniel, 2026-10-19).
+  const [warmEditor, setWarmEditor] = useState(true);
   useEffect(() => {
-    void import("@/components/ideas/IdeaDetailsEditor");
+    const t = setTimeout(() => setWarmEditor(false), 4000);
+    return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
@@ -911,6 +921,15 @@ export function IdeasView({
     );
 
   return (
+    <>
+      {warmEditor && (
+        <div
+          aria-hidden
+          style={{ position: "fixed", left: -10000, top: 0, width: 600, visibility: "hidden", pointerEvents: "none" }}
+        >
+          <WarmDetailsEditor defaultValue={"## Warm-up\n\n- one\n"} onChange={() => {}} />
+        </div>
+      )}
     <div className="app-canvas font-title min-h-full">
       <div className="mx-auto w-full max-w-[1680px] px-7 pb-24 pt-6">
         <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFile} />
@@ -2025,5 +2044,6 @@ export function IdeasView({
         </div>
       )}
     </div>
+    </>
   );
 }
