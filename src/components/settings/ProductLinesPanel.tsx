@@ -162,10 +162,18 @@ export function ProductLinesPanel({
   );
 
   return (
-    <section className="max-w-3xl">
+    <section>
       <div className="mb-1 flex items-end justify-between gap-4">
         <h2 className="font-title m-0 text-[15px] font-semibold">Product Lines</h2>
         <div className="flex items-center gap-1.5">
+          {canEdit && !adding && (
+            <button
+              onClick={() => setAdding(true)}
+              className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-white px-3 text-[12px] font-medium hover:border-primary"
+            >
+              <Plus size={13} /> Add product line
+            </button>
+          )}
           <button onClick={() => setView("formatted")} className={viewChip(view === "formatted")}>
             Formatted
           </button>
@@ -190,6 +198,40 @@ export function ProductLinesPanel({
         <div className="mb-3 rounded-lg border border-[#f3c9d5] bg-[#fdeef2] px-3 py-2 text-[13px] text-[#c94266]">
           {error}
         </div>
+      )}
+
+      {canEdit && adding && (
+      <div
+        className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4"
+        onKeyDown={editorKeys(() => void onAdd(), () => setAdding(false))}
+      >
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Name"
+          autoFocus
+          className={INPUT_CLASS}
+          maxLength={80}
+        />
+        {aliasesEditor(aliases, setAliases)}
+        {descriptionEditor(description, setDescription)}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={() => setAdding(false)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
+          >
+            <X size={13} /> Cancel
+          </button>
+          <button
+            onClick={() => void onAdd()}
+            disabled={busy || !name.trim()}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+            Add product line
+          </button>
+        </div>
+      </div>
       )}
 
       <div className="flex flex-col gap-3">
@@ -297,52 +339,11 @@ export function ProductLinesPanel({
         {items.length === 0 && (
           <div className="rounded-xl border border-dashed border-border bg-white px-5 py-8 text-center text-sm text-muted">
             No product lines yet.
-            {canEdit ? " Add the first one below." : ""}
+            {canEdit ? " Add the first one with the button above." : ""}
           </div>
         )}
       </div>
 
-      {canEdit &&
-        (adding ? (
-          <div
-            className="mt-4 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4"
-            onKeyDown={editorKeys(() => void onAdd(), () => setAdding(false))}
-          >
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Name"
-              autoFocus
-              className={INPUT_CLASS}
-              maxLength={80}
-            />
-            {aliasesEditor(aliases, setAliases)}
-            {descriptionEditor(description, setDescription)}
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setAdding(false)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
-              >
-                <X size={13} /> Cancel
-              </button>
-              <button
-                onClick={() => void onAdd()}
-                disabled={busy || !name.trim()}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50"
-              >
-                {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
-                Add product line
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setAdding(true)}
-            className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
-          >
-            <Plus size={13} /> Add product line
-          </button>
-        ))}
     </section>
   );
 }

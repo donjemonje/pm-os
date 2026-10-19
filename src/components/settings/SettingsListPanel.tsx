@@ -168,7 +168,7 @@ export function SettingsListPanel({
   }
 
   return (
-    <section className="max-w-3xl rounded-xl border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-5 py-4">
         <div className="font-medium text-foreground">{title}</div>
         <p className="mt-1 text-sm text-muted">{blurb}</p>
