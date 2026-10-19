@@ -93,6 +93,16 @@ export async function getAccessibleResources(accessToken: string) {
   return response.json() as Promise<Array<{ id: string; url: string; name: string }>>;
 }
 
+/** The Atlassian account behind an access token (name + email), for "Connected by". */
+export async function getAtlassianMe(accessToken: string): Promise<{ name: string | null; email: string | null }> {
+  const response = await fetch(`${ATLASSIAN_API_URL}/me`, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Failed to read the Atlassian profile: ${await response.text()}`);
+  const me = (await response.json()) as { name?: string; email?: string; nickname?: string };
+  return { name: me.name ?? me.nickname ?? null, email: me.email ?? null };
+}
+
 /**
  * True when a Jira connection exists AND its token is usable (fresh, or
  * refreshable with the configured Atlassian OAuth creds). A configured but
@@ -1002,6 +1012,8 @@ export async function getJiraConnectionStatus(workspaceId: string) {
     prdSource: connection.prdSource,
     ideasProjectKey: connection.ideasProjectKey,
     ideasIssueType: connection.ideasIssueType,
+    connectedByName: connection.connectedByName,
+    connectedByEmail: connection.connectedByEmail,
     connected: true,
   };
 }

@@ -53,6 +53,11 @@ export interface IdeasJiraConfig {
   descriptionMode: "overwrite";
   /** How the Jira backlog is pulled at import. */
   pull: JiraPullConfig;
+  /** The Jira site the org works on ("https://d3east.atlassian.net"). On
+   *  (re)connect the OAuth callback binds to THIS site from the account's
+   *  accessible list — never "the first site", which for a PM with several
+   *  Atlassian sites could be the wrong one. "" = first site (legacy). */
+  jiraSiteUrl: string;
   /** The one Jira project this org manages its ideas in (Admin → Ideas →
    *  Jira; Kela: "PRDT"). Read on import, written on sync. "" = not set
    *  (falls back to the connection's own selection, e.g. QA seeds). */
@@ -110,6 +115,7 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   pull: DEFAULT_JIRA_PULL_CONFIG,
+  jiraSiteUrl: "",
   jiraProject: "",
   jiraIssueType: "",
   descriptionGapLines: 2,
@@ -220,12 +226,17 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
     : "";
   const jiraIssueType =
     typeof stored.jiraIssueType === "string" ? stored.jiraIssueType.trim().slice(0, 60) : "";
+  const rawSite = typeof stored.jiraSiteUrl === "string" ? stored.jiraSiteUrl.trim() : "";
+  const jiraSiteUrl = /^https:\/\/[a-z0-9-]+\.atlassian\.net$/i.test(rawSite.replace(/\/+$/, ""))
+    ? rawSite.replace(/\/+$/, "").toLowerCase()
+    : "";
   return {
     csv,
     ideaTemplate,
     fieldParsing,
     descriptionMode: "overwrite",
     pull,
+    jiraSiteUrl,
     jiraProject,
     jiraIssueType,
     descriptionGapLines:

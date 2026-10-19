@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
-import { exchangeJiraCode, getAccessibleResources } from "@/lib/jira";
+import { exchangeJiraCode, getAccessibleResources, getAtlassianMe } from "@/lib/jira";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { getAppBaseUrl } from "@/lib/jira-oauth-config";
 
@@ -41,10 +41,43 @@ export async function GET(request: NextRequest) {
   try {
     const tokens = await exchangeJiraCode(code);
     const resources = await getAccessibleResources(tokens.access_token);
-    const site = resources[0];
-
-    if (!site) {
+    if (resources.length === 0) {
       return back(request, "/settings/jira?error=no_site");
+    }
+    // The org's site comes from Admin → Ideas (or, failing that, the site the
+    // workspace was connected to before). A PM with several Atlassian sites
+    // must land on that one, never on "the first" — reconnecting with a
+    // personal account that also sees the customer's own Jira would
+    // otherwise silently rebind PM-OS to the wrong site.
+    const wsCfg = await db.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { ideasConfig: true, jiraConnection: { select: { siteUrl: true } } },
+    });
+    const wanted = (
+      mergeIdeasJiraConfig(wsCfg?.ideasConfig).jiraSiteUrl ||
+      wsCfg?.jiraConnection?.siteUrl ||
+      ""
+    )
+      .replace(/\/+$/, "")
+      .toLowerCase();
+    const site = wanted
+      ? resources.find((r) => r.url.replace(/\/+$/, "").toLowerCase() === wanted)
+      : resources[0];
+    if (!site) {
+      return back(
+        request,
+        `/settings/jira?error=${encodeURIComponent(`site_not_accessible:${wanted}`)}`,
+      );
+    }
+    // Who authorized — shown in Settings so the team knows whose grant it is.
+    let connectedByName: string | null = null;
+    let connectedByEmail: string | null = null;
+    try {
+      const me = await getAtlassianMe(tokens.access_token);
+      connectedByName = me.name;
+      connectedByEmail = me.email;
+    } catch {
+      // Cosmetic; the connection works without it.
     }
 
     // The org's project and work type are set by the PM-OS admin (Admin →
@@ -67,6 +100,8 @@ export async function GET(request: NextRequest) {
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+        connectedByName,
+        connectedByEmail,
         ...onboarding,
       },
       update: {
@@ -76,6 +111,8 @@ export async function GET(request: NextRequest) {
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+        connectedByName,
+        connectedByEmail,
         ...onboarding,
       },
     });

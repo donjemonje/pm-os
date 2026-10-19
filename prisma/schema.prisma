@@ -215,6 +215,10 @@ model JiraConnection {
   /// refreshToken is empty, expiresAt is far future, and requests go to
   /// siteUrl directly instead of api.atlassian.com/ex/jira/<cloudId>.
   authType        String    @default("oauth")
+  /// The Atlassian account that authorized the connection (OAuth /me at
+  /// connect time) — shown in Settings so the team knows whose grant it is.
+  connectedByName  String?
+  connectedByEmail String?
   projectKeys     String    @default("[]")
   prdSource       String    @default("epic_description")
   /// Ideas write-back target: new ideas become issues of this type in this

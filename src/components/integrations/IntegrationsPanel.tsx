@@ -11,6 +11,8 @@ import { GoogleDriveManagePanel } from "@/components/google-drive/GoogleDriveCon
 type JiraStatus = {
   connected: boolean;
   siteUrl?: string;
+  connectedByName?: string | null;
+  connectedByEmail?: string | null;
   projectKeys?: string[];
   ideasProjectKey?: string | null;
   ideasIssueType?: string;
@@ -256,6 +258,16 @@ export function IntegrationsPanel({
         {jiraDisconnectError && <div className="text-sm text-[#c94266]">{jiraDisconnectError}</div>}
         {jiraStatus?.connected && ideasEnabled && (
           <div className="text-sm">
+            {(jiraStatus.connectedByName || jiraStatus.connectedByEmail) && (
+              <p className="mb-1 text-muted">
+                Connected by{" "}
+                <span className="font-medium text-foreground">
+                  {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail}
+                </span>
+                {jiraStatus.connectedByName && jiraStatus.connectedByEmail ? ` (${jiraStatus.connectedByEmail})` : ""}
+                . Any user of the Jira site can reconnect with their own account when needed.
+              </p>
+            )}
             {(
               <p className="text-muted">
                 {jiraProject ? (

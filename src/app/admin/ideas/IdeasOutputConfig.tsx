@@ -267,6 +267,21 @@ export function IdeasOutputConfig({
             type; they apply as soon as a member connects Jira.
           </div>
         )}
+        <div className="mb-4">
+          <div className="mb-1.5 text-xs font-medium text-slate-600">Jira site</div>
+          <input
+            type="text"
+            value={config.jiraSiteUrl}
+            onChange={(e) => patch({ jiraSiteUrl: e.target.value.trim() })}
+            placeholder="https://your-site.atlassian.net"
+            className={`${inputCls} w-80`}
+          />
+          <div className="mt-1 text-[11px] text-slate-500">
+            On connect and reconnect PM-OS binds to this site, whichever other Atlassian sites the
+            signing-in account can see. Required when members will reconnect with their own accounts.
+            {org.jiraConnected && !config.jiraSiteUrl ? " Leave empty to keep the site connected today." : ""}
+          </div>
+        </div>
         <div className="flex flex-wrap items-start gap-6">
           <div>
             <div className="mb-1.5 text-xs font-medium text-slate-600">Project</div>
