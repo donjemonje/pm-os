@@ -103,9 +103,6 @@ const MONO_LABEL =
  *  soon as a drawer opens so the first click on the text does not show an
  *  empty box while the chunk arrives. */
 const loadEditor = () => import("@/components/ideas/IdeaDetailsEditor");
-const preloadEditor = () => {
-  void loadEditor();
-};
 const IdeaDetailsEditor = dynamic(loadEditor, {
   ssr: false,
   // While the chunk loads (first open only), the text stays visible instead
@@ -165,8 +162,17 @@ export function IdeaDrawer({
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [productMenuOpen]);
+  /** True once the editor chunk is in memory; until then an edit shows the
+   *  text read-only rather than an empty box (first open only). */
+  const [editorReady, setEditorReady] = useState(false);
   useEffect(() => {
-    preloadEditor();
+    let stale = false;
+    loadEditor().then(() => {
+      if (!stale) setEditorReady(true);
+    });
+    return () => {
+      stale = true;
+    };
   }, []);
 
   // Esc peels one layer per press, innermost first, wherever focus sits:
@@ -890,11 +896,17 @@ export function IdeaDrawer({
               {editSection === "details" && (
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
-                <IdeaDetailsEditor
-                  key={idea?.id}
-                  defaultValue={editDetails}
-                  onChange={setEditDetails}
-                />
+                {editorReady ? (
+                  <IdeaDetailsEditor
+                    key={idea?.id}
+                    defaultValue={editDetails}
+                    onChange={setEditDetails}
+                  />
+                ) : (
+                  <div className="rounded-lg border border-border px-3 py-2.5 opacity-70">
+                    <UmMarkdown content={editDetails} className="idea-text" />
+                  </div>
+                )}
                 <span className="text-[11px] text-[#9aa8be]">
                   ⌘B bold · ⌘I italic · ⌘K link · ⌘↵ saves · Esc cancels
                 </span>
