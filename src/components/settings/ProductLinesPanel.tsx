@@ -55,7 +55,13 @@ export function ProductLinesPanel({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
-      setItems(data.items);
+      // The API returns rows without usage counts — keep the ones the page computed.
+      setItems((prev) =>
+        (data.items as SettingsListItem[]).map((it) => ({
+          ...it,
+          usage: prev.find((p) => p.id === it.id)?.usage,
+        })),
+      );
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
