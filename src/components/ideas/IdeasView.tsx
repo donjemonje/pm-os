@@ -18,7 +18,7 @@ import {
   Undo2,
   Share2,
 } from "lucide-react";
-import dynamic from "next/dynamic";
+import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
@@ -70,10 +70,7 @@ const IMPORT_STEPS: { label: string; hint: string; pmos?: boolean }[] = [
   { label: "Preparing ideas for review", hint: "Almost there" },
 ];
 
-const WarmDetailsEditor = dynamic(() => import("@/components/ideas/IdeaDetailsEditor"), {
-  ssr: false,
-  loading: () => null,
-});
+const WarmDetailsEditor = LazyIdeaDetailsEditor;
 
 interface ServerState {
   tickets: ZendeskTicket[];
