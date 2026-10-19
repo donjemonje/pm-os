@@ -444,6 +444,10 @@ model Idea {
   /// Customers a PM added by hand (names). Ticket-derived customers are
   /// never stored here; removing one of those is a dismissal on its tickets.
   addedCustomers Json      @default("[]")
+  /// A PM changed the sources after PMOS AI wrote the text: approval is
+  /// blocked until the idea is rewritten from its current sources or the PM
+  /// explicitly keeps the text (Daniel, 2026-10-19).
+  sourcesChanged Boolean   @default(false)
   pmScore        Int?
   manualScore    Int?
   existingVotes  Int       @default(0)

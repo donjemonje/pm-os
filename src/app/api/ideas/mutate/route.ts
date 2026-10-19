@@ -7,6 +7,8 @@ const MUTATION_TYPES = [
   "edit",
   "approveAll",
   "reassign",
+  "rewrite",
+  "keepText",
   "approveCustomer",
   "dismissCustomer",
   "undismissCustomer",

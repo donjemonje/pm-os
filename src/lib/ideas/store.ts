@@ -15,7 +15,7 @@ import { primaryJiraKey } from "./jira-keys";
 import { citationsByTicket } from "./jira-links";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { buildProductLineResolver } from "./product-line-key";
-import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
+import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch, rewriteIdeaFromSources } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import {
   SPLIT_PREFIX_KEY,
@@ -251,6 +251,7 @@ function toClientIdea(row: IdeaRow, jiraCustomers: JiraCustomerMap = NO_JIRA_CUS
     batch: row.batchStatus as Idea["batch"],
     batchChanges: (row.batchChanges as string[]) ?? [],
     decision: row.decision as Idea["decision"],
+    sourcesChanged: row.sourcesChanged || undefined,
     origin: row.origin as Idea["origin"],
     pmScore: row.pmScore,
     manual: row.manualScore,
@@ -1302,6 +1303,10 @@ export type IdeasMutation =
    *  pending idea; omitted = approve when anything is pending, else revert. */
   | { type: "approveAll"; revert?: boolean }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
+  /** Rewrite title + text (and lines) from the idea's current sources — PMOS AI, one call. */
+  | { type: "rewrite"; ideaId: string }
+  /** The PM keeps the text as written despite changed sources. */
+  | { type: "keepText"; ideaId: string }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
   | { type: "undismissCustomer"; ideaId: string; name: string };
@@ -1383,6 +1388,11 @@ export async function mutateIdeas(
         APPROVAL_EXEMPT.includes(idea.batchStatus)
       ) {
         break;
+      }
+      if (mutation.decision === "reviewed" && idea && idea.sourcesChanged) {
+        throw new Error(
+          "Sources changed since PMOS AI wrote this idea — rewrite it from the current sources or keep the text first",
+        );
       }
       if (mutation.decision === "reviewed" && idea) {
         const open = unresolvedSuggestions(
@@ -1525,6 +1535,7 @@ export async function mutateIdeas(
         revert
           ? i.decision === "reviewed"
           : i.decision === "pending" &&
+            !i.sourcesChanged &&
             unresolvedSuggestions(i, catalogLower!, jiraCustomers).length === 0,
       );
       await db.idea.updateMany({
@@ -1537,7 +1548,7 @@ export async function mutateIdeas(
         ).length;
         notice =
           skipped > 0
-            ? `${targets.length} approved · ${skipped} skipped — review the suggested customer${skipped === 1 ? "" : "s"} on ${skipped === 1 ? "that idea" : "those ideas"} first`
+            ? `${targets.length} approved · ${skipped} skipped — ${skipped === 1 ? "that idea needs" : "those ideas need"} a decision first (suggested customers, or sources changed by a PM)`
             : `${targets.length} approved`;
       } else {
         notice = `${targets.length} back to pending`;
@@ -1587,12 +1598,36 @@ export async function mutateIdeas(
       const newEvidence =
         ticketRows.length + Math.max(0, mutation.jira.length - selfJira);
       const voteDelta = newEvidence - oldEvidence;
-      if (voteDelta !== 0) {
-        await db.idea.update({
-          where: { id: idea.id },
-          data: { newVotes: Math.max(0, idea.newVotes + voteDelta) },
-        });
-      }
+      const before = toClientIdea(idea);
+      const added =
+        mutation.zen.filter((k) => !before.zen.includes(k)).length +
+        mutation.jira.filter((k) => !before.jira.includes(k)).length;
+      const removed =
+        before.zen.filter((k) => !mutation.zen.includes(k)).length +
+        before.jira.filter((k) => !mutation.jira.includes(k)).length;
+      const changed = added > 0 || removed > 0;
+      // Changed sources flag the idea: the text was written from the old
+      // set, so approval waits for a rewrite or an explicit keep. The
+      // narration says a PM did it, not an import.
+      await db.idea.update({
+        where: { id: idea.id },
+        data: {
+          ...(voteDelta !== 0 ? { newVotes: Math.max(0, idea.newVotes + voteDelta) } : {}),
+          ...(changed
+            ? {
+                sourcesChanged: true,
+                batchChanges: mergeBatchChanges((idea.batchChanges as string[]) ?? [], [
+                  `Sources edited by a PM: ${[
+                    added > 0 ? `+${added}` : "",
+                    removed > 0 ? `−${removed}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}`,
+                ]) as Prisma.InputJsonValue,
+              }
+            : {}),
+        },
+      });
       await logEvents(workspaceId, [
         {
           ideaId: idea.id,
@@ -1667,6 +1702,59 @@ export async function mutateIdeas(
     // …or dismissed: marked on this idea's tickets, never deleted — the
     // extraction stays intact so the PM can restore it at any time. A future
     // ticket naming the same customer is new evidence and suggests again.
+    case "rewrite": {
+      const idea = await db.idea.findFirst({
+        where: { id: mutation.ideaId, workspaceId },
+        include: {
+          sources: {
+            include: { ticket: { select: { externalId: true, subject: true, body: true } } },
+          },
+        },
+      });
+      if (!idea) break;
+      const jiraKeys = idea.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : []));
+      const issues = jiraKeys.length
+        ? await db.jiraIdeaSnapshot.findMany({
+            where: { workspaceId, key: { in: jiraKeys } },
+            select: { key: true, title: true, body: true },
+          })
+        : [];
+      const members = [
+        ...idea.sources.flatMap((s) =>
+          s.kind === "zendesk" && s.ticket
+            ? [{ key: `ZEN-${s.ticket.externalId}`, subject: s.ticket.subject, body: s.ticket.body, productTitle: "", productSummary: "" }]
+            : [],
+        ),
+        ...issues.map((i) => ({ key: i.key, subject: i.title, body: i.body, productTitle: "", productSummary: "" })),
+      ];
+      const rewrite = await rewriteIdeaFromSources(workspaceId, members);
+      if (!rewrite) throw new Error("PMOS AI returned no text for this idea — nothing changed");
+      const lines = rewrite.productLines.filter(Boolean);
+      await db.idea.update({
+        where: { id: idea.id },
+        data: {
+          title: rewrite.productTitle || idea.title,
+          details: rewrite.productSummary || idea.details,
+          ...(lines.length > 0 ? { products: lines as Prisma.InputJsonValue } : {}),
+          sourcesChanged: false,
+          batchChanges: mergeBatchChanges((idea.batchChanges as string[]) ?? [], [
+            "Rewritten by PMOS AI from the current sources",
+          ]) as Prisma.InputJsonValue,
+        },
+      });
+      await logEvents(workspaceId, [
+        { ideaId: idea.id, action: "rewrite", payload: { sources: members.map((x) => x.key) } },
+      ]);
+      notice = "Rewritten from the current sources";
+      break;
+    }
+    case "keepText": {
+      const idea = await db.idea.findFirst({ where: { id: mutation.ideaId, workspaceId } });
+      if (!idea) break;
+      await db.idea.update({ where: { id: idea.id }, data: { sourcesChanged: false } });
+      await logEvents(workspaceId, [{ ideaId: idea.id, action: "keep_text", payload: {} }]);
+      break;
+    }
     case "dismissCustomer": {
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },

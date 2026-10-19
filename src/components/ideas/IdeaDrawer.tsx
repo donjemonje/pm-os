@@ -13,6 +13,8 @@ import {
   RotateCcw,
   X,
   Share2,
+  Loader2,
+  Sparkles,
 } from "lucide-react";
 import {
   badgeOf,
@@ -92,6 +94,10 @@ interface IdeaDrawerProps {
     removeCustomers: string[];
   }) => void;
   onMerge?: () => void;
+  /** Sources changed: rewrite the idea from its current sources (PMOS AI, one call). */
+  onRewrite?: () => Promise<boolean>;
+  /** Sources changed: keep the text as written. */
+  onKeepText?: () => Promise<boolean>;
 }
 
 const MONO_LABEL =
@@ -126,6 +132,8 @@ export function IdeaDrawer({
   onUndoPush,
   onSave,
   onMerge,
+  onRewrite,
+  onKeepText,
 }: IdeaDrawerProps) {
   // Opens at half the window (sidebar included); the PM can still drag it
   // between 380px and 90% of the window.
@@ -143,6 +151,7 @@ export function IdeaDrawer({
   // Esc closes the drawer (standing rule: Esc = cancel). Window-level so it
   // works wherever focus sits; the drawer is the topmost layer while open.
   const [customerListOpen, setCustomerListOpen] = useState(false);
+  const [rewriting, setRewriting] = useState(false);
   /** Product-line multi-select dropdown (tags edit); closes on outside click. */
   const [productMenuOpen, setProductMenuOpen] = useState(false);
   const productMenuRef = useRef<HTMLDivElement>(null);
@@ -860,6 +869,39 @@ export function IdeaDrawer({
               </div>
             )}
 
+          {!viewingSource && idea?.sourcesChanged && (
+            <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-3.5 py-2.5 text-[12.5px] text-[var(--app-warn-fg)]">
+              <Flag size={13} className="shrink-0" />
+              <span className="min-w-0 flex-1">
+                <b className="font-semibold">Sources changed</b> since PMOS AI wrote this idea. Rewrite it
+                from the current sources, or keep the text — then it can be approved.
+              </span>
+              {onRewrite && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={rewriting}
+                  onClick={async () => {
+                    setRewriting(true);
+                    try {
+                      await onRewrite();
+                    } finally {
+                      setRewriting(false);
+                    }
+                  }}
+                >
+                  {rewriting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  {rewriting ? "Rewriting…" : "Rewrite with PMOS AI"}
+                </Button>
+              )}
+              {onKeepText && (
+                <Button size="sm" disabled={rewriting} onClick={() => void onKeepText()}>
+                  Keep text
+                </Button>
+              )}
+            </div>
+          )}
+
           {stats.length > 0 && (
             <div
               className="grid gap-2"
@@ -1037,7 +1079,7 @@ export function IdeaDrawer({
                   (() => {
                     // Unresolved suggested metadata (customers outside the
                     // catalog) blocks approval — same rule the server enforces.
-                    const blocked =
+                    const suggestionsOpen =
                       idea.decision === "pending" &&
                       (idea.customers ?? []).some(
                         (c) =>
@@ -1045,6 +1087,7 @@ export function IdeaDrawer({
                             (n) => n.toLowerCase() === c.toLowerCase(),
                           ),
                       );
+                    const blocked = suggestionsOpen || (idea.decision === "pending" && !!idea.sourcesChanged);
                     return (
                       <>
                         <Button
@@ -1054,7 +1097,9 @@ export function IdeaDrawer({
                           disabled={blocked}
                           title={
                             blocked
-                              ? "Approve or dismiss the suggested customers first"
+                              ? idea.sourcesChanged
+                                ? "Sources changed — rewrite the idea or keep the text first"
+                                : "Approve or dismiss the suggested customers first"
                               : idea.decision === "pending"
                                 ? undefined
                                 : "Click to mark unreviewed"
@@ -1081,12 +1126,13 @@ export function IdeaDrawer({
                 )}
                 {needsApproval(idea) &&
                   idea.decision === "pending" &&
-                  (idea.customers ?? []).some(
-                    (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase()),
-                  ) && (
+                  (idea.sourcesChanged ||
+                    (idea.customers ?? []).some(
+                      (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase()),
+                    )) && (
                     <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] text-[var(--app-warn-fg)]">
                       <Flag size={12} />
-                      Resolve suggested customers first
+                      {idea.sourcesChanged ? "Rewrite or keep the text first" : "Resolve suggested customers first"}
                     </span>
                   )}
               </>

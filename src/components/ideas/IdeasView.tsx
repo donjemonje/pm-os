@@ -17,6 +17,7 @@ import {
   ExternalLink,
   Undo2,
   Share2,
+  Flag,
 } from "lucide-react";
 import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
@@ -1461,7 +1462,8 @@ export function IdeasView({
                           const score = SCORING_ENABLED ? scoreOf(idea) : null;
                           const isOpen = drawerId === idea.id;
                           const blocked =
-                            idea.decision === "pending" && unresolvedSuggested(idea).length > 0;
+                            idea.decision === "pending" &&
+                            (unresolvedSuggested(idea).length > 0 || !!idea.sourcesChanged);
                           const firstTicket = idea.zen[0] ? ticketsByKey.get(idea.zen[0]) : undefined;
                           const customers = idea.customers ?? [];
                           return (
@@ -1487,7 +1489,9 @@ export function IdeasView({
                                   blocked={blocked}
                                   title={
                                     blocked
-                                      ? "Approve or dismiss the suggested customers first"
+                                      ? idea.sourcesChanged
+                                        ? "Sources changed — rewrite or keep the text first"
+                                        : "Approve or dismiss the suggested customers first"
                                       : idea.decision === "pending"
                                         ? "Mark reviewed"
                                         : "Mark unreviewed"
@@ -1532,6 +1536,14 @@ export function IdeasView({
                                     </span>
                                   )}
                                   {(firstTicket || idea.jira[0]) && <span>·</span>}
+                                  {idea.sourcesChanged && (
+                                    <span
+                                      title="Sources changed by a PM — rewrite or keep the text before approving"
+                                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[var(--app-warn-fg)]"
+                                    >
+                                      <Flag size={9} /> sources changed
+                                    </span>
+                                  )}
                                   {idea.products.slice(1).map((p) => productChip(p))}
                                   {(idea.platforms ?? []).map((p) => (
                                     <Chip key={`platform-${p}`} kind="platform">
@@ -1684,6 +1696,8 @@ export function IdeasView({
               : undefined
           }
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}
+          onRewrite={drawerIdea ? () => callMutate({ type: "rewrite", ideaId: drawerIdea.id }) : undefined}
+          onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
         />
       )}
 

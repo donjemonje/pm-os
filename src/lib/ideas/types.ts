@@ -104,6 +104,9 @@ export interface Idea {
   decision: IdeaDecision;
   /** Set while this idea's write from the LAST merge is still undoable. */
   undoable?: { action: "create" | "update"; jiraKey: string };
+  /** A PM changed the sources after PMOS AI wrote the text: approval waits
+   *  for a rewrite or an explicit "keep the text". */
+  sourcesChanged?: boolean;
   /** Where this idea came from this batch. */
   origin: "zendesk" | "jira";
   /** Computed score — null until the scoring pipeline exists. */
