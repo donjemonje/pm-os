@@ -69,7 +69,7 @@ export function ColorSwatch({
         {swatch}
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-30 mt-1 grid grid-flow-col grid-rows-6 auto-cols-max gap-1.5 rounded-lg border border-border bg-white p-2 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
+        <div className="absolute left-0 top-full z-30 mt-1 grid grid-flow-col grid-rows-4 auto-cols-max gap-1.5 rounded-lg border border-border bg-white p-2 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
           {CHIP_PALETTE.map((c) => {
             const active = c.id === color;
             return (
