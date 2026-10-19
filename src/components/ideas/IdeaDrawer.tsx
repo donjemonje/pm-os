@@ -143,9 +143,10 @@ export function IdeaDrawer({
   });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
 
-  /** Which part is being edited: the text (title + details) or the tags
-   *  (product lines, platforms, customers). null = viewing. */
-  const [editSection, setEditSection] = useState<null | "details" | "tags">(null);
+  /** Which part is being edited — each on its own: the title (Enter saves),
+   *  the details text (⌘↵ saves), or the tags (every change saves). null =
+   *  viewing. Esc leaves whichever is open. */
+  const [editSection, setEditSection] = useState<null | "title" | "details" | "tags">(null);
   const editMode = editSection !== null;
   // Esc closes the drawer (standing rule: Esc = cancel). Window-level so it
   // works wherever focus sits; the drawer is the topmost layer while open.
@@ -211,7 +212,7 @@ export function IdeaDrawer({
   const score = idea ? scoreOf(idea) : null;
   const votes = idea ? votesLabel(idea) : null;
 
-  const startEdit = (section: "details" | "tags" = "details") => {
+  const startEdit = (section: "title" | "details" | "tags" = "details") => {
     if (!idea) return;
     setEditTitle(idea.title);
     setEditManual(idea.manual != null ? String(idea.manual) : "");
@@ -710,11 +711,25 @@ export function IdeaDrawer({
             </button>
           </div>
 
-          {editSection === "details" && !viewingSource ? (
+          {editSection === "title" && !viewingSource ? (
             <input
               type="text"
               value={editTitle}
+              autoFocus
               onChange={(e) => setEditTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  saveEdit();
+                }
+              }}
+              onBlur={() => {
+                // Click-away keeps a real change; an untouched title just closes.
+                if (editSection !== "title") return;
+                if (idea && editTitle.trim() && editTitle.trim() !== idea.title) saveEdit();
+                else setEditSection(null);
+              }}
+              title="Enter saves · Esc cancels"
               className="font-title w-full rounded-control border border-primary px-3 py-2 text-[17px] font-bold shadow-[0_0_0_2px_var(--app-accent-soft)] outline-none"
             />
           ) : (
@@ -722,9 +737,9 @@ export function IdeaDrawer({
               className={`font-title m-0 text-[19px] font-bold leading-[1.3] text-foreground ${
                 !viewingSource && idea && !editMode ? "cursor-text rounded-md hover:bg-[rgba(12,25,41,.04)]" : ""
               }`}
-              title={!viewingSource && idea && !editMode ? "Click to edit" : undefined}
+              title={!viewingSource && idea && !editMode ? "Click to edit the title" : undefined}
               onClick={() => {
-                if (!viewingSource && idea && !editMode) startEdit("details");
+                if (!viewingSource && idea && !editMode) startEdit("title");
               }}
             >
               {ticket ? ticket.subject : jiraSrc ? jiraSrc.title : idea?.title}
@@ -938,7 +953,7 @@ export function IdeaDrawer({
                 )}
               <div
                 onClick={() => startEdit("details")}
-                title="Click to edit"
+                title="Click to edit the text"
                 className="-mx-2 cursor-text rounded-lg px-2 py-1 hover:bg-[rgba(12,25,41,.03)]"
               >
                 <UmMarkdown
