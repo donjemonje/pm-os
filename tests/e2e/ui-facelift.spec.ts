@@ -404,42 +404,43 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     // product-lines + customers editor; the text is edited by clicking it.
     await drawer.getByRole("button", { name: "Edit product lines and customers" }).click();
 
-    // While editing, the header keeps showing the SAVED chips — the edit
-    // list is the "Customers" section below, so scope to it.
-    // (`has` resolves relative to the outer element, so the inner locator
-    // must be page-rooted, not drawer-rooted.)
-    const customersEdit = drawer
-      .locator("div.flex.flex-col")
-      .filter({ has: page.getByText("Customers", { exact: true }) })
-      .last();
-    await expect(customersEdit.getByPlaceholder("Add customer…")).toBeVisible();
+    // The chips row itself is the editor; every change saves on its own
+    // (no Save/Cancel), the X leaves edit mode.
+    const customersEdit = drawer;
+    const input = customersEdit.getByPlaceholder("Add customer…");
+    await expect(input).toBeVisible();
+    const mutate = () =>
+      page.waitForResponse(
+        (r) => r.url().includes("/api/ideas/mutate") && r.request().method() === "POST"
+      );
 
     // Add by typing + Enter.
-    const input = customersEdit.getByPlaceholder("Add customer…");
+    let saved = mutate();
     await input.fill(ADDED);
     await input.press("Enter");
+    expect((await saved).status()).toBe(200);
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
     await expect(input).toHaveValue("");
 
     // Remove the ticket-derived customer from this idea.
+    saved = mutate();
     await customersEdit
       .getByText(CATALOGED, { exact: true })
       .getByTitle("Remove from this idea")
       .click();
+    expect((await saved).status()).toBe(200);
     await expect(customersEdit.getByText(CATALOGED, { exact: true })).toHaveCount(0);
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
 
     // Toggle the product-line chip on.
     const lineChip = drawer.getByRole("button", { name: PRODUCT_LINE, exact: true });
     await expect(lineChip).toHaveAttribute("aria-pressed", "false");
+    saved = mutate();
     await lineChip.click();
+    expect((await saved).status()).toBe(200);
     await expect(lineChip).toHaveAttribute("aria-pressed", "true");
 
-    const saved = page.waitForResponse(
-      (r) => r.url().includes("/api/ideas/mutate") && r.request().method() === "POST"
-    );
-    await drawer.getByRole("button", { name: "Save changes" }).click();
-    expect((await saved).status()).toBe(200);
+    await drawer.getByRole("button", { name: "Stop editing tags" }).click();
 
     // View mode again: product line chip, the added name as a suggestion
     // (off-catalog), the removed name gone from the chips…

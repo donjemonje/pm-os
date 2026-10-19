@@ -209,13 +209,18 @@ export function IdeaDrawer({
   // Keyboard for the whole edit (title, score, customers, Details editor):
   // Esc cancels the edit and must not also close the drawer; ⌘↵ saves. Inputs
   // that handle these keys themselves (the editor's link bar) stop propagation.
+  // Esc acts on the innermost thing that has focus: the customer typeahead
+  // list closes itself (and stops the event), then this leaves the edit —
+  // tags mode just closes (already saved), the text edit is cancelled — and
+  // only when nothing is being edited does Esc close the drawer (window
+  // listener above). ⌘↵ saves the text edit.
   const onEditKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (!editMode) return;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
       cancelEdit();
-    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && editSection === "details") {
       e.preventDefault();
       saveEdit();
     }
@@ -223,6 +228,36 @@ export function IdeaDrawer({
   const sameName = (a: string, b: string) => a.toLowerCase() === b.trim().toLowerCase();
   const toggleIn = (list: string[], name: string) =>
     list.some((x) => sameName(x, name)) ? list.filter((x) => !sameName(x, name)) : [...list, name];
+  /** Tag edits save on every change (no Save/Cancel — Daniel, 2026-10-19):
+   *  one call per click with the full lists; a ticket-derived customer
+   *  removed in this click goes out as a dismissal. */
+  const commitTags = (next: {
+    products?: string[];
+    platforms?: string[];
+    added?: string[];
+    removed?: string[];
+  }) => {
+    if (!idea) return;
+    onSave?.({
+      title: idea.title,
+      details: idea.details,
+      manual: idea.manual ?? null,
+      products: next.products ?? editProducts,
+      platforms: next.platforms ?? editPlatforms,
+      addedCustomers: next.added ?? editAdded,
+      removeCustomers: next.removed ?? [],
+    });
+  };
+  const toggleProduct = (p: string) => {
+    const next = toggleIn(editProducts, p);
+    setEditProducts(next);
+    commitTags({ products: next });
+  };
+  const togglePlatform = (p: string) => {
+    const next = toggleIn(editPlatforms, p);
+    setEditPlatforms(next);
+    commitTags({ platforms: next });
+  };
   const addCustomer = (name: string) => {
     const n = name.trim();
     if (!n || editCustomers.some((c) => sameName(c, n))) {
@@ -230,22 +265,163 @@ export function IdeaDrawer({
       return;
     }
     setEditCustomers((l) => [...l, n]);
-    // Re-adding a name removed in this same edit just cancels the removal.
-    if (editRemoved.some((c) => sameName(c, n))) {
-      setEditRemoved((l) => l.filter((c) => !sameName(c, n)));
-    } else {
-      setEditAdded((l) => [...l, n]);
-    }
+    const added = [...editAdded, n];
+    setEditAdded(added);
     setNewCustomer("");
+    commitTags({ added });
   };
   const removeCustomer = (name: string) => {
     setEditCustomers((l) => l.filter((c) => !sameName(c, name)));
     if (editAdded.some((c) => sameName(c, name))) {
-      setEditAdded((l) => l.filter((c) => !sameName(c, name)));
+      const added = editAdded.filter((c) => !sameName(c, name));
+      setEditAdded(added);
+      commitTags({ added });
     } else {
-      setEditRemoved((l) => [...l, name]);
+      commitTags({ removed: [name] });
     }
   };
+
+  /** Inline tag editing on the chips row: product lines toggle, customers
+   *  get an × and the add field sits at the end of the row; the rest of the
+   *  drawer stays as it is (Daniel, 2026-10-19). */
+  const tagsEditor = (
+    <div className="flex flex-wrap items-center gap-1.5" onKeyDown={onEditKeyDown}>
+      {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
+        const on = editProducts.some((x) => sameName(x, p));
+        return (
+          <button
+            key={`edit-product-${p}`}
+            type="button"
+            onClick={() => toggleProduct(p)}
+            aria-pressed={on}
+            title={on ? "Click to remove this product line" : "Click to add this product line"}
+            className={
+              on
+                ? "rounded-chip border border-transparent px-[7px] py-[2px] font-mono text-[11px] font-semibold ring-1 ring-black/10"
+                : "rounded-chip border border-dashed border-[#c9d3e0] px-[7px] py-[2px] font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
+            }
+            style={on ? chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) : undefined}
+          >
+            {p}
+          </button>
+        );
+      })}
+      {(catalogPlatforms.length > 0 || editPlatforms.length > 0) &&
+        [...new Set([...catalogPlatforms, ...editPlatforms])].map((p) => {
+          const on = editPlatforms.some((x) => sameName(x, p));
+          return (
+            <button
+              key={`edit-platform-${p}`}
+              type="button"
+              onClick={() => togglePlatform(p)}
+              aria-pressed={on}
+              className={
+                on
+                  ? "rounded-chip bg-[rgba(169,140,255,.16)] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[#6b4bd0] ring-1 ring-black/10"
+                  : "rounded-chip border border-dashed border-[#c9d3e0] px-[7px] py-[2px] font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
+              }
+            >
+              {p}
+            </button>
+          );
+        })}
+      <span aria-hidden className="mx-0.5 h-3 w-px shrink-0 bg-[#dde5ef]" />
+      {editCustomers.map((c) => {
+        const suggested = !customerCatalog.some((k) => sameName(k, c));
+        return (
+          <span
+            key={`edit-customer-${c}`}
+            className={
+              suggested
+                ? "inline-flex items-center gap-1 rounded-chip border border-dashed border-amber-400 bg-amber-50 px-[7px] py-[2px] font-mono text-[11px] font-semibold text-amber-700"
+                : "inline-flex items-center gap-1 rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold"
+            }
+            style={suggested ? undefined : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
+          >
+            {c}
+            <button
+              type="button"
+              title="Remove from this idea"
+              onClick={() => removeCustomer(c)}
+              className="flex rounded-sm p-px opacity-70 hover:bg-black/10 hover:opacity-100"
+            >
+              <X size={11} strokeWidth={3} />
+            </button>
+          </span>
+        );
+      })}
+        {(() => {
+          const q = newCustomer.trim().toLowerCase();
+          const options = customerCatalog
+            .filter((k) => !editCustomers.some((c) => sameName(c, k)))
+            .filter((k) => !q || k.toLowerCase().includes(q))
+            .slice(0, 8);
+          return (
+            <div className="relative">
+              <input
+                type="text"
+                value={newCustomer}
+                onChange={(e) => {
+                  setNewCustomer(e.target.value);
+                  setCustomerListOpen(true);
+                }}
+                onFocus={() => setCustomerListOpen(true)}
+                onBlur={() => setTimeout(() => setCustomerListOpen(false), 120)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    // Enter takes the first match when the typed text
+                    // is a prefix of it; otherwise the text as typed.
+                    const first = options[0];
+                    addCustomer(
+                      first && q && first.toLowerCase().startsWith(q) ? first : newCustomer,
+                    );
+                    setCustomerListOpen(false);
+                  } else if (e.key === "Escape" && customerListOpen) {
+                    e.stopPropagation();
+                    setCustomerListOpen(false);
+                  }
+                }}
+                placeholder="Add customer…"
+                className="min-w-[180px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
+              />
+              {customerListOpen && options.length > 0 && (
+                <ul className="absolute left-0 top-full z-20 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
+                  {options.map((k) => (
+                    <li key={k}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          addCustomer(k);
+                          setCustomerListOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)]"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: swatchColor(colorOf(customerColors, k), CUSTOMER_CHIP_DEFAULT) }}
+                        />
+                        <span className="truncate">{k}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })()}
+      <button
+        type="button"
+        onClick={() => setEditSection(null)}
+        title="Stop editing (every change is already saved) — Esc"
+        aria-label="Stop editing tags"
+        className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+      >
+        <X size={14} strokeWidth={2.5} />
+      </button>
+    </div>
+  );
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -487,8 +663,10 @@ export function IdeaDrawer({
             </h2>
           )}
 
+          {!viewingSource && idea && editSection === "tags" && tagsEditor}
           {!viewingSource &&
             idea &&
+            editSection !== "tags" &&
             (idea.products.length > 0 ||
               (idea.platforms ?? []).length > 0 ||
               (idea.customers ?? []).length > 0) && (
@@ -645,171 +823,8 @@ export function IdeaDrawer({
             />
           ) : jiraSrc ? (
             <JiraIssueView src={jiraSrc} productLineLabel={jiraProductLineLabel} />
-          ) : editMode ? (
+          ) : editSection === "details" ? (
             <>
-              {editSection === "tags" && (
-              <>
-              {SCORING_ENABLED && (
-              <div className="flex w-[140px] flex-col gap-1.5">
-                <span className={MONO_LABEL}>Manual score</span>
-                <input
-                  type="number"
-                  value={editManual}
-                  onChange={(e) => setEditManual(e.target.value)}
-                  placeholder="—"
-                  className="font-title w-full rounded-lg border border-border px-2.5 py-2 text-sm font-semibold outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
-                />
-                <span className="text-[11px] text-[#9aa8be]">
-                  Overrides the displayed score
-                </span>
-              </div>
-              )}
-              {/* Product lines — catalog names plus "Other"; PMOS's pick is a starting point, not a verdict. */}
-              <div className="flex flex-col gap-1.5">
-                <span className={MONO_LABEL}>Product lines</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
-                    const on = editProducts.some((x) => sameName(x, p));
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => setEditProducts((l) => toggleIn(l, p))}
-                        aria-pressed={on}
-                        className={
-                          on
-                            ? "rounded border border-transparent px-2 py-0.5 font-mono text-[11px] font-medium ring-1 ring-black/10"
-                            : "rounded border border-dashed border-[#c9d3e0] px-2 py-0.5 font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
-                        }
-                        style={on ? chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) : undefined}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              {(catalogPlatforms.length > 0 || editPlatforms.length > 0) && (
-                <div className="flex flex-col gap-1.5">
-                  <span className={MONO_LABEL}>Platforms</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[...new Set([...catalogPlatforms, ...editPlatforms])].map((p) => {
-                      const on = editPlatforms.some((x) => sameName(x, p));
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setEditPlatforms((l) => toggleIn(l, p))}
-                          aria-pressed={on}
-                          className={
-                            on
-                              ? "rounded bg-[rgba(169,140,255,.16)] px-2 py-0.5 font-mono text-[11px] font-medium text-[#6b4bd0] ring-1 ring-black/10"
-                              : "rounded border border-dashed border-[#c9d3e0] px-2 py-0.5 font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
-                          }
-                        >
-                          {p}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {/* Customers — any name, from the catalog or typed; removing a ticket-derived one dismisses it (restorable). */}
-              <div className="flex flex-col gap-1.5">
-                <span className={MONO_LABEL}>Customers</span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {editCustomers.map((c) => {
-                    const suggested = !customerCatalog.some((k) => sameName(k, c));
-                    return (
-                      <span
-                        key={`edit-customer-${c}`}
-                        className={
-                          suggested
-                            ? "inline-flex items-center gap-1 rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                            : "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
-                        }
-                        style={suggested ? undefined : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
-                      >
-                        {c}
-                        <button
-                          type="button"
-                          title="Remove from this idea"
-                          onClick={() => removeCustomer(c)}
-                          className="flex rounded-sm p-px opacity-70 hover:bg-black/10 hover:opacity-100"
-                        >
-                          <X size={11} strokeWidth={3} />
-                        </button>
-                      </span>
-                    );
-                  })}
-                  {(() => {
-                    const q = newCustomer.trim().toLowerCase();
-                    const options = customerCatalog
-                      .filter((k) => !editCustomers.some((c) => sameName(c, k)))
-                      .filter((k) => !q || k.toLowerCase().includes(q))
-                      .slice(0, 8);
-                    return (
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={newCustomer}
-                          onChange={(e) => {
-                            setNewCustomer(e.target.value);
-                            setCustomerListOpen(true);
-                          }}
-                          onFocus={() => setCustomerListOpen(true)}
-                          onBlur={() => setTimeout(() => setCustomerListOpen(false), 120)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              // Enter takes the first match when the typed text
-                              // is a prefix of it; otherwise the text as typed.
-                              const first = options[0];
-                              addCustomer(
-                                first && q && first.toLowerCase().startsWith(q) ? first : newCustomer,
-                              );
-                              setCustomerListOpen(false);
-                            } else if (e.key === "Escape" && customerListOpen) {
-                              e.stopPropagation();
-                              setCustomerListOpen(false);
-                            }
-                          }}
-                          placeholder="Add customer…"
-                          className="min-w-[180px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
-                        />
-                        {customerListOpen && options.length > 0 && (
-                          <ul className="absolute left-0 top-full z-20 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
-                            {options.map((k) => (
-                              <li key={k}>
-                                <button
-                                  type="button"
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={() => {
-                                    addCustomer(k);
-                                    setCustomerListOpen(false);
-                                  }}
-                                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)]"
-                                >
-                                  <span
-                                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                                    style={{ background: swatchColor(colorOf(customerColors, k), CUSTOMER_CHIP_DEFAULT) }}
-                                  />
-                                  <span className="truncate">{k}</span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-                <span className="text-[11px] text-[#9aa8be]">
-                  Enter adds. A name outside the catalog is kept as a suggestion until approved.
-                </span>
-              </div>
-              </>
-              )}
               {editSection === "details" && (
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
@@ -928,7 +943,7 @@ export function IdeaDrawer({
         {/* Footer */}
         {!viewingSource && idea && (
           <div className="flex items-center gap-2 border-t border-border bg-[rgba(255,255,255,.6)] px-6 py-3">
-            {editMode ? (
+            {editSection === "details" ? (
               <>
                 <Button variant="primary" glow onClick={saveEdit}>
                   Save changes
