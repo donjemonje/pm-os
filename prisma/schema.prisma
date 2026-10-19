@@ -491,6 +491,15 @@ model JiraIdeaSnapshot {
   assignee        String?
   sourceCreatedAt DateTime?
   syncedAt        DateTime  @default(now())
+  /// Customers read from the issue's summary + description (customer-mentions.ts):
+  /// catalog names from the deterministic pass, as-written names from the AI
+  /// pass (suggestions until approved). PM-OS data, not Jira's — the sync
+  /// upserts rows so these survive every pull.
+  affectedCustomers  Json    @default("[]")
+  /// Names the PM dismissed on this issue (reversible, like a ticket's).
+  dismissedCustomers Json    @default("[]")
+  /// Hash of the text the AI pass last read; unchanged text = no new call.
+  customersTextHash  String?
 
   @@unique([workspaceId, key])
 }
