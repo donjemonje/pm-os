@@ -19,28 +19,28 @@ export interface ChipColor {
 }
 
 export const CHIP_PALETTE: readonly ChipColor[] = [
-  // Row 1 — blues / teals
-  { id: "blue", label: "Bright blue", swatch: "#0073ea", bg: "rgba(0,115,234,.16)", fg: "#0a5bc4" },
-  { id: "navy", label: "Navy", swatch: "#225091", bg: "rgba(34,80,145,.18)", fg: "#1f3f86" },
+  // Blues — light to dark
   { id: "sky", label: "Chili blue", swatch: "#66ccff", bg: "rgba(102,204,255,.28)", fg: "#0b6aa0" },
-  { id: "cyan", label: "Dark blue", swatch: "#0086c0", bg: "rgba(0,134,192,.2)", fg: "#0b6e8f" },
   { id: "teal", label: "Aquamarine", swatch: "#4eccc6", bg: "rgba(78,204,198,.26)", fg: "#0f7a6a" },
   { id: "steel", label: "River", swatch: "#68a1bd", bg: "rgba(104,161,189,.26)", fg: "#2f5676" },
-  // Row 2 — greens / yellows
+  { id: "cyan", label: "Dark blue", swatch: "#0086c0", bg: "rgba(0,134,192,.2)", fg: "#0b6e8f" },
+  { id: "blue", label: "Bright blue", swatch: "#0073ea", bg: "rgba(0,115,234,.16)", fg: "#0a5bc4" },
+  { id: "navy", label: "Navy", swatch: "#225091", bg: "rgba(34,80,145,.18)", fg: "#1f3f86" },
+  // Greens and yellows — light to dark
+  { id: "mint", label: "Bright green", swatch: "#9cd326", bg: "rgba(156,211,38,.3)", fg: "#4a7a0f" },
   { id: "green", label: "Done green", swatch: "#00c875", bg: "rgba(0,200,117,.22)", fg: "#0f7a3f" },
   { id: "grass", label: "Grass green", swatch: "#037f4c", bg: "rgba(3,127,76,.2)", fg: "#0a6a3f" },
-  { id: "mint", label: "Bright green", swatch: "#9cd326", bg: "rgba(156,211,38,.3)", fg: "#4a7a0f" },
   { id: "lime", label: "Saladish", swatch: "#cab641", bg: "rgba(202,182,65,.32)", fg: "#6a5e12" },
   { id: "yellow", label: "Egg yolk", swatch: "#ffcb00", bg: "rgba(255,203,0,.3)", fg: "#8a6200" },
   { id: "amber", label: "Working orange", swatch: "#fdab3d", bg: "rgba(253,171,61,.3)", fg: "#8a5a00" },
-  // Row 3 — oranges / reds / pinks
-  { id: "orange", label: "Dark orange", swatch: "#ff642e", bg: "rgba(255,100,46,.22)", fg: "#9a3f10" },
+  // Oranges, reds and pinks — light to dark
   { id: "peach", label: "Sunset", swatch: "#ff7575", bg: "rgba(255,117,117,.26)", fg: "#a0433a" },
+  { id: "orange", label: "Dark orange", swatch: "#ff642e", bg: "rgba(255,100,46,.22)", fg: "#9a3f10" },
   { id: "red", label: "Stuck red", swatch: "#e2445c", bg: "rgba(226,68,92,.2)", fg: "#a32a2a" },
   { id: "crimson", label: "Dark red", swatch: "#bb3354", bg: "rgba(187,51,84,.22)", fg: "#8a1f3a" },
   { id: "pink", label: "Lipstick", swatch: "#ff5ac4", bg: "rgba(255,90,196,.22)", fg: "#a0246a" },
   { id: "magenta", label: "Sofia pink", swatch: "#ff158a", bg: "rgba(255,21,138,.18)", fg: "#9a0f5e" },
-  // Row 4 — purples / neutrals
+  // Purples and neutrals — light to dark
   { id: "purple", label: "Purple", swatch: "#a25ddc", bg: "rgba(162,93,220,.22)", fg: "#5e2d9a" },
   { id: "violet", label: "Dark purple", swatch: "#784bd1", bg: "rgba(120,75,209,.22)", fg: "#4a2d8f" },
   { id: "indigo", label: "Indigo", swatch: "#5559df", bg: "rgba(85,89,223,.22)", fg: "#3f47b8" },
