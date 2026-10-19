@@ -291,7 +291,7 @@ export function ProductLinesPanel({
             ) : (
               <>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="-ml-1.5 flex min-w-0 items-center gap-1.5">
                     <ColorSwatch
                       color={item.color}
                       fallback={PRODUCT_CHIP_DEFAULT}
