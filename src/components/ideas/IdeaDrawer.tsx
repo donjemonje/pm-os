@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -131,6 +131,19 @@ export function IdeaDrawer({
     return Math.max(380, Math.round(window.innerWidth / 2));
   });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
+
+  // Esc closes the drawer (standing rule: Esc = cancel). Window-level so it
+  // works wherever focus sits; the drawer is the topmost layer while open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const [editMode, setEditMode] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editManual, setEditManual] = useState("");
