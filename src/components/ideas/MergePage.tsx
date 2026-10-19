@@ -67,6 +67,8 @@ interface SourceRow {
   id: string;
   text: string;
   checked: boolean;
+  /** In edit mode: attached in this edit (not saved yet) / detached in this edit. */
+  delta?: "added" | "removed";
   selected: boolean;
   orphan: boolean;
   owners: number;
@@ -113,8 +115,10 @@ export function MergePage({
       )
         return false;
     }
+    // While editing sources the search box targets the Zendesk / Jira rows
+    // (the PM is hunting for a ticket to attach); the ideas stay as they are.
     const q = query.trim().toLowerCase();
-    if (q && !i.title.toLowerCase().includes(q)) return false;
+    if (!edit && q && !i.title.toLowerCase().includes(q)) return false;
     if (
       productFilter.length > 0 &&
       !i.products.some((p) => productFilter.includes(p))
@@ -193,6 +197,8 @@ export function MergePage({
   ): SourceRow[] => {
     const refs = (i: Idea) => (kind === "zen" ? i.zen : i.jira);
     const editRefs = edit ? (kind === "zen" ? edit.zen : edit.jira) : null;
+    const savedRefs = editedIdea ? refs(editedIdea) : null;
+    const q = edit ? query.trim().toLowerCase() : "";
     const ownersOf = (key: string) =>
       ideas.filter((i) => refs(i).includes(key));
     const rows: SourceRow[] = [];
@@ -203,6 +209,20 @@ export function MergePage({
       const src = all.find((s) => s.key === key);
       if (!src) return;
       const owners = ownersOf(key);
+      const checked = editRefs != null && editRefs.includes(key);
+      const wasAttached = savedRefs != null && savedRefs.includes(key);
+      const delta: SourceRow["delta"] =
+        editRefs == null ? undefined : checked && !wasAttached ? "added" : !checked && wasAttached ? "removed" : undefined;
+      // Edit-mode search: match id or title; rows touched in this edit and
+      // rows attached to the idea always stay visible.
+      if (
+        q &&
+        !checked &&
+        !delta &&
+        !src.id.toLowerCase().includes(q) &&
+        !src.title.toLowerCase().includes(q)
+      )
+        return;
       // Sources backing only unchanged ideas are hidden with them; the
       // Unchanged chip and edit mode (attach-anything) show the full pool.
       if (
@@ -217,7 +237,8 @@ export function MergePage({
         key,
         id: src.id,
         text: src.title,
-        checked: editRefs != null && editRefs.includes(key),
+        checked,
+        delta,
         selected: owners.some((o) => o.id === selId),
         orphan: owners.length === 0,
         owners: owners.length,
@@ -355,6 +376,16 @@ export function MergePage({
                   {row.text}
                 </span>
               </div>
+              {row.delta === "added" && (
+                <span className="shrink-0 rounded-full border border-[#17b26a] bg-[rgba(23,178,106,.16)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[#0f7a47]">
+                  + attached
+                </span>
+              )}
+              {row.delta === "removed" && (
+                <span className="shrink-0 rounded-full border border-[#e2445c] bg-[rgba(226,68,92,.12)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[#a32a2a]">
+                  − detached
+                </span>
+              )}
               {row.parkLabel && tag(row.parkLabel)}
               {row.owners > 1 &&
                 tag(

@@ -818,6 +818,16 @@ export function IdeasView({
     editedIdea != null &&
     !(sameSet(edit.zen, editedIdea.zen) && sameSet(edit.jira, editedIdea.jira));
   const editCount = edit ? edit.zen.length + edit.jira.length : 0;
+  const editAdded =
+    edit && editedIdea
+      ? edit.zen.filter((k) => !editedIdea.zen.includes(k)).length +
+        edit.jira.filter((k) => !editedIdea.jira.includes(k)).length
+      : 0;
+  const editRemoved =
+    edit && editedIdea
+      ? editedIdea.zen.filter((k) => !edit.zen.includes(k)).length +
+        editedIdea.jira.filter((k) => !edit.jira.includes(k)).length
+      : 0;
 
   const productChip = (p: string, dot?: boolean) => {
     // Flag names the model returned that aren't in the Settings → Ideas
@@ -1125,7 +1135,7 @@ export function IdeasView({
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search ideas…"
+                    placeholder={edit ? "Search tickets and Jira issues…" : "Search ideas…"}
                     className="h-8 w-full rounded-control border border-border bg-[var(--app-glass)] pl-9 pr-3 text-[13px] shadow-sm outline-none placeholder:text-fg-faint focus:border-primary focus:bg-white focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                   />
                 </div>
@@ -1319,13 +1329,40 @@ export function IdeasView({
             {page === "merge" ? (
               <div className="flex flex-col gap-3">
                 {edit && editedIdea ? (
-                  <div className="flex items-center gap-2.5 rounded-inner border border-[rgba(23,178,106,.35)] bg-[rgba(23,178,106,.12)] px-3.5 py-2.5 text-[13px] text-[#0f7a47]">
+                  // Two states the PM can tell apart at a glance: untouched
+                  // (neutral, nothing to save) and changed (green, with the
+                  // delta — ✓ saves, ✕ / Esc discards).
+                  <div
+                    className={`flex items-center gap-2.5 rounded-inner border px-3.5 py-2.5 text-[13px] ${
+                      editDirty
+                        ? "border-[rgba(23,178,106,.35)] bg-[rgba(23,178,106,.12)] text-[#0f7a47]"
+                        : "border-border bg-[var(--app-glass)] text-fg-2"
+                    }`}
+                  >
                     <Share2 size={15} strokeWidth={2.25} className="shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
                       Editing <b className="font-semibold">{editedIdea.title}</b> —{" "}
-                      {editCount} source{editCount === 1 ? "" : "s"} selected. Tick a Zendesk or Jira
-                      row to attach it; ✓ on the idea saves, ✕ or Esc discards.
+                      {editDirty ? (
+                        <>
+                          <b className="font-semibold">
+                            {editAdded > 0 ? `+${editAdded} attached` : ""}
+                            {editAdded > 0 && editRemoved > 0 ? ", " : ""}
+                            {editRemoved > 0 ? `−${editRemoved} detached` : ""}
+                          </b>{" "}
+                          ({editCount} source{editCount === 1 ? "" : "s"} now). ✓ on the idea saves, ✕ or Esc discards.
+                        </>
+                      ) : (
+                        <>
+                          no changes yet ({editCount} source{editCount === 1 ? "" : "s"}). Tick a Zendesk or Jira
+                          row to attach it, untick to detach; search finds tickets and issues. Esc leaves.
+                        </>
+                      )}
                     </span>
+                    {editDirty && (
+                      <span className="shrink-0 rounded-full bg-[#17b26a] px-2 py-px font-mono text-[10px] font-semibold text-white">
+                        unsaved
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">
