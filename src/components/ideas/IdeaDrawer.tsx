@@ -98,6 +98,8 @@ interface IdeaDrawerProps {
   onRewrite?: () => Promise<boolean>;
   /** Sources changed: keep the text as written. */
   onKeepText?: () => Promise<boolean>;
+  /** A ticket with no live idea: PMOS AI reads it alone and creates one (or parks it). */
+  onCreateIdeaFromTicket?: (ticketKey: string) => Promise<boolean>;
 }
 
 const MONO_LABEL =
@@ -134,6 +136,7 @@ export function IdeaDrawer({
   onMerge,
   onRewrite,
   onKeepText,
+  onCreateIdeaFromTicket,
 }: IdeaDrawerProps) {
   // Opens at half the window (sidebar included); the PM can still drag it
   // between 380px and 90% of the window.
@@ -937,6 +940,7 @@ export function IdeaDrawer({
               customerCatalog={customerCatalog}
               customerColors={customerColors}
               onOpenIdea={onOpenIdea ? (id) => onOpenIdea(id, { source: srcSel }) : undefined}
+              onCreateIdea={onCreateIdeaFromTicket ? () => onCreateIdeaFromTicket(ticket.key) : undefined}
             />
           ) : jiraSrc ? (
             <JiraIssueView src={jiraSrc} productLineLabel={jiraProductLineLabel} />
@@ -1312,10 +1316,13 @@ function TicketView({
   customerCatalog,
   customerColors,
   onOpenIdea,
+  onCreateIdea,
 }: {
   ticket: ZendeskTicket;
   csvMapping: CsvMapping;
   ideasById?: Map<string, Idea>;
+  /** Shown when the ticket backs no live idea. */
+  onCreateIdea?: () => Promise<boolean>;
   customerCatalog: string[];
   customerColors: Record<string, string>;
   onOpenIdea?: (id: string) => void;
@@ -1409,6 +1416,9 @@ function TicketView({
           </div>
         ) : (
           <div className="text-[13px] text-muted">Not evaluated yet.</div>
+        )}
+        {onCreateIdea && !notes.some((n) => ideasById?.get(n.ideaId)) && (
+          <CreateIdeaButton onCreate={onCreateIdea} parked={!!ticket.catalog && ticket.catalog.kind !== "fr"} />
         )}
         {(ticket.affectedCustomers ?? []).length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
@@ -1518,5 +1528,35 @@ function TicketView({
         </div>
       )}
     </>
+  );
+}
+
+/** "Create idea with PMOS AI" for a ticket that backs no live idea. */
+function CreateIdeaButton({ onCreate, parked }: { onCreate: () => Promise<boolean>; parked: boolean }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onCreate();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+        {busy ? "Reading the ticket…" : "Create idea with PMOS AI"}
+      </Button>
+      <span className="text-[11.5px] text-muted">
+        {parked
+          ? "PMOS AI reads the ticket again on its own; a feature request becomes a New idea, anything else stays parked."
+          : "This ticket backs no idea. PMOS AI reads it on its own and creates one."}
+      </span>
+    </div>
   );
 }

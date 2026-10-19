@@ -1307,6 +1307,9 @@ export type IdeasMutation =
   | { type: "rewrite"; ideaId: string }
   /** The PM keeps the text as written despite changed sources. */
   | { type: "keepText"; ideaId: string }
+  /** A ticket with no idea (orphaned on the merge board, or parked): PMOS AI
+   *  reads it alone — an FR becomes a New idea, anything else is parked. */
+  | { type: "createIdeaFromTicket"; ticketKey: string }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
   | { type: "undismissCustomer"; ideaId: string; name: string };
@@ -1746,6 +1749,88 @@ export async function mutateIdeas(
         { ideaId: idea.id, action: "rewrite", payload: { sources: members.map((x) => x.key) } },
       ]);
       notice = "Rewritten from the current sources";
+      break;
+    }
+    case "createIdeaFromTicket": {
+      const ticket = await db.zendeskTicketRaw.findFirst({
+        where: { workspaceId, externalId: mutation.ticketKey },
+      });
+      if (!ticket) throw new Error("Ticket not found");
+      const live = await db.ideaSource.findFirst({
+        where: { ticketId: ticket.id, kind: "zendesk", idea: { batchStatus: { not: "deleted" } } },
+        select: { ideaId: true },
+      });
+      if (live) throw new Error("This ticket already backs an idea");
+      const [verdict] = (
+        await catalogTickets(workspaceId, [
+          {
+            key: ticket.externalId,
+            subject: ticket.subject,
+            body: ticket.body,
+            requester: ticket.requester ?? undefined,
+            tags: ((ticket.tags as string[]) ?? []).filter((t) => typeof t === "string"),
+            module: ticket.module ?? undefined,
+            whyBuild: ticket.whyBuild ?? undefined,
+            insights: ticket.insights ?? undefined,
+          },
+        ])
+      ).results;
+      if (!verdict) throw new Error("PMOS AI returned no verdict for this ticket");
+      const affected = distinct([
+        ...(((ticket.affectedCustomers as string[]) ?? []) as string[]),
+        ...verdict.affectedCustomers,
+      ]);
+      if (verdict.kind !== "fr") {
+        await db.zendeskTicketRaw.update({
+          where: { id: ticket.id },
+          data: {
+            catalogKind: verdict.kind,
+            catalogReason: verdict.reason,
+            affectedCustomers: affected as Prisma.InputJsonValue,
+          },
+        });
+        notice = `PMOS AI read it as ${verdict.kind.replace("_", " ")} — parked, no idea created${verdict.reason ? `: ${verdict.reason}` : ""}`;
+        break;
+      }
+      const resolver = buildProductLineResolver(
+        await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } }),
+      );
+      const givenLine = ticket.module?.trim() ? (resolver.resolve(ticket.module) ?? "Other") : undefined;
+      const products = givenLine
+        ? [givenLine]
+        : verdict.productLines.length > 0
+          ? verdict.productLines
+          : ["Other"];
+      const created = await db.idea.create({
+        data: {
+          workspaceId,
+          title: verdict.productTitle || ticket.subject,
+          details: verdict.productSummary || ticket.body,
+          products: products as Prisma.InputJsonValue,
+          platforms: verdict.platforms as Prisma.InputJsonValue,
+          batchStatus: "new",
+          decision: "pending",
+          origin: "zendesk",
+          newVotes: 1,
+          batchChanges: ["Created by a PM from this ticket"] as unknown as Prisma.InputJsonValue,
+          sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
+        },
+      });
+      await db.zendeskTicketRaw.update({
+        where: { id: ticket.id },
+        data: {
+          catalogKind: "fr",
+          catalogReason: verdict.reason,
+          affectedCustomers: affected as Prisma.InputJsonValue,
+          matchNotes: [
+            { unit: ticket.externalId, ideaId: created.id, merged: false, reason: "Created by a PM from this ticket" },
+          ] as unknown as Prisma.InputJsonValue,
+        },
+      });
+      await logEvents(workspaceId, [
+        { ideaId: created.id, action: "create_from_ticket", payload: { ticket: ticket.externalId } },
+      ]);
+      notice = `New idea created from ticket ${ticket.externalId}`;
       break;
     }
     case "keepText": {

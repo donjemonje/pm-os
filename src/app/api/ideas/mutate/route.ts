@@ -9,6 +9,7 @@ const MUTATION_TYPES = [
   "reassign",
   "rewrite",
   "keepText",
+  "createIdeaFromTicket",
   "approveCustomer",
   "dismissCustomer",
   "undismissCustomer",

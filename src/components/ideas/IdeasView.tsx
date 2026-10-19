@@ -1698,6 +1698,7 @@ export function IdeasView({
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}
           onRewrite={drawerIdea ? () => callMutate({ type: "rewrite", ideaId: drawerIdea.id }) : undefined}
           onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
+          onCreateIdeaFromTicket={(ticketKey) => callMutate({ type: "createIdeaFromTicket", ticketKey })}
         />
       )}
 
