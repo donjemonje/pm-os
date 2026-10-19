@@ -182,7 +182,7 @@ export function ProductLinesPanel({
         The products ideas can belong to — this text is the ground truth PMOS AI uses to classify
         tickets. The order here is the order filters list them in.{" "}
         {canEdit
-          ? "Markdown is supported; drag a row by its handle to reorder."
+          ? "Drag a row by its handle to reorder."
           : "Managed by your organization's admin; read-only for members."}
       </p>
 
