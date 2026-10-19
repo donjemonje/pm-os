@@ -139,7 +139,7 @@ export function ProductLinesPanel({
     <input
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      placeholder="Aliases, comma-separated — e.g. the Jira option name: Platform General, Platform- General"
+      placeholder="Aliases, comma-separated (optional)"
       title="Other names that mean this product line. Imports map any of them here; the sync to Jira writes whichever one is a Jira option."
       className={`${INPUT_CLASS} text-[13px]`}
     />
