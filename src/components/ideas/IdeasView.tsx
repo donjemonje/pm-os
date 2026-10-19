@@ -15,8 +15,7 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
-  ExternalLink,
-} from "lucide-react";
+  ExternalLink,, Undo2 } from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
@@ -1183,17 +1182,34 @@ export function IdeasView({
                       Grouped by <b className="font-semibold text-fg-2">Product line</b>
                     </span>
                   )}
-                  {page === "final" && (
-                    <span title={pending > 0 ? `${pending} awaiting review` : "All approved"}>
+                  {/* Approve all while anything is pending; Undo while anything is
+                      approved — both when the batch is mixed (e.g. ideas skipped for
+                      an open suggestion), so an approve is always reversible. */}
+                  {page === "final" && reviewed > 0 && (
+                    <span title={`${reviewed} approved — back to pending`}>
                       <Button
                         size="sm"
                         onClick={() => {
                           setNote("");
-                          void callMutate({ type: "approveAll" });
+                          void callMutate({ type: "approveAll", revert: true });
+                        }}
+                      >
+                        <Undo2 size={13} strokeWidth={2.25} />
+                        Undo approve all
+                      </Button>
+                    </span>
+                  )}
+                  {page === "final" && pending > 0 && (
+                    <span title={`${pending} awaiting review`}>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setNote("");
+                          void callMutate({ type: "approveAll", revert: false });
                         }}
                       >
                         <CheckCheck size={13} strokeWidth={2.25} />
-                        {pending > 0 ? "Approve all" : "Undo approve all"}
+                        Approve all
                       </Button>
                     </span>
                   )}

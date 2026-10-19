@@ -1298,7 +1298,9 @@ export type IdeasMutation =
       /** Ticket-derived names the PM removed — dismissed on their tickets (reversible). */
       removeCustomers?: string[];
     }
-  | { type: "approveAll" }
+  /** `revert` true = every reviewed idea back to pending; false = approve every
+   *  pending idea; omitted = approve when anything is pending, else revert. */
+  | { type: "approveAll"; revert?: boolean }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
@@ -1509,7 +1511,10 @@ export async function mutateIdeas(
         where: { workspaceId, batchStatus: { notIn: APPROVAL_EXEMPT } },
         include: IDEA_INCLUDE,
       });
-      const revert = approvable.every((i) => i.decision !== "pending");
+      const revert =
+        typeof mutation.revert === "boolean"
+          ? mutation.revert
+          : approvable.every((i) => i.decision !== "pending");
       // Bulk approve skips (never fails on) ideas with unresolved suggested
       // metadata — those need a per-idea call; reverting is always allowed.
       const catalogLower = revert
