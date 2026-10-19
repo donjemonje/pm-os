@@ -321,8 +321,8 @@ export async function prepareCatalog(
     db.customer.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },
-      select: { name: true, description: true },
-    }),
+      select: { name: true, description: true, aliases: true },
+    }).then((rows) => rows.map(catalogEntryWithAliases)),
     db.workspace.findUnique({
       where: { id: workspaceId },
       select: { ideasConfig: true },

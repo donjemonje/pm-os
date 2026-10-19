@@ -31,6 +31,7 @@ export function SettingsListPanel({
   mergeEndpoint,
   namePlaceholder,
   descriptionPlaceholder,
+  aliasesPlaceholder,
   emptyLabel,
   initialItems,
 }: {
@@ -42,6 +43,8 @@ export function SettingsListPanel({
   mergeEndpoint?: string;
   namePlaceholder: string;
   descriptionPlaceholder: string;
+  /** When set, the add/edit forms take comma-separated aliases (customers). */
+  aliasesPlaceholder?: string;
   emptyLabel: string;
   initialItems: SettingsListItem[];
 }) {
@@ -49,6 +52,8 @@ export function SettingsListPanel({
   const [items, setItems] = useState(initialItems);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [aliases, setAliases] = useState("");
+  const [editAliases, setEditAliases] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -83,7 +88,8 @@ export function SettingsListPanel({
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    if (await call("POST", { name, description })) {
+    if (await call("POST", { name, description, ...(aliasesPlaceholder ? { aliases } : {}) })) {
+      setAliases("");
       setName("");
       setDescription("");
     }
@@ -93,11 +99,19 @@ export function SettingsListPanel({
     setEditingId(item.id);
     setEditName(item.name);
     setEditDescription(item.description);
+    setEditAliases((item.aliases ?? []).join(", "));
     setError(null);
   }
 
   async function onSaveEdit(id: string) {
-    if (await call("PATCH", { id, name: editName, description: editDescription })) {
+    if (
+      await call("PATCH", {
+        id,
+        name: editName,
+        description: editDescription,
+        ...(aliasesPlaceholder ? { aliases: editAliases } : {}),
+      })
+    ) {
       setEditingId(null);
     }
   }
@@ -164,6 +178,17 @@ export function SettingsListPanel({
             disabled={busy}
           />
         </div>
+        {aliasesPlaceholder && (
+          <input
+            type="text"
+            value={aliases}
+            onChange={(e) => setAliases(e.target.value)}
+            placeholder={aliasesPlaceholder}
+            title="Other spellings that mean this customer. Imports map any of them here; PMOS AI sees them too."
+            className={INPUT_CLASS}
+            disabled={busy}
+          />
+        )}
         <input
           type="text"
           value={description}
@@ -206,6 +231,17 @@ export function SettingsListPanel({
                       autoFocus
                     />
                   </div>
+                  {aliasesPlaceholder && (
+                    <input
+                      type="text"
+                      value={editAliases}
+                      onChange={(e) => setEditAliases(e.target.value)}
+                      onKeyDown={onEditKeyDown(item.id)}
+                      placeholder={aliasesPlaceholder}
+                      className={INPUT_CLASS}
+                      disabled={busy}
+                    />
+                  )}
                   <input
                     type="text"
                     value={editDescription}

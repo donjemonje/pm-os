@@ -4,7 +4,7 @@ import { canManageOrgSettings } from "@/lib/admin-auth";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isChipColorId, nextChipColor } from "@/lib/ideas/colors";
-import { isAllCustomers } from "@/lib/ideas/customer-key";
+import { customerKey, isAllCustomers } from "@/lib/ideas/customer-key";
 import { productLineKey } from "@/lib/ideas/product-line-key";
 
 const ITEM_SELECT = { id: true, name: true, description: true, color: true } as const;
@@ -115,10 +115,13 @@ const KINDS: Record<string, ListOps> = {
       Boolean(await db.customer.findFirst({ where: { id, workspaceId }, select: { id: true } })),
     colors: async (workspaceId) =>
       (await db.customer.findMany({ where: { workspaceId }, select: { color: true } })).map((r) => r.color),
-    create: (workspaceId, name, description, color) =>
-      db.customer.create({ data: { workspaceId, name, description, color } }),
-    update: (id, name, description, color) =>
-      db.customer.update({ where: { id }, data: { name, description, ...(color ? { color } : {}) } }),
+    create: (workspaceId, name, description, color, aliases) =>
+      db.customer.create({ data: { workspaceId, name, description, color, aliases: aliases ?? [] } }),
+    update: (id, name, description, color, aliases) =>
+      db.customer.update({
+        where: { id },
+        data: { name, description, ...(color ? { color } : {}), ...(aliases ? { aliases } : {}) },
+      }),
     setColor: (id, color) => db.customer.update({ where: { id }, data: { color } }),
     remove: async (workspaceId, id) =>
       (await db.customer.deleteMany({ where: { id, workspaceId } })).count,
@@ -247,6 +250,29 @@ async function aliasClash(
   return null;
 }
 
+/** A customer alias (or name) may not be another customer's name or alias — same first-wins reason. */
+async function customerAliasClash(
+  workspaceId: string,
+  aliases: string[],
+  name: string,
+  excludeId?: string
+): Promise<string | null> {
+  const rows = await db.customer.findMany({
+    where: { workspaceId, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { name: true, aliases: true },
+  });
+  const mine = [name, ...aliases].map((a) => customerKey(a));
+  for (const r of rows) {
+    const theirs = [r.name, ...(Array.isArray(r.aliases) ? (r.aliases as string[]) : [])];
+    for (const t of theirs) {
+      if (mine.includes(customerKey(t))) {
+        return `"${t}" already belongs to customer "${r.name}" — a name or alias can only mean one customer`;
+      }
+    }
+  }
+  return null;
+}
+
 function cleanDescription(value: unknown): string {
   const description = typeof value === "string" ? value.trim() : "";
   return description.slice(0, MAX_DESCRIPTION);
@@ -275,6 +301,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const clash = await aliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name);
     if (clash) return NextResponse.json({ error: clash }, { status: 409 });
   }
+  if (kind === "customers") {
+    const clash = await customerAliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name);
+    if (clash) return NextResponse.json({ error: clash }, { status: 409 });
+  }
 
   const color = isChipColorId(body.color)
     ? body.color
@@ -284,7 +314,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     name,
     cleanDescription(body.description),
     color,
-    kind === "product-lines" ? cleanAliases(body.aliases, name) : undefined
+    kind === "product-lines" || kind === "customers" ? cleanAliases(body.aliases, name) : undefined
   );
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }
@@ -327,13 +357,17 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     const clash = await aliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name, id);
     if (clash) return NextResponse.json({ error: clash }, { status: 409 });
   }
+  if (kind === "customers" && body.aliases !== undefined) {
+    const clash = await customerAliasClash(workspaceId, cleanAliases(body.aliases, name) ?? [], name, id);
+    if (clash) return NextResponse.json({ error: clash }, { status: 409 });
+  }
 
   await ops.update(
     id,
     name,
     cleanDescription(body.description),
     isChipColorId(body.color) ? body.color : undefined,
-    kind === "product-lines" ? cleanAliases(body.aliases, name) : undefined,
+    kind === "product-lines" || kind === "customers" ? cleanAliases(body.aliases, name) : undefined,
   );
   return NextResponse.json({ items: await ops.list(workspaceId) });
 }
