@@ -7,7 +7,6 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
-  GitMerge,
   Layers,
   PlusCircle,
   RefreshCw,
@@ -1299,7 +1298,7 @@ export function IdeasView({
               <div className="flex flex-col gap-3">
                 {edit && editedIdea ? (
                   <div className="flex items-center gap-2.5 rounded-inner border border-[rgba(23,178,106,.35)] bg-[rgba(23,178,106,.12)] px-3.5 py-2.5 text-[13px] text-[#0f7a47]">
-                    <GitMerge size={15} strokeWidth={2.25} className="shrink-0" />
+                    <Share2 size={15} strokeWidth={2.25} className="shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
                       Editing <b className="font-semibold">{editedIdea.title}</b> —{" "}
                       {editCount} source{editCount === 1 ? "" : "s"} selected. Tick a Zendesk or Jira
