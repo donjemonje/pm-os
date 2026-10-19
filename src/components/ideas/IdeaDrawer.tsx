@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   Check,
   ChevronDown,
@@ -47,6 +48,7 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
   return undefined;
 }
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
+import { URL_RE } from "@/lib/ideas/editor-markdown";
 
 type SourceSel = { kind: "zen" | "jira"; key: string };
 
@@ -98,6 +100,13 @@ interface IdeaDrawerProps {
 
 const MONO_LABEL =
   "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
+
+// The WYSIWYG Details editor (Tiptap) is loaded only when a PM clicks Edit —
+// the Ideas page itself never pays for it.
+const IdeaDetailsEditor = dynamic(
+  () => import("@/components/ideas/IdeaDetailsEditor"),
+  { ssr: false, loading: () => <div className="idea-editor idea-editor-loading" /> },
+);
 
 const ZEN_TAG = { background: "#e6eaf2", color: "#4a5b74" };
 const JIRA_TAG = { background: "rgba(59,124,246,.15)", color: "#2a5fd0" };
@@ -193,6 +202,21 @@ export function IdeaDrawer({
       removeCustomers: editRemoved,
     });
     setEditMode(false);
+  };
+  const cancelEdit = () => setEditMode(false);
+  // Keyboard for the whole edit (title, score, customers, Details editor):
+  // Esc cancels the edit and must not also close the drawer; ⌘↵ saves. Inputs
+  // that handle these keys themselves (the editor's link bar) stop propagation.
+  const onEditKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!editMode) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelEdit();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveEdit();
+    }
   };
   const sameName = (a: string, b: string) => a.toLowerCase() === b.trim().toLowerCase();
   const toggleIn = (list: string[], name: string) =>
@@ -349,6 +373,7 @@ export function IdeaDrawer({
       <div
         className="fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border bg-white shadow-[var(--app-shadow-drawer)]"
         style={{ width }}
+        onKeyDown={onEditKeyDown}
       >
         {/* Status edge: the idea's batch color (accent for sources and In Jira). */}
         <div
@@ -720,12 +745,14 @@ export function IdeaDrawer({
               </div>
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
-                <textarea
-                  rows={12}
-                  value={editDetails}
-                  onChange={(e) => setEditDetails(e.target.value)}
-                  className="w-full resize-y rounded-lg border border-border px-3 py-2.5 text-[13.5px] leading-relaxed outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
+                <IdeaDetailsEditor
+                  key={idea?.id}
+                  defaultValue={editDetails}
+                  onChange={setEditDetails}
                 />
+                <span className="text-[11px] text-[#9aa8be]">
+                  ⌘B bold · ⌘I italic · ⌘K link · ⌘↵ saves · Esc cancels
+                </span>
               </div>
             </>
           ) : idea ? (
@@ -820,7 +847,7 @@ export function IdeaDrawer({
                 <Button variant="primary" glow onClick={saveEdit}>
                   Save changes
                 </Button>
-                <Button onClick={() => setEditMode(false)}>Cancel</Button>
+                <Button onClick={cancelEdit}>Cancel</Button>
               </>
             ) : (
               <>
@@ -927,7 +954,6 @@ function RawChip({ label, value }: { label: string; value: string }) {
 }
 
 /** One labelled value on the ticket's header line: "Customer  Acme". */
-const URL_RE = /(https?:\/\/[^\s<>()\[\]"']+[^\s<>()\[\]"'.,;:!?])/g;
 
 /**
  * Markdown with every bare http(s) URL wrapped as a CommonMark autolink

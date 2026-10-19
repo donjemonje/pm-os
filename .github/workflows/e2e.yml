@@ -72,6 +72,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Pure-module unit tests (vitest): no DOM, no DB — cheap, so first.
+      - name: Run unit tests
+        run: npm run test:unit
+
       - name: Push schema to test database
         run: npx prisma db push --skip-generate
 

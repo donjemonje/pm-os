@@ -32,6 +32,18 @@ feature session.
 Schema changed in your branch? Re-run `npm run test:db:setup` (db push is
 idempotent).
 
+## Unit tests (`tests/unit`)
+
+`npm run test:unit` runs vitest over `tests/unit/**/*.test.ts` — pure modules
+only (no DOM, no database), so they finish in a second and run first in CI.
+Today: the markdown round trip of the idea Details editor
+(`editor-markdown.test.ts`). `idea-roundtrip-db.test.ts` is opt-in and runs
+the same checks over every idea in a database:
+
+```
+IDEA_ROUNDTRIP_DB=1 node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- npx vitest run tests/unit/idea-roundtrip-db.test.ts
+```
+
 ## Tags: `@ai` and `@ops`
 
 - `@ai` — calls PMOS AI live through Vertex (the release golden run,
