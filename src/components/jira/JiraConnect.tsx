@@ -132,7 +132,7 @@ export function JiraProjectsPanel({
       )}
 
       <p className="mb-3 text-sm text-muted">
-        Choose which Jira projects PMOS can read for releases and user manuals.
+        Choose which Jira projects PMOS reads on import and writes ideas to.
       </p>
 
       {loading ? (
