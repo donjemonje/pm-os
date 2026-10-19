@@ -19,7 +19,7 @@ export default async function SettingsLayout({ children }: { children: React.Rea
   return (
     <AppShell>
       <div className="p-8">
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="mx-auto w-full max-w-[72rem]">
           <h1 className="font-title text-2xl font-bold tracking-tight">Settings</h1>
           <SettingsNav sections={sections} />
           {children}
