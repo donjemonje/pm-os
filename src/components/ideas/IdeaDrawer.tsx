@@ -992,6 +992,7 @@ function JiraIssueView({
     [productLineLabel, src.products.join(", ") || undefined],
     ["Reporter", src.reporter],
     ["Assignee", src.assignee],
+    ["Customers (read from text)", src.customers?.join(", ") || undefined],
     ["Created", created ?? undefined],
     ["Link", src.url],
   ];

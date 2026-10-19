@@ -326,6 +326,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       createdAt: s.sourceCreatedAt?.toISOString(),
       url: s.url ?? undefined,
       products: (s.components as string[]) ?? [],
+      customers: (s.affectedCustomers as string[]) ?? [],
     })),
     ideas: ideaRows.map((row) => {
       const idea = toClientIdea(row, jiraCustomersByKey);

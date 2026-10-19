@@ -77,6 +77,8 @@ export interface JiraSource {
   url?: string;
   /** Product lines: the mapped field (Kela: Module) or Components. */
   products: string[];
+  /** Customers read from the issue text (customer-mentions.ts); catalog names + as-written suggestions. */
+  customers?: string[];
 }
 
 export interface Idea {
