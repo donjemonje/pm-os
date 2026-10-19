@@ -19,6 +19,7 @@ export interface ChipColor {
 }
 
 export const CHIP_PALETTE: readonly ChipColor[] = [
+  // Shown as COLUMNS in the picker (grid-flow-col, 6 rows): one hue family per column, light at the top.
   // Blues — light to dark
   { id: "sky", label: "Chili blue", swatch: "#66ccff", bg: "rgba(102,204,255,.28)", fg: "#0b6aa0" },
   { id: "teal", label: "Aquamarine", swatch: "#4eccc6", bg: "rgba(78,204,198,.26)", fg: "#0f7a6a" },
