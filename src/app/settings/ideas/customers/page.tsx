@@ -6,6 +6,7 @@ import { ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { ensureCatalogColors } from "@/lib/ideas/catalog-colors";
 import { isAllCustomers } from "@/lib/ideas/customer-key";
+import { catalogUsage, usageOf } from "@/lib/ideas/catalog-usage";
 
 export const metadata: Metadata = {
   title: "Customers — PM-OS",
@@ -16,6 +17,7 @@ export default async function CustomersSettingsPage() {
   if (!(await ideasEnabledForCurrentUser())) notFound();
   const workspace = await getOrCreateWorkspace();
   await ensureCatalogColors(workspace.id);
+  const usage = await catalogUsage(workspace.id);
   const customers = await db.customer.findMany({
     where: { workspaceId: workspace.id },
     orderBy: { name: "asc" },
@@ -35,6 +37,7 @@ export default async function CustomersSettingsPage() {
         ...c,
         aliases: (c.aliases as string[]) ?? [],
         builtIn: isAllCustomers(c.name),
+        usage: usageOf(usage.customers, c.name),
       }))}
     />
   );

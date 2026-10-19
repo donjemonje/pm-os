@@ -9,6 +9,7 @@ import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { ensureCatalogColors } from "@/lib/ideas/catalog-colors";
+import { catalogUsage, usageOf } from "@/lib/ideas/catalog-usage";
 
 export const metadata: Metadata = {
   title: "Product Lines — PM-OS",
@@ -23,6 +24,7 @@ export default async function ProductLinesSettingsPage() {
   // Components (platforms) off in Admin → Ideas hides the whole platforms
   // concept here, not just the Jira mapping.
   const platformsEnabled = mergeIdeasJiraConfig(workspace.ideasConfig).fields.platforms.enabled;
+  const usage = await catalogUsage(workspace.id);
   const [productLines, platforms, dbUser] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId: workspace.id },
@@ -51,6 +53,7 @@ export default async function ProductLinesSettingsPage() {
           aliases: Array.isArray(l.aliases)
             ? l.aliases.filter((a): a is string => typeof a === "string")
             : [],
+          usage: usageOf(usage.products, l.name),
         }))}
         canEdit={canManageOrgSettings(user)}
       />

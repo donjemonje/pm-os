@@ -5,6 +5,7 @@ import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { CUSTOMER_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { customerKey } from "@/lib/ideas/customer-key";
 import { ColorSwatch } from "./ColorSwatch";
+import { UsageCounts } from "./UsageCounts";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export interface SettingsListItem {
@@ -19,6 +20,8 @@ export interface SettingsListItem {
   origin?: string;
   /** Part of PM-OS (e.g. the All Customers row): color only — no edit, delete or merge. */
   builtIn?: boolean;
+  /** What the row is attached to today (Settings shows it next to the name). */
+  usage?: { zen: number; jira: number; ideas: number };
 }
 
 const INPUT_CLASS =
@@ -291,6 +294,7 @@ export function SettingsListPanel({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 text-sm font-medium text-foreground">
                       {item.name}
+                      {item.usage && <UsageCounts {...item.usage} />}
                       {item.builtIn && (
                         <span
                           title="Part of PM-OS: tickets that affect everyone land here. Pick its color; it can't be renamed or deleted."

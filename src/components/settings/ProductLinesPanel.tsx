@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, GripVertical, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { cn } from "@/lib/utils";
 import type { SettingsListItem } from "./SettingsListPanel";
+import { UsageCounts } from "./UsageCounts";
 import { PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { ColorSwatch } from "./ColorSwatch";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
@@ -14,17 +15,6 @@ const MAX_DESCRIPTION = 2000;
 
 const INPUT_CLASS =
   "w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]";
-
-type ViewMode = "formatted" | "markdown";
-
-function viewChip(active: boolean): string {
-  return cn(
-    "rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
-    active
-      ? "border-transparent bg-primary text-white"
-      : "border-border bg-white text-[#3f506b] hover:border-primary/55"
-  );
-}
 
 /**
  * Product Lines — the AI's ground truth for classifying ideas. Everyone can
@@ -41,7 +31,8 @@ export function ProductLinesPanel({
 }) {
   const { confirm } = useConfirm();
   const [items, setItems] = useState(initialItems);
-  const [view, setView] = useState<ViewMode>("formatted");
+  /** Row being dragged (drag & drop reorder). */
+  const [dragId, setDragId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -105,14 +96,17 @@ export function ProductLinesPanel({
     }
   }
 
-  /** Swap with the neighbor and persist the full order (position = index). */
-  async function move(id: string, dir: -1 | 1) {
-    const idx = items.findIndex((i) => i.id === id);
-    const j = idx + dir;
-    if (idx < 0 || j < 0 || j >= items.length) return;
-    const order = items.map((i) => i.id);
-    [order[idx], order[j]] = [order[j], order[idx]];
-    await call("PUT", { order });
+  /** Drag & drop: drop the dragged row where the pointer is, persist the full order. */
+  async function dropOn(targetId: string) {
+    const from = items.findIndex((i) => i.id === dragId);
+    const to = items.findIndex((i) => i.id === targetId);
+    setDragId(null);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setItems(next);
+    await call("PUT", { order: next.map((i) => i.id) });
   }
 
   async function onDelete(id: string, itemName: string) {
@@ -174,23 +168,13 @@ export function ProductLinesPanel({
               <Plus size={13} /> Add product line
             </button>
           )}
-          <button onClick={() => setView("formatted")} className={viewChip(view === "formatted")}>
-            Formatted
-          </button>
-          <button
-            onClick={() => setView("markdown")}
-            title="The raw text exactly as PMOS receives it"
-            className={viewChip(view === "markdown")}
-          >
-            Markdown
-          </button>
         </div>
       </div>
       <p className="mb-4 text-[13px] text-muted">
         The products ideas can belong to — this text is the ground truth PMOS AI uses to classify
         tickets. The order here is the order filters list them in.{" "}
         {canEdit
-          ? "Markdown is supported."
+          ? "Markdown is supported; drag a row by its handle to reorder."
           : "Managed by your organization's admin; read-only for members."}
       </p>
 
@@ -235,8 +219,22 @@ export function ProductLinesPanel({
       )}
 
       <div className="flex flex-col gap-3">
-        {items.map((item, index) => (
-          <div key={item.id} className="rounded-xl border border-border bg-white px-5 py-4">
+        {items.map((item) => (
+          <div
+            key={item.id}
+            onDragOver={(e) => {
+              if (dragId && dragId !== item.id) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              void dropOn(item.id);
+            }}
+            className={cn(
+              "rounded-xl border border-border bg-white px-5 py-4 transition-shadow",
+              dragId === item.id && "opacity-50",
+              dragId && dragId !== item.id && "hover:shadow-[0_-2px_0_0_var(--app-accent)]",
+            )}
+          >
             {editingId === item.id ? (
               <div
                 className="flex flex-col gap-2"
@@ -279,25 +277,22 @@ export function ProductLinesPanel({
                       onPick={(color) => call("PATCH", { id: item.id, color })}
                     />
                     <span className="font-title text-[14px] font-semibold">{item.name}</span>
+                    {item.usage && <UsageCounts {...item.usage} />}
                   </span>
                   {canEdit && (
                     <span className="flex shrink-0 items-center gap-1">
-                      <button
-                        onClick={() => void move(item.id, -1)}
-                        disabled={busy || index === 0}
-                        title="Move up"
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                      <span
+                        draggable={!busy}
+                        onDragStart={(e) => {
+                          setDragId(item.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragEnd={() => setDragId(null)}
+                        title="Drag to reorder"
+                        className="flex h-7 w-7 cursor-grab items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground active:cursor-grabbing"
                       >
-                        <ChevronUp size={14} />
-                      </button>
-                      <button
-                        onClick={() => void move(item.id, 1)}
-                        disabled={busy || index === items.length - 1}
-                        title="Move down"
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                      >
-                        <ChevronDown size={14} />
-                      </button>
+                        <GripVertical size={14} />
+                      </span>
                       <span className="mx-0.5 h-4 w-px bg-border" />
                       <button
                         onClick={() => startEdit(item)}
@@ -322,13 +317,7 @@ export function ProductLinesPanel({
                   </p>
                 )}
                 {item.description ? (
-                  view === "formatted" ? (
-                    <UmMarkdown content={item.description} className="text-[13px]" />
-                  ) : (
-                    <pre className="m-0 whitespace-pre-wrap rounded-lg bg-background px-3.5 py-3 font-mono text-[12px] leading-relaxed text-[#33445e]">
-                      {item.description}
-                    </pre>
-                  )
+                  <UmMarkdown content={item.description} className="text-[13px]" />
                 ) : (
                   <p className="m-0 text-[13px] italic text-muted">No description yet.</p>
                 )}
