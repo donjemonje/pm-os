@@ -1341,28 +1341,24 @@ export function IdeasView({
                   >
                     <Share2 size={15} strokeWidth={2.25} className="shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
-                      Editing <b className="font-semibold">{editedIdea.title}</b> —{" "}
                       {editDirty ? (
                         <>
                           <b className="font-semibold">
-                            {editAdded > 0 ? `+${editAdded} attached` : ""}
+                            {editAdded > 0 ? `Added ${editAdded} source${editAdded === 1 ? "" : "s"}` : ""}
                             {editAdded > 0 && editRemoved > 0 ? ", " : ""}
-                            {editRemoved > 0 ? `−${editRemoved} detached` : ""}
-                          </b>{" "}
-                          ({editCount} source{editCount === 1 ? "" : "s"} now). ✓ on the idea saves, ✕ or Esc discards.
+                            {editRemoved > 0
+                              ? `${editAdded > 0 ? "removed" : "Removed"} ${editRemoved} source${editRemoved === 1 ? "" : "s"}`
+                              : ""}
+                          </b>
+                          . ✓ saves, ✕ or Esc discards.
                         </>
                       ) : (
                         <>
-                          no changes yet ({editCount} source{editCount === 1 ? "" : "s"}). Tick a Zendesk or Jira
-                          row to attach it, untick to detach; search finds tickets and issues. Esc leaves.
+                          <b className="font-semibold">No changes</b>. Tick a Zendesk or Jira row to add it,
+                          untick to remove; search finds tickets and issues. Esc leaves.
                         </>
                       )}
                     </span>
-                    {editDirty && (
-                      <span className="shrink-0 rounded-full bg-[#17b26a] px-2 py-px font-mono text-[10px] font-semibold text-white">
-                        unsaved
-                      </span>
-                    )}
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">

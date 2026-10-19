@@ -378,12 +378,12 @@ export function MergePage({
               </div>
               {row.delta === "added" && (
                 <span className="shrink-0 rounded-full border border-[#17b26a] bg-[rgba(23,178,106,.16)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[#0f7a47]">
-                  + attached
+                  + added
                 </span>
               )}
               {row.delta === "removed" && (
                 <span className="shrink-0 rounded-full border border-[#e2445c] bg-[rgba(226,68,92,.12)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[#a32a2a]">
-                  − detached
+                  − removed
                 </span>
               )}
               {row.parkLabel && tag(row.parkLabel)}
