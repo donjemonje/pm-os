@@ -34,6 +34,8 @@ type IntegrationsPanelProps = {
   /** The org's Jira project and work type, set by the PM-OS admin (Admin → Ideas). */
   jiraProject?: string;
   jiraIssueType?: string;
+  /** Connected but the token is dead (refresh failed). */
+  jiraNeedsReconnect?: boolean;
   /** False = Drive is off for this org (follows the Docs flag): no card, no banners. */
   driveEnabled?: boolean;
 };
@@ -68,6 +70,12 @@ function IntegrationRow({
   expanded: boolean;
   onToggle: () => void;
   children?: React.ReactNode;
+  /** One card, no Hide/Manage toggle, children in the same section (no separator). */
+  flat?: boolean;
+  /** Connected but the token is dead: status reads "Needs reconnecting" and Reconnect shows. */
+  needsReconnect?: boolean;
+  /** Extra control on the header row (e.g. an Open-in-Jira link). */
+  headerAction?: React.ReactNode;
 }) {
   return (
     <div className="rounded-xl border border-border bg-card">
@@ -75,9 +83,9 @@ function IntegrationRow({
         <div className="min-w-0 flex-1">
           <div className="font-medium text-foreground">{name}</div>
           <div className="mt-1 flex items-center gap-2 text-sm">
-            <StatusDot connected={connected} />
-            <span className={connected ? "text-green-800" : "text-muted"}>
-              {connected ? "Connected" : "Not connected"}
+            <StatusDot connected={connected && !needsReconnect} />
+            <span className={connected && !needsReconnect ? "text-green-800" : "text-muted"}>
+              {connected ? (needsReconnect ? "Needs reconnecting" : "Connected") : "Not connected"}
             </span>
             {connected && detail && (
               <span className="truncate text-muted">· {detail}</span>
@@ -88,22 +96,25 @@ function IntegrationRow({
         <div className="flex shrink-0 items-center gap-2">
           {connected ? (
             <>
-              {oauthReady && (
+              {headerAction}
+              {oauthReady && (needsReconnect || !flat) && (
                 <a
                   href={connectHref}
-                  title="Run the authorization again — needed when PM-OS asks for a new permission. Project selection is kept."
+                  title="Run the authorization again — needed when the token expired or PM-OS asks for a new permission."
                   className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
                 >
                   Reconnect
                 </a>
               )}
-              <button
-                type="button"
-                onClick={onToggle}
-                className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
-              >
-                {expanded ? "Hide" : "Manage"}
-              </button>
+              {!flat && (
+                <button
+                  type="button"
+                  onClick={onToggle}
+                  className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
+                >
+                  {expanded ? "Hide" : "Manage"}
+                </button>
+              )}
             </>
           ) : oauthReady ? (
             <a
@@ -119,7 +130,8 @@ function IntegrationRow({
         </div>
       </div>
 
-      {expanded && children && (
+      {flat && children && <div className="px-5 pb-4">{children}</div>}
+      {!flat && expanded && children && (
         <div className="border-t border-border px-5 py-4">{children}</div>
       )}
     </div>
@@ -135,9 +147,10 @@ export function IntegrationsPanel({
   ideasEnabled = false,
   jiraProject = "",
   jiraIssueType = "",
+  jiraNeedsReconnect = false,
   driveEnabled = true,
 }: IntegrationsPanelProps) {
-  const [jiraExpanded, setJiraExpanded] = useState(Boolean(jiraStatus?.connected));
+  const [jiraExpanded, setJiraExpanded] = useState(true);
   const [driveExpanded, setDriveExpanded] = useState(Boolean(driveStatus?.connected));
   const [driveConnected, setDriveConnected] = useState(Boolean(driveStatus?.connected));
   const [driveEmail, setDriveEmail] = useState(driveStatus?.email);
@@ -175,21 +188,25 @@ export function IntegrationsPanel({
         unavailableLabel="Not available"
         expanded={jiraExpanded}
         onToggle={() => setJiraExpanded((v) => !v)}
+        flat
+        needsReconnect={jiraNeedsReconnect}
+        headerAction={
+          jiraStatus?.connected && jiraStatus.siteUrl ? (
+            <a
+              href={jiraStatus.siteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
+            >
+              Open Jira
+              <ExternalLink size={12} />
+            </a>
+          ) : null
+        }
       >
-        {jiraStatus?.connected && (
-          <div className="px-5 py-4 text-sm">
-            {jiraStatus.siteUrl && (
-              <a
-                href={jiraStatus.siteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mb-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"
-              >
-                Open Jira
-                <ExternalLink size={12} />
-              </a>
-            )}
-            {ideasEnabled && (
+        {jiraStatus?.connected && ideasEnabled && (
+          <div className="text-sm">
+            {(
               <p className="text-muted">
                 {jiraProject ? (
                   <>

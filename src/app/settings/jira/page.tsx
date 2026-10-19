@@ -3,7 +3,7 @@ import {
   featureEnabledForCurrentUser,
   ideasEnabledForCurrentUser,
 } from "@/lib/org-features";
-import { getJiraConnectionStatus } from "@/lib/jira";
+import { getJiraConnectionStatus, getJiraHealth } from "@/lib/jira";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { getGoogleDriveConnectionStatus } from "@/lib/google-drive";
 import { getJiraOAuthSetupStatus } from "@/lib/jira-oauth-config";
@@ -36,6 +36,9 @@ export default async function IntegrationsSettingsPage({
   const driveOauthSetup = getGoogleDriveOAuthSetupStatus();
   const params = await searchParams;
   const jiraCfg = mergeIdeasJiraConfig(workspace.ideasConfig);
+  const jiraNeedsReconnect = jiraStatus?.connected
+    ? (await getJiraHealth(workspace.id)).status === "reconnect"
+    : false;
   return (
     <div>
       <p className="mb-6 text-sm text-muted">
@@ -51,6 +54,7 @@ export default async function IntegrationsSettingsPage({
         ideasEnabled={ideasEnabled}
         jiraProject={jiraCfg.jiraProject}
         jiraIssueType={jiraCfg.jiraIssueType}
+        jiraNeedsReconnect={jiraNeedsReconnect}
         jiraOauthReady={jiraOauthSetup.ready}
         driveOauthReady={driveOauthSetup.ready}
         banners={{
