@@ -1063,30 +1063,40 @@ async function runImport(
           matched++;
           const curProducts = (target.products as string[]) ?? [];
           const curPlatforms = (target.platforms as string[]) ?? [];
-          let nextProducts = distinct([
-            ...curProducts,
-            ...unit.rewrite.productLines,
-          ]);
-          // A real product line replaces the "Other" placeholder.
-          if (nextProducts.length > 1)
-            nextProducts = nextProducts.filter((p) => p !== "Other");
+          // A product line the ticket carries in its Module column (or the
+          // idea carries from Jira's mapped field) was GIVEN to us, not found
+          // by PMOS AI — it is never narrated as a change and never widens an
+          // idea that already has a real product line; it only fills in the
+          // "Other" placeholder (Daniel, 2026-10-19). A model-inferred line
+          // (ticket without a Module) is a finding: added and narrated.
+          const givenLine = moduleProductLine(input.module);
+          const curReal = curProducts.filter((p) => p !== "Other");
+          let nextProducts: string[];
+          const changes: string[] = [`+1 vote (ticket ${input.key})`];
+          if (givenLine) {
+            nextProducts =
+              curReal.length > 0 || givenLine === "Other" ? curProducts : [givenLine];
+            if (nextProducts !== curProducts)
+              changes.push(`Product line set from the ticket's Module: ${givenLine}`);
+          } else {
+            nextProducts = distinct([...curProducts, ...unit.rewrite.productLines]);
+            // A real product line replaces the "Other" placeholder.
+            if (nextProducts.length > 1)
+              nextProducts = nextProducts.filter((p) => p !== "Other");
+            for (const p of nextProducts)
+              if (!curProducts.some((c) => c.toLowerCase() === p.toLowerCase()))
+                changes.push(`Product line added: ${p}`);
+          }
           const nextPlatforms = distinct([
             ...curPlatforms,
             ...unit.rewrite.platforms,
           ]);
-          const addedProducts = nextProducts.filter(
-            (p) =>
-              !curProducts.some((c) => c.toLowerCase() === p.toLowerCase()),
-          );
           const addedPlatforms = nextPlatforms.filter(
             (p) =>
               !curPlatforms.some((c) => c.toLowerCase() === p.toLowerCase()),
           );
 
-          const changes: string[] = [`+1 vote (ticket ${input.key})`];
           if (m?.enrichedSummary) changes.push("Summary updated");
-          for (const p of addedProducts)
-            changes.push(`Product line added: ${p}`);
           for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
           // Several tickets can match the same idea in one import — accumulate.
           // (fresh tickets exist here, so rollover already reset last batch's
