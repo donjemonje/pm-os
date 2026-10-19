@@ -235,7 +235,7 @@ export function SettingsListPanel({
           {items.map((item) => (
             <li
               key={item.id}
-              className="flex items-start gap-2 border-b border-border px-5 py-3 last:border-b-0"
+              className="flex items-center gap-2 border-b border-border px-5 py-3 last:border-b-0"
             >
               {editingId === item.id ? (
                 <>
