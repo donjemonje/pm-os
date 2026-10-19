@@ -74,6 +74,8 @@ interface ServerState {
   ideas: Idea[];
   customerCatalog?: string[];
   jiraConnected?: boolean;
+  jiraEnabled?: boolean;
+  jiraHealth?: "not_connected" | "ok" | "reconnect";
   csvMapping?: CsvMapping;
   jiraSiteUrl?: string | null;
   jiraProductLineField?: string;
@@ -133,6 +135,8 @@ export function IdeasView({
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [jiraEnabled, setJiraEnabled] = useState(false);
+  const [jiraHealth, setJiraHealth] = useState<"not_connected" | "ok" | "reconnect">("ok");
   const [jiraSiteUrl, setJiraSiteUrl] = useState<string | null>(null);
   const [jiraProductLineField, setJiraProductLineField] = useState("Product line");
   const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
@@ -188,6 +192,8 @@ export function IdeasView({
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
+    if (state.jiraEnabled !== undefined) setJiraEnabled(state.jiraEnabled);
+    if (state.jiraHealth !== undefined) setJiraHealth(state.jiraHealth);
     if (state.jiraSiteUrl !== undefined) setJiraSiteUrl(state.jiraSiteUrl);
     if (state.jiraProductLineField) setJiraProductLineField(state.jiraProductLineField);
     if (state.csvMapping) setCsvMapping(state.csvMapping);
@@ -315,6 +321,34 @@ export function IdeasView({
         setError(result.errors[0]);
         return;
       }
+      // Jira is expected for this org: check the connection right now and
+      // let the user decide — import without Jira (Zendesk only, no
+      // matching against the backlog) or stop and reconnect first.
+      let skipJira = false;
+      if (jiraEnabled) {
+        const health = await fetch("/api/jira/health")
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        const status: "not_connected" | "ok" | "reconnect" = health?.status ?? "reconnect";
+        setJiraHealth(status);
+        if (status !== "ok") {
+          setImporting(false);
+          setImportStep(null);
+          const proceed = await confirm({
+            title: status === "not_connected" ? "Jira is not connected" : "Jira needs reconnecting",
+            message:
+              status === "not_connected"
+                ? "This import will not match tickets against your Jira backlog. Connect Jira in Settings → Integrations, or import Zendesk only."
+                : "The Jira connection expired. Reconnect it in Settings → Integrations, or import Zendesk only — tickets will not be matched against your Jira backlog.",
+            confirmLabel: "Import without Jira",
+            cancelLabel: "Cancel",
+          });
+          if (!proceed) return;
+          skipJira = true;
+          setImporting(true);
+          setImportStep(0);
+        }
+      }
       // The overlay steps are a high-level narration of one server call; the
       // AI-review step holds until the response lands (it dominates the wait).
       await sleep(600);
@@ -322,7 +356,7 @@ export function IdeasView({
       const resPromise = fetch("/api/ideas/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickets: result.tickets }),
+        body: JSON.stringify({ tickets: result.tickets, skipJira }),
       });
       await sleep(900);
       setImportStep(2);
@@ -912,6 +946,21 @@ export function IdeasView({
           </div>
         </div>
 
+        {jiraEnabled && jiraHealth !== "ok" && (
+          <div className="mb-4 flex items-center gap-3 rounded-inner border border-[#f3dcb0] bg-[#fdf6e7] px-4 py-2.5 text-[13px] text-[#8a5a00]">
+            <span className="flex-1">
+              {jiraHealth === "not_connected"
+                ? "Jira is not connected — imports will not match tickets against your Jira backlog."
+                : "Jira needs reconnecting — the connection expired. Imports will not match tickets against your Jira backlog until it is reconnected."}
+            </span>
+            <a
+              href="/settings/jira"
+              className="shrink-0 rounded-lg border border-[#e3c98f] bg-white px-2.5 py-1 text-[12px] font-medium text-[#8a5a00] hover:border-[#c9a65a]"
+            >
+              {jiraHealth === "not_connected" ? "Connect Jira" : "Reconnect Jira"}
+            </a>
+          </div>
+        )}
         {error && (
           <div className="mb-4 rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">
             {error}

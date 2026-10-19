@@ -98,6 +98,36 @@ export async function getAccessibleResources(accessToken: string) {
  * refreshable with the configured Atlassian OAuth creds). A configured but
  * dead connection is "not connected" for anything that needs to write.
  */
+export type JiraHealth = {
+  status: "not_connected" | "ok" | "reconnect";
+  /** Why a reconnect is needed, for the UI. */
+  detail?: string;
+};
+
+/**
+ * Connection health for the UI: no row, usable (fresh or refreshed just
+ * now), or dead (refresh failed / OAuth creds missing) — the user must go
+ * through Settings → Integrations → Reconnect. One refresh call at most.
+ */
+export async function getJiraHealth(workspaceId: string): Promise<JiraHealth> {
+  const row = await db.jiraConnection.findUnique({
+    where: { workspaceId },
+    select: { id: true, authType: true, expiresAt: true },
+  });
+  if (!row) return { status: "not_connected" };
+  try {
+    const ok = await getValidConnection(workspaceId);
+    return ok
+      ? { status: "ok" }
+      : { status: "reconnect", detail: "The token expired and cannot be refreshed here." };
+  } catch (err) {
+    return {
+      status: "reconnect",
+      detail: err instanceof Error ? err.message.slice(0, 160) : "Token refresh failed.",
+    };
+  }
+}
+
 export async function hasValidJiraConnection(workspaceId: string): Promise<boolean> {
   try {
     return (await getValidConnection(workspaceId)) !== null;

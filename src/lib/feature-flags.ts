@@ -63,6 +63,18 @@ export function isMyProductLinesEnabled(): boolean {
   return value === "true" || value === "1";
 }
 
+/**
+ * Jira integration gate — env default. Off when unset. ON means the org is
+ * expected to have Jira connected: the Ideas page warns when the connection
+ * needs reconnecting and asks before an import runs without Jira.
+ */
+export function isJiraIntegrationEnabled(): boolean {
+  const raw = process.env.JIRA_ENABLED;
+  if (!raw?.trim()) return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "1";
+}
+
 /** Dashboard feature gate — env default. Off when unset; DASHBOARD_ENABLED=true turns it on globally. */
 export function isDashboardEnabled(): boolean {
   const raw = process.env.DASHBOARD_ENABLED;
@@ -85,6 +97,7 @@ export const ORG_FEATURE_KEYS = [
   "dashboard",
   "ideasUndo",
   "myProductLines",
+  "jira",
   "ssoSkips2fa",
 ] as const;
 export type OrgFeatureKey = (typeof ORG_FEATURE_KEYS)[number];
@@ -104,6 +117,8 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isIdeasUndoEnabled();
     case "myProductLines":
       return isMyProductLinesEnabled();
+    case "jira":
+      return isJiraIntegrationEnabled();
     case "ssoSkips2fa":
       return isSsoSkips2faDefault();
   }

@@ -7,7 +7,8 @@ import { customersTextHash, findCatalogCustomers, issueCustomerText } from "./cu
 import { extractJiraCustomers } from "./jira-customers";
 import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
-import { getJiraConnectionStatus } from "../jira";
+import { getJiraConnectionStatus, getJiraHealth } from "../jira";
+import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { primaryJiraKey } from "./jira-keys";
@@ -45,6 +46,10 @@ export interface IdeasState {
   customerCatalog: string[];
   /** Jira integration is set up for the workspace — gates Sync to Jira. */
   jiraConnected: boolean;
+  /** Admin → Enablements "Jira integration" for the org: Jira is expected. */
+  jiraEnabled: boolean;
+  /** Connection health at read time (one refresh attempt at most). */
+  jiraHealth: "not_connected" | "ok" | "reconnect";
   /** Browse base of the connected site ("https://x.atlassian.net"); null when
    *  not connected. The client links every issue key with it, created ones
    *  (not yet in the snapshot) included. */
@@ -295,9 +300,15 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
     getJiraConnectionStatus(workspaceId),
     db.workspace.findUnique({
       where: { id: workspaceId },
-      select: { ideasConfig: true },
+      select: { ideasConfig: true, organization: { select: { features: true } } },
     }),
   ]);
+  const jiraEnabled = resolveFeature(
+    wsRow?.organization?.features,
+    "jira",
+    envFeatureDefault("jira"),
+  );
+  const jiraHealth = (await getJiraHealth(workspaceId)).status;
 
   const jiraCustomersByKey: JiraCustomerMap = new Map(snapshotRows.map((r) => [r.key, r]));
   const undoByIdea = new Map(
@@ -309,6 +320,8 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
 
   return {
     jiraConnected: Boolean(jiraStatus?.connected),
+    jiraEnabled,
+    jiraHealth,
     jiraSiteUrl: jiraStatus?.siteUrl ?? null,
     csvMapping: mergeIdeasJiraConfig(wsRow?.ideasConfig).csv,
     jiraProductLineField: mergeIdeasJiraConfig(wsRow?.ideasConfig).fields.productLine.jiraField,
@@ -348,9 +361,16 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
  * (stage timings, calls, tokens, errors) — a run that dies is recorded as
  * such, never silently missing.
  */
+export interface ImportOptions {
+  /** Run without Jira even if a connection row exists (the user chose
+   *  "import without Jira" when the connection needed reconnecting). */
+  skipJira?: boolean;
+}
+
 export async function importBatch(
   workspaceId: string,
   inputs: ImportTicketInput[],
+  options: ImportOptions = {},
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
   // The built-in All Customers row must exist before the catalog is read.
   await ensureAllCustomers(workspaceId);
@@ -362,7 +382,7 @@ export async function importBatch(
     `[ideas:import ${batch.id.slice(0, 8)}] start · ${inputs.length} tickets uploaded · workspace ${workspaceId}`,
   );
   try {
-    return await runImport(workspaceId, inputs, batch.id, trace);
+    return await runImport(workspaceId, inputs, batch.id, trace, options);
   } catch (err) {
     const message = trace.fail(err);
     await trace.flush({ status: "failed", error: message });
@@ -375,6 +395,7 @@ async function runImport(
   inputs: ImportTicketInput[],
   batchId: string,
   trace: ImportTrace,
+  options: ImportOptions = {},
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
   trace.begin("dedupe", "db", inputs.length);
   const existing = await db.zendeskTicketRaw.findMany({
@@ -390,9 +411,19 @@ async function runImport(
   // Jira live state is fetched before any judgment: FRs are matched against
   // the same backlog this batch will display.
   trace.begin("jira-fetch", "http");
-  const jira = await fetchJiraLiveSources(workspaceId);
+  const jira = options.skipJira
+    ? {
+        connected: false,
+        sources: [],
+        truncatedProjects: [],
+        unresolvedProductLines: [],
+        pull: mergeIdeasJiraConfig(null).pull,
+      }
+    : await fetchJiraLiveSources(workspaceId);
   trace.end({
-    note: jira.connected
+    note: options.skipJira
+      ? "Jira skipped by the user (connection needed reconnecting)"
+      : jira.connected
       ? `${jira.sources.length} live issues` +
         (jira.truncatedProjects.length > 0
           ? ` · CAPPED at ${jira.pull.maxIssues} in ${jira.truncatedProjects.join(", ")}`
