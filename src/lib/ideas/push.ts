@@ -94,6 +94,17 @@ function ticketUrl(config: IdeasJiraConfig, ticket: TicketRef): string | null {
   return config.zendeskTicketUrlTemplate.replace("{id}", encodeURIComponent(ticket.id));
 }
 
+/** The one issue type every pulled issue of the project has, or null when mixed / none pulled. */
+export async function pulledIssueType(workspaceId: string, projectKey: string): Promise<string | null> {
+  const rows = await db.jiraIdeaSnapshot.findMany({
+    where: { workspaceId, key: { startsWith: `${projectKey}-` } },
+    select: { issueType: true },
+    distinct: ["issueType"],
+  });
+  const types = rows.map((r) => r.issueType).filter((t): t is string => Boolean(t));
+  return types.length === 1 ? types[0] : null;
+}
+
 /** The full new description as ADF plus its plain-text twin (for diffing). */
 function buildDescription(
   config: IdeasJiraConfig,
@@ -369,8 +380,16 @@ async function derivePlan(
 
   const targetProject =
     status.ideasProjectKey ?? (status.projectKeys.length === 1 ? status.projectKeys[0] : null);
+  // Issue type for NEW ideas: the saved choice (Settings → Integrations) when
+  // one exists; otherwise the type of the Jira origin — when every pulled
+  // issue of the project shares one type that type is obvious and no
+  // choice is shown (Daniel, 2026-10-19); "Story" only as the last resort.
   const target = targetProject
-    ? { projectKey: targetProject, issueType: status.ideasIssueType || "Story" }
+    ? {
+        projectKey: targetProject,
+        issueType:
+          status.ideasIssueType || (await pulledIssueType(workspaceId, targetProject)) || "Story",
+      }
     : null;
 
   const rows = await db.idea.findMany({

@@ -258,8 +258,9 @@ export function IdeasOutputConfig({
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
           The projects this organization works with. Settings → Integrations shows
           only these and selects them by default; the import reads only these.
-          Empty = every project the connection can see. (New ideas are created
-          as Story; the write-back type is fixed for now.)
+          Empty = every project the connection can see. New ideas are created with
+          the type the pulled issues of the target project share; when the
+          project mixes types the organization picks one in Settings → Integrations.
         </p>
         {orgProjects === undefined ? (
           <div className="flex items-center gap-2 text-xs text-slate-500">

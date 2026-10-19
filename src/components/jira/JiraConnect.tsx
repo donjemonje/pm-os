@@ -14,14 +14,18 @@ export function JiraProjectsPanel({
   siteUrl,
   showIdeasTarget = false,
   initialIdeasProjectKey = null,
-  initialIdeasIssueType = "Task",
+  initialIdeasIssueType = "",
+  pulledIssueTypes = {},
 }: {
   initialProjectKeys: string[];
   siteUrl?: string;
   /** Rendered only when the Ideas feature is enabled for the caller's org. */
   showIdeasTarget?: boolean;
   initialIdeasProjectKey?: string | null;
+  /** Saved write-back type; "" = none saved, the pulled backlog's type applies. */
   initialIdeasIssueType?: string;
+  /** Issue types seen in the pulled backlog, per project — one type = no picker. */
+  pulledIssueTypes?: Record<string, string[]>;
 }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<string[]>(initialProjectKeys);
@@ -58,8 +62,15 @@ export function JiraProjectsPanel({
         ? selected[0]
         : "";
 
+  // The type every pulled issue of the target project has — the obvious
+  // write-back type (updated ideas keep their issue's own type regardless).
+  const pulled = pulledIssueTypes[effectiveIdeasProject] ?? [];
+  const obviousType = pulled.length === 1 ? pulled[0] : null;
+  const typeIsObvious = obviousType !== null && (!ideasIssueType || ideasIssueType === obviousType);
+  const projectIsObvious = selected.length === 1;
+
   useEffect(() => {
-    if (!showIdeasTarget || !effectiveIdeasProject) {
+    if (!showIdeasTarget || !effectiveIdeasProject || typeIsObvious) {
       setIssueTypes([]);
       return;
     }
@@ -76,7 +87,7 @@ export function JiraProjectsPanel({
     return () => {
       stale = true;
     };
-  }, [showIdeasTarget, effectiveIdeasProject]);
+  }, [showIdeasTarget, effectiveIdeasProject, typeIsObvious]);
 
   async function saveProjects() {
     setSaving(true);
@@ -154,9 +165,16 @@ export function JiraProjectsPanel({
           <div className="text-sm font-medium">Ideas write-back</div>
           <p className="mb-3 mt-0.5 text-[13px] text-muted">
             New ideas approved in the Ideas screen are created as issues here. Existing Jira
-            ideas are updated in place.
+            ideas are updated in place and keep their own type.
           </p>
+          {projectIsObvious && typeIsObvious && (
+            <p className="text-[13px]">
+              New ideas are created in <span className="font-mono text-primary">{effectiveIdeasProject}</span> as{" "}
+              <span className="font-medium">{obviousType}</span> — the type every issue pulled from it has.
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-3">
+            {!projectIsObvious && (
             <label className="flex items-center gap-2 text-sm">
               <span className="text-muted">Project</span>
               <select
@@ -172,6 +190,8 @@ export function JiraProjectsPanel({
                 ))}
               </select>
             </label>
+            )}
+            {!typeIsObvious && (
             <label className="flex items-center gap-2 text-sm">
               <span className="text-muted">Issue type</span>
               <select
@@ -182,7 +202,7 @@ export function JiraProjectsPanel({
               >
                 {/* Keep the saved value selectable even before types load. */}
                 {!issueTypes.includes(ideasIssueType) && (
-                  <option value={ideasIssueType}>{ideasIssueType}</option>
+                  <option value={ideasIssueType}>{ideasIssueType || "Choose…"}</option>
                 )}
                 {issueTypes.map((t) => (
                   <option key={t} value={t}>
@@ -191,6 +211,7 @@ export function JiraProjectsPanel({
                 ))}
               </select>
             </label>
+            )}
             {issueTypesLoading && <Loader2 size={14} className="animate-spin text-muted" />}
           </div>
         </div>

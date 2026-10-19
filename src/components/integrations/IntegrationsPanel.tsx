@@ -32,6 +32,8 @@ type IntegrationsPanelProps = {
   };
   /** Ideas feature flag for the caller's org — shows the write-back target picker. */
   ideasEnabled?: boolean;
+  /** Issue types seen in the pulled backlog, per project key. */
+  pulledIssueTypes?: Record<string, string[]>;
   /** False = Drive is off for this org (follows the Docs flag): no card, no banners. */
   driveEnabled?: boolean;
 };
@@ -131,6 +133,7 @@ export function IntegrationsPanel({
   driveOauthReady,
   banners,
   ideasEnabled = false,
+  pulledIssueTypes = {},
   driveEnabled = true,
 }: IntegrationsPanelProps) {
   const [jiraExpanded, setJiraExpanded] = useState(Boolean(jiraStatus?.connected));
@@ -176,9 +179,10 @@ export function IntegrationsPanel({
           <JiraProjectsPanel
             initialProjectKeys={jiraStatus.projectKeys ?? []}
             siteUrl={jiraStatus.siteUrl}
-            showIdeasTarget={false /* Story only for now (Daniel 2026-10-19); rebuilt when a customer needs it */}
+            showIdeasTarget={ideasEnabled}
             initialIdeasProjectKey={jiraStatus.ideasProjectKey ?? null}
-            initialIdeasIssueType={jiraStatus.ideasIssueType ?? "Story"}
+            initialIdeasIssueType={jiraStatus.ideasIssueType ?? ""}
+            pulledIssueTypes={pulledIssueTypes}
           />
         )}
       </IntegrationRow>
