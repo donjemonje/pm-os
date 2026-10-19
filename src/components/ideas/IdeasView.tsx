@@ -541,8 +541,9 @@ export function IdeasView({
     });
     if (!ok) return;
     setEdit(null);
-    // Keep the edited idea selected so the saved reassignment stays visible.
-    setSelectedFinalId(edit.ideaId);
+    // Nothing stays highlighted after a save (Daniel, 2026-10-19): the board
+    // returns to its plain state, the saved sources speak for themselves.
+    setSelectedFinalId(null);
     setNote("");
   };
 
