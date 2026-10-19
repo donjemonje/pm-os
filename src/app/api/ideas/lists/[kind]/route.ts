@@ -36,11 +36,11 @@ interface ListOps {
     color: string,
     aliases?: string[]
   ): Promise<unknown>;
-  /** `color` undefined = unchanged; `aliases` undefined = unchanged (product lines only). */
+  /** `description`, `color`, `aliases` undefined = unchanged. */
   update(
     id: string,
     name: string,
-    description: string,
+    description: string | undefined,
     color?: string,
     aliases?: string[]
   ): Promise<unknown>;
@@ -91,7 +91,12 @@ const KINDS: Record<string, ListOps> = {
     update: (id, name, description, color, aliases) =>
       db.productLine.update({
         where: { id },
-        data: { name, description, ...(color ? { color } : {}), ...(aliases ? { aliases } : {}) },
+        data: {
+          name,
+          ...(description !== undefined ? { description } : {}),
+          ...(color ? { color } : {}),
+          ...(aliases ? { aliases } : {}),
+        },
       }),
     setColor: (id, color) => db.productLine.update({ where: { id }, data: { color } }),
     remove: async (workspaceId, id) =>
@@ -120,7 +125,12 @@ const KINDS: Record<string, ListOps> = {
     update: (id, name, description, color, aliases) =>
       db.customer.update({
         where: { id },
-        data: { name, description, ...(color ? { color } : {}), ...(aliases ? { aliases } : {}) },
+        data: {
+          name,
+          ...(description !== undefined ? { description } : {}),
+          ...(color ? { color } : {}),
+          ...(aliases ? { aliases } : {}),
+        },
       }),
     setColor: (id, color) => db.customer.update({ where: { id }, data: { color } }),
     remove: async (workspaceId, id) =>
@@ -146,7 +156,10 @@ const KINDS: Record<string, ListOps> = {
     create: (workspaceId, name, description) =>
       db.platform.create({ data: { workspaceId, name, description } }),
     update: (id, name, description) =>
-      db.platform.update({ where: { id }, data: { name, description } }),
+      db.platform.update({
+        where: { id },
+        data: { name, ...(description !== undefined ? { description } : {}) },
+      }),
     setColor: async () => undefined,
     remove: async (workspaceId, id) =>
       (await db.platform.deleteMany({ where: { id, workspaceId } })).count,
@@ -365,7 +378,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   await ops.update(
     id,
     name,
-    cleanDescription(body.description),
+    body.description === undefined ? undefined : cleanDescription(body.description),
     isChipColorId(body.color) ? body.color : undefined,
     kind === "product-lines" || kind === "customers" ? cleanAliases(body.aliases, name) : undefined,
   );

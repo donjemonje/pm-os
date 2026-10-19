@@ -42,7 +42,8 @@ export function SettingsListPanel({
   /** When set, near-duplicate rows get a Merge action (customers). */
   mergeEndpoint?: string;
   namePlaceholder: string;
-  descriptionPlaceholder: string;
+  /** Omit to drop the description field (customers: aliases carry what people put there). */
+  descriptionPlaceholder?: string;
   /** When set, the add/edit forms take comma-separated aliases (customers). */
   aliasesPlaceholder?: string;
   emptyLabel: string;
@@ -88,7 +89,13 @@ export function SettingsListPanel({
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    if (await call("POST", { name, description, ...(aliasesPlaceholder ? { aliases } : {}) })) {
+    if (
+      await call("POST", {
+        name,
+        ...(descriptionPlaceholder ? { description } : {}),
+        ...(aliasesPlaceholder ? { aliases } : {}),
+      })
+    ) {
       setAliases("");
       setName("");
       setDescription("");
@@ -108,7 +115,7 @@ export function SettingsListPanel({
       await call("PATCH", {
         id,
         name: editName,
-        description: editDescription,
+        ...(descriptionPlaceholder ? { description: editDescription } : {}),
         ...(aliasesPlaceholder ? { aliases: editAliases } : {}),
       })
     ) {
@@ -189,14 +196,16 @@ export function SettingsListPanel({
             disabled={busy}
           />
         )}
-        <input
-          type="text"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={descriptionPlaceholder}
-          className={INPUT_CLASS}
-          disabled={busy}
-        />
+        {descriptionPlaceholder && (
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={descriptionPlaceholder}
+            className={INPUT_CLASS}
+            disabled={busy}
+          />
+        )}
         <button
           type="submit"
           disabled={busy || !name.trim()}
@@ -242,15 +251,17 @@ export function SettingsListPanel({
                       disabled={busy}
                     />
                   )}
-                  <input
-                    type="text"
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    onKeyDown={onEditKeyDown(item.id)}
-                    placeholder={descriptionPlaceholder}
-                    className={INPUT_CLASS}
-                    disabled={busy}
-                  />
+                  {descriptionPlaceholder && (
+                    <input
+                      type="text"
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      onKeyDown={onEditKeyDown(item.id)}
+                      placeholder={descriptionPlaceholder}
+                      className={INPUT_CLASS}
+                      disabled={busy}
+                    />
+                  )}
                   <button
                     onClick={() => onSaveEdit(item.id)}
                     disabled={busy || !editName.trim()}
@@ -289,7 +300,7 @@ export function SettingsListPanel({
                         </span>
                       )}
                     </div>
-                    {item.description && (
+                    {item.description && (descriptionPlaceholder || item.builtIn) && (
                       <div className="mt-0.5 text-sm text-muted">{item.description}</div>
                     )}
                     {(item.aliases ?? []).length > 0 && (
