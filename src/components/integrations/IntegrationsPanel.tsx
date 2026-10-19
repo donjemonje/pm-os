@@ -148,7 +148,9 @@ function IntegrationRow({
         </div>
       </div>
 
-      {flat && children && <div className="px-5 pb-4">{children}</div>}
+      {/* `children` is an array even when every item is false — gate on the
+          connection so a not-connected card has no empty padded footer. */}
+      {flat && connected && children && <div className="px-5 pb-4">{children}</div>}
       {!flat && expanded && children && (
         <div className="border-t border-border px-5 py-4">{children}</div>
       )}
