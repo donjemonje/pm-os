@@ -15,7 +15,9 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
-  ExternalLink,, Undo2 } from "lucide-react";
+  ExternalLink,
+  Undo2,
+} from "lucide-react";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
