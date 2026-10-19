@@ -1187,32 +1187,50 @@ export function IdeasView({
                   {/* Approve all while anything is pending; Undo while anything is
                       approved — both when the batch is mixed (e.g. ideas skipped for
                       an open suggestion), so an approve is always reversible. */}
-                  {page === "final" && reviewed > 0 && (
-                    <span title={`${reviewed} approved — back to pending`}>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setNote("");
-                          void callMutate({ type: "approveAll", revert: true });
-                        }}
-                      >
-                        <Undo2 size={13} strokeWidth={2.25} />
-                        Undo approve all
-                      </Button>
-                    </span>
-                  )}
-                  {page === "final" && pending > 0 && (
-                    <span title={`${pending} awaiting review`}>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setNote("");
-                          void callMutate({ type: "approveAll", revert: false });
-                        }}
-                      >
-                        <CheckCheck size={13} strokeWidth={2.25} />
-                        Approve all
-                      </Button>
+                  {page === "final" && (pending > 0 || reviewed > 0) && (
+                    <span className="inline-flex items-center gap-1">
+                      {pending > 0 ? (
+                        <span title={`${pending} awaiting review`}>
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setNote("");
+                              void callMutate({ type: "approveAll", revert: false });
+                            }}
+                          >
+                            <CheckCheck size={13} strokeWidth={2.25} />
+                            Approve all
+                          </Button>
+                        </span>
+                      ) : (
+                        <span title="Every idea is approved — back to pending">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setNote("");
+                              void callMutate({ type: "approveAll", revert: true });
+                            }}
+                          >
+                            <Undo2 size={13} strokeWidth={2.25} />
+                            Undo approve all
+                          </Button>
+                        </span>
+                      )}
+                      {/* Mixed batch: a compact undo next to Approve all, no second line. */}
+                      {pending > 0 && reviewed > 0 && (
+                        <button
+                          type="button"
+                          title={`Undo: ${reviewed} approved back to pending`}
+                          aria-label="Undo approve all"
+                          onClick={() => {
+                            setNote("");
+                            void callMutate({ type: "approveAll", revert: true });
+                          }}
+                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-control border border-border bg-[var(--app-glass)] text-fg-2 shadow-sm hover:border-primary/60 hover:bg-white"
+                        >
+                          <Undo2 size={13} strokeWidth={2.25} />
+                        </button>
+                      )}
                     </span>
                   )}
                 </div>
