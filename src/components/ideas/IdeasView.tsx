@@ -990,10 +990,6 @@ export function IdeasView({
                 Clear import
               </Button>
             )}
-            <Button onClick={() => setNewIdeaOpen(true)} disabled={importing}>
-              <Plus size={13} />
-              New idea
-            </Button>
             <Button onClick={() => fileRef.current?.click()} disabled={importing}>
               <Upload size={13} />
               {importing ? "Importing…" : "Upload Zendesk CSV"}
@@ -1234,6 +1230,13 @@ export function IdeasView({
                       <Layers size={13} className="text-primary" />
                       Grouped by <b className="font-semibold text-fg-2">Product line</b>
                     </span>
+                  )}
+                  {/* A PM writes an idea from scratch — next to the review controls. */}
+                  {page === "final" && (
+                    <Button size="sm" onClick={() => setNewIdeaOpen(true)} disabled={importing}>
+                      <Plus size={13} strokeWidth={2.25} />
+                      New idea
+                    </Button>
                   )}
                   {/* Approve all while anything is pending; Undo while anything is
                       approved — both when the batch is mixed (e.g. ideas skipped for
