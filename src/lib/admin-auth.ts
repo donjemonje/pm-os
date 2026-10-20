@@ -20,6 +20,16 @@ export function isPmosAdmin(user: Pick<AuthUser, "role"> | null): boolean {
   return user?.role === "PMOS_ADMIN";
 }
 
+/**
+ * May change the settings of their own organization (Settings → Ideas →
+ * Product Lines). CUSTOMER_ADMIN is a customer-side role: everything a USER
+ * has plus these settings, and nothing in /admin — isPmosAdmin() stays the
+ * only gate there.
+ */
+export function canManageOrgSettings(user: Pick<AuthUser, "role"> | null): boolean {
+  return user?.role === "PMOS_ADMIN" || user?.role === "CUSTOMER_ADMIN";
+}
+
 /** Current user when they are a pmos-admin, else null. */
 export async function getCurrentAdmin(): Promise<AuthUser | null> {
   const user = await getCurrentUser();

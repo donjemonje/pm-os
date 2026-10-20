@@ -1,5 +1,7 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { getAdminOrg } from "@/lib/admin-org";
+import { envFeatureDefault, resolveFeature } from "@/lib/feature-flags";
 import {
   CATALOG_PROMPT_VERSION,
   CATALOG_SYSTEM_PROMPT,
@@ -20,15 +22,19 @@ import { IdeasOutputConfig } from "./IdeasOutputConfig";
 
 export default async function AdminIdeasPage() {
   const admin = await requireAdminPage("/admin/ideas");
+  const org = await getAdminOrg(admin.organizationId);
 
   const organizations = await db.organization.findMany({
+    where: { id: org.current?.id ?? "" },
     orderBy: { createdAt: "asc" },
     include: {
       workspace: {
         select: {
           id: true,
           ideasConfig: true,
-          jiraConnection: { select: { ideasIssueType: true } },
+          jiraConnection: {
+            select: { id: true, authType: true, connectedByName: true, connectedByEmail: true, apiTokenExpiresAt: true, siteUrl: true },
+          },
         },
       },
     },
@@ -37,10 +43,12 @@ export default async function AdminIdeasPage() {
   return (
     <AdminShell
       user={admin}
+      org={org}
       title="Ideas"
       description="Per-organization Ideas setup in four parts: import stats, Jira (pull, mapping, write-back), Zendesk (CSV import mapping), and the AI stages. Changes apply to the next import or merge."
     >
       <IdeasOutputConfig
+        key={org.current?.id ?? "none"}
         prompts={[
           {
             id: "parse",
@@ -80,9 +88,19 @@ export default async function AdminIdeasPage() {
             name: org.name,
             slug: org.slug,
             config: mergeIdeasJiraConfig(org.workspace?.ideasConfig),
-            // null = no Jira connection yet; the issue-type control is hidden.
-            ideasIssueType:
-              org.workspace?.jiraConnection?.ideasIssueType ?? null,
+            jiraEnabled: resolveFeature(org.features, "jira", envFeatureDefault("jira")),
+            jiraConnected: Boolean(org.workspace?.jiraConnection),
+            jiraConnection: org.workspace?.jiraConnection
+              ? {
+                  authType: org.workspace.jiraConnection.authType,
+                  connectedBy:
+                    org.workspace.jiraConnection.connectedByName ??
+                    org.workspace.jiraConnection.connectedByEmail ??
+                    null,
+                  siteUrl: org.workspace.jiraConnection.siteUrl,
+                  apiTokenExpiresAt: org.workspace.jiraConnection.apiTokenExpiresAt?.toISOString() ?? null,
+                }
+              : null,
           }))}
       />
     </AdminShell>

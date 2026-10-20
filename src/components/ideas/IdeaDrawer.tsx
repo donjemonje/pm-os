@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import {
   Check,
   ChevronDown,
@@ -8,10 +9,13 @@ import {
   ChevronRight,
   ExternalLink,
   Flag,
-  GitMerge,
   Pencil,
   RotateCcw,
   X,
+  Share2,
+  Loader2,
+  Sparkles,
+  Undo2,
 } from "lucide-react";
 import {
   badgeOf,
@@ -23,16 +27,13 @@ import {
   CATALOG_KIND_LABELS,
 } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
+import type { IdeaSyncPreview } from "@/lib/ideas/push";
 import {
   DEFAULT_CSV_MAPPING,
   extractMappedFields,
   type CsvMapping,
 } from "@/lib/ideas/csv-mapping";
-import {
-  chipStyle,
-  CUSTOMER_CHIP_DEFAULT,
-  PRODUCT_CHIP_DEFAULT,
-} from "@/lib/ideas/colors";
+import { chipStyle, CUSTOMER_CHIP_DEFAULT, PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { PmosMark } from "@/components/brand/PmosMark";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
@@ -47,6 +48,7 @@ function colorOf(map: Record<string, string>, name: string): string | undefined 
   return undefined;
 }
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
+import { URL_RE } from "@/lib/ideas/editor-markdown";
 
 type SourceSel = { kind: "zen" | "jira"; key: string };
 
@@ -92,12 +94,27 @@ interface IdeaDrawerProps {
     platforms: string[];
     addedCustomers: string[];
     removeCustomers: string[];
-  }) => void;
+  }) => Promise<boolean> | void;
   onMerge?: () => void;
+  /** Sources changed: rewrite the idea from its current sources (PMOS AI, one call). */
+  onRewrite?: () => Promise<boolean>;
+  /** Sources changed: keep the text as written. */
+  onKeepText?: () => Promise<boolean>;
+  /** A ticket with no live idea: PMOS AI reads it alone and creates one (or parks it). */
+  onCreateIdeaFromTicket?: (ticketKey: string) => Promise<boolean>;
+  /** "Changes to sync": the sync's own per-field diff for this idea, live
+   *  against its Jira issue — "loading" while it is fetched, null when the
+   *  idea has no issue (New) or Jira is off. */
+  syncPreview?: IdeaSyncPreview | "loading" | null;
 }
 
 const MONO_LABEL =
   "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
+
+// The WYSIWYG Details editor (Tiptap) is loaded only when a PM clicks Edit —
+// the Ideas page itself never pays for it.
+const IdeaDetailsEditor = LazyIdeaDetailsEditor;
+const loadEditor = () => import("@/components/ideas/IdeaDetailsEditor");
 
 const ZEN_TAG = { background: "#e6eaf2", color: "#4a5b74" };
 const JIRA_TAG = { background: "rgba(59,124,246,.15)", color: "#2a5fd0" };
@@ -123,6 +140,10 @@ export function IdeaDrawer({
   onUndoPush,
   onSave,
   onMerge,
+  onRewrite,
+  onKeepText,
+  onCreateIdeaFromTicket,
+  syncPreview = null,
 }: IdeaDrawerProps) {
   // Opens at half the window (sidebar included); the PM can still drag it
   // between 380px and 90% of the window.
@@ -131,7 +152,71 @@ export function IdeaDrawer({
     return Math.max(380, Math.round(window.innerWidth / 2));
   });
   const [srcSel, setSrcSel] = useState<SourceSel | null>(initialSource ?? null);
-  const [editMode, setEditMode] = useState(false);
+
+  /** Which part is being edited — each on its own: the title (Enter saves),
+   *  the details text (⌘↵ saves), or the tags (every change saves). null =
+   *  viewing. Esc leaves whichever is open. */
+  const [editSection, setEditSection] = useState<null | "title" | "details" | "tags">(null);
+  const editMode = editSection !== null;
+  // Esc closes the drawer (standing rule: Esc = cancel). Window-level so it
+  // works wherever focus sits; the drawer is the topmost layer while open.
+  const [customerListOpen, setCustomerListOpen] = useState(false);
+  const [rewriting, setRewriting] = useState(false);
+  /** Product-line multi-select dropdown (tags edit); closes on outside click. */
+  const [productMenuOpen, setProductMenuOpen] = useState(false);
+  const productMenuRef = useRef<HTMLDivElement>(null);
+  const tagsRowRef = useRef<HTMLDivElement>(null);
+  /** Latest saveTags for the window listener (declared later in the component). */
+  const saveTagsRef = useRef<(() => Promise<void>) | null>(null);
+  useEffect(() => {
+    if (!productMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (productMenuRef.current && !productMenuRef.current.contains(e.target as Node))
+        setProductMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [productMenuOpen]);
+  /** True once the editor chunk is in memory; until then an edit shows the
+   *  text read-only rather than an empty box (first open only). */
+  const [editorReady, setEditorReady] = useState(false);
+  useEffect(() => {
+    let stale = false;
+    loadEditor().then(() => {
+      if (!stale) setEditorReady(true);
+    });
+    return () => {
+      stale = true;
+    };
+  }, []);
+
+  // Esc peels one layer per press, innermost first, wherever focus sits:
+  // open menu → tags/text edit → the drawer. Element handlers that take Esc
+  // themselves stop propagation, so this sees only what nobody else took.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (productMenuOpen) setProductMenuOpen(false);
+        else if (customerListOpen) setCustomerListOpen(false);
+        else if (editSection !== null) setEditSection(null);
+        else onClose();
+        return;
+      }
+      // Enter = ✓, the mirror of Esc = ✕: saves the tag draft from wherever
+      // focus sits (after clicking the pencil or a chip, focus is on nothing
+      // inside the row). Inputs inside the editor row handle Enter themselves
+      // and the row's own handler covers everything within it.
+      if (e.key === "Enter" && editSection === "tags" && !productMenuOpen) {
+        const target = e.target as HTMLElement | null;
+        if (tagsRowRef.current && target && tagsRowRef.current.contains(target)) return;
+        e.preventDefault();
+        void saveTagsRef.current?.();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, editSection, productMenuOpen, customerListOpen]);
   const [editTitle, setEditTitle] = useState("");
   const [editManual, setEditManual] = useState("");
   const [editDetails, setEditDetails] = useState("");
@@ -153,24 +238,30 @@ export function IdeaDrawer({
   const score = idea ? scoreOf(idea) : null;
   const votes = idea ? votesLabel(idea) : null;
 
-  const startEdit = () => {
+  /** `detailsText` seeds the text editor with something other than the
+   *  current text — the "Text updated" undo opens it on the previous text;
+   *  nothing is saved until the PM hits Save (⌘Z inside the editor undoes the undo). */
+  const startEdit = (section: "title" | "details" | "tags" = "details", detailsText?: string) => {
     if (!idea) return;
     setEditTitle(idea.title);
     setEditManual(idea.manual != null ? String(idea.manual) : "");
-    setEditDetails(idea.details);
+    setEditDetails(detailsText ?? idea.details);
     setEditProducts([...idea.products]);
     setEditPlatforms([...(idea.platforms ?? [])]);
     setEditCustomers([...(idea.customers ?? [])]);
     setEditAdded([...(idea.addedCustomers ?? [])]);
     setEditRemoved([]);
     setNewCustomer("");
-    setEditMode(true);
+    setCustomerListOpen(false);
+    setEditSection(section);
   };
-  const saveEdit = () => {
+  const saveEdit = async () => {
+    if (saving) return;
     if (!idea) return;
     const raw = editManual.trim();
     const parsed = raw === "" ? null : parseInt(raw, 10);
-    onSave?.({
+    setSaving(true);
+    const ok = await onSave?.({
       title: editTitle.trim() || idea.title,
       details: editDetails,
       manual: parsed != null && Number.isNaN(parsed) ? idea.manual : parsed,
@@ -179,11 +270,71 @@ export function IdeaDrawer({
       addedCustomers: editAdded,
       removeCustomers: editRemoved,
     });
-    setEditMode(false);
+    setSaving(false);
+    if (ok !== false) setEditSection(null);
+  };
+  const cancelEdit = () => setEditSection(null);
+  // Keyboard for the whole edit (title, score, customers, Details editor):
+  // Esc cancels the edit and must not also close the drawer; ⌘↵ saves. Inputs
+  // that handle these keys themselves (the editor's link bar) stop propagation.
+  // Esc acts on the innermost thing that has focus: the customer typeahead
+  // list closes itself (and stops the event), then this leaves the edit —
+  // the tag draft is discarded, the text edit is cancelled — and
+  // only when nothing is being edited does Esc close the drawer (window
+  // listener above). ⌘↵ saves the text edit.
+  const onEditKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!editMode) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelEdit();
+    } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && editSection === "details") {
+      e.preventDefault();
+      saveEdit();
+    } else if (e.key === "Enter" && editSection === "tags") {
+      // Enter = save the tag draft; the customer box swallows Enter itself
+      // while it holds text to add.
+      e.preventDefault();
+      saveTags();
+    }
   };
   const sameName = (a: string, b: string) => a.toLowerCase() === b.trim().toLowerCase();
   const toggleIn = (list: string[], name: string) =>
     list.some((x) => sameName(x, name)) ? list.filter((x) => !sameName(x, name)) : [...list, name];
+  /** Tag edits are a draft (Daniel, 2026-10-20): nothing reaches the server
+   *  — or the "Changes to sync" section — until ✓ / Enter saves the whole
+   *  set in one call; ✕ / Esc discards. A ticket-derived customer removed
+   *  in the draft goes out as a dismissal on save. */
+  /** Saves in flight: the draft stays on screen until the new state has
+   *  arrived, so the old chips never show for a beat (Daniel, 2026-10-20). */
+  const [saving, setSaving] = useState(false);
+  const saveTags = async () => {
+    if (!idea || saving) return;
+    setSaving(true);
+    try {
+      const ok = await onSave?.({
+        title: idea.title,
+        details: idea.details,
+        manual: idea.manual ?? null,
+        products: editProducts,
+        platforms: editPlatforms,
+        addedCustomers: editAdded,
+        removeCustomers: editRemoved,
+      });
+      if (ok !== false) setEditSection(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+  saveTagsRef.current = saveTags;
+  const toggleProduct = (p: string) => {
+    const next = toggleIn(editProducts, p);
+    if (next.length === 0) return; // one product line is mandatory
+    setEditProducts(next);
+  };
+  const togglePlatform = (p: string) => {
+    setEditPlatforms(toggleIn(editPlatforms, p));
+  };
   const addCustomer = (name: string) => {
     const n = name.trim();
     if (!n || editCustomers.some((c) => sameName(c, n))) {
@@ -191,12 +342,7 @@ export function IdeaDrawer({
       return;
     }
     setEditCustomers((l) => [...l, n]);
-    // Re-adding a name removed in this same edit just cancels the removal.
-    if (editRemoved.some((c) => sameName(c, n))) {
-      setEditRemoved((l) => l.filter((c) => !sameName(c, n)));
-    } else {
-      setEditAdded((l) => [...l, n]);
-    }
+    setEditAdded((l) => [...l, n]);
     setNewCustomer("");
   };
   const removeCustomer = (name: string) => {
@@ -204,9 +350,197 @@ export function IdeaDrawer({
     if (editAdded.some((c) => sameName(c, name))) {
       setEditAdded((l) => l.filter((c) => !sameName(c, name)));
     } else {
-      setEditRemoved((l) => [...l, name]);
+      setEditRemoved((l) => (l.some((c) => sameName(c, name)) ? l : [...l, name]));
     }
   };
+
+  /** Inline tag editing on the chips row: product lines toggle, customers
+   *  get an × and the add field sits at the end of the row; the rest of the
+   *  drawer stays as it is (Daniel, 2026-10-19). */
+  const tagsEditor = (
+    <div ref={tagsRowRef} className="flex flex-wrap items-center gap-1.5" onKeyDown={onEditKeyDown}>
+      <div ref={productMenuRef} className="relative flex flex-wrap items-center gap-1.5">
+        {editProducts.map((p) => (
+          <button
+            key={`edit-product-${p}`}
+            type="button"
+            onClick={() => setProductMenuOpen((v) => !v)}
+            title="Click to change product lines"
+            className="rounded-chip border border-transparent px-[7px] py-[2px] font-mono text-[11px] font-semibold ring-1 ring-black/10 hover:ring-primary"
+            style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}
+          >
+            {p} ▾
+          </button>
+        ))}
+        {productMenuOpen && (
+          <ul
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                setProductMenuOpen(false);
+              }
+            }}
+            className="absolute left-0 top-full z-20 mt-1 max-h-64 w-60 overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]"
+          >
+            {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
+              const on = editProducts.some((x) => sameName(x, p));
+              const last = on && editProducts.length === 1;
+              return (
+                <li key={`product-option-${p}`}>
+                  <button
+                    type="button"
+                    onClick={() => toggleProduct(p)}
+                    disabled={last}
+                    aria-pressed={on}
+                    title={last ? "At least one product line stays" : undefined}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border border-[#c9d3e0] bg-white">
+                      {on && <Check size={10} strokeWidth={3} className="text-primary" />}
+                    </span>
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ background: swatchColor(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) }}
+                    />
+                    <span className="truncate">{p}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      {(catalogPlatforms.length > 0 || editPlatforms.length > 0) &&
+        [...new Set([...catalogPlatforms, ...editPlatforms])].map((p) => {
+          const on = editPlatforms.some((x) => sameName(x, p));
+          return (
+            <button
+              key={`edit-platform-${p}`}
+              type="button"
+              onClick={() => togglePlatform(p)}
+              aria-pressed={on}
+              className={
+                on
+                  ? "rounded-chip bg-[rgba(169,140,255,.16)] px-[7px] py-[2px] font-mono text-[11px] font-semibold text-[#6b4bd0] ring-1 ring-black/10"
+                  : "rounded-chip border border-dashed border-[#c9d3e0] px-[7px] py-[2px] font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
+              }
+            >
+              {p}
+            </button>
+          );
+        })}
+      <span aria-hidden className="mx-0.5 h-3 w-px shrink-0 bg-[#dde5ef]" />
+      {editCustomers.map((c) => {
+        const suggested = !customerCatalog.some((k) => sameName(k, c));
+        return (
+          <span
+            key={`edit-customer-${c}`}
+            className={
+              suggested
+                ? "inline-flex items-center gap-1 rounded-chip border border-dashed border-amber-400 bg-amber-50 px-[7px] py-[2px] font-mono text-[11px] font-semibold text-amber-700"
+                : "inline-flex items-center gap-1 rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold"
+            }
+            style={suggested ? undefined : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
+          >
+            {c}
+            <button
+              type="button"
+              title="Remove from this idea"
+              onClick={() => removeCustomer(c)}
+              className="flex rounded-sm p-px opacity-70 hover:bg-black/10 hover:opacity-100"
+            >
+              <X size={11} strokeWidth={3} />
+            </button>
+          </span>
+        );
+      })}
+        {(() => {
+          const q = newCustomer.trim().toLowerCase();
+          const options = customerCatalog
+            .filter((k) => !editCustomers.some((c) => sameName(c, k)))
+            .filter((k) => !q || k.toLowerCase().includes(q))
+            .slice(0, 8);
+          return (
+            <div className="relative">
+              <input
+                type="text"
+                value={newCustomer}
+                onChange={(e) => {
+                  setNewCustomer(e.target.value);
+                  setCustomerListOpen(true);
+                }}
+                onFocus={() => setCustomerListOpen(true)}
+                onClick={() => setCustomerListOpen(true)}
+                onBlur={() => setTimeout(() => setCustomerListOpen(false), 120)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    // Empty box: let Enter bubble — it closes the editor (done).
+                    if (!newCustomer.trim()) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    // Enter takes the first match when the typed text
+                    // is a prefix of it; otherwise the text as typed.
+                    const first = options[0];
+                    addCustomer(
+                      first && q && first.toLowerCase().startsWith(q) ? first : newCustomer,
+                    );
+                    setCustomerListOpen(false);
+                  } else if (e.key === "Escape" && customerListOpen) {
+                    e.stopPropagation();
+                    setCustomerListOpen(false);
+                  }
+                }}
+                placeholder="Add customer…"
+                autoFocus
+                className="min-w-[180px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
+              />
+              {customerListOpen && options.length > 0 && (
+                <ul className="absolute left-0 top-full z-20 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg border border-border bg-white p-1 shadow-[0_8px_24px_rgba(10,22,40,.12)]">
+                  {options.map((k) => (
+                    <li key={k}>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          addCustomer(k);
+                          setCustomerListOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)]"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: swatchColor(colorOf(customerColors, k), CUSTOMER_CHIP_DEFAULT) }}
+                        />
+                        <span className="truncate">{k}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })()}
+      <button
+        type="button"
+        onClick={() => void saveTags()}
+        disabled={saving}
+        title="Save — Enter"
+        aria-label="Save tag changes"
+        className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-[#0f7a47] hover:bg-[rgba(23,178,106,.16)]"
+      >
+        <Check size={14} strokeWidth={2.75} />
+      </button>
+      <button
+        type="button"
+        onClick={cancelEdit}
+        title="Cancel — Esc (discards the tag changes)"
+        aria-label="Cancel tag editing"
+        className="flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+      >
+        <X size={14} strokeWidth={2.5} />
+      </button>
+    </div>
+  );
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -336,6 +670,7 @@ export function IdeaDrawer({
       <div
         className="fixed bottom-0 right-0 top-0 z-[41] flex flex-col border-l border-border bg-white shadow-[var(--app-shadow-drawer)]"
         style={{ width }}
+        onKeyDown={onEditKeyDown}
       >
         {/* Status edge: the idea's batch color (accent for sources and In Jira). */}
         <div
@@ -426,25 +761,50 @@ export function IdeaDrawer({
             </button>
           </div>
 
-          {editMode && !viewingSource ? (
+          {editSection === "title" && !viewingSource ? (
             <input
               type="text"
               value={editTitle}
+              autoFocus
               onChange={(e) => setEditTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  saveEdit();
+                }
+              }}
+              onBlur={() => {
+                // Click-away keeps a real change; an untouched title just closes.
+                if (editSection !== "title") return;
+                if (idea && editTitle.trim() && editTitle.trim() !== idea.title) saveEdit();
+                else setEditSection(null);
+              }}
+              title="Enter saves · Esc cancels"
               className="font-title w-full rounded-control border border-primary px-3 py-2 text-[17px] font-bold shadow-[0_0_0_2px_var(--app-accent-soft)] outline-none"
             />
           ) : (
-            <h2 className="font-title m-0 text-[19px] font-bold leading-[1.3] text-foreground">
+            <h2
+              className={`font-title m-0 text-[19px] font-bold leading-[1.3] text-foreground ${
+                !viewingSource && idea && !editMode ? "cursor-text rounded-md hover:bg-[rgba(12,25,41,.04)]" : ""
+              }`}
+              title={!viewingSource && idea && !editMode ? "Click to edit the title" : undefined}
+              onClick={() => {
+                if (!viewingSource && idea && !editMode) startEdit("title");
+              }}
+            >
               {ticket ? ticket.subject : jiraSrc ? jiraSrc.title : idea?.title}
             </h2>
           )}
 
+          {!viewingSource && idea && editSection === "tags" && tagsEditor}
           {!viewingSource &&
             idea &&
+            editSection !== "tags" &&
             (idea.products.length > 0 ||
               (idea.platforms ?? []).length > 0 ||
               (idea.customers ?? []).length > 0) && (
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                 {idea.products.map((p) => (
                   <Chip key={p} dot style={chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT)}>
                     {p}
@@ -509,6 +869,18 @@ export function IdeaDrawer({
                   );
                 })}
               </div>
+              {!editMode && (
+                <button
+                  type="button"
+                  onClick={() => startEdit("tags")}
+                  title="Edit product lines and customers"
+                  aria-label="Edit product lines and customers"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
+              </div>
             )}
 
           {/* Dismissed suggestions stay reachable — a dismiss is a review
@@ -546,6 +918,39 @@ export function IdeaDrawer({
               </div>
             )}
 
+          {!viewingSource && idea?.sourcesChanged && (
+            <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-3.5 py-2.5 text-[12.5px] text-[var(--app-warn-fg)]">
+              <Flag size={13} className="shrink-0" />
+              <span className="min-w-0 flex-1">
+                <b className="font-semibold">Sources changed</b> since PMOS AI wrote this idea. Rewrite it
+                from the current sources, or keep the text — then it can be approved.
+              </span>
+              {onRewrite && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={rewriting}
+                  onClick={async () => {
+                    setRewriting(true);
+                    try {
+                      await onRewrite();
+                    } finally {
+                      setRewriting(false);
+                    }
+                  }}
+                >
+                  {rewriting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  {rewriting ? "Rewriting…" : "Rewrite with PMOS AI"}
+                </Button>
+              )}
+              {onKeepText && (
+                <Button size="sm" disabled={rewriting} onClick={() => void onKeepText()}>
+                  Keep text
+                </Button>
+              )}
+            </div>
+          )}
+
           {stats.length > 0 && (
             <div
               className="grid gap-2"
@@ -581,164 +986,115 @@ export function IdeaDrawer({
               customerCatalog={customerCatalog}
               customerColors={customerColors}
               onOpenIdea={onOpenIdea ? (id) => onOpenIdea(id, { source: srcSel }) : undefined}
+              onCreateIdea={onCreateIdeaFromTicket ? () => onCreateIdeaFromTicket(ticket.key) : undefined}
             />
           ) : jiraSrc ? (
             <JiraIssueView src={jiraSrc} productLineLabel={jiraProductLineLabel} />
-          ) : editMode ? (
+          ) : editSection === "details" ? (
             <>
-              {SCORING_ENABLED && (
-              <div className="flex w-[140px] flex-col gap-1.5">
-                <span className={MONO_LABEL}>Manual score</span>
-                <input
-                  type="number"
-                  value={editManual}
-                  onChange={(e) => setEditManual(e.target.value)}
-                  placeholder="—"
-                  className="font-title w-full rounded-lg border border-border px-2.5 py-2 text-sm font-semibold outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
-                />
-                <span className="text-[11px] text-[#9aa8be]">
-                  Overrides the displayed score
-                </span>
-              </div>
-              )}
-              {/* Product lines — catalog names plus "Other"; PMOS's pick is a starting point, not a verdict. */}
-              <div className="flex flex-col gap-1.5">
-                <span className={MONO_LABEL}>Product lines</span>
-                <div className="flex flex-wrap gap-1.5">
-                  {[...new Set([...catalogProducts, "Other", ...editProducts])].map((p) => {
-                    const on = editProducts.some((x) => sameName(x, p));
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => setEditProducts((l) => toggleIn(l, p))}
-                        aria-pressed={on}
-                        className={
-                          on
-                            ? "rounded border border-transparent px-2 py-0.5 font-mono text-[11px] font-medium ring-1 ring-black/10"
-                            : "rounded border border-dashed border-[#c9d3e0] px-2 py-0.5 font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
-                        }
-                        style={on ? chipStyle(colorOf(productColors, p), PRODUCT_CHIP_DEFAULT) : undefined}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              {(catalogPlatforms.length > 0 || editPlatforms.length > 0) && (
-                <div className="flex flex-col gap-1.5">
-                  <span className={MONO_LABEL}>Platforms</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[...new Set([...catalogPlatforms, ...editPlatforms])].map((p) => {
-                      const on = editPlatforms.some((x) => sameName(x, p));
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setEditPlatforms((l) => toggleIn(l, p))}
-                          aria-pressed={on}
-                          className={
-                            on
-                              ? "rounded bg-[rgba(169,140,255,.16)] px-2 py-0.5 font-mono text-[11px] font-medium text-[#6b4bd0] ring-1 ring-black/10"
-                              : "rounded border border-dashed border-[#c9d3e0] px-2 py-0.5 font-mono text-[11px] text-[#7a8aa3] hover:border-primary hover:text-foreground"
-                          }
-                        >
-                          {p}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {/* Customers — any name, from the catalog or typed; removing a ticket-derived one dismisses it (restorable). */}
-              <div className="flex flex-col gap-1.5">
-                <span className={MONO_LABEL}>Customers</span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {editCustomers.map((c) => {
-                    const suggested = !customerCatalog.some((k) => sameName(k, c));
-                    return (
-                      <span
-                        key={`edit-customer-${c}`}
-                        className={
-                          suggested
-                            ? "inline-flex items-center gap-1 rounded border border-dashed border-amber-400 bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-700"
-                            : "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
-                        }
-                        style={suggested ? undefined : chipStyle(colorOf(customerColors, c), CUSTOMER_CHIP_DEFAULT)}
-                      >
-                        {c}
-                        <button
-                          type="button"
-                          title="Remove from this idea"
-                          onClick={() => removeCustomer(c)}
-                          className="flex rounded-sm p-px opacity-70 hover:bg-black/10 hover:opacity-100"
-                        >
-                          <X size={11} strokeWidth={3} />
-                        </button>
-                      </span>
-                    );
-                  })}
-                  <input
-                    type="text"
-                    list="idea-customer-options"
-                    value={newCustomer}
-                    onChange={(e) => setNewCustomer(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addCustomer(newCustomer);
-                      }
-                    }}
-                    placeholder="Add customer…"
-                    className="min-w-[140px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
-                  />
-                  <datalist id="idea-customer-options">
-                    {customerCatalog
-                      .filter((k) => !editCustomers.some((c) => sameName(c, k)))
-                      .map((k) => (
-                        <option key={k} value={k} />
-                      ))}
-                  </datalist>
-                </div>
-                <span className="text-[11px] text-[#9aa8be]">
-                  Enter adds. A name outside the catalog is kept as a suggestion until approved.
-                </span>
-              </div>
+              {editSection === "details" && (
               <div className="flex flex-col gap-1.5">
                 <span className={MONO_LABEL}>Details</span>
-                <textarea
-                  rows={12}
-                  value={editDetails}
-                  onChange={(e) => setEditDetails(e.target.value)}
-                  className="w-full resize-y rounded-lg border border-border px-3 py-2.5 text-[13.5px] leading-relaxed outline-none focus:border-primary focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
-                />
+                {editorReady ? (
+                  <IdeaDetailsEditor
+                    key={idea?.id}
+                    defaultValue={editDetails}
+                    onChange={setEditDetails}
+                  />
+                ) : (
+                  <div className="rounded-lg border border-border px-3 py-2.5 opacity-70">
+                    <UmMarkdown content={editDetails} className="idea-text" />
+                  </div>
+                )}
+                <span className="text-[11px] text-[#9aa8be]">
+                  ⌘B bold · ⌘I italic · ⌘K link · ⌘↵ saves · Esc cancels
+                </span>
               </div>
+              )}
             </>
           ) : idea ? (
             <>
-              {/* What this import did to an Updated idea — the PM shouldn't
-                  have to diff anything by eye. */}
-              {idea.batch === "updated" &&
-                (idea.batchChanges ?? []).length > 0 && (
-                  <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
-                    <div className={`${MONO_LABEL} mb-1.5 text-[#2a5fd0]`}>
-                      Updated this import
-                    </div>
-                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                      {(idea.batchChanges ?? []).map((c, i) => (
-                        <li
-                          key={`${i}-${c}`}
-                          className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
-                        >
-                          <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
-                          {c}
-                        </li>
-                      ))}
-                    </ul>
+              {/* Changes to sync — exactly what Sync to Jira would write to
+                  this issue, field by field, Jira's current value → the
+                  idea's (the sync's own diff, live). Empty = in sync. */}
+              {syncPreview && (
+                <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
+                  <div className={`${MONO_LABEL} mb-1.5 flex items-center gap-1.5 text-[#2a5fd0]`}>
+                    <span>Changes to sync</span>
+                    {syncPreview !== "loading" && syncPreview.jiraKey && (
+                      <>
+                        <span className="text-[#7a8aa3]" title="Compared with the issue as it was at the last import">→</span>
+                        {syncPreview.url ? (
+                          <a href={syncPreview.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                            {syncPreview.jiraKey}
+                          </a>
+                        ) : (
+                          <span>{syncPreview.jiraKey}</span>
+                        )}
+                      </>
+                    )}
+                    {syncPreview === "loading" && <Loader2 size={11} className="ml-auto animate-spin text-[#7a8aa3]" />}
                   </div>
-                )}
-              <div>
+                  {syncPreview === "loading" ? (
+                    <div className="text-[12.5px] text-[#7a8aa3]">Comparing…</div>
+                  ) : syncPreview.blockers.length > 0 ? (
+                    <div className="text-[12.5px] text-[var(--app-warn-fg)]">{syncPreview.blockers[0]}</div>
+                  ) : syncPreview.skipped ? (
+                    <div className="text-[12.5px] text-[var(--app-warn-fg)]">{syncPreview.skipped}</div>
+                  ) : syncPreview.changes.length === 0 ? (
+                    <div className="text-[12.5px] text-[#33445e]">In sync — nothing to write.</div>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {syncPreview.changes.map((c) => {
+                        const isDesc = c.field === "description";
+                        const clip = (v: string) => (v.length > 90 ? `${v.slice(0, 90)}…` : v);
+                        return (
+                          <li
+                            key={c.field}
+                            className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
+                            title={isDesc ? undefined : `${c.label}: ${c.from || "(empty)"} → ${c.to}`}
+                          >
+                            <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
+                            <span className="min-w-0">
+                              <b className="font-semibold">{c.label}</b>
+                              {isDesc ? (
+                                " updated"
+                              ) : (
+                                <>
+                                  : {c.from ? <span className="line-through opacity-70">{clip(c.from)}</span> : "(empty)"}{" "}
+                                  → {clip(c.to)}
+                                </>
+                              )}
+                            </span>
+                            {/* Only the description is undone here (sources on the
+                                Merge board): the editor opens on the previous text;
+                                Save commits it. */}
+                            {isDesc && idea.previousDetails !== undefined && onSave && (
+                              <button
+                                type="button"
+                                onClick={() => startEdit("details", idea.previousDetails)}
+                                title="Undo — opens the editor on the previous description; nothing changes until you save"
+                                aria-label="Undo the description update"
+                                className="ml-1 flex shrink-0 rounded p-0.5 text-[#7a8aa3] hover:bg-white hover:text-[#2a5fd0]"
+                              >
+                                <Undo2 size={11} strokeWidth={2.5} />
+                              </button>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  {syncPreview !== "loading" && syncPreview.warnings.length > 0 && (
+                    <div className="mt-1.5 text-[11.5px] text-[var(--app-warn-fg)]">{syncPreview.warnings[0]}</div>
+                  )}
+                </div>
+              )}
+              <div
+                onClick={() => startEdit("details")}
+                title="Click to edit the text"
+                className="-mx-2 cursor-text rounded-lg px-2 py-1 hover:bg-[rgba(12,25,41,.03)]"
+              >
                 <UmMarkdown
                   content={autolinkBareUrls(idea.details)}
                   className="idea-text"
@@ -746,8 +1102,20 @@ export function IdeaDrawer({
               </div>
               {sourceEntries.length > 0 && (
                 <div>
-                  <div className={`${MONO_LABEL} mb-2`}>
+                  <div className={`${MONO_LABEL} mb-2 flex items-center gap-1.5`}>
+                    <Share2 size={12} strokeWidth={2.25} className="text-primary" />
                     Sources · {sourceEntries.length}
+                    {onMerge && (
+                      <button
+                        type="button"
+                        onClick={onMerge}
+                        title="Edit sources on the Merge board"
+                        aria-label="Edit sources on the Merge board"
+                        className="ml-auto flex h-6 items-center gap-1 rounded-[7px] px-1.5 text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    )}
                   </div>
                   <div className="flex flex-col gap-2">
                     {sourceEntries.map((src) => (
@@ -802,12 +1170,12 @@ export function IdeaDrawer({
         {/* Footer */}
         {!viewingSource && idea && (
           <div className="flex items-center gap-2 border-t border-border bg-[rgba(255,255,255,.6)] px-6 py-3">
-            {editMode ? (
+            {editSection === "details" ? (
               <>
-                <Button variant="primary" glow onClick={saveEdit}>
+                <Button variant="primary" glow onClick={() => void saveEdit()} disabled={saving}>
                   Save changes
                 </Button>
-                <Button onClick={() => setEditMode(false)}>Cancel</Button>
+                <Button onClick={cancelEdit}>Cancel</Button>
               </>
             ) : (
               <>
@@ -815,7 +1183,7 @@ export function IdeaDrawer({
                   (() => {
                     // Unresolved suggested metadata (customers outside the
                     // catalog) blocks approval — same rule the server enforces.
-                    const blocked =
+                    const suggestionsOpen =
                       idea.decision === "pending" &&
                       (idea.customers ?? []).some(
                         (c) =>
@@ -823,6 +1191,7 @@ export function IdeaDrawer({
                             (n) => n.toLowerCase() === c.toLowerCase(),
                           ),
                       );
+                    const blocked = suggestionsOpen || (idea.decision === "pending" && !!idea.sourcesChanged);
                     return (
                       <>
                         <Button
@@ -832,7 +1201,9 @@ export function IdeaDrawer({
                           disabled={blocked}
                           title={
                             blocked
-                              ? "Approve or dismiss the suggested customers first"
+                              ? idea.sourcesChanged
+                                ? "Sources changed — rewrite the idea or keep the text first"
+                                : "Approve or dismiss the suggested customers first"
                               : idea.decision === "pending"
                                 ? undefined
                                 : "Click to mark unreviewed"
@@ -857,24 +1228,15 @@ export function IdeaDrawer({
                     Undo sync
                   </Button>
                 )}
-                {onMerge && (
-                  <Button onClick={onMerge}>
-                    <GitMerge size={13} strokeWidth={2.25} />
-                    Merge
-                  </Button>
-                )}
-                <Button onClick={startEdit}>
-                  <Pencil size={13} />
-                  Edit
-                </Button>
                 {needsApproval(idea) &&
                   idea.decision === "pending" &&
-                  (idea.customers ?? []).some(
-                    (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase()),
-                  ) && (
+                  (idea.sourcesChanged ||
+                    (idea.customers ?? []).some(
+                      (c) => !customerCatalog.some((n) => n.toLowerCase() === c.toLowerCase()),
+                    )) && (
                     <span className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] text-[var(--app-warn-fg)]">
                       <Flag size={12} />
-                      Resolve suggested customers first
+                      {idea.sourcesChanged ? "Rewrite or keep the text first" : "Resolve suggested customers first"}
                     </span>
                   )}
               </>
@@ -914,7 +1276,6 @@ function RawChip({ label, value }: { label: string; value: string }) {
 }
 
 /** One labelled value on the ticket's header line: "Customer  Acme". */
-const URL_RE = /(https?:\/\/[^\s<>()\[\]"']+[^\s<>()\[\]"'.,;:!?])/g;
 
 /**
  * Markdown with every bare http(s) URL wrapped as a CommonMark autolink
@@ -992,6 +1353,7 @@ function JiraIssueView({
     [productLineLabel, src.products.join(", ") || undefined],
     ["Reporter", src.reporter],
     ["Assignee", src.assignee],
+    ["Customers (read from text)", src.customers?.join(", ") || undefined],
     ["Created", created ?? undefined],
     ["Link", src.url],
   ];
@@ -1054,10 +1416,13 @@ function TicketView({
   customerCatalog,
   customerColors,
   onOpenIdea,
+  onCreateIdea,
 }: {
   ticket: ZendeskTicket;
   csvMapping: CsvMapping;
   ideasById?: Map<string, Idea>;
+  /** Shown when the ticket backs no live idea. */
+  onCreateIdea?: () => Promise<boolean>;
   customerCatalog: string[];
   customerColors: Record<string, string>;
   onOpenIdea?: (id: string) => void;
@@ -1151,6 +1516,9 @@ function TicketView({
           </div>
         ) : (
           <div className="text-[13px] text-muted">Not evaluated yet.</div>
+        )}
+        {onCreateIdea && !notes.some((n) => ideasById?.get(n.ideaId)) && (
+          <CreateIdeaButton onCreate={onCreateIdea} parked={!!ticket.catalog && ticket.catalog.kind !== "fr"} />
         )}
         {(ticket.affectedCustomers ?? []).length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
@@ -1260,5 +1628,35 @@ function TicketView({
         </div>
       )}
     </>
+  );
+}
+
+/** "Create idea with PMOS AI" for a ticket that backs no live idea. */
+function CreateIdeaButton({ onCreate, parked }: { onCreate: () => Promise<boolean>; parked: boolean }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await onCreate();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+        {busy ? "Reading the ticket…" : "Create idea with PMOS AI"}
+      </Button>
+      <span className="text-[11.5px] text-muted">
+        {parked
+          ? "PMOS AI reads the ticket again on its own; a feature request becomes a New idea, anything else stays parked."
+          : "This ticket backs no idea. PMOS AI reads it on its own and creates one."}
+      </span>
+    </div>
   );
 }

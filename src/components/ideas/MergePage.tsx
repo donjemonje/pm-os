@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Sparkles, X } from "lucide-react";
+import { Check, Brain, X, Flag } from "lucide-react";
 import { JiraMark, ZendeskMark } from "@/components/brand/SourceIcons";
 import { ApproveMark } from "@/components/ui/ApproveMark";
 import { Chip } from "@/components/ui/Chip";
@@ -67,6 +67,8 @@ interface SourceRow {
   id: string;
   text: string;
   checked: boolean;
+  /** In edit mode: attached in this edit (not saved yet) / detached in this edit. */
+  delta?: "added" | "removed";
   selected: boolean;
   orphan: boolean;
   owners: number;
@@ -113,8 +115,10 @@ export function MergePage({
       )
         return false;
     }
+    // While editing sources the search box targets the Zendesk / Jira rows
+    // (the PM is hunting for a ticket to attach); the ideas stay as they are.
     const q = query.trim().toLowerCase();
-    if (q && !i.title.toLowerCase().includes(q)) return false;
+    if (!edit && q && !i.title.toLowerCase().includes(q)) return false;
     if (
       productFilter.length > 0 &&
       !i.products.some((p) => productFilter.includes(p))
@@ -193,6 +197,8 @@ export function MergePage({
   ): SourceRow[] => {
     const refs = (i: Idea) => (kind === "zen" ? i.zen : i.jira);
     const editRefs = edit ? (kind === "zen" ? edit.zen : edit.jira) : null;
+    const savedRefs = editedIdea ? refs(editedIdea) : null;
+    const q = edit ? query.trim().toLowerCase() : "";
     const ownersOf = (key: string) =>
       ideas.filter((i) => refs(i).includes(key));
     const rows: SourceRow[] = [];
@@ -203,6 +209,20 @@ export function MergePage({
       const src = all.find((s) => s.key === key);
       if (!src) return;
       const owners = ownersOf(key);
+      const checked = editRefs != null && editRefs.includes(key);
+      const wasAttached = savedRefs != null && savedRefs.includes(key);
+      const delta: SourceRow["delta"] =
+        editRefs == null ? undefined : checked && !wasAttached ? "added" : !checked && wasAttached ? "removed" : undefined;
+      // Edit-mode search: match id or title; rows touched in this edit and
+      // rows attached to the idea always stay visible.
+      if (
+        q &&
+        !checked &&
+        !delta &&
+        !src.id.toLowerCase().includes(q) &&
+        !src.title.toLowerCase().includes(q)
+      )
+        return;
       // Sources backing only unchanged ideas are hidden with them; the
       // Unchanged chip and edit mode (attach-anything) show the full pool.
       if (
@@ -217,7 +237,8 @@ export function MergePage({
         key,
         id: src.id,
         text: src.title,
-        checked: editRefs != null && editRefs.includes(key),
+        checked,
+        delta,
         selected: owners.some((o) => o.id === selId),
         orphan: owners.length === 0,
         owners: owners.length,
@@ -254,7 +275,7 @@ export function MergePage({
     children: React.ReactNode,
   ) => (
     <div className="glass overflow-hidden rounded-card">
-      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-mono text-[10px] font-semibold tracking-[0.06em] text-fg-3">
+      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 font-mono text-[11px] font-semibold tracking-[0.06em] text-fg-3">
         <span className="inline-flex text-primary">{icon}</span>
         <span>{label}</span>
         <span className="ml-auto rounded-full bg-[rgba(12,25,41,.06)] px-[7px] py-px tracking-normal">
@@ -355,6 +376,16 @@ export function MergePage({
                   {row.text}
                 </span>
               </div>
+              {row.delta === "added" && (
+                <span className="shrink-0 rounded-full border border-[#17b26a] bg-[rgba(23,178,106,.16)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[#0f7a47]">
+                  + added
+                </span>
+              )}
+              {row.delta === "removed" && (
+                <span className="shrink-0 rounded-full border border-[#e2445c] bg-[rgba(226,68,92,.12)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[#a32a2a]">
+                  − removed
+                </span>
+              )}
               {row.parkLabel && tag(row.parkLabel)}
               {row.owners > 1 &&
                 tag(
@@ -398,9 +429,9 @@ export function MergePage({
 
       {/* Final column */}
       {columnFrame(
-        "Final",
+        "PM-OS Ideas",
         finals.length,
-        <Sparkles size={13} strokeWidth={2.25} />,
+        <Brain size={13} strokeWidth={2.25} fill="currentColor" fillOpacity={0.3} />,
         <>
           {finals.map(({ idea, count }) => {
             const gone = count === 0;
@@ -413,7 +444,8 @@ export function MergePage({
             return (
               <div
                 key={idea.id}
-                onClick={() => onStartEdit(idea.id)}
+                onClick={() => onOpenIdea(idea.id)}
+                title="Open idea"
                 className={`${ROW} hover:bg-white/60`}
                 style={{
                   ...(sel && !gone ? SELECTED_ROW : {}),
@@ -453,6 +485,14 @@ export function MergePage({
                 >
                   {idea.title}
                 </span>
+                {idea.sourcesChanged && !gone && (
+                  <span
+                    title="Sources changed by a PM — rewrite or keep the text before approving"
+                    className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[var(--app-warn-fg)]"
+                  >
+                    <Flag size={9} /> sources changed
+                  </span>
+                )}
                 {idea.batch === "unchanged" && !gone && (
                   <span
                     title="Nothing touched this idea in the last import"
@@ -472,9 +512,9 @@ export function MergePage({
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onOpenIdea(idea.id);
+                    onStartEdit(idea.id);
                   }}
-                  title="Open idea"
+                  title="Edit sources"
                   className="shrink-0 whitespace-nowrap rounded-full px-[7px] py-[2px] font-mono text-[10px] font-semibold hover:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                   style={{
                     background: gone

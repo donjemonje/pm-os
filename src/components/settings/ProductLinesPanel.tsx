@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronDown, ChevronUp, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, GripVertical, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { cn } from "@/lib/utils";
 import type { SettingsListItem } from "./SettingsListPanel";
+import { UsageCounts } from "./UsageCounts";
 import { PRODUCT_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { ColorSwatch } from "./ColorSwatch";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
@@ -14,17 +15,6 @@ const MAX_DESCRIPTION = 2000;
 
 const INPUT_CLASS =
   "w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)]";
-
-type ViewMode = "formatted" | "markdown";
-
-function viewChip(active: boolean): string {
-  return cn(
-    "rounded-full border px-3 py-1 text-[12px] font-medium transition-colors",
-    active
-      ? "border-transparent bg-primary text-white"
-      : "border-border bg-white text-[#3f506b] hover:border-primary/55"
-  );
-}
 
 /**
  * Product Lines — the AI's ground truth for classifying ideas. Everyone can
@@ -41,7 +31,9 @@ export function ProductLinesPanel({
 }) {
   const { confirm } = useConfirm();
   const [items, setItems] = useState(initialItems);
-  const [view, setView] = useState<ViewMode>("formatted");
+  /** Row being dragged (drag & drop reorder) and the row it would replace. */
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -64,7 +56,13 @@ export function ProductLinesPanel({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
-      setItems(data.items);
+      // The API returns rows without usage counts — keep the ones the page computed.
+      setItems((prev) =>
+        (data.items as SettingsListItem[]).map((it) => ({
+          ...it,
+          usage: prev.find((p) => p.id === it.id)?.usage,
+        })),
+      );
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
@@ -105,14 +103,18 @@ export function ProductLinesPanel({
     }
   }
 
-  /** Swap with the neighbor and persist the full order (position = index). */
-  async function move(id: string, dir: -1 | 1) {
-    const idx = items.findIndex((i) => i.id === id);
-    const j = idx + dir;
-    if (idx < 0 || j < 0 || j >= items.length) return;
-    const order = items.map((i) => i.id);
-    [order[idx], order[j]] = [order[j], order[idx]];
-    await call("PUT", { order });
+  /** Drag & drop: drop the dragged row where the pointer is, persist the full order. */
+  async function dropOn(targetId: string) {
+    const from = items.findIndex((i) => i.id === dragId);
+    const to = items.findIndex((i) => i.id === targetId);
+    setDragId(null);
+    setOverId(null);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setItems(next);
+    await call("PUT", { order: next.map((i) => i.id) });
   }
 
   async function onDelete(id: string, itemName: string) {
@@ -139,7 +141,7 @@ export function ProductLinesPanel({
     <input
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      placeholder="Aliases, comma-separated — e.g. the Jira option name: Platform General, Platform- General"
+      placeholder="Aliases, comma-separated (optional)"
       title="Other names that mean this product line. Imports map any of them here; the sync to Jira writes whichever one is a Jira option."
       className={`${INPUT_CLASS} text-[13px]`}
     />
@@ -162,28 +164,26 @@ export function ProductLinesPanel({
   );
 
   return (
-    <section className="max-w-3xl">
+    <section>
       <div className="mb-1 flex items-end justify-between gap-4">
         <h2 className="font-title m-0 text-[15px] font-semibold">Product Lines</h2>
         <div className="flex items-center gap-1.5">
-          <button onClick={() => setView("formatted")} className={viewChip(view === "formatted")}>
-            Formatted
-          </button>
-          <button
-            onClick={() => setView("markdown")}
-            title="The raw text exactly as PMOS receives it"
-            className={viewChip(view === "markdown")}
-          >
-            Markdown
-          </button>
+          {canEdit && !adding && (
+            <button
+              onClick={() => setAdding(true)}
+              className="mr-2 inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-white px-3 text-[12px] font-medium hover:border-primary"
+            >
+              <Plus size={13} /> Add product line
+            </button>
+          )}
         </div>
       </div>
-      <p className="mb-4 text-[13px] text-muted">
+      <p className="mb-4 text-sm text-muted">
         The products ideas can belong to — this text is the ground truth PMOS AI uses to classify
         tickets. The order here is the order filters list them in.{" "}
         {canEdit
-          ? "Markdown is supported."
-          : "Managed by your PM-OS admin; read-only for members."}
+          ? "Drag a row by its handle to reorder."
+          : "Managed by your organization's admin; read-only for members."}
       </p>
 
       {error && (
@@ -192,9 +192,72 @@ export function ProductLinesPanel({
         </div>
       )}
 
+      {canEdit && adding && (
+      <div
+        className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4"
+        onKeyDown={editorKeys(() => void onAdd(), () => setAdding(false))}
+      >
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Name"
+          autoFocus
+          className={INPUT_CLASS}
+          maxLength={80}
+        />
+        {aliasesEditor(aliases, setAliases)}
+        {descriptionEditor(description, setDescription)}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={() => setAdding(false)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
+          >
+            <X size={13} /> Cancel
+          </button>
+          <button
+            onClick={() => void onAdd()}
+            disabled={busy || !name.trim()}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+            Add product line
+          </button>
+        </div>
+      </div>
+      )}
+
       <div className="flex flex-col gap-3">
-        {items.map((item, index) => (
-          <div key={item.id} className="rounded-xl border border-border bg-white px-5 py-4">
+        {items.map((item) => (
+          <div
+            key={item.id}
+            onDragOver={(e) => {
+              if (!dragId || dragId === item.id) return;
+              e.preventDefault();
+              if (overId !== item.id) setOverId(item.id);
+            }}
+            onDragLeave={(e) => {
+              // Leaving to a child element fires too — only clear when the
+              // pointer really left the card.
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null) && overId === item.id)
+                setOverId(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              void dropOn(item.id);
+            }}
+            className={cn(
+              "relative rounded-xl border border-border bg-white px-5 py-4 transition-[box-shadow,opacity,border-color]",
+              dragId === item.id && "opacity-40",
+              // The row the dragged line will take the place of: accent frame
+              // plus an insertion bar on the side it will land on.
+              dragId && overId === item.id && "border-primary shadow-[0_0_0_2px_var(--app-accent-soft)]",
+              dragId &&
+                overId === item.id &&
+                (items.findIndex((i) => i.id === dragId) < items.findIndex((i) => i.id === item.id)
+                  ? "after:absolute after:inset-x-3 after:-bottom-[7px] after:h-[3px] after:rounded-full after:bg-primary after:content-['']"
+                  : "before:absolute before:inset-x-3 before:-top-[7px] before:h-[3px] before:rounded-full before:bg-primary before:content-['']"),
+            )}
+          >
             {editingId === item.id ? (
               <div
                 className="flex flex-col gap-2"
@@ -228,7 +291,7 @@ export function ProductLinesPanel({
             ) : (
               <>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="-ml-1.5 flex min-w-0 items-center gap-1.5">
                     <ColorSwatch
                       color={item.color}
                       fallback={PRODUCT_CHIP_DEFAULT}
@@ -237,25 +300,25 @@ export function ProductLinesPanel({
                       onPick={(color) => call("PATCH", { id: item.id, color })}
                     />
                     <span className="font-title text-[14px] font-semibold">{item.name}</span>
+                    {item.usage && <UsageCounts {...item.usage} />}
                   </span>
                   {canEdit && (
                     <span className="flex shrink-0 items-center gap-1">
-                      <button
-                        onClick={() => void move(item.id, -1)}
-                        disabled={busy || index === 0}
-                        title="Move up"
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                      <span
+                        draggable={!busy}
+                        onDragStart={(e) => {
+                          setDragId(item.id);
+                          e.dataTransfer.effectAllowed = "move";
+                        }}
+                        onDragEnd={() => {
+                          setDragId(null);
+                          setOverId(null);
+                        }}
+                        title="Drag to reorder"
+                        className="flex h-7 w-7 cursor-grab items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground active:cursor-grabbing"
                       >
-                        <ChevronUp size={14} />
-                      </button>
-                      <button
-                        onClick={() => void move(item.id, 1)}
-                        disabled={busy || index === items.length - 1}
-                        title="Move down"
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-                      >
-                        <ChevronDown size={14} />
-                      </button>
+                        <GripVertical size={14} />
+                      </span>
                       <span className="mx-0.5 h-4 w-px bg-border" />
                       <button
                         onClick={() => startEdit(item)}
@@ -280,13 +343,7 @@ export function ProductLinesPanel({
                   </p>
                 )}
                 {item.description ? (
-                  view === "formatted" ? (
-                    <UmMarkdown content={item.description} className="text-[13px]" />
-                  ) : (
-                    <pre className="m-0 whitespace-pre-wrap rounded-lg bg-background px-3.5 py-3 font-mono text-[12px] leading-relaxed text-[#33445e]">
-                      {item.description}
-                    </pre>
-                  )
+                  <UmMarkdown content={item.description} className="text-[13px]" />
                 ) : (
                   <p className="m-0 text-[13px] italic text-muted">No description yet.</p>
                 )}
@@ -297,52 +354,11 @@ export function ProductLinesPanel({
         {items.length === 0 && (
           <div className="rounded-xl border border-dashed border-border bg-white px-5 py-8 text-center text-sm text-muted">
             No product lines yet.
-            {canEdit ? " Add the first one below." : ""}
+            {canEdit ? " Add the first one with the button above." : ""}
           </div>
         )}
       </div>
 
-      {canEdit &&
-        (adding ? (
-          <div
-            className="mt-4 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4"
-            onKeyDown={editorKeys(() => void onAdd(), () => setAdding(false))}
-          >
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Name"
-              autoFocus
-              className={INPUT_CLASS}
-              maxLength={80}
-            />
-            {aliasesEditor(aliases, setAliases)}
-            {descriptionEditor(description, setDescription)}
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => setAdding(false)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
-              >
-                <X size={13} /> Cancel
-              </button>
-              <button
-                onClick={() => void onAdd()}
-                disabled={busy || !name.trim()}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50"
-              >
-                {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
-                Add product line
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setAdding(true)}
-            className="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
-          >
-            <Plus size={13} /> Add product line
-          </button>
-        ))}
     </section>
   );
 }

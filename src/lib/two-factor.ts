@@ -108,3 +108,7 @@ export function isFreshTotpStep(
 ): boolean {
   return lastUsedStep === null || step > lastUsedStep;
 }
+
+/** The same AES-256-GCM sealing, for any secret we keep at rest (Jira tokens). */
+export const encryptSecret = encryptTotpSecret;
+export const decryptSecret = decryptTotpSecret;

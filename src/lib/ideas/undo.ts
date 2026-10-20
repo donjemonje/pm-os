@@ -73,8 +73,15 @@ export async function undoIdeaPush(
     const write: {
       summary?: string;
       descriptionAdf?: unknown;
+      labels?: string[];
       extraFields?: Record<string, unknown>;
     } = {};
+    if (payload.labels) {
+      const now = [...live.labels].sort().join("\n");
+      const wrote = [...payload.labels.after].sort().join("\n");
+      if (now === wrote) write.labels = payload.labels.before;
+      else warnings.push(`Labels changed in Jira after the merge — left as is.`);
+    }
     const extraFields: Record<string, unknown> = {};
 
     if (payload.summary) {
@@ -102,6 +109,11 @@ export async function undoIdeaPush(
       } else if (s.kind === "single") {
         if (readSingleSelect(cur) === s.after) extraFields[fieldId] = null;
         else warnings.push(`A select field changed in Jira after the merge — left as is.`);
+      } else if (s.kind === "labels") {
+        const now = (Array.isArray(cur) ? cur.filter((x): x is string => typeof x === "string") : []).sort().join("\n");
+        const wrote = ((s.after as string[]) ?? []).slice().sort().join("\n");
+        if (now === wrote) extraFields[fieldId] = (s.before as string[]) ?? [];
+        else warnings.push(`A labels field changed in Jira after the merge — left as is.`);
       } else {
         const now = readMultiSelect(cur);
         const wrote = (s.after as string[]) ?? [];
@@ -117,7 +129,7 @@ export async function undoIdeaPush(
     }
     if (Object.keys(extraFields).length > 0) write.extraFields = extraFields;
 
-    if (write.summary !== undefined || write.descriptionAdf !== undefined || write.extraFields) {
+    if (write.summary !== undefined || write.descriptionAdf !== undefined || write.labels !== undefined || write.extraFields) {
       await updateJiraIssue(workspaceId, record.jiraKey, write);
     }
     if (record.commentId) {

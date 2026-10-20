@@ -17,7 +17,7 @@
  *   for any of its members (deleting an org deletes its users)
  */
 
-export type RoleName = "USER" | "PMOS_ADMIN";
+export type RoleName = "USER" | "CUSTOMER_ADMIN" | "PMOS_ADMIN";
 
 /** The word the admin must type in the UI (and the client must send) to
  * delete an organization. Checked on both sides. */

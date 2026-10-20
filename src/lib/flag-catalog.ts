@@ -51,6 +51,12 @@ export const FLAG_AREAS: readonly FlagArea[] = [
           "Personal product-line pre-filter: the My Product Lines picker in Settings → Ideas and the default filter it applies on the Ideas page.",
       },
       {
+        key: "jira",
+        label: "Jira integration",
+        description:
+          "The organization works with Jira connected: a banner shows when the connection is unavailable (contact support), and an import asks before running without Jira.",
+      },
+      {
         key: "ideasUndo",
         label: "Ideas undo",
         description:

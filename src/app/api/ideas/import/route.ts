@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
 
-  let body: { tickets?: unknown };
+  let body: { tickets?: unknown; skipJira?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -53,7 +53,9 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await importBatch(workspaceResult, tickets);
+    const result = await importBatch(workspaceResult, tickets, {
+      skipJira: body.skipJira === true,
+    });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(

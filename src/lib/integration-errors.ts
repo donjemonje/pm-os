@@ -12,10 +12,9 @@ const INTEGRATION_ERRORS: Record<string, string> = {
   missing_code: "Connection was cancelled.",
   invalid_state: "Connection timed out. Please try again.",
   state_mismatch: "Something went wrong. Please try again.",
-  no_site: "No Jira site was found on your account.",
 };
 
-/** Map OAuth / setup error codes to plain-language messages for the settings UI. */
+/** Map OAuth / setup error codes (Google Drive) to plain-language messages for the settings UI. */
 export function formatIntegrationError(error: string): string {
   if (INTEGRATION_ERRORS[error]) return INTEGRATION_ERRORS[error];
 
@@ -25,7 +24,6 @@ export function formatIntegrationError(error: string): string {
 
   if (
     error.includes("GOOGLE_CLIENT") ||
-    error.includes("ATLASSIAN_CLIENT") ||
     error.includes(".env") ||
     error.includes("NEXT_PUBLIC_APP_URL")
   ) {

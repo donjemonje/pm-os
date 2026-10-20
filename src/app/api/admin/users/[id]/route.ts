@@ -5,12 +5,15 @@ import { db } from "@/lib/db";
 
 /**
  * PATCH { deactivated: boolean } — soft-deactivate / reactivate a user.
+ * PATCH { role: "USER" | "CUSTOMER_ADMIN" } — customer-side role, one
+ * change per request (never bundled with `deactivated`).
  *
- * Role changes are NOT accepted here — not from the UI, not from an admin
- * session (Daniel's security call, 2026-08-27). Roles change only via
- * scripts/seed-admin.mjs (promote + password) and scripts/set-user-role.mjs
- * (either direction), in every environment including production. A request
- * carrying `role` is rejected outright rather than silently ignored.
+ * PMOS_ADMIN is NOT assignable or removable here — not from the UI, not
+ * from an admin session (Daniel's security call, 2026-08-27; customer-admin
+ * carved out 2026-10-18 because a customer must be able to run its own
+ * settings). The pmos-admin role moves only via scripts/seed-admin.mjs, in
+ * every environment including production. A request naming PMOS_ADMIN, or
+ * targeting a pmos-admin, is rejected outright rather than silently ignored.
  *
  * Guardrails (see admin-guard.ts): no self-deactivation, and the last
  * active pmos-admin cannot be deactivated. Deactivation deletes the user's
@@ -39,13 +42,33 @@ export async function PATCH(
   }
 
   if (body.role !== undefined) {
-    return NextResponse.json(
-      {
-        error:
-          "Role changes are not available through the API. Use scripts/set-user-role.mjs.",
-      },
-      { status: 400 }
-    );
+    if (body.deactivated !== undefined) {
+      return NextResponse.json(
+        { error: "Change the role or the deactivation, not both at once" },
+        { status: 400 }
+      );
+    }
+    if (body.role !== "USER" && body.role !== "CUSTOMER_ADMIN") {
+      return NextResponse.json(
+        {
+          error:
+            "Only USER and CUSTOMER_ADMIN can be set here. The pmos-admin role moves only via scripts/seed-admin.mjs.",
+        },
+        { status: 400 }
+      );
+    }
+    const target = await db.user.findUnique({ where: { id }, select: { role: true } });
+    if (!target) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+    if (target.role === "PMOS_ADMIN") {
+      return NextResponse.json(
+        { error: "A pmos-admin's role cannot be changed here" },
+        { status: 400 }
+      );
+    }
+    await db.user.update({ where: { id }, data: { role: body.role } });
+    return NextResponse.json({ ok: true });
   }
 
   if (typeof body.deactivated !== "boolean") {

@@ -100,7 +100,7 @@ const JIRA_REPORTER = "Noa Reporter (QA)";
 const JIRA_ASSIGNEE = "Eitan Assignee (QA)";
 const QA_JK_CLOUD = "qa-jk-cloud";
 
-const NOT_CONNECTED_BLOCKER = "Jira is not connected — connect it in Settings → Integrations.";
+const NOT_CONNECTED_BLOCKER = "Jira is temporarily unavailable — Sync to Jira is paused. Contact support@pm-os.io.";
 const READ_POLICY = "Read on import — shown on the raw Jira issue, never written";
 
 let roomlensOrgId: string;
@@ -410,7 +410,7 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     await aliasInput.fill(
       ` ${RL_ALIAS_SEEDED} ,${RL_ALIAS_ADDED},  ${RL_ALIAS_ADDED.toLowerCase()} , ${RL_LINE}`
     );
-    await editRow.getByRole("button", { name: "Save" }).click();
+    await editRow.getByRole("button", { name: "Save", exact: true }).click();
     await expect(row.getByText(`Also called: ${RL_ALIAS_SEEDED}, ${RL_ALIAS_ADDED}`)).toBeVisible();
     await expect(panel.getByPlaceholder(aliasPlaceholder)).toHaveCount(0);
 
@@ -554,7 +554,7 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     // All fields: collapsed by default; expanded it lists every field, type
     // and priority included (they live only here).
     const allFields = drawer.getByRole("button", { name: /^All fields \(\d+\)$/ });
-    await expect(allFields).toHaveText("All fields (9)");
+    await expect(allFields).toHaveText("All fields (10)");
     await expect(allFields).toHaveAttribute("aria-expanded", "false");
     await expect(drawer.locator("dl")).toHaveCount(0);
     await allFields.click();
@@ -568,6 +568,7 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
       "Module",
       "Reporter",
       "Assignee",
+      "Customers (read from text)",
       "Created",
       "Link",
     ]);
@@ -694,7 +695,8 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
 
     // Field mapping, Kela's config: Product Line → Module (single select)
     // with the Create missing options toggle; Votes (number) without it;
-    // Customers (multi select) with it ON by default.
+    // Customers as prefixed Labels by default (2026-10-20: no admin right
+    // needed) — a type switch, a prefix, no Create missing options.
     const productLine = fieldRow(page, "Product Line");
     await expect(productLine.locator('input[type="text"]')).toHaveValue("Module");
     await expect(productLine.getByText("Single select")).toBeVisible();
@@ -703,8 +705,9 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     await expect(productLine.getByRole("checkbox").nth(1)).not.toBeChecked();
     await expect(fieldRow(page, "Votes").getByText("Create missing options")).toHaveCount(0);
     const customers = fieldRow(page, "Customers");
-    await expect(customers.getByText("Create missing options")).toBeVisible();
-    await expect(customers.getByRole("checkbox").nth(1)).toBeChecked();
+    await expect(customers.locator("select")).toHaveValue("labels");
+    await expect(customers.locator('input[type="text"]').nth(1)).toHaveValue("cs_");
+    await expect(customers.getByText("Create missing options")).toHaveCount(0);
 
     // Read-only rows: Kela's P_Reporter / P_Assignee, text type, read policy,
     // no create-options toggle.

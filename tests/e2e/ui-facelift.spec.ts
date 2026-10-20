@@ -59,7 +59,7 @@ const FRESH_ORG = { name: "QA-UF Fresh Org", slug: "qa-uf-fresh" };
 const PJ_TOKENLESS_CLOUD = "qa-pj-cloud"; // ideas-jira-push's own fixture row
 
 const SUGGESTED_TITLE = "Suggested customer — not in the catalog yet";
-const NOT_CONNECTED_HINT = "Connect Jira in Settings → Integrations to export";
+const NOT_CONNECTED_HINT = "Jira is not connected for your organization";
 
 const FIXTURE_CUSTOMERS = [CATALOGED, ADDED, SWATCH, WHITFIELD, THE_WHITFIELD];
 
@@ -335,19 +335,20 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     const patch = page.waitForResponse(
       (r) => r.url().includes("/api/ideas/lists/customers") && r.request().method() === "PATCH"
     );
-    await panel.getByRole("button", { name: "Red", exact: true }).click();
+    // Palette 24 (2026-10-19): the red id is labelled "Stuck red".
+    await panel.getByRole("button", { name: "Stuck red", exact: true }).click();
     const patchRes = await patch;
     expect(patchRes.status()).toBe(200);
     const body = patchRes.request().postDataJSON() as Record<string, unknown>;
     expect(body.color).toBe("red");
     expect(typeof body.id).toBe("string");
     expect(body.name).toBeUndefined();
-    // Red's foreground (#a32a2a) paints the swatch; still after a reload.
-    await expect(swatchButton.locator("span")).toHaveCSS("background-color", "rgb(163, 42, 42)");
+    // The dot shows the solid swatch color of red (#e2445c); still after a reload.
+    await expect(swatchButton.locator("span")).toHaveCSS("background-color", "rgb(226, 68, 92)");
     await page.reload();
     await expect(
       panel.getByRole("button", { name: `Chip color for ${SWATCH}` }).locator("span")
-    ).toHaveCSS("background-color", "rgb(163, 42, 42)");
+    ).toHaveCSS("background-color", "rgb(226, 68, 92)");
     const listed = await page.request.get("/api/ideas/lists/customers");
     expect(listed.status()).toBe(200);
     const { items } = (await listed.json()) as {
@@ -400,26 +401,23 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     await expect(drawer.getByText(CATALOGED, { exact: true })).toBeVisible();
     await expect(drawer.getByText(PRODUCT_LINE, { exact: true })).toHaveCount(0);
 
-    await drawer.getByRole("button", { name: "Edit", exact: true }).click();
+    // Sectioned edit (2026-10-19): the pencil on the chips row opens the
+    // product-lines + customers editor; the text is edited by clicking it.
+    await drawer.getByRole("button", { name: "Edit product lines and customers" }).click();
 
-    // While editing, the header keeps showing the SAVED chips — the edit
-    // list is the "Customers" section below, so scope to it.
-    // (`has` resolves relative to the outer element, so the inner locator
-    // must be page-rooted, not drawer-rooted.)
-    const customersEdit = drawer
-      .locator("div.flex.flex-col")
-      .filter({ has: page.getByText("Customers", { exact: true }) })
-      .last();
-    await expect(customersEdit.getByPlaceholder("Add customer…")).toBeVisible();
-
-    // Add by typing + Enter.
+    // The chips row itself is the editor. Tag edits are a DRAFT (2026-10-20):
+    // nothing reaches the server until ✓ saves the whole set in one call.
+    const customersEdit = drawer;
     const input = customersEdit.getByPlaceholder("Add customer…");
+    await expect(input).toBeVisible();
+
+    // Add by typing + Enter (draft).
     await input.fill(ADDED);
     await input.press("Enter");
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
     await expect(input).toHaveValue("");
 
-    // Remove the ticket-derived customer from this idea.
+    // Remove the ticket-derived customer from this idea (draft).
     await customersEdit
       .getByText(CATALOGED, { exact: true })
       .getByTitle("Remove from this idea")
@@ -427,16 +425,19 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     await expect(customersEdit.getByText(CATALOGED, { exact: true })).toHaveCount(0);
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
 
-    // Toggle the product-line chip on.
+    // Product lines: the selected chip opens a multi-select menu; pick the line there (draft).
+    await drawer.getByRole("button", { name: /▾$/ }).first().click();
     const lineChip = drawer.getByRole("button", { name: PRODUCT_LINE, exact: true });
     await expect(lineChip).toHaveAttribute("aria-pressed", "false");
     await lineChip.click();
     await expect(lineChip).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape"); // closes the menu only
 
+    // ✓ saves all three in one mutation; the drawer shows the saved state.
     const saved = page.waitForResponse(
       (r) => r.url().includes("/api/ideas/mutate") && r.request().method() === "POST"
     );
-    await drawer.getByRole("button", { name: "Save changes" }).click();
+    await drawer.getByRole("button", { name: "Save tag changes" }).click();
     expect((await saved).status()).toBe(200);
 
     // View mode again: product line chip, the added name as a suggestion

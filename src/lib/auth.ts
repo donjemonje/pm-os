@@ -22,12 +22,16 @@ export const SESSION_COOKIE = "pmos_session";
 export const TWO_FACTOR_PENDING_COOKIE = "pmos_2fa_pending";
 const SESSION_DAYS = 30;
 
+/** The three roles of the minimized IAM — mirrors prisma `enum UserRole`. */
+export type UserRoleName = "USER" | "CUSTOMER_ADMIN" | "PMOS_ADMIN";
+
 export type AuthUser = {
   id: string;
   email: string;
   name: string;
-  /** Minimized IAM: "USER" (default) or "PMOS_ADMIN" (PM-OS Admin access). */
-  role: "USER" | "PMOS_ADMIN";
+  /** Minimized IAM: "USER" (default), "CUSTOMER_ADMIN" (own org settings) or
+   *  "PMOS_ADMIN" (PM-OS Admin access). */
+  role: UserRoleName;
   workspaceId: string | null;
   organizationId: string | null;
   organizationName: string | null;
@@ -123,7 +127,7 @@ function toAuthUser(user: {
   id: string;
   email: string;
   name: string;
-  role: "USER" | "PMOS_ADMIN";
+  role: UserRoleName;
   organization:
     | {
         id: string;
@@ -472,7 +476,7 @@ export type OrganizationMember = {
   id: string;
   email: string;
   name: string;
-  role: "USER" | "PMOS_ADMIN";
+  role: UserRoleName;
   hasPassword: boolean;
   /** Linked SSO providers (e.g. ["google"]). */
   providers: string[];

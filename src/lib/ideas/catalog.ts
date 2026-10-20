@@ -22,7 +22,7 @@ import type { CatalogKind, CatalogVerdict } from "./types";
  * but nothing is ever replayed or forced.
  */
 
-export const CATALOG_PROMPT_VERSION = "catalog-v15";
+export const CATALOG_PROMPT_VERSION = "catalog-v16";
 
 /** Reserved product-line value for FRs no catalog line fits. */
 export const OTHER_PRODUCT_LINE = "Other";
@@ -321,8 +321,8 @@ export async function prepareCatalog(
     db.customer.findMany({
       where: { workspaceId },
       orderBy: { name: "asc" },
-      select: { name: true, description: true },
-    }),
+      select: { name: true, description: true, aliases: true },
+    }).then((rows) => rows.map(catalogEntryWithAliases)),
     db.workspace.findUnique({
       where: { id: workspaceId },
       select: { ideasConfig: true },

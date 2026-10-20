@@ -3,12 +3,14 @@ import { notFound } from "next/navigation";
 import { MyProductLinesPanel } from "@/components/ideas/MyProductLinesPanel";
 import { ProductLinesPanel } from "@/components/settings/ProductLinesPanel";
 import { SettingsListPanel } from "@/components/settings/SettingsListPanel";
-import { isPmosAdmin } from "@/lib/admin-auth";
+import { canManageOrgSettings } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { PageView } from "@/lib/analytics/PageView";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { ensureCatalogColors } from "@/lib/ideas/catalog-colors";
+import { catalogUsage, usageOf } from "@/lib/ideas/catalog-usage";
 
 export const metadata: Metadata = {
   title: "Product Lines — PM-OS",
@@ -23,6 +25,7 @@ export default async function ProductLinesSettingsPage() {
   // Components (platforms) off in Admin → Ideas hides the whole platforms
   // concept here, not just the Jira mapping.
   const platformsEnabled = mergeIdeasJiraConfig(workspace.ideasConfig).fields.platforms.enabled;
+  const usage = await catalogUsage(workspace.id);
   const [productLines, platforms, dbUser] = await Promise.all([
     db.productLine.findMany({
       where: { workspaceId: workspace.id },
@@ -44,6 +47,8 @@ export default async function ProductLinesSettingsPage() {
   );
 
   return (
+    <>
+    <PageView name="settings_product_lines" />
     <div className="space-y-8">
       <ProductLinesPanel
         initialItems={productLines.map((l) => ({
@@ -51,8 +56,9 @@ export default async function ProductLinesSettingsPage() {
           aliases: Array.isArray(l.aliases)
             ? l.aliases.filter((a): a is string => typeof a === "string")
             : [],
+          usage: usageOf(usage.products, l.name),
         }))}
-        canEdit={isPmosAdmin(user)}
+        canEdit={canManageOrgSettings(user)}
       />
       {myLinesEnabled && productLines.length > 0 && (
         <MyProductLinesPanel
@@ -67,10 +73,11 @@ export default async function ProductLinesSettingsPage() {
           endpoint="/api/ideas/lists/platforms"
           namePlaceholder="e.g. iOS"
           descriptionPlaceholder="What does this platform cover? (optional)"
-          emptyLabel="No platforms yet. Add the first one above."
+          emptyLabel="No platforms yet. Add the first one with the button above."
           initialItems={platforms}
         />
       )}
     </div>
+    </>
   );
 }
