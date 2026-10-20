@@ -26,7 +26,7 @@ import {
   type SplitRequest,
 } from "./split";
 import { ImportTrace, markAbandonedImports } from "./trace";
-import { diffIdea, undoAll, undoOne, type IdeaBaseline, type IdeaLike } from "./changes";
+import { diffIdea, type IdeaBaseline, type IdeaLike } from "./changes";
 import type {
   CatalogKind,
   Idea,
@@ -209,20 +209,6 @@ async function settleIdea(ideaId: string): Promise<void> {
   });
 }
 
-/** Replace an idea's sources with the given keys (tickets by externalId). */
-async function writeSources(workspaceId: string, ideaId: string, zen: string[], jira: string[]): Promise<void> {
-  const ticketRows = await db.zendeskTicketRaw.findMany({
-    where: { workspaceId, externalId: { in: zen } },
-    select: { id: true },
-  });
-  await db.ideaSource.deleteMany({ where: { ideaId } });
-  await db.ideaSource.createMany({
-    data: [
-      ...ticketRows.map((t) => ({ ideaId, kind: "zendesk", ticketId: t.id })),
-      ...jira.map((key) => ({ ideaId, kind: "jira", jiraKey: key })),
-    ],
-  });
-}
 
 /**
  * Narration of what an import did to an idea, one line per kind of change:
@@ -1438,13 +1424,7 @@ export type IdeasMutation =
       addedCustomers: string[];
       zen: string[];
       jira: string[];
-    }
-  /** Move one source from the idea holding it to another idea, in one step. */
-  | { type: "moveSource"; kind: "zen" | "jira"; key: string; toIdeaId: string }
-  /** Undo one line of the "what changed" section (lib/ideas/changes.ts ids). */
-  | { type: "undoChange"; ideaId: string; changeId: string }
-  /** Restore the idea's baseline entirely. */
-  | { type: "undoAllChanges"; ideaId: string };
+    };
 
 /**
  * Suggested metadata still awaiting the PM's call on this idea. Today that is
@@ -2001,97 +1981,6 @@ export async function mutateIdeas(
       await logEvents(workspaceId, [{ ideaId: created.id, action: "create", payload: { title, zen, jira } }]);
       const n = ticketRows.length + jira.length;
       notice = `Idea created${n ? ` with ${n} source${n === 1 ? "" : "s"}` : ""}`;
-      break;
-    }
-    case "moveSource": {
-      const to = await db.idea.findFirst({
-        where: { id: mutation.toIdeaId, workspaceId, batchStatus: { not: "deleted" } },
-        include: IDEA_INCLUDE,
-      });
-      if (!to) throw new Error("Target idea not found");
-      const sourceWhere =
-        mutation.kind === "zen"
-          ? { kind: "zendesk", ticket: { externalId: mutation.key } }
-          : { kind: "jira", jiraKey: mutation.key };
-      const from = await db.idea.findFirst({
-        where: { workspaceId, batchStatus: { not: "deleted" }, sources: { some: sourceWhere } },
-        include: IDEA_INCLUDE,
-      });
-      if (!from) throw new Error("That source backs no idea");
-      if (from.id === to.id) break;
-      const fromLike = likeOf(from);
-      const toLike = likeOf(to);
-      const without = (l: string[]) => l.filter((k) => k !== mutation.key);
-      const withKey = (l: string[]) => (l.includes(mutation.key) ? l : [...l, mutation.key]);
-      const fromNext =
-        mutation.kind === "zen"
-          ? { zen: without(fromLike.zen), jira: fromLike.jira }
-          : { zen: fromLike.zen, jira: without(fromLike.jira) };
-      const toNext =
-        mutation.kind === "zen"
-          ? { zen: withKey(toLike.zen), jira: toLike.jira }
-          : { zen: toLike.zen, jira: withKey(toLike.jira) };
-      for (const [row, next] of [
-        [from, fromNext],
-        [to, toNext],
-      ] as const) {
-        const patch = await baselinePatch(row.id);
-        await writeSources(workspaceId, row.id, next.zen, next.jira);
-        // The text was written from the old set: approval waits for a
-        // rewrite or an explicit keep, on both sides of the move.
-        await db.idea.update({ where: { id: row.id }, data: { ...patch, sourcesChanged: true } });
-        await settleIdea(row.id);
-      }
-      await logEvents(workspaceId, [
-        { ideaId: from.id, action: "move_source_out", payload: { kind: mutation.kind, key: mutation.key, to: to.id } },
-        { ideaId: to.id, action: "move_source_in", payload: { kind: mutation.kind, key: mutation.key, from: from.id } },
-      ]);
-      notice = `${mutation.kind === "zen" ? "Ticket" : "Issue"} ${mutation.key} moved to “${to.title}”`;
-      break;
-    }
-    case "undoChange":
-    case "undoAllChanges": {
-      const idea = await db.idea.findFirst({
-        where: { id: mutation.ideaId, workspaceId },
-        include: IDEA_INCLUDE,
-      });
-      if (!idea) break;
-      const base = baselineOf(idea);
-      if (!base) throw new Error("Nothing to undo on this idea");
-      const now = likeOf(idea);
-      const next =
-        mutation.type === "undoAllChanges" ? undoAll(base) : undoOne(now, base, mutation.changeId);
-      const sourcesMoved =
-        next.zen.join("|") !== now.zen.join("|") || next.jira.join("|") !== now.jira.join("|");
-      if (sourcesMoved) await writeSources(workspaceId, idea.id, next.zen, next.jira);
-      await db.idea.update({
-        where: { id: idea.id },
-        data: {
-          title: next.title,
-          details: next.details,
-          manualScore: next.manual,
-          products: next.products as Prisma.InputJsonValue,
-          platforms: next.platforms as Prisma.InputJsonValue,
-          addedCustomers: next.addedCustomers as Prisma.InputJsonValue,
-          // Undo-all restores text and sources together — they agree again.
-          // A single source undo leaves text written from another set.
-          sourcesChanged:
-            mutation.type === "undoAllChanges" ? false : sourcesMoved ? true : idea.sourcesChanged,
-        },
-      });
-      await logEvents(workspaceId, [
-        {
-          ideaId: idea.id,
-          action: mutation.type === "undoAllChanges" ? "undo_all" : "undo_change",
-          payload: {
-            changeId: mutation.type === "undoChange" ? mutation.changeId : "*",
-            before: now,
-            after: next,
-          },
-        },
-      ]);
-      await settleIdea(idea.id);
-      notice = mutation.type === "undoAllChanges" ? "All changes undone" : "Change undone";
       break;
     }
     case "keepText": {

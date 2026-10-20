@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import {
-  ArrowRightLeft,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -102,11 +101,6 @@ interface IdeaDrawerProps {
   onKeepText?: () => Promise<boolean>;
   /** A ticket with no live idea: PMOS AI reads it alone and creates one (or parks it). */
   onCreateIdeaFromTicket?: (ticketKey: string) => Promise<boolean>;
-  /** Undo one line of the "what changed" section / all of them (lib/ideas/changes.ts). */
-  onUndoChange?: (changeId: string) => void;
-  onUndoAllChanges?: () => void;
-  /** Move this source to another idea in one step (detach here, attach there). */
-  onMoveSource?: (kind: "zen" | "jira", key: string, toIdeaId: string) => Promise<boolean>;
 }
 
 const MONO_LABEL =
@@ -144,14 +138,7 @@ export function IdeaDrawer({
   onRewrite,
   onKeepText,
   onCreateIdeaFromTicket,
-  onUndoChange,
-  onUndoAllChanges,
-  onMoveSource,
 }: IdeaDrawerProps) {
-  // "Move to…" picker: which source row is open, and the title filter.
-  const [moveFor, setMoveFor] = useState<string | null>(null);
-  const [moveQuery, setMoveQuery] = useState("");
-  const [moving, setMoving] = useState(false);
   // Opens at half the window (sidebar included); the PM can still drag it
   // between 380px and 90% of the window.
   const [width, setWidth] = useState(() => {
@@ -230,11 +217,14 @@ export function IdeaDrawer({
   const score = idea ? scoreOf(idea) : null;
   const votes = idea ? votesLabel(idea) : null;
 
-  const startEdit = (section: "title" | "details" | "tags" = "details") => {
+  /** `detailsText` seeds the text editor with something other than the
+   *  current text — the "Text updated" undo opens it on the previous text;
+   *  nothing is saved until the PM hits Save (⌘Z inside the editor undoes the undo). */
+  const startEdit = (section: "title" | "details" | "tags" = "details", detailsText?: string) => {
     if (!idea) return;
     setEditTitle(idea.title);
     setEditManual(idea.manual != null ? String(idea.manual) : "");
-    setEditDetails(idea.details);
+    setEditDetails(detailsText ?? idea.details);
     setEditProducts([...idea.products]);
     setEditPlatforms([...(idea.platforms ?? [])]);
     setEditCustomers([...(idea.customers ?? [])]);
@@ -1002,21 +992,8 @@ export function IdeaDrawer({
               )}
               {(idea.changes ?? []).length > 0 && (
                 <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
-                  <div className={`${MONO_LABEL} mb-1.5 flex items-center gap-2 text-[#2a5fd0]`}>
-                    <span>
-                      Changed {idea.changesBase === "jira" ? "vs. Jira" : "since the previous import"}
-                    </span>
-                    {onUndoAllChanges && (
-                      <button
-                        type="button"
-                        onClick={onUndoAllChanges}
-                        title="Put everything back the way it was — the idea leaves review as Unchanged"
-                        className="ml-auto inline-flex h-6 items-center gap-1 rounded-[7px] px-1.5 font-mono text-[10px] font-semibold text-[#2a5fd0] hover:bg-white"
-                      >
-                        <Undo2 size={11} strokeWidth={2.5} />
-                        Undo all
-                      </button>
-                    )}
+                  <div className={`${MONO_LABEL} mb-1.5 text-[#2a5fd0]`}>
+                    Changed {idea.changesBase === "jira" ? "vs. Jira" : "since the previous import"}
                   </div>
                   <ul className="m-0 flex list-none flex-col gap-1 p-0">
                     {(idea.changes ?? []).map((c) => (
@@ -1027,12 +1004,14 @@ export function IdeaDrawer({
                       >
                         <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
                         <span className="min-w-0 flex-1">{c.label}</span>
-                        {onUndoChange && (
+                        {/* Only the text is undone here (sources on the Merge board):
+                            the editor opens on the previous text; Save commits it. */}
+                        {c.kind === "details" && c.from !== undefined && onSave && (
                           <button
                             type="button"
-                            onClick={() => onUndoChange(c.id)}
-                            title="Undo this change"
-                            aria-label={`Undo: ${c.label}`}
+                            onClick={() => startEdit("details", c.from)}
+                            title="Undo — opens the editor on the previous text; nothing changes until you save"
+                            aria-label="Undo the text update"
                             className="flex shrink-0 rounded p-0.5 text-[#7a8aa3] opacity-60 hover:bg-white hover:text-[#2a5fd0] group-hover:opacity-100"
                           >
                             <Undo2 size={11} strokeWidth={2.5} />
@@ -1067,36 +1046,17 @@ export function IdeaDrawer({
                         className="ml-auto flex h-6 items-center gap-1 rounded-[7px] px-1.5 text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
                       >
                         <Pencil size={12} />
-                        <ExternalLink size={11} />
                       </button>
                     )}
                   </div>
                   <div className="flex flex-col gap-2">
-                    {sourceEntries.map((src) => {
-                      const srcId = `${src.kind}:${src.key}`;
-                      const pickerOpen = moveFor === srcId;
-                      const q = moveQuery.trim().toLowerCase();
-                      const targets = pickerOpen
-                        ? Array.from(ideasById?.values() ?? [])
-                            .filter((i) => i.id !== idea.id && i.batch !== "deleted")
-                            .filter((i) => !q || i.title.toLowerCase().includes(q))
-                            .slice(0, 8)
-                        : [];
-                      return (
-                      <div key={srcId} className="relative">
-                      <div
-                        role="button"
-                        tabIndex={0}
+                    {sourceEntries.map((src) => (
+                      <button
+                        key={`${src.kind}:${src.key}`}
                         onClick={() =>
                           setSrcSel({ kind: src.kind, key: src.key })
                         }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setSrcSel({ kind: src.kind, key: src.key });
-                          }
-                        }}
-                        className="flex w-full cursor-pointer items-center gap-2.5 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-3 py-2.5 text-left transition-colors hover:border-primary hover:bg-white"
+                        className="flex w-full items-center gap-2.5 rounded-[10px] border border-border bg-[rgba(240,244,250,.7)] px-3 py-2.5 text-left transition-colors hover:border-primary hover:bg-white"
                       >
                         <span
                           className="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] font-bold"
@@ -1114,21 +1074,6 @@ export function IdeaDrawer({
                             </span>
                           )}
                         </span>
-                        {onMoveSource && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setMoveQuery("");
-                              setMoveFor(pickerOpen ? null : srcId);
-                            }}
-                            title="Move this source to another idea"
-                            aria-label={`Move ${src.id} to another idea`}
-                            className={`shrink-0 rounded p-1 hover:bg-white hover:text-primary ${pickerOpen ? "text-primary" : "text-[#9aa8be]"}`}
-                          >
-                            <ArrowRightLeft size={12} />
-                          </button>
-                        )}
                         {src.url && (
                           <a
                             href={src.url}
@@ -1145,60 +1090,8 @@ export function IdeaDrawer({
                           size={13}
                           className="shrink-0 text-[#9aa8be]"
                         />
-                      </div>
-                      {pickerOpen && onMoveSource && (
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === "Escape") {
-                              e.stopPropagation();
-                              setMoveFor(null);
-                            }
-                          }}
-                          className="absolute left-0 right-0 top-full z-20 mt-1 rounded-lg border border-border bg-white p-1.5 shadow-[0_8px_24px_rgba(10,22,40,.12)]"
-                        >
-                          <input
-                            autoFocus
-                            value={moveQuery}
-                            onChange={(e) => setMoveQuery(e.target.value)}
-                            placeholder="Move to idea…"
-                            aria-label="Move to idea"
-                            className="mb-1 w-full rounded-md border border-border px-2 py-1 text-[12.5px] outline-none focus:border-primary"
-                          />
-                          {targets.length === 0 ? (
-                            <div className="px-2 py-1.5 text-[12px] text-fg-muted">No other idea matches.</div>
-                          ) : (
-                            <ul className="m-0 max-h-56 list-none overflow-y-auto p-0">
-                              {targets.map((t) => (
-                                <li key={t.id}>
-                                  <button
-                                    type="button"
-                                    disabled={moving}
-                                    onClick={async () => {
-                                      setMoving(true);
-                                      try {
-                                        const ok = await onMoveSource(src.kind, src.key, t.id);
-                                        if (ok) setMoveFor(null);
-                                      } finally {
-                                        setMoving(false);
-                                      }
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-[var(--app-accent-soft)] disabled:opacity-60"
-                                  >
-                                    <span className="truncate">{t.title}</span>
-                                    <span className="ml-auto shrink-0 font-mono text-[10px] text-fg-muted">
-                                      {t.zen.length + t.jira.length} src
-                                    </span>
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      )}
-                      </div>
-                      );
-                    })}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}

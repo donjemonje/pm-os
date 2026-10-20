@@ -1724,15 +1724,6 @@ export function IdeasView({
           onRewrite={drawerIdea ? () => callMutate({ type: "rewrite", ideaId: drawerIdea.id }) : undefined}
           onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
           onCreateIdeaFromTicket={(ticketKey) => callMutate({ type: "createIdeaFromTicket", ticketKey })}
-          onUndoChange={
-            drawerIdea
-              ? (changeId) => void callMutate({ type: "undoChange", ideaId: drawerIdea.id, changeId })
-              : undefined
-          }
-          onUndoAllChanges={
-            drawerIdea ? () => void callMutate({ type: "undoAllChanges", ideaId: drawerIdea.id }) : undefined
-          }
-          onMoveSource={(kind, key, toIdeaId) => callMutate({ type: "moveSource", kind, key, toIdeaId })}
         />
       )}
 

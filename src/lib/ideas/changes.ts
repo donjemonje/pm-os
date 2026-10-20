@@ -46,7 +46,8 @@ export interface IdeaChange {
   kind: IdeaChangeKind;
   /** Human line for the section. */
   label: string;
-  /** Before → after for title / score; the item for list changes. */
+  /** Before → after for title / score; the item for list changes; the
+   *  previous text for "details" (the drawer's undo opens the editor on it). */
   from?: string;
   to?: string;
 }
@@ -78,7 +79,7 @@ export function diffIdea(now: IdeaLike, base: IdeaBaseline): IdeaChange[] {
   if (now.title.trim() !== base.title.trim())
     out.push({ id: "title", kind: "title", label: "Title changed", from: base.title, to: now.title });
   if (now.details.trim() !== base.details.trim())
-    out.push({ id: "details", kind: "details", label: "Text updated" });
+    out.push({ id: "details", kind: "details", label: "Text updated", from: base.details });
   if ((now.manual ?? null) !== (base.manual ?? null))
     out.push({
       id: "score",
