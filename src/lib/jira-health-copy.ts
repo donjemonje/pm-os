@@ -18,7 +18,7 @@ export const JIRA_UNAVAILABLE_MESSAGE =
   `PM-OS support has been notified; contact ${SUPPORT_EMAIL} if this persists.`;
 
 export const JIRA_NOT_CONNECTED_MESSAGE =
-  `Jira is not connected for your organization — PM-OS support sets up the connection. Contact ${SUPPORT_EMAIL}.`;
+  `Jira is not connected for your organization — Contact ${SUPPORT_EMAIL}.`;
 
 export const JIRA_NOT_CONFIGURED_MESSAGE =
   `The Jira project for ideas is not set for your organization — contact ${SUPPORT_EMAIL}.`;
