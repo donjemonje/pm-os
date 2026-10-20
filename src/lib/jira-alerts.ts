@@ -8,9 +8,10 @@ import { mergeIdeasJiraConfig } from "./ideas/jira-mapping";
  * Health alerts to PM-OS support. Rule (Daniel, 2026-10-20): Jira enabled
  * for an organization means it must work — any non-ok health (no
  * connection row, project not set, dead or legacy token, Jira unreachable)
- * emails support once per incident. The customer cannot fix any of it, so
- * the person who can gets the mail. Deduped through Workspace.jiraAlertedAt
- * (cleared when a check passes again). A second signal, the API token
+ * emails support once per incident, then a daily reminder while it stays
+ * broken. The customer cannot fix any of it, so the person who can gets the
+ * mail. Deduped through Workspace.jiraAlertedAt (the last send; cleared
+ * when a check passes again). A second signal, the API token
  * expiring within EXPIRY_WARN_DAYS, is deduped on
  * JiraConnection.expiryWarnedAt (cleared when a new token is saved).
  * Never throws: an alert failure must not break the page or import that
@@ -19,6 +20,7 @@ import { mergeIdeasJiraConfig } from "./ideas/jira-mapping";
  */
 
 const EXPIRY_WARN_DAYS = 14;
+const REMINDER_EVERY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECIPIENT = "support@pm-os.io";
 
 type AlertRow = {
@@ -42,21 +44,23 @@ function adminUrl(): string {
   return `${base || "https://app.pm-os.io"}/admin/ideas`;
 }
 
-async function sendOutageAlert(org: string, site: string | null, cause: string) {
+async function sendOutageAlert(org: string, site: string | null, cause: string, since: Date | null) {
   const to = recipient();
   if (!to) return;
+  const sinceDay = since ? since.toISOString().slice(0, 10) : null;
+  const heading = sinceDay ? `Jira still not working for ${org} (since ${sinceDay})` : `Jira not working for ${org}`;
   const { html, text } = renderBrandedEmail({
-    preheader: `Jira not working for ${org}`,
-    heading: `Jira not working for ${org}`,
+    preheader: heading,
+    heading,
     paragraphs: [
       `Jira is enabled for ${org}${site ? ` (${site})` : ""} but PM-OS cannot use it.`,
       `Cause: ${cause}`,
       `Members see "contact support"; imports run without Jira matching and Sync to Jira is paused until this is fixed in Admin → Ideas.`,
     ],
     cta: { label: "Open Admin → Ideas", url: adminUrl() },
-    note: "Sent once per incident. A passing health check resets it.",
+    note: "One email when it breaks, then a daily reminder while it stays broken. A passing health check resets it.",
   });
-  await sendEmail({ to, subject: `[PM-OS] Jira not working for ${org}`, text, html });
+  await sendEmail({ to, subject: `[PM-OS] ${heading}`, text, html });
 }
 
 async function sendExpiryWarning(org: string, row: AlertRow, expiresAt: Date) {
@@ -89,6 +93,7 @@ export async function recordJiraHealth(
       where: { id: workspaceId },
       select: {
         jiraAlertedAt: true,
+        jiraAlertedSince: true,
         ideasConfig: true,
         organization: { select: { name: true, features: true } },
       },
@@ -108,14 +113,25 @@ export async function recordJiraHealth(
             : null;
 
     if (cause) {
-      if (ws.jiraAlertedAt) return;
-      await db.workspace.update({ where: { id: workspaceId }, data: { jiraAlertedAt: new Date() } });
-      await sendOutageAlert(org, row?.siteUrl ?? null, cause);
+      // First failure emails at once; afterwards one reminder per day. The
+      // flag keeps the last send; the incident start travels in the subject
+      // only from the first email's date (we keep it in jiraAlertedSince).
+      const last = ws.jiraAlertedAt;
+      if (last && Date.now() - last.getTime() < REMINDER_EVERY_MS) return;
+      const since = ws.jiraAlertedSince ?? null;
+      await db.workspace.update({
+        where: { id: workspaceId },
+        data: { jiraAlertedAt: new Date(), ...(since ? {} : { jiraAlertedSince: new Date() }) },
+      });
+      await sendOutageAlert(org, row?.siteUrl ?? null, cause, since);
       return;
     }
 
-    if (ws.jiraAlertedAt) {
-      await db.workspace.update({ where: { id: workspaceId }, data: { jiraAlertedAt: null } });
+    if (ws.jiraAlertedAt || ws.jiraAlertedSince) {
+      await db.workspace.update({
+        where: { id: workspaceId },
+        data: { jiraAlertedAt: null, jiraAlertedSince: null },
+      });
     }
     const expiresAt = row?.apiTokenExpiresAt;
     if (

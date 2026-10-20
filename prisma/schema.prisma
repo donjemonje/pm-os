@@ -99,11 +99,12 @@ model Workspace {
   /// often, so they live in Admin → Ideas, not in code. Shape:
   /// lib/ideas/jira-mapping.ts.
   ideasConfig    Json         @default("{}")
-  /// Jira is enabled for the organization, so it must work: when the health
-  /// check last found it not working (no connection, project not set, or a
-  /// dead token) and emailed PM-OS support (src/lib/jira-alerts.ts). Null =
-  /// healthy / not yet alerted; cleared when a check passes again.
-  jiraAlertedAt  DateTime?
+  /// Jira is enabled for the organization, so it must work: when PM-OS
+  /// support was last emailed that it is not working (first failure, then
+  /// one reminder a day — src/lib/jira-alerts.ts) and when the current
+  /// incident started. Both null = healthy; cleared when a check passes.
+  jiraAlertedAt    DateTime?
+  jiraAlertedSince DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
