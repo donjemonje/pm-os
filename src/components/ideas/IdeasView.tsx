@@ -198,6 +198,18 @@ export function IdeasView({
   const [importing, setImporting] = useState(false);
   /** Index into IMPORT_STEPS while the import overlay is up; null = closed. */
   const [importStep, setImportStep] = useState<number | null>(null);
+  /** A PMOS AI call started from the drawer (rewrite / create from ticket):
+   *  shown as a full-screen wait owned by the page, so closing the drawer
+   *  neither hides it nor looks like it stopped. */
+  const [aiWait, setAiWait] = useState<{ title: string; what: string } | null>(null);
+  const withAiWait = async (title: string, what: string, run: () => Promise<boolean>) => {
+    setAiWait({ title, what });
+    try {
+      return await run();
+    } finally {
+      setAiWait(null);
+    }
+  };
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -1721,9 +1733,22 @@ export function IdeasView({
               : undefined
           }
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}
-          onRewrite={drawerIdea ? () => callMutate({ type: "rewrite", ideaId: drawerIdea.id }) : undefined}
+          onRewrite={
+            drawerIdea
+              ? () =>
+                  withAiWait(drawerIdea.title, "Rewriting the idea from its current sources", () =>
+                    callMutate({ type: "rewrite", ideaId: drawerIdea.id }),
+                  )
+              : undefined
+          }
           onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
-          onCreateIdeaFromTicket={(ticketKey) => callMutate({ type: "createIdeaFromTicket", ticketKey })}
+          onCreateIdeaFromTicket={(ticketKey) =>
+            withAiWait(
+              ticketsByKey.get(ticketKey)?.subject ?? ticketKey,
+              "Reading the ticket and writing an idea",
+              () => callMutate({ type: "createIdeaFromTicket", ticketKey }),
+            )
+          }
         />
       )}
 
@@ -1753,6 +1778,31 @@ export function IdeasView({
           className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-inner bg-[#0b1430] px-4 py-2.5 text-[13px] font-medium text-white shadow-[0_12px_32px_rgba(10,22,40,.3)]"
         >
           {toast}
+        </div>
+      )}
+
+      {/* PMOS AI wait (rewrite / create from ticket) — blocks the page until the call returns. */}
+      {aiWait && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,25,41,.42)] p-10 backdrop-blur-[6px]">
+          <div className="glass-strong flex w-[440px] max-w-full flex-col gap-5 overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]">
+            <div className="h-[3px] bg-[linear-gradient(90deg,var(--app-accent),#17b26a)]" />
+            <div className="flex flex-col gap-4 px-6 pb-6">
+              <div>
+                <div className="eyebrow mb-1.5 inline-flex items-center gap-1.5 text-primary">
+                  <PmosMark size={18} />
+                  PMOS AI
+                </div>
+                <div className="font-title text-[20px] font-bold">{aiWait.what}…</div>
+                <div className="mt-1 truncate text-[13px] text-fg-3" title={aiWait.title}>
+                  {aiWait.title}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-control bg-[var(--app-accent-soft)] px-3 py-2.5 text-[13px] text-foreground">
+                <span className="h-[18px] w-[18px] shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                One call — usually a few seconds.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
