@@ -329,7 +329,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(labeledInput(page, "Tickets heading")).toHaveValue("QA Supported:");
     await expect(labeledInput(page, "Blank lines before the list")).toHaveValue("3");
     await expect(
-      fieldRow(page, "Customers").locator('input[type="text"]')
+      fieldRow(page, "Customers").locator('input[type="text"]').first()
     ).toHaveValue("QA_Customers");
     await expect(fieldRow(page, "Components").getByRole("checkbox").first()).toBeChecked();
 
