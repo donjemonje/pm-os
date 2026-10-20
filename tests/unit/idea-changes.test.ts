@@ -34,7 +34,7 @@ describe("diffIdea", () => {
       "+2 votes: 112, 624",
       "Jira merges 1: PRDT-331",
       "Title changed",
-      "Text updated",
+      "Description updated",
       "Product lines added: Workflows, Platform",
       "Product lines removed: Other",
       "Platforms added: Web",
@@ -42,7 +42,7 @@ describe("diffIdea", () => {
     ]);
   });
 
-  it("carries the previous text on the Text updated line", () => {
+  it("carries the previous text on the Description updated line", () => {
     expect(diffIdea(touched, base).find((c) => c.kind === "details")?.from).toBe(base.details);
   });
 

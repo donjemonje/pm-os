@@ -70,7 +70,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 /**
  * One line per kind of change, related items folded together:
  *   +4 votes: 825, 112, 624, 633 · Jira merges 2: PRDT-331, PRDT-338 ·
- *   Title changed · Text updated · Product lines added: Monitor, Platform ·
+ *   Title changed · Description updated · Product lines added: Monitor, Platform ·
  *   +5 customers
  */
 export function diffIdea(now: IdeaLike, base: IdeaBaseline): IdeaChange[] {
@@ -90,7 +90,7 @@ export function diffIdea(now: IdeaLike, base: IdeaBaseline): IdeaChange[] {
   if (now.title.trim() !== base.title.trim())
     out.push({ id: "title", kind: "title", label: "Title changed", from: base.title, to: now.title });
   if (now.details.trim() !== base.details.trim())
-    out.push({ id: "details", kind: "details", label: "Text updated", from: base.details });
+    out.push({ id: "details", kind: "details", label: "Description updated", from: base.details });
   if ((now.manual ?? null) !== (base.manual ?? null))
     out.push({
       id: "score",

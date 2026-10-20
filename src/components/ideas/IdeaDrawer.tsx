@@ -1003,16 +1003,16 @@ export function IdeaDrawer({
                         title={c.kind === "title" ? `Was: ${c.from}` : undefined}
                       >
                         <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
-                        <span className="min-w-0 flex-1">{c.label}</span>
-                        {/* Only the text is undone here (sources on the Merge board):
-                            the editor opens on the previous text; Save commits it. */}
+                        <span className="min-w-0">{c.label}</span>
+                        {/* Only the description is undone here (sources on the Merge
+                            board): the editor opens on the previous text; Save commits it. */}
                         {c.kind === "details" && c.from !== undefined && onSave && (
                           <button
                             type="button"
                             onClick={() => startEdit("details", c.from)}
-                            title="Undo — opens the editor on the previous text; nothing changes until you save"
-                            aria-label="Undo the text update"
-                            className="flex shrink-0 rounded p-0.5 text-[#7a8aa3] opacity-60 hover:bg-white hover:text-[#2a5fd0] group-hover:opacity-100"
+                            title="Undo — opens the editor on the previous description; nothing changes until you save"
+                            aria-label="Undo the description update"
+                            className="ml-1 flex shrink-0 rounded p-0.5 text-[#7a8aa3] hover:bg-white hover:text-[#2a5fd0]"
                           >
                             <Undo2 size={11} strokeWidth={2.5} />
                           </button>
