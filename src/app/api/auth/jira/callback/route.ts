@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
-import { exchangeJiraCode, getAccessibleResources, getAtlassianMe } from "@/lib/jira";
+import { exchangeJiraCode, getAccessibleResources, getAtlassianMe, sealToken } from "@/lib/jira";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { getAppBaseUrl } from "@/lib/jira-oauth-config";
 
@@ -97,8 +97,8 @@ export async function GET(request: NextRequest) {
         workspaceId,
         cloudId: site.id,
         siteUrl: site.url,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: sealToken(tokens.access_token),
+        refreshToken: sealToken(tokens.refresh_token),
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         connectedByName,
         connectedByEmail,
@@ -108,8 +108,8 @@ export async function GET(request: NextRequest) {
         authType: "oauth",
         cloudId: site.id,
         siteUrl: site.url,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: sealToken(tokens.access_token),
+        refreshToken: sealToken(tokens.refresh_token),
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
         connectedByName,
         connectedByEmail,

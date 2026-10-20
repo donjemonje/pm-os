@@ -219,6 +219,9 @@ model JiraConnection {
   /// connect time) — shown in Settings so the team knows whose grant it is.
   connectedByName  String?
   connectedByEmail String?
+  /// authType "basic" (a dedicated PM-OS user + Atlassian API token): when
+  /// the token expires (admin-set at creation, max 1 year). Null = unknown.
+  apiTokenExpiresAt DateTime?
   projectKeys     String    @default("[]")
   prdSource       String    @default("epic_description")
   /// Ideas write-back target: new ideas become issues of this type in this

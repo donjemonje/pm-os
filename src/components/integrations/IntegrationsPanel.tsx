@@ -13,6 +13,8 @@ type JiraStatus = {
   siteUrl?: string;
   connectedByName?: string | null;
   connectedByEmail?: string | null;
+  authType?: string;
+  apiTokenExpiresAt?: string | null;
   projectKeys?: string[];
   ideasProjectKey?: string | null;
   ideasIssueType?: string;
@@ -251,22 +253,35 @@ export function IntegrationsPanel({
         expanded={jiraExpanded}
         onToggle={() => setJiraExpanded((v) => !v)}
         flat
-        needsReconnect={jiraNeedsReconnect}
-        onDisconnect={jiraStatus?.connected ? disconnectJira : undefined}
+        needsReconnect={jiraNeedsReconnect && jiraStatus?.authType !== "basic"}
+        onDisconnect={jiraStatus?.connected && jiraStatus.authType !== "basic" ? disconnectJira : undefined}
         detailHref={jiraStatus?.siteUrl}
       >
         {jiraDisconnectError && <div className="text-sm text-[#c94266]">{jiraDisconnectError}</div>}
         {jiraStatus?.connected && ideasEnabled && (
           <div className="text-sm">
-            {(jiraStatus.connectedByName || jiraStatus.connectedByEmail) && (
+            {jiraStatus.authType === "basic" ? (
               <p className="mb-1 text-muted">
-                Connected by{" "}
+                Connected as the PM-OS user{" "}
                 <span className="font-medium text-foreground">
-                  {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail}
+                  {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail ?? "PM-OS"}
                 </span>
-                {jiraStatus.connectedByName && jiraStatus.connectedByEmail ? ` (${jiraStatus.connectedByEmail})` : ""}
-                . Any user of the Jira site can reconnect with their own account when needed.
+                {jiraStatus.apiTokenExpiresAt
+                  ? ` · access valid until ${new Date(jiraStatus.apiTokenExpiresAt).toLocaleDateString()}`
+                  : ""}
+                . Everything PM-OS writes in Jira shows as this user; renewal is done by your PM-OS admin.
               </p>
+            ) : (
+              (jiraStatus.connectedByName || jiraStatus.connectedByEmail) && (
+                <p className="mb-1 text-muted">
+                  Connected by{" "}
+                  <span className="font-medium text-foreground">
+                    {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail}
+                  </span>
+                  {jiraStatus.connectedByName && jiraStatus.connectedByEmail ? ` (${jiraStatus.connectedByEmail})` : ""}
+                  . Any user of the Jira site can reconnect with their own account when needed.
+                </p>
+              )
             )}
             {(
               <p className="text-muted">

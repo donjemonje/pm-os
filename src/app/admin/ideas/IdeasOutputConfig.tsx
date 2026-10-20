@@ -33,6 +33,12 @@ interface OrgRow {
   /** Admin → Enablements "Jira integration" for the org — makes the Jira onboarding mandatory. */
   jiraEnabled: boolean;
   jiraConnected: boolean;
+  jiraConnection: {
+    authType: string;
+    connectedBy: string | null;
+    siteUrl: string;
+    apiTokenExpiresAt: string | null;
+  } | null;
 }
 
 const POLICY_LABELS: Record<string, string> = {
@@ -97,6 +103,42 @@ export function IdeasOutputConfig({
     };
   }, [orgId, selectedProject]);
   const [remapping, setRemapping] = useState(false);
+  /** PM-OS user + API token form (option A). */
+  const [tokenEmail, setTokenEmail] = useState("support@pm-os.io");
+  const [tokenValue, setTokenValue] = useState("");
+  const [tokenExpiry, setTokenExpiry] = useState("");
+  const [tokenBusy, setTokenBusy] = useState(false);
+  const [tokenMsg, setTokenMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  async function saveToken() {
+    setTokenBusy(true);
+    setTokenMsg(null);
+    try {
+      const res = await fetch(`/api/admin/organizations/${orgId}/jira-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: tokenEmail, token: tokenValue, expiresAt: tokenExpiry || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTokenMsg({ ok: false, text: data.error ?? "Save failed" });
+        return;
+      }
+      setTokenValue("");
+      setTokenMsg({ ok: true, text: `Connected as ${data.connectedBy} — reload to see it in the status line.` });
+    } finally {
+      setTokenBusy(false);
+    }
+  }
+  async function removeConnection() {
+    if (!window.confirm("Remove this organization's Jira connection? Imports run without Jira until it is connected again.")) return;
+    setTokenBusy(true);
+    try {
+      await fetch(`/api/admin/organizations/${orgId}/jira-token`, { method: "DELETE" });
+      setTokenMsg({ ok: true, text: "Connection removed — reload to see it in the status line." });
+    } finally {
+      setTokenBusy(false);
+    }
+  }
   const [remapResult, setRemapResult] = useState("");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -280,6 +322,92 @@ export function IdeasOutputConfig({
             On connect and reconnect PM-OS binds to this site, whichever other Atlassian sites the
             signing-in account can see. Required when members will reconnect with their own accounts.
             {org.jiraConnected && !config.jiraSiteUrl ? " Leave empty to keep the site connected today." : ""}
+          </div>
+        </div>
+        {/* Connection: who Jira sees us as */}
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="mb-1 text-xs font-medium text-slate-600">Connection</div>
+          <div className="text-sm">
+            {org.jiraConnection ? (
+              org.jiraConnection.authType === "basic" ? (
+                <>
+                  PM-OS user <b>{org.jiraConnection.connectedBy ?? "—"}</b> via API token on{" "}
+                  <span className="font-mono text-xs">{org.jiraConnection.siteUrl}</span>
+                  {org.jiraConnection.apiTokenExpiresAt ? (
+                    <>
+                      {" "}
+                      · token expires {new Date(org.jiraConnection.apiTokenExpiresAt).toLocaleDateString()}
+                      {new Date(org.jiraConnection.apiTokenExpiresAt).getTime() - Date.now() < 30 * 86_400_000 && (
+                        <span className="ml-1 font-semibold text-amber-700">(renew soon)</span>
+                      )}
+                    </>
+                  ) : (
+                    " · token expiry unknown"
+                  )}
+                  . Every write in Jira shows this user; no reconnect needed until the token expires.
+                </>
+              ) : (
+                <>
+                  OAuth grant by <b>{org.jiraConnection.connectedBy ?? "an unknown account"}</b> on{" "}
+                  <span className="font-mono text-xs">{org.jiraConnection.siteUrl}</span>. Writes in Jira show that
+                  person; a dead token needs a Reconnect by a site user. Prefer the PM-OS user below for a customer.
+                </>
+              )
+            ) : (
+              "Not connected. Either a member connects with OAuth in Settings → Integrations, or set the PM-OS user below."
+            )}
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_160px]">
+            <input
+              type="email"
+              value={tokenEmail}
+              onChange={(e) => setTokenEmail(e.target.value)}
+              placeholder="PM-OS user email (support@pm-os.io)"
+              className={inputCls}
+            />
+            <input
+              type="password"
+              value={tokenValue}
+              onChange={(e) => setTokenValue(e.target.value)}
+              placeholder="Atlassian API token"
+              autoComplete="off"
+              className={inputCls}
+            />
+            <input
+              type="date"
+              value={tokenExpiry}
+              onChange={(e) => setTokenExpiry(e.target.value)}
+              title="The expiry you chose when creating the token (max 1 year)"
+              className={inputCls}
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void saveToken()}
+              disabled={tokenBusy || !tokenEmail.trim() || !tokenValue.trim() || !config.jiraSiteUrl}
+              title={!config.jiraSiteUrl ? "Set and save the Jira site first" : "Checks the token against the site, then stores it sealed"}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            >
+              {tokenBusy && <Loader2 size={14} className="animate-spin" />}
+              Save & test token
+            </button>
+            {org.jiraConnection && (
+              <button
+                type="button"
+                onClick={() => void removeConnection()}
+                disabled={tokenBusy}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm hover:border-red-400 hover:text-red-700 disabled:opacity-50"
+              >
+                Remove connection
+              </button>
+            )}
+            {tokenMsg && <span className={`text-xs ${tokenMsg.ok ? "text-emerald-700" : "text-red-600"}`}>{tokenMsg.text}</span>}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            The PM-OS user must be a user of the site with access to the project (and Administer Jira if
+            select-field options are created on sync). Token: id.atlassian.com → Security → API tokens, signed in
+            as that user. The token is sealed at rest and never shown again.
           </div>
         </div>
         <div className="flex flex-wrap items-start gap-6">

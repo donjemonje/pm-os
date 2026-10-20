@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { decryptSecret, encryptSecret } from "./two-factor";
 import {
   assertJiraOAuthReady,
   getJiraRedirectUri,
@@ -122,9 +123,12 @@ export type JiraHealth = {
 export async function getJiraHealth(workspaceId: string): Promise<JiraHealth> {
   const row = await db.jiraConnection.findUnique({
     where: { workspaceId },
-    select: { id: true, authType: true, expiresAt: true },
+    select: { id: true, authType: true, expiresAt: true, apiTokenExpiresAt: true },
   });
   if (!row) return { status: "not_connected" };
+  if (row.authType === "basic" && row.apiTokenExpiresAt && row.apiTokenExpiresAt.getTime() <= Date.now()) {
+    return { status: "reconnect", detail: "The PM-OS user's API token expired — a PM-OS admin pastes a new one in Admin → Ideas." };
+  }
   try {
     const ok = await getValidConnection(workspaceId);
     return ok
@@ -158,10 +162,21 @@ type JiraConnectionRow = NonNullable<
  *   connection to the TEST project across DB resets — OAuth refresh tokens
  *   rotate on use, so a seeded one would die after the first refresh.
  */
+/**
+ * Tokens are sealed at rest (AES-GCM, "enc:" prefix). Rows written before
+ * sealing (no prefix) still read as plain text — no migration needed; they
+ * are re-sealed on the next refresh or reconnect.
+ */
+export function sealToken(value: string): string {
+  return value ? `enc:${encryptSecret(value)}` : value;
+}
+export function openToken(stored: string): string {
+  return stored.startsWith("enc:") ? decryptSecret(stored.slice(4)) : stored;
+}
+
 function authHeader(connection: JiraConnectionRow): string {
-  return connection.authType === "basic"
-    ? `Basic ${connection.accessToken}`
-    : `Bearer ${connection.accessToken}`;
+  const token = openToken(connection.accessToken);
+  return connection.authType === "basic" ? `Basic ${token}` : `Bearer ${token}`;
 }
 
 function apiBase(connection: JiraConnectionRow): string {
@@ -191,12 +206,12 @@ async function getValidConnection(workspaceId: string) {
     ) {
       return null;
     }
-    const tokens = await refreshJiraToken(connection.refreshToken);
+    const tokens = await refreshJiraToken(openToken(connection.refreshToken));
     return db.jiraConnection.update({
       where: { id: connection.id },
       data: {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: sealToken(tokens.access_token),
+        refreshToken: sealToken(tokens.refresh_token),
         expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
       },
     });
@@ -1014,6 +1029,8 @@ export async function getJiraConnectionStatus(workspaceId: string) {
     ideasIssueType: connection.ideasIssueType,
     connectedByName: connection.connectedByName,
     connectedByEmail: connection.connectedByEmail,
+    authType: connection.authType,
+    apiTokenExpiresAt: connection.apiTokenExpiresAt?.toISOString() ?? null,
     connected: true,
   };
 }
@@ -1034,4 +1051,28 @@ export function buildIssueContext(issues: JiraIssue[]): string {
       return parts.filter(Boolean).join("\n");
     })
     .join("\n\n---\n\n");
+}
+
+/**
+ * Checks a dedicated-user API token against the site (GET /myself with basic
+ * auth) and returns who it is. Throws with Jira's answer when it is refused.
+ */
+export async function validateBasicCredentials(
+  siteUrl: string,
+  email: string,
+  apiToken: string,
+): Promise<{ displayName: string; accountId: string; emailAddress: string | null }> {
+  const base = siteUrl.replace(/\/+$/, "");
+  const response = await fetch(`${base}/rest/api/3/myself`, {
+    headers: { Authorization: `Basic ${basicAuthToken(email, apiToken)}`, Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 401
+        ? "Jira refused the email + token (401). Check both, and that the user is active on this site."
+        : `Jira answered ${response.status}: ${(await response.text()).slice(0, 200)}`,
+    );
+  }
+  const me = (await response.json()) as { displayName?: string; accountId?: string; emailAddress?: string };
+  return { displayName: me.displayName ?? email, accountId: me.accountId ?? "", emailAddress: me.emailAddress ?? null };
 }

@@ -29,7 +29,9 @@ export default async function AdminIdeasPage() {
         select: {
           id: true,
           ideasConfig: true,
-          jiraConnection: { select: { id: true } },
+          jiraConnection: {
+            select: { id: true, authType: true, connectedByName: true, connectedByEmail: true, apiTokenExpiresAt: true, siteUrl: true },
+          },
         },
       },
     },
@@ -83,6 +85,17 @@ export default async function AdminIdeasPage() {
             config: mergeIdeasJiraConfig(org.workspace?.ideasConfig),
             jiraEnabled: resolveFeature(org.features, "jira", envFeatureDefault("jira")),
             jiraConnected: Boolean(org.workspace?.jiraConnection),
+            jiraConnection: org.workspace?.jiraConnection
+              ? {
+                  authType: org.workspace.jiraConnection.authType,
+                  connectedBy:
+                    org.workspace.jiraConnection.connectedByName ??
+                    org.workspace.jiraConnection.connectedByEmail ??
+                    null,
+                  siteUrl: org.workspace.jiraConnection.siteUrl,
+                  apiTokenExpiresAt: org.workspace.jiraConnection.apiTokenExpiresAt?.toISOString() ?? null,
+                }
+              : null,
           }))}
       />
     </AdminShell>
