@@ -53,7 +53,7 @@ const TYPE_LABELS: Record<string, string> = {
   single_select: "Single select",
   number: "Number",
   multi_select: "Multi select",
-  labels: "Labels (prefixed)",
+  labels: "Labels",
 };
 
 export function IdeasOutputConfig({
@@ -565,8 +565,8 @@ export function IdeasOutputConfig({
                       className={`${inputCls} w-40 disabled:opacity-50`}
                       title="Labels: any user who can edit the issue may add one (no admin right). Multi select: options must exist or be created, which needs Administer Jira."
                     >
-                      <option value="labels">Labels (prefixed)</option>
-                      <option value="multi_select">Multi select field</option>
+                      <option value="labels">Labels</option>
+                      <option value="multi_select">Select field</option>
                     </select>
                     {f.type === "labels" && (
                       <input

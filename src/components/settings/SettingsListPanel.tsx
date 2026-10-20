@@ -337,8 +337,8 @@ export function SettingsListPanel({
                     onPick={(color) => call("PATCH", { id: item.id, color })}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex min-h-7 items-center gap-2 text-sm font-medium text-foreground">
-                      {item.name}
+                    <div className="flex min-h-7 items-center gap-2 text-sm">
+                      <div className="font-medium text-foreground">{item.name}</div>
                       {item.usage && <UsageCounts {...item.usage} />}
                       {item.builtIn && (
                         <span

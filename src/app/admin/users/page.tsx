@@ -17,7 +17,7 @@ export default async function AdminUsersPage() {
       description="Add and manage the selected organization's users."
       org={org}
     >
-      <UserManagement initialOrganizations={organizations} />
+      <UserManagement key={org.current?.id ?? "none"} initialOrganizations={organizations} />
     </AdminShell>
   );
 }

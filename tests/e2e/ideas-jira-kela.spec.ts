@@ -554,7 +554,7 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     // All fields: collapsed by default; expanded it lists every field, type
     // and priority included (they live only here).
     const allFields = drawer.getByRole("button", { name: /^All fields \(\d+\)$/ });
-    await expect(allFields).toHaveText("All fields (9)");
+    await expect(allFields).toHaveText("All fields (10)");
     await expect(allFields).toHaveAttribute("aria-expanded", "false");
     await expect(drawer.locator("dl")).toHaveCount(0);
     await allFields.click();

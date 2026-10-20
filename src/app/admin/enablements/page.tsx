@@ -19,6 +19,7 @@ export default async function AdminEnablementsPage() {
       org={org}
     >
       <EnablementsMatrix
+        key={org.current?.id ?? "none"}
         initialOrganizations={organizations}
         orgEnvDefaults={Object.fromEntries(
           ORG_FEATURE_KEYS.map((key) => [key, envFeatureDefault(key)])

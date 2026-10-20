@@ -208,7 +208,13 @@ async function settleIdea(ideaId: string): Promise<void> {
     if (base) {
       const changed = diffIdea(like, base).length > 0;
       batchStatus = changed ? "updated" : row.origin === "jira" ? "unchanged" : "new";
-      newVotes = Math.max(0, evidenceOf(like, row.origin) - evidenceOf(base, row.origin));
+      // Votes follow the evidence gained over the baseline — but only when
+      // the source set actually moved. A reassign that re-sends the same
+      // sources (or a text/tag edit) leaves the batch votes an import gave
+      // (MRG-04: consolidated ideas untouched).
+      const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+      if (!(sameSet(like.zen, base.zen) && sameSet(like.jira, base.jira)))
+        newVotes = Math.max(0, evidenceOf(like, row.origin) - evidenceOf(base, row.origin));
     }
   }
   if (batchStatus === row.batchStatus && newVotes === row.newVotes) return;

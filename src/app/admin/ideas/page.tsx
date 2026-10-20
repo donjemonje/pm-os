@@ -48,6 +48,7 @@ export default async function AdminIdeasPage() {
       description="Per-organization Ideas setup in four parts: import stats, Jira (pull, mapping, write-back), Zendesk (CSV import mapping), and the AI stages. Changes apply to the next import or merge."
     >
       <IdeasOutputConfig
+        key={org.current?.id ?? "none"}
         prompts={[
           {
             id: "parse",

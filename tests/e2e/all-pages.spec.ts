@@ -62,9 +62,7 @@ test("logged-in user can open every app page", async ({ page }) => {
   );
   // Integrations content confirms the settings child page rendered, not
   // just the settings layout.
-  await expect(
-    page.getByText("Connect Jira and Google Drive to import tickets and PRDs.")
-  ).toBeVisible();
+  await expect(page.getByText("Jira Integration", { exact: true })).toBeVisible();
 
   // Legacy route: must land on the integrations settings page.
   await page.goto("/settings/google-drive");

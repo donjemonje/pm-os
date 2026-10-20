@@ -404,44 +404,40 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     // product-lines + customers editor; the text is edited by clicking it.
     await drawer.getByRole("button", { name: "Edit product lines and customers" }).click();
 
-    // The chips row itself is the editor; every change saves on its own
-    // (no Save/Cancel), the X leaves edit mode.
+    // The chips row itself is the editor. Tag edits are a DRAFT (2026-10-20):
+    // nothing reaches the server until ✓ saves the whole set in one call.
     const customersEdit = drawer;
     const input = customersEdit.getByPlaceholder("Add customer…");
     await expect(input).toBeVisible();
-    const mutate = () =>
-      page.waitForResponse(
-        (r) => r.url().includes("/api/ideas/mutate") && r.request().method() === "POST"
-      );
 
-    // Add by typing + Enter.
-    let saved = mutate();
+    // Add by typing + Enter (draft).
     await input.fill(ADDED);
     await input.press("Enter");
-    expect((await saved).status()).toBe(200);
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
     await expect(input).toHaveValue("");
 
-    // Remove the ticket-derived customer from this idea.
-    saved = mutate();
+    // Remove the ticket-derived customer from this idea (draft).
     await customersEdit
       .getByText(CATALOGED, { exact: true })
       .getByTitle("Remove from this idea")
       .click();
-    expect((await saved).status()).toBe(200);
     await expect(customersEdit.getByText(CATALOGED, { exact: true })).toHaveCount(0);
     await expect(customersEdit.getByText(ADDED, { exact: true })).toBeVisible();
 
-    // Product lines: the selected chip opens a multi-select menu; pick the line there.
+    // Product lines: the selected chip opens a multi-select menu; pick the line there (draft).
     await drawer.getByRole("button", { name: /▾$/ }).first().click();
     const lineChip = drawer.getByRole("button", { name: PRODUCT_LINE, exact: true });
     await expect(lineChip).toHaveAttribute("aria-pressed", "false");
-    saved = mutate();
     await lineChip.click();
-    expect((await saved).status()).toBe(200);
     await expect(lineChip).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape"); // closes the menu only
 
-    await drawer.getByRole("button", { name: "Stop editing tags" }).click();
+    // ✓ saves all three in one mutation; the drawer shows the saved state.
+    const saved = page.waitForResponse(
+      (r) => r.url().includes("/api/ideas/mutate") && r.request().method() === "POST"
+    );
+    await drawer.getByRole("button", { name: "Save tag changes" }).click();
+    expect((await saved).status()).toBe(200);
 
     // View mode again: product line chip, the added name as a suggestion
     // (off-catalog), the removed name gone from the chips…

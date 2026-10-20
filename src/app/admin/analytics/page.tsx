@@ -19,7 +19,7 @@ export default async function AdminAnalyticsPage() {
       title="Analytics"
       description="What users do in PM-OS, per organization: every decision and edit (what they changed, before → after), behaviour (pages, searches, filters, sessions), imports, and how often PMOS AI's output needed a correction. The man-in-the-middle view until the learning is automatic."
     >
-      <AnalyticsView organizations={organizations} />
+      <AnalyticsView key={org.current?.id ?? "none"} organizations={organizations} />
     </AdminShell>
   );
 }
