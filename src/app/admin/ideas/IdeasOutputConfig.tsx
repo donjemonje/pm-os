@@ -585,7 +585,8 @@ export function IdeasOutputConfig({
                         value={f.labelPrefix ?? "cs_"}
                         onChange={(e) => patchField(attr, { labelPrefix: e.target.value.replace(/\s+/g, "") })}
                         disabled={!f.enabled}
-                        title="Prefix on every customer label, e.g. cs_kensington-securities"
+                        placeholder="(no prefix)"
+                        title="Prefix on every customer label (cs_kensington-securities). Needed on Jira's own Labels field; leave empty for a dedicated custom Labels-type field such as 'Customers'."
                         className={`${inputCls} w-20 disabled:opacity-50`}
                       />
                     )}

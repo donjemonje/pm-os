@@ -168,6 +168,11 @@ export function readNumber(v: unknown): number {
 }
 
 /** Split wanted option values into allowed / rejected per Jira's own list. */
+/** A Labels-type custom field's value: an array of strings (anything else → none). */
+function readStringList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
 function filterAllowed(
   wanted: string[],
   meta: JiraFieldMeta | undefined
@@ -255,7 +260,7 @@ type PushIdeaRow = Prisma.IdeaGetPayload<{ include: typeof PUSH_INCLUDE }>;
 
 /** One written custom field's before/after, captured for per-idea undo. */
 export interface UndoFieldSnap {
-  kind: "number" | "single" | "multi";
+  kind: "number" | "single" | "multi" | "labels";
   /** number → previous number; single → always null (set-if-empty); multi → previous option values. */
   before: number | string[] | null;
   /** Exactly what the push wrote — undo restores only while Jira still holds this. */
@@ -566,21 +571,30 @@ async function derivePlan(
     const attrValue = (attr: MappedAttribute, fieldId: string): PushFieldChange | null => {
       const mapping = config.fields[attr];
       if (mapping.type === "labels") {
-        // Customers as labels: union with whatever labels the issue has; the
+        // Customers as labels: union with whatever the field holds; the
         // team's own labels are never touched. No option list, no admin right.
-        const prefix = mapping.labelPrefix ?? DEFAULT_CUSTOMER_LABEL_PREFIX;
-        const cur = live.labels;
+        // Jira's own Labels field (prefixed) or a custom Labels-type field
+        // (its own namespace, no prefix needed) — same wire shape.
+        const system = fieldId === "labels";
+        const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
+        const cur = system ? live.labels : readStringList(live.extra[fieldId]);
         const wanted = ideaCustomers(row).map((c) => customerLabel(c, prefix));
         const missing = wanted.filter((w) => !cur.includes(w));
         if (missing.length === 0) return null;
         const next = distinct([...cur, ...missing]);
-        write.labels = next;
-        write.undo.labels = { before: cur, after: next };
+        if (system) {
+          write.labels = next;
+          write.undo.labels = { before: cur, after: next };
+        } else {
+          extraFields[fieldId] = next;
+          undoFields[fieldId] = { kind: "labels", before: cur, after: next };
+        }
+        const ours = (l: string) => !prefix || l.startsWith(prefix);
         return {
           field: attr,
           label: ATTRIBUTE_LABELS[attr],
-          from: cur.filter((l) => l.startsWith(prefix)).join(", ") || "(none)",
-          to: next.filter((l) => l.startsWith(prefix)).join(", "),
+          from: cur.filter(ours).join(", ") || "(none)",
+          to: next.filter(ours).join(", "),
         };
       }
       const meta = editMeta.get(fieldId);
@@ -720,10 +734,12 @@ async function derivePlan(
         continue;
       }
       if (mapping.type === "labels") {
-        const prefix = mapping.labelPrefix ?? DEFAULT_CUSTOMER_LABEL_PREFIX;
+        const system = fieldId === "labels";
+        const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
         const labels = ideaCustomers(row).map((c) => customerLabel(c, prefix));
         if (labels.length > 0) {
-          createLabels = labels;
+          if (system) createLabels = labels;
+          else extraFields[fieldId] = labels;
           changes.push({ field: attr, label: ATTRIBUTE_LABELS[attr], from: "", to: labels.join(", ") });
         }
         continue;

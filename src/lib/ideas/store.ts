@@ -4,7 +4,7 @@ import { PrefixWarmer } from "./ai-cache";
 import { nextChipColor } from "./colors";
 import { ALL_CUSTOMERS_NAME, buildCustomerResolver, customerKey } from "./customer-key";
 import { customersTextHash, findCatalogCustomers, issueCustomerText } from "./customer-mentions";
-import { DEFAULT_CUSTOMER_LABEL_PREFIX, isCustomerLabel, labelToCustomerName } from "./customer-labels";
+import { DEFAULT_CUSTOMER_LABEL_PREFIX, labelToCustomerName } from "./customer-labels";
 import { extractJiraCustomers } from "./jira-customers";
 import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
@@ -905,13 +905,10 @@ async function runImport(
       // Customer labels (cs_…) the team or an earlier sync put on the issue
       // are customers too — read deterministically, catalog spelling first.
       const customersMapping = importCfg.fields.customers;
-      const labelPrefix = customersMapping.labelPrefix ?? DEFAULT_CUSTOMER_LABEL_PREFIX;
-      const labelNames =
-        customersMapping.type === "labels"
-          ? (s.labels ?? [])
-              .filter((l) => isCustomerLabel(l, labelPrefix))
-              .map((l) => labelToCustomerName(l, catalogRows, labelPrefix))
-          : [];
+      const labelPrefix =
+        customersMapping.labelPrefix ??
+        (customersMapping.jiraField.trim().toLowerCase() === "labels" ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
+      const labelNames = (s.customerLabels ?? []).map((l) => labelToCustomerName(l, catalogRows, labelPrefix));
       const affected = distinct([...catalogHits, ...labelNames, ...aiRead]);
       const hashNow = aiNames.has(s.key) || !changed.some((c) => c.key === s.key)
         ? hashes.get(s.key)!

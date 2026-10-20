@@ -20,7 +20,7 @@ export function customerLabel(name: string, prefix = DEFAULT_CUSTOMER_LABEL_PREF
 }
 
 export function isCustomerLabel(label: string, prefix = DEFAULT_CUSTOMER_LABEL_PREFIX): boolean {
-  return label.startsWith(prefix) && label.length > prefix.length;
+  return prefix ? label.startsWith(prefix) && label.length > prefix.length : label.length > 0;
 }
 
 /**
@@ -32,7 +32,7 @@ export function labelToCustomerName(
   catalog: { name: string; aliases?: string[] | null }[],
   prefix = DEFAULT_CUSTOMER_LABEL_PREFIX,
 ): string {
-  const slug = label.slice(prefix.length);
+  const slug = prefix && label.startsWith(prefix) ? label.slice(prefix.length) : label;
   const wanted = customerKey(slug.replace(/-/g, " "));
   for (const c of catalog) {
     if (customerKey(c.name) === wanted) return c.name;

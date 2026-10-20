@@ -291,6 +291,8 @@ interface MapIssueOptions {
    *  demo keeps the names in P_Reporter / P_Assignee). Unset = system fields. */
   reporterFieldId?: string;
   assigneeFieldId?: string;
+  /** Custom Labels-type field holding customer names (Admin → Ideas → Customers = a custom labels field). */
+  customersFieldId?: string;
 }
 
 function userName(v: unknown): string | undefined {
@@ -330,6 +332,9 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
   const issueKey = String(issue.key);
   const productLine = opts.productLineFieldId
     ? readProductLineValue(fields[opts.productLineFieldId])
+    : undefined;
+  const customerLabels = opts.customersFieldId
+    ? ((fields[opts.customersFieldId] as unknown[]) ?? []).filter((v): v is string => typeof v === "string")
     : undefined;
   const priority = ((fields.priority as { name?: string }) ?? {}).name || undefined;
   const reporter =
@@ -400,6 +405,7 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
     status,
     issueType,
     labels,
+    customerLabels,
     components,
     productLine,
     priority,
@@ -560,6 +566,8 @@ export interface IssueScopeParams {
   /** Custom text field ids read as reporter / assignee names (see MapIssueOptions). */
   reporterFieldId?: string;
   assigneeFieldId?: string;
+  /** Custom Labels-type field read as the issue's customers. */
+  customersFieldId?: string;
 }
 
 function scopeJql(params: IssueScopeParams): string {
@@ -592,11 +600,13 @@ export async function fetchIssuesForScopePaged(
   const fieldId = params.productLineFieldId?.trim() || undefined;
   const reporterFieldId = params.reporterFieldId?.trim() || undefined;
   const assigneeFieldId = params.assigneeFieldId?.trim() || undefined;
+  const customersFieldId = params.customersFieldId?.trim() || undefined;
   return searchJiraPaged(workspaceId, scopeJql(params), params.maxResults ?? 100, {
     productLineFieldId: fieldId,
     reporterFieldId,
     assigneeFieldId,
-    extraFields: [fieldId, reporterFieldId, assigneeFieldId].filter((x): x is string => Boolean(x)),
+    customersFieldId,
+    extraFields: [fieldId, reporterFieldId, assigneeFieldId, customersFieldId].filter((x): x is string => Boolean(x)),
   });
 }
 

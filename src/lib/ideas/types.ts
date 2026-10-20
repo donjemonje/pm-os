@@ -81,6 +81,9 @@ export interface JiraSource {
   customers?: string[];
   /** Jira labels (customer labels among them when the org maps customers to labels). */
   labels?: string[];
+  /** Raw customer label values: the custom labels field's values, or the
+   *  prefixed system labels — whichever the org maps. */
+  customerLabels?: string[];
 }
 
 export interface Idea {
