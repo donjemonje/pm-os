@@ -1762,7 +1762,7 @@ export function IdeasView({
           }
           onSave={
             drawerIdea
-              ? (patch) => void callMutate({ type: "edit", ideaId: drawerIdea.id, ...patch })
+              ? (patch) => callMutate({ type: "edit", ideaId: drawerIdea.id, ...patch })
               : undefined
           }
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}

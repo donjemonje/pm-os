@@ -94,7 +94,7 @@ interface IdeaDrawerProps {
     platforms: string[];
     addedCustomers: string[];
     removeCustomers: string[];
-  }) => void;
+  }) => Promise<boolean> | void;
   onMerge?: () => void;
   /** Sources changed: rewrite the idea from its current sources (PMOS AI, one call). */
   onRewrite?: () => Promise<boolean>;
@@ -240,11 +240,13 @@ export function IdeaDrawer({
     setCustomerListOpen(false);
     setEditSection(section);
   };
-  const saveEdit = () => {
+  const saveEdit = async () => {
+    if (saving) return;
     if (!idea) return;
     const raw = editManual.trim();
     const parsed = raw === "" ? null : parseInt(raw, 10);
-    onSave?.({
+    setSaving(true);
+    const ok = await onSave?.({
       title: editTitle.trim() || idea.title,
       details: editDetails,
       manual: parsed != null && Number.isNaN(parsed) ? idea.manual : parsed,
@@ -253,7 +255,8 @@ export function IdeaDrawer({
       addedCustomers: editAdded,
       removeCustomers: editRemoved,
     });
-    setEditSection(null);
+    setSaving(false);
+    if (ok !== false) setEditSection(null);
   };
   const cancelEdit = () => setEditSection(null);
   // Keyboard for the whole edit (title, score, customers, Details editor):
@@ -287,18 +290,26 @@ export function IdeaDrawer({
    *  — or the "Changes to sync" section — until ✓ / Enter saves the whole
    *  set in one call; ✕ / Esc discards. A ticket-derived customer removed
    *  in the draft goes out as a dismissal on save. */
-  const saveTags = () => {
-    if (!idea) return;
-    onSave?.({
-      title: idea.title,
-      details: idea.details,
-      manual: idea.manual ?? null,
-      products: editProducts,
-      platforms: editPlatforms,
-      addedCustomers: editAdded,
-      removeCustomers: editRemoved,
-    });
-    setEditSection(null);
+  /** Saves in flight: the draft stays on screen until the new state has
+   *  arrived, so the old chips never show for a beat (Daniel, 2026-10-20). */
+  const [saving, setSaving] = useState(false);
+  const saveTags = async () => {
+    if (!idea || saving) return;
+    setSaving(true);
+    try {
+      const ok = await onSave?.({
+        title: idea.title,
+        details: idea.details,
+        manual: idea.manual ?? null,
+        products: editProducts,
+        platforms: editPlatforms,
+        addedCustomers: editAdded,
+        removeCustomers: editRemoved,
+      });
+      if (ok !== false) setEditSection(null);
+    } finally {
+      setSaving(false);
+    }
   };
   const toggleProduct = (p: string) => {
     const next = toggleIn(editProducts, p);
@@ -494,7 +505,8 @@ export function IdeaDrawer({
         })()}
       <button
         type="button"
-        onClick={saveTags}
+        onClick={() => void saveTags()}
+        disabled={saving}
         title="Save — Enter"
         aria-label="Save tag changes"
         className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-[#0f7a47] hover:bg-[rgba(23,178,106,.16)]"
@@ -1143,7 +1155,7 @@ export function IdeaDrawer({
           <div className="flex items-center gap-2 border-t border-border bg-[rgba(255,255,255,.6)] px-6 py-3">
             {editSection === "details" ? (
               <>
-                <Button variant="primary" glow onClick={saveEdit}>
+                <Button variant="primary" glow onClick={() => void saveEdit()} disabled={saving}>
                   Save changes
                 </Button>
                 <Button onClick={cancelEdit}>Cancel</Button>
