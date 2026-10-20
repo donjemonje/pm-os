@@ -1,5 +1,6 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { getAdminOrg } from "@/lib/admin-org";
 import { envFeatureDefault, resolveFeature } from "@/lib/feature-flags";
 import {
   CATALOG_PROMPT_VERSION,
@@ -21,8 +22,10 @@ import { IdeasOutputConfig } from "./IdeasOutputConfig";
 
 export default async function AdminIdeasPage() {
   const admin = await requireAdminPage("/admin/ideas");
+  const org = await getAdminOrg(admin.organizationId);
 
   const organizations = await db.organization.findMany({
+    where: { id: org.current?.id ?? "" },
     orderBy: { createdAt: "asc" },
     include: {
       workspace: {
@@ -40,6 +43,7 @@ export default async function AdminIdeasPage() {
   return (
     <AdminShell
       user={admin}
+      org={org}
       title="Ideas"
       description="Per-organization Ideas setup in four parts: import stats, Jira (pull, mapping, write-back), Zendesk (CSV import mapping), and the AI stages. Changes apply to the next import or merge."
     >

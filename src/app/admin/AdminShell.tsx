@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { Building2, Lightbulb, Settings, Users, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AdminLogoutButton } from "./AdminLogoutButton";
+import { AdminOrgBanner } from "./AdminOrgBanner";
 
 type AdminShellUser = {
   email: string;
@@ -47,12 +48,15 @@ export function AdminShell({
   user,
   title,
   description,
+  org,
   actions,
   children,
 }: {
   user: AdminShellUser;
   title: string;
   description?: string;
+  /** The selected organization and the list to switch between (every page passes both). */
+  org?: { current: { id: string; name: string; slug: string } | null; all: { id: string; name: string; slug: string }[] };
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -158,6 +162,7 @@ export function AdminShell({
               })}
             </nav>
           </header>
+          {org && <AdminOrgBanner current={org.current} all={org.all} />}
 
           <main className="flex-1 px-4 py-8 sm:px-8">
             <div className="mx-auto max-w-6xl">

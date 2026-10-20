@@ -192,17 +192,7 @@ export function AnalyticsView({ organizations }: { organizations: { id: string; 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
-        <select
-          value={orgId}
-          onChange={(e) => setOrgId(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm"
-        >
-          {organizations.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name} ({o.slug})
-            </option>
-          ))}
-        </select>
+        {/* The organization is chosen in the admin banner. */}
         <div className="flex items-center gap-1">
           {[7, 30, 90, 365].map((d) => (
             <button

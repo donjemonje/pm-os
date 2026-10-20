@@ -260,20 +260,7 @@ export function IdeasOutputConfig({
 
   return (
     <div className="space-y-6">
-      <label className="flex items-center gap-3 text-sm">
-        <span className="font-medium">Organization</span>
-        <select
-          value={orgId}
-          onChange={(e) => setOrgId(e.target.value)}
-          className={inputCls}
-        >
-          {organizations.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name} ({o.slug})
-            </option>
-          ))}
-        </select>
-      </label>
+      {/* The organization is chosen in the admin banner; this page shows that one. */}
 
       <section className="space-y-4">
         <div className="border-b border-slate-200 pb-2">

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Building2,
@@ -50,6 +51,7 @@ export function UserManagement({
   initialOrganizations: Organization[];
 }) {
   const { confirm } = useConfirm();
+  const router = useRouter();
   const [organizations, setOrganizations] =
     useState<Organization[]>(initialOrganizations);
   const [showAddUser, setShowAddUser] = useState(false);
@@ -63,11 +65,14 @@ export function UserManagement({
     [organizations]
   );
 
+  // Admin screens show ONE organization (the banner's choice, server-side);
+  // a refresh re-reads that org only, never the whole list.
+  const shownOrgIds = useMemo(() => new Set(initialOrganizations.map((o) => o.id)), [initialOrganizations]);
   async function refresh() {
     const res = await fetch("/api/admin/organizations");
     if (res.ok) {
       const data = await res.json();
-      setOrganizations(data.organizations ?? []);
+      setOrganizations(((data.organizations ?? []) as Organization[]).filter((o) => shownOrgIds.has(o.id)));
     }
   }
 
@@ -191,6 +196,16 @@ export function UserManagement({
             setShowAddUser(false);
             setActionError("");
             setNotice("");
+            // A user added to a NEW organization: make that org the selected
+            // one, so the screen shows what was just created.
+            if (created.organizationId && !shownOrgIds.has(created.organizationId)) {
+              await fetch("/api/admin/current-org", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orgId: created.organizationId }),
+              });
+              router.refresh();
+            }
             if (created.invite === null) {
               setNotice(`${created.email} added.`);
             } else if (created.invite.sent) {
@@ -542,6 +557,8 @@ function inviteNotice(email: string, delivered: boolean): string {
 }
 
 type CreatedUser = {
+  /** The user's organization — the screen switches to it when it is a new one. */
+  organizationId?: string | null;
   email: string;
   invite: { sent: boolean; delivered?: boolean; error?: string } | null;
 };
@@ -595,7 +612,11 @@ function AddUserForm({
         setError(data.error || "Failed to add user");
         return;
       }
-      await onCreated({ email: data.user.email, invite: data.invite ?? null });
+      await onCreated({
+        email: data.user.email,
+        organizationId: typeof data.user.organizationId === "string" ? data.user.organizationId : null,
+        invite: data.invite ?? null,
+      });
     } catch {
       setError("Something went wrong. Try again.");
     } finally {

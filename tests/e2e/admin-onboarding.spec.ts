@@ -107,7 +107,11 @@ test.describe("PM-OS Admin: onboarding, CSV mapping, import runs (ADM-02, ADM-08
     await expect(page.getByRole("heading", { name: "Add a user" })).toBeVisible();
     await page.getByPlaceholder("Jane Doe").fill(ONB_INVITEE.name);
     await page.getByPlaceholder("jane@company.com").fill(ONB_INVITEE.email);
-    await page.locator("select").selectOption({ label: "+ Create new organization…" });
+    // Two selects on the page now (the admin org banner + the form's) — scope to the form.
+    await page
+      .locator("form", { has: page.getByPlaceholder("Jane Doe") })
+      .locator("select")
+      .selectOption({ label: "+ Create new organization…" });
     await page.getByPlaceholder("Acme Inc.").fill(ONB_ORG);
     await page.locator("form", { has: page.getByPlaceholder("Acme Inc.") }).locator('button[type="submit"]').click();
 

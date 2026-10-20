@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
-import { acceptConfirm, loginAsRoomLensAdmin, QA_ADMIN, withTestDb } from "./helpers";
+import { acceptConfirm, loginAsRoomLensAdmin, QA_ADMIN, withTestDb, selectAdminOrg } from "./helpers";
 import { LOCAL_BASE_URL } from "./test-env";
 
 /**
@@ -197,6 +197,7 @@ test.describe("Admin delete + invites + landing (feature/admin-delete-user-org)"
       organizationId: org.id,
     });
 
+    await selectAdminOrg(page, org.id); // admin screens show one org (banner)
     await page.goto("/admin/users");
     await expect(
       page.getByRole("heading", { name: "User Management" })
@@ -322,6 +323,7 @@ test.describe("Admin delete + invites + landing (feature/admin-delete-user-org)"
     expect(withPassword.invite).toBeNull();
 
     // Before: the Admin row shows the invite as pending.
+    await selectAdminOrg(page, org.id); // admin screens show one org (banner)
     await page.goto("/admin/users");
     const inviteCard = orgCard(page, INVITE_ORG);
     await expect(
@@ -462,6 +464,7 @@ test.describe("Admin delete + invites + landing (feature/admin-delete-user-org)"
       password: SEEDED_STYLE_PASSWORD,
     });
 
+    await selectAdminOrg(page, org.id); // admin screens show one org (banner)
     await page.goto("/admin/users");
     const card = orgCard(page, RESEND_ORG);
     const pendingRow = memberRow(card, RES_PENDING);

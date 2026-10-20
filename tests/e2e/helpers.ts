@@ -217,3 +217,12 @@ export async function acceptConfirm(page: Page): Promise<void> {
   await dialog.getByRole("button").last().click();
   await expect(dialog).toHaveCount(0);
 }
+
+/**
+ * PM-OS Admin works on one organization at a time (banner, cookie). Specs that
+ * look at an org other than the admin's own select it here before navigating.
+ */
+export async function selectAdminOrg(page: Page, orgId: string): Promise<void> {
+  const res = await page.request.post("/api/admin/current-org", { data: { orgId } });
+  if (!res.ok()) throw new Error(`selectAdminOrg: ${res.status()} ${await res.text()}`);
+}
