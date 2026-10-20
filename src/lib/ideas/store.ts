@@ -1852,11 +1852,14 @@ export async function mutateIdeas(
       if (!rewrite) throw new Error("PMOS AI returned no text for this idea — nothing changed");
       const lines = rewrite.productLines.filter(Boolean);
       const rewriteBaseline = await baselinePatch(idea.id);
+      // An existing idea keeps its title (it is what Jira and the team know
+      // it by — Daniel, 2026-10-20); only a New idea takes the rewritten one.
+      const keepTitle = idea.batchStatus !== "new";
       await db.idea.update({
         where: { id: idea.id },
         data: {
           ...rewriteBaseline,
-          title: rewrite.productTitle || idea.title,
+          title: keepTitle ? idea.title : rewrite.productTitle || idea.title,
           details: rewrite.productSummary || idea.details,
           ...(lines.length > 0 ? { products: lines as Prisma.InputJsonValue } : {}),
           sourcesChanged: false,
