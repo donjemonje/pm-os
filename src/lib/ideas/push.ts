@@ -315,21 +315,31 @@ interface PushWrites {
   newOptions: Map<string, NewOptions>;
 }
 
+/** Customers read from a Jira issue's text at import, and the PM's dismissals on it. */
+type JiraCustomerRows = Map<string, { affectedCustomers: unknown; dismissedCustomers: unknown }>;
+
 /**
- * The customers a sync writes for an idea: ticket-derived names plus the
+ * The customers a sync writes for an idea — the same set the idea shows:
+ * names from its tickets, names read from its Jira issues' text, and the
  * ones a PM added by hand, minus dismissals — and only names in the
  * catalog (Settings → Ideas → Customers). A suggested customer the PM has
  * not approved yet is never written (Daniel, 2026-10-20).
  */
-function ideaCustomers(row: PushIdeaRow, catalog: Set<string>): string[] {
+function ideaCustomers(row: PushIdeaRow, ctx: { catalog: Set<string>; jira: JiraCustomerRows }): string[] {
   const tickets = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
-  const dismissed = new Set(
-    tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
-  );
+  const issues = row.sources.flatMap((s) => {
+    const r = s.kind === "jira" && s.jiraKey ? ctx.jira.get(s.jiraKey) : undefined;
+    return r ? [r] : [];
+  });
+  const dismissed = new Set([
+    ...tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase())),
+    ...issues.flatMap((j) => ((j.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase())),
+  ]);
   return distinct([
     ...tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+    ...issues.flatMap((j) => (j.affectedCustomers as string[]) ?? []),
     ...(((row as { addedCustomers?: unknown }).addedCustomers as string[]) ?? []),
-  ]).filter((c) => !dismissed.has(c.toLowerCase()) && catalog.has(c.toLowerCase()));
+  ]).filter((c) => !dismissed.has(c.toLowerCase()) && ctx.catalog.has(c.toLowerCase()));
 }
 
 function ideaTickets(row: PushIdeaRow): TicketRef[] {
@@ -442,12 +452,26 @@ async function derivePlan(
     include: PUSH_INCLUDE,
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  // Approved customers only (see ideaCustomers).
-  const catalog = new Set(
-    (await db.customer.findMany({ where: { workspaceId }, select: { name: true } })).map((c) =>
-      c.name.toLowerCase()
-    )
-  );
+  // Approved customers only, from tickets, Jira issue text and the PM's
+  // additions alike (see ideaCustomers).
+  const customerCtx = {
+    catalog: new Set(
+      (await db.customer.findMany({ where: { workspaceId }, select: { name: true } })).map((c) =>
+        c.name.toLowerCase()
+      )
+    ),
+    jira: new Map(
+      (
+        await db.jiraIdeaSnapshot.findMany({
+          where: {
+            workspaceId,
+            key: { in: rows.flatMap((r) => r.sources.flatMap((x) => (x.kind === "jira" && x.jiraKey ? [x.jiraKey] : []))) },
+          },
+          select: { key: true, affectedCustomers: true, dismissedCustomers: true },
+        })
+      ).map((r) => [r.key, r] as const)
+    ) as JiraCustomerRows,
+  };
 
   const scoped = rows.filter((r) => inScope((r.products as string[]) ?? [], scope));
   // Pending ideas never block a merge — only approved ones go.
@@ -629,7 +653,7 @@ async function derivePlan(
         const system = fieldId === "labels";
         const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
         const cur = system ? live.labels : readStringList(live.extra[fieldId]);
-        const wanted = ideaCustomers(row, catalog).map((c) => customerLabel(c, prefix));
+        const wanted = ideaCustomers(row, customerCtx).map((c) => customerLabel(c, prefix));
         const missing = wanted.filter((w) => !cur.includes(w));
         if (missing.length === 0) return null;
         const next = distinct([...cur, ...missing]);
@@ -692,7 +716,7 @@ async function derivePlan(
       const cur = readMultiSelect(live.extra[fieldId]);
       const wanted =
         attr === "customers"
-          ? ideaCustomers(row, catalog)
+          ? ideaCustomers(row, customerCtx)
           : ((row.platforms as string[]) ?? []).filter(Boolean);
       const missing = wanted.filter((w) => !cur.some((c) => c.toLowerCase() === w.toLowerCase()));
       if (missing.length === 0) return null;
@@ -787,7 +811,7 @@ async function derivePlan(
       if (mapping.type === "labels") {
         const system = fieldId === "labels";
         const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
-        const labels = ideaCustomers(row, catalog).map((c) => customerLabel(c, prefix));
+        const labels = ideaCustomers(row, customerCtx).map((c) => customerLabel(c, prefix));
         if (labels.length > 0) {
           if (system) createLabels = labels;
           else extraFields[fieldId] = labels;
@@ -799,7 +823,7 @@ async function derivePlan(
         attr === "productLine"
           ? ((row.products as string[]) ?? []).filter((p) => p !== "Other").slice(0, 1)
           : attr === "customers"
-            ? ideaCustomers(row, catalog)
+            ? ideaCustomers(row, customerCtx)
             : ((row.platforms as string[]) ?? []).filter(Boolean);
       if (wanted.length === 0) continue;
       const candidates = attr === "productLine" ? productResolver.spellings(wanted[0]) : wanted;
