@@ -4,6 +4,7 @@ import { ArrowRight, FileText, MessageSquare, Package, Plug } from "lucide-react
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
 import { db } from "@/lib/db";
 import { getJiraConnectionStatus } from "@/lib/jira";
+import { SUPPORT_EMAIL } from "@/lib/jira-health-copy";
 import { landingPathForCurrentUser } from "@/lib/landing";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { AppShell } from "@/components/layout/AppShell";
@@ -50,18 +51,13 @@ export default async function DashboardPage() {
             <div className="flex items-center gap-3">
               <Plug className="text-amber-600" size={20} />
               <div>
-                <div className="text-sm font-medium text-amber-900">Connect Jira to get started</div>
+                <div className="text-sm font-medium text-amber-900">Jira is not connected</div>
                 <div className="text-xs text-amber-700">
-                  Required for release notes, user manuals, and PRD Q&A.
+                  Required for release notes, user manuals, and PRD Q&A. PM-OS support sets up the
+                  connection — contact {SUPPORT_EMAIL}.
                 </div>
               </div>
             </div>
-            <Link
-              href="/settings/jira"
-              className="rounded-lg bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-700"
-            >
-              Connect
-            </Link>
           </div>
         )}
 

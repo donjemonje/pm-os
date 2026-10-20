@@ -7,7 +7,6 @@ import {
 import { getJiraConnectionStatus, getJiraHealth } from "@/lib/jira";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
 import { getGoogleDriveConnectionStatus } from "@/lib/google-drive";
-import { getJiraOAuthSetupStatus } from "@/lib/jira-oauth-config";
 import { getGoogleDriveOAuthSetupStatus } from "@/lib/google-drive-oauth-config";
 import { IntegrationsPanel } from "@/components/integrations/IntegrationsPanel";
 
@@ -15,8 +14,6 @@ export default async function IntegrationsSettingsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    connected?: string;
-    error?: string;
     drive_connected?: string;
     drive_error?: string;
   }>;
@@ -33,13 +30,14 @@ export default async function IntegrationsSettingsPage({
   const driveStatus = driveEnabled
     ? await getGoogleDriveConnectionStatus(workspace.id)
     : { connected: false };
-  const jiraOauthSetup = getJiraOAuthSetupStatus();
   const driveOauthSetup = getGoogleDriveOAuthSetupStatus();
   const params = await searchParams;
   const jiraCfg = mergeIdeasJiraConfig(workspace.ideasConfig);
-  const jiraNeedsReconnect = jiraStatus?.connected
-    ? (await getJiraHealth(workspace.id)).status === "reconnect"
-    : false;
+  // Live probe (cached a few minutes) — the card says "Unavailable" with the
+  // support message when the PM-OS user's token stopped working.
+  const jiraHealth = jiraStatus?.connected
+    ? (await getJiraHealth(workspace.id)).status
+    : "not_connected";
   return (
     <>
     <PageView name="settings_integrations" />
@@ -51,12 +49,9 @@ export default async function IntegrationsSettingsPage({
         ideasEnabled={ideasEnabled}
         jiraProject={jiraCfg.jiraProject}
         jiraIssueType={jiraCfg.jiraIssueType}
-        jiraNeedsReconnect={jiraNeedsReconnect}
-        jiraOauthReady={jiraOauthSetup.ready}
+        jiraHealth={jiraHealth}
         driveOauthReady={driveOauthSetup.ready}
         banners={{
-          jiraSuccess: Boolean(params.connected),
-          jiraError: params.error,
           driveSuccess: Boolean(params.drive_connected),
           driveError: params.drive_error,
         }}

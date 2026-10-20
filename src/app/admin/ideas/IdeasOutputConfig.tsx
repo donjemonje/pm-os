@@ -307,7 +307,7 @@ export function IdeasOutputConfig({
         {!org.jiraConnected && (
           <div className="mb-3 text-xs text-slate-500">
             Jira is not connected for this organization yet — type the project key and work
-            type; they apply as soon as a member connects Jira.
+            type; they apply as soon as the PM-OS user token below is saved.
           </div>
         )}
         <div className="mb-4">
@@ -320,8 +320,7 @@ export function IdeasOutputConfig({
             className={`${inputCls} w-80`}
           />
           <div className="mt-1 text-[11px] text-slate-500">
-            On connect and reconnect PM-OS binds to this site, whichever other Atlassian sites the
-            signing-in account can see. Required when members will reconnect with their own accounts.
+            The site the PM-OS user token below is checked against and every request goes to.
             {org.jiraConnected && !config.jiraSiteUrl ? " Leave empty to keep the site connected today." : ""}
           </div>
         </div>
@@ -345,17 +344,19 @@ export function IdeasOutputConfig({
                   ) : (
                     " · token expiry unknown"
                   )}
-                  . Every write in Jira shows this user; no reconnect needed until the token expires.
+                  . Every write in Jira shows this user. Members see "Unavailable — contact support" when
+                  the token stops working, and support@pm-os.io gets one email per incident.
                 </>
               ) : (
                 <>
-                  OAuth grant by <b>{org.jiraConnection.connectedBy ?? "an unknown account"}</b> on{" "}
-                  <span className="font-mono text-xs">{org.jiraConnection.siteUrl}</span>. Writes in Jira show that
-                  person; a dead token needs a Reconnect by a site user. Prefer the PM-OS user below for a customer.
+                  <span className="font-semibold text-amber-700">Legacy OAuth connection</span> by{" "}
+                  <b>{org.jiraConnection.connectedBy ?? "an unknown account"}</b> on{" "}
+                  <span className="font-mono text-xs">{org.jiraConnection.siteUrl}</span> — no longer supported:
+                  members see Jira as unavailable until the PM-OS user below is saved.
                 </>
               )
             ) : (
-              "Not connected. Either a member connects with OAuth in Settings → Integrations, or set the PM-OS user below."
+              "Not connected. Set the PM-OS user below — members cannot connect Jira themselves."
             )}
           </div>
           <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_160px]">
@@ -602,7 +603,7 @@ export function IdeasOutputConfig({
                 {(f.type === "single_select" || f.type === "multi_select") && (
                   <label
                     className="flex items-center gap-1.5 text-xs text-slate-600"
-                    title="A value Jira doesn't have as an option yet is added to the field during the sync (needs the Jira configuration permission — reconnect Jira if it was connected before 2026-10-13)."
+                    title="A value Jira doesn't have as an option yet is added to the field during the sync (the PM-OS user needs the Administer Jira permission on the site)."
                   >
                     <input
                       type="checkbox"

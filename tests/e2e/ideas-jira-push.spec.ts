@@ -62,7 +62,7 @@ const IDEA_B_TITLE = "QA-PJ vendor sync"; // Beta, pending
 const TICKET_PREFIX = "QA-PJ-T";
 
 const NOT_CONNECTED_BLOCKER =
-  "Jira is not connected — connect it in Settings → Integrations.";
+  "Jira is temporarily unavailable — Sync to Jira is paused. Contact support@pm-os.io.";
 
 let orgId: string;
 let workspaceId: string;

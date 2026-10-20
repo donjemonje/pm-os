@@ -65,8 +65,8 @@ export function isMyProductLinesEnabled(): boolean {
 
 /**
  * Jira integration gate — env default. Off when unset. ON means the org is
- * expected to have Jira connected: the Ideas page warns when the connection
- * needs reconnecting and asks before an import runs without Jira.
+ * expected to have Jira connected: the app warns when the connection is
+ * unavailable and asks before an import runs without Jira.
  */
 export function isJiraIntegrationEnabled(): boolean {
   const raw = process.env.JIRA_ENABLED;

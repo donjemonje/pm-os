@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { SUPPORT_EMAIL } from "../jira-health-copy";
 import { fetchIssuesForScopePaged, getJiraConnectionStatus, listAllFields } from "../jira";
 import { mergeIdeasJiraConfig, type JiraPullConfig } from "./jira-mapping";
 import { buildProductLineResolver } from "./product-line-key";
@@ -88,7 +89,7 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       // Silently falling back to Components would move every issue to "Other"
       // and the resync would rewrite every idea's product line — fail loudly.
       throw new Error(
-        `Could not read Jira's field list (${err instanceof Error ? err.message : "unknown error"}) — the import stopped before touching any idea. Retry; if it persists, reconnect Jira in Settings → Integrations.`
+        `Could not read Jira's field list (${err instanceof Error ? err.message : "unknown error"}) — the import stopped before touching any idea. Retry; if it persists, contact ${SUPPORT_EMAIL}.`
       );
     }
   }

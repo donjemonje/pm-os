@@ -1,4 +1,9 @@
 import type { Prisma } from "@prisma/client";
+import {
+  JIRA_SYNC_NOT_CONNECTED_BLOCKER,
+  JIRA_SYNC_UNAVAILABLE_BLOCKER,
+  SUPPORT_EMAIL,
+} from "../jira-health-copy";
 import { db } from "../db";
 import {
   addJiraCommentAdf,
@@ -371,8 +376,9 @@ async function derivePlan(
     writes.newOptions.set(k, cur);
   };
 
-  // Row-existence gates the button; writing needs a usable token too, so the
-  // preview blocker also covers a configured-but-dead connection.
+  // Row-existence gates the button; writing needs a working token too (a
+  // fresh health probe), so the preview blocker also covers a dead
+  // connection. Either way the customer's only move is to contact support.
   const status = await getJiraConnectionStatus(workspaceId);
   if (!status?.connected || !(await hasValidJiraConnection(workspaceId))) {
     return {
@@ -382,7 +388,7 @@ async function derivePlan(
         warnings,
         notes,
         skipped,
-        blockers: ["Jira is not connected — connect it in Settings → Integrations."],
+        blockers: [status?.connected ? JIRA_SYNC_UNAVAILABLE_BLOCKER : JIRA_SYNC_NOT_CONNECTED_BLOCKER],
         scope,
         pendingInScope: 0,
       },
@@ -850,7 +856,7 @@ export async function executePush(
   const { plan, writes, config } = await derivePlan(workspaceId, scope);
   if (plan.blockers.length > 0) return { ok: false, blockers: plan.blockers };
   const status = await getJiraConnectionStatus(workspaceId);
-  if (!status) return { ok: false, blockers: ["Jira is not connected."] };
+  if (!status) return { ok: false, blockers: [JIRA_SYNC_NOT_CONNECTED_BLOCKER] };
 
   // Options first, all of them, before a single issue is written — a refusal
   // here (401/403: no admin rights, or a connection that predates the
@@ -865,8 +871,8 @@ export async function executePush(
         ok: false,
         blockers: [
           `Could not add options to Jira field "${o.label}": ${msg}` +
-            (/\((401|403)\)|scope does not match/i.test(msg)
-              ? " — adding options needs Jira admin rights on the connected account, and a connection made before 2026-10-13 lacks the configuration permission: reconnect Jira in Settings → Integrations (the project selection is kept), then sync again."
+            (/\((401|403)\)/.test(msg)
+              ? ` — the PM-OS user lacks the Jira permission to add field options. Contact ${SUPPORT_EMAIL}.`
               : ""),
         ],
       };

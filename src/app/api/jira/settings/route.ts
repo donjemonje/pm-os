@@ -43,12 +43,5 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ ok: true });
 }
 
-/** Disconnect: drops the connection row (tokens included). Snapshots and
- *  ideas stay; the next import simply runs without Jira. */
-export async function DELETE() {
-  const workspaceResult = await apiWorkspaceId();
-  if (workspaceResult instanceof NextResponse) return workspaceResult;
-  const { count } = await db.jiraConnection.deleteMany({ where: { workspaceId: workspaceResult } });
-  if (count === 0) return NextResponse.json({ error: "Jira is not connected" }, { status: 404 });
-  return NextResponse.json({ ok: true });
-}
+// No DELETE: customers cannot disconnect Jira — the PM-OS admin removes the
+// connection in Admin → Ideas (/api/admin/organizations/[id]/jira-token).

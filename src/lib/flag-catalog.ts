@@ -54,7 +54,7 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         key: "jira",
         label: "Jira integration",
         description:
-          "The organization works with Jira connected: the Ideas page shows a banner when the connection needs reconnecting, and an import asks before running without Jira.",
+          "The organization works with Jira connected: a banner shows when the connection is unavailable (contact support), and an import asks before running without Jira.",
       },
       {
         key: "ideasUndo",

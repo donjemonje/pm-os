@@ -59,7 +59,7 @@ const FRESH_ORG = { name: "QA-UF Fresh Org", slug: "qa-uf-fresh" };
 const PJ_TOKENLESS_CLOUD = "qa-pj-cloud"; // ideas-jira-push's own fixture row
 
 const SUGGESTED_TITLE = "Suggested customer — not in the catalog yet";
-const NOT_CONNECTED_HINT = "Connect Jira in Settings → Integrations to export";
+const NOT_CONNECTED_HINT = "Jira is not connected for your organization";
 
 const FIXTURE_CUSTOMERS = [CATALOGED, ADDED, SWATCH, WHITFIELD, THE_WHITFIELD];
 

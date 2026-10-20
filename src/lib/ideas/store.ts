@@ -9,6 +9,7 @@ import { extractJiraCustomers } from "./jira-customers";
 import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
 import { getJiraConnectionStatus, getJiraHealth } from "../jira";
+import type { JiraHealthStatus } from "../jira-health-copy";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
@@ -51,7 +52,7 @@ export interface IdeasState {
   jiraEnabled: boolean;
   /** Connection health at read time (one refresh attempt at most);
    *  not_configured = connected but the admin has not set the org's project. */
-  jiraHealth: "not_connected" | "ok" | "reconnect" | "not_configured";
+  jiraHealth: JiraHealthStatus;
   /** Browse base of the connected site ("https://x.atlassian.net"); null when
    *  not connected. The client links every issue key with it, created ones
    *  (not yet in the snapshot) included. */
@@ -370,7 +371,7 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
  */
 export interface ImportOptions {
   /** Run without Jira even if a connection row exists (the user chose
-   *  "import without Jira" when the connection needed reconnecting). */
+   *  "import without Jira" when the connection was unavailable). */
   skipJira?: boolean;
 }
 
@@ -429,7 +430,7 @@ async function runImport(
     : await fetchJiraLiveSources(workspaceId);
   trace.end({
     note: options.skipJira
-      ? "Jira skipped by the user (connection needed reconnecting)"
+      ? "Jira skipped by the user (connection unavailable)"
       : jira.connected
       ? `${jira.sources.length} live issues` +
         (jira.truncatedProjects.length > 0

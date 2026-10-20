@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { mergeIdeasJiraConfig } from "@/lib/ideas/jira-mapping";
-import { basicAuthToken, sealToken, validateBasicCredentials } from "@/lib/jira";
+import { basicAuthToken, invalidateJiraHealth, sealToken, validateBasicCredentials } from "@/lib/jira";
 
 /**
  * Dedicated PM-OS user + Atlassian API token for an organization (option A,
@@ -55,6 +55,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     apiTokenExpiresAt: expiresAt,
     connectedByName: me.displayName,
     connectedByEmail: me.emailAddress ?? email,
+    // A new token starts a clean alert cycle.
+    healthAlertedAt: null,
+    expiryWarnedAt: null,
     ...(cfg.jiraProject
       ? {
           projectKeys: JSON.stringify([cfg.jiraProject]),
@@ -68,6 +71,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     create: { workspaceId: workspace.id, ...data },
     update: data,
   });
+  invalidateJiraHealth(workspace.id);
   return NextResponse.json({ ok: true, connectedBy: me.displayName, expiresAt: expiresAt?.toISOString() ?? null });
 }
 
@@ -78,5 +82,6 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   const workspace = await db.workspace.findUnique({ where: { organizationId: id }, select: { id: true } });
   if (!workspace) return NextResponse.json({ error: "Organization has no workspace" }, { status: 404 });
   const { count } = await db.jiraConnection.deleteMany({ where: { workspaceId: workspace.id } });
+  invalidateJiraHealth(workspace.id);
   return NextResponse.json({ ok: true, removed: count });
 }

@@ -28,8 +28,11 @@ export function Shell({
   user,
   organization,
   appVersion,
+  jiraNotice = null,
 }: {
   children: React.ReactNode;
+  /** Jira health message for the top banner (null = healthy). The Ideas page shows its own. */
+  jiraNotice?: string | null;
   /** Server-read cookie state so the rail renders collapsed without a flash. */
   sidebarDefaultCollapsed: boolean;
   ideasEnabled: boolean;
@@ -70,7 +73,17 @@ export function Shell({
           organization={organization}
           appVersion={appVersion}
         />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {jiraNotice && !pathname.startsWith("/ideas") && (
+            <div
+              role="status"
+              className="shrink-0 border-b border-[#f3dcb0] bg-[#fdf6e7] px-6 py-2 text-[13px] text-[#8a5a00]"
+            >
+              {jiraNotice}
+            </div>
+          )}
+          {children}
+        </div>
       </div>
     </OrgFeaturesProvider>
     </ConfirmProvider>

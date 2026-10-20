@@ -1,11 +1,9 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useConfirm } from "@/components/ui/ConfirmDialog";
-
 import { useState } from "react";
-import { ArrowRight, CheckCircle2, Circle, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Circle, Loader2 } from "lucide-react";
 import { formatIntegrationError } from "@/lib/integration-errors";
+import { jiraHealthMessage, type JiraHealthStatus } from "@/lib/jira-health-copy";
 import { GoogleDriveManagePanel } from "@/components/google-drive/GoogleDriveConnect";
 
 type JiraStatus = {
@@ -28,11 +26,8 @@ type DriveStatus = {
 type IntegrationsPanelProps = {
   jiraStatus: JiraStatus;
   driveStatus: DriveStatus;
-  jiraOauthReady: boolean;
   driveOauthReady: boolean;
   banners?: {
-    jiraSuccess?: boolean;
-    jiraError?: string;
     driveSuccess?: boolean;
     driveError?: string;
   };
@@ -41,13 +36,14 @@ type IntegrationsPanelProps = {
   /** The org's Jira project and work type, set by the PM-OS admin (Admin → Ideas). */
   jiraProject?: string;
   jiraIssueType?: string;
-  /** Connected but the token is dead (refresh failed). */
-  jiraNeedsReconnect?: boolean;
+  /** Live connection health from the server (see lib/jira.ts getJiraHealth). */
+  jiraHealth?: JiraHealthStatus;
   /** False = Drive is off for this org (follows the Docs flag): no card, no banners. */
   driveEnabled?: boolean;
 };
 
-function StatusDot({ connected }: { connected: boolean }) {
+function StatusDot({ connected, unavailable = false }: { connected: boolean; unavailable?: boolean }) {
+  if (connected && unavailable) return <AlertTriangle size={16} className="shrink-0 text-amber-600" />;
   return connected ? (
     <CheckCircle2 size={16} className="shrink-0 text-green-600" />
   ) : (
@@ -67,31 +63,32 @@ function IntegrationRow({
   onToggle,
   children,
   flat = false,
-  needsReconnect = false,
+  unavailable = false,
+  notice,
   headerAction,
-  onDisconnect,
   detailHref,
 }: {
   name: string;
   connected: boolean;
   detail?: string | null;
-  connectHref: string;
-  connectLabel: string;
-  oauthReady: boolean;
-  unavailableLabel: string;
+  /** The OAuth start URL. Absent = members cannot connect this one themselves (Jira). */
+  connectHref?: string;
+  connectLabel?: string;
+  oauthReady?: boolean;
+  unavailableLabel?: string;
   expanded: boolean;
   onToggle: () => void;
   children?: React.ReactNode;
-  /** One card, no Hide/Manage toggle, children in the same section (no separator). */
+  /** One card, no Hide/Manage toggle, children on the right of the header row. */
   flat?: boolean;
-  /** Connected but the token is dead: status reads "Needs reconnecting" and Reconnect shows. */
-  needsReconnect?: boolean;
+  /** Connected but not working: status reads "Unavailable" (amber). */
+  unavailable?: boolean;
+  /** Full-width amber line under the header (the support message). */
+  notice?: string | null;
   /** Extra control on the header row. */
   headerAction?: React.ReactNode;
   /** When set, `detail` renders as a link opening in a new tab. */
   detailHref?: string;
-  /** Shown as a Disconnect button when set (asks first). */
-  onDisconnect?: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-card">
@@ -99,9 +96,13 @@ function IntegrationRow({
         <div className="min-w-0 flex-1">
           <div className="font-medium text-foreground">{name}</div>
           <div className="mt-1 flex items-center gap-2 text-sm">
-            <StatusDot connected={connected && !needsReconnect} />
-            <span className={connected && !needsReconnect ? "text-green-800" : "text-muted"}>
-              {connected ? (needsReconnect ? "Needs reconnecting" : "Connected") : "Not connected"}
+            <StatusDot connected={connected} unavailable={unavailable} />
+            <span
+              className={
+                connected ? (unavailable ? "text-amber-700" : "text-green-800") : "text-muted"
+              }
+            >
+              {connected ? (unavailable ? "Unavailable" : "Connected") : "Not connected"}
             </span>
             {connected && detail && (
               <span className="truncate text-muted">
@@ -121,24 +122,15 @@ function IntegrationRow({
               </span>
             )}
           </div>
-          {/* Flat card: the extra line lives in the left column, so the
-              actions on the right centre on the whole card. */}
-          {flat && connected && children && <div className="mt-2">{children}</div>}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-4">
+          {/* Flat card: the connection summary sits on the right, vertically
+              centred against the name + status on the left. */}
+          {flat && connected && children && <div className="text-right">{children}</div>}
           {connected ? (
             <>
               {headerAction}
-              {oauthReady && (needsReconnect || !flat) && (
-                <a
-                  href={connectHref}
-                  title="Run the authorization again — needed when the token expired or PM-OS asks for a new permission."
-                  className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-background"
-                >
-                  Reconnect
-                </a>
-              )}
               {!flat && (
                 <button
                   type="button"
@@ -148,17 +140,8 @@ function IntegrationRow({
                   {expanded ? "Hide" : "Manage"}
                 </button>
               )}
-              {onDisconnect && (
-                <button
-                  type="button"
-                  onClick={onDisconnect}
-                  className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted hover:border-[#c23767] hover:text-[#c23767]"
-                >
-                  Disconnect
-                </button>
-              )}
             </>
-          ) : oauthReady ? (
+          ) : !connectHref ? null : oauthReady ? (
             <a
               href={connectHref}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-hover"
@@ -172,6 +155,12 @@ function IntegrationRow({
         </div>
       </div>
 
+      {notice && (
+        <div className="border-t border-[#f3dcb0] bg-[#fdf6e7] px-5 py-2.5 text-[13px] text-[#8a5a00]">
+          {notice}
+        </div>
+      )}
+
       {!flat && expanded && children && (
         <div className="border-t border-border px-5 py-4">{children}</div>
       )}
@@ -182,58 +171,29 @@ function IntegrationRow({
 export function IntegrationsPanel({
   jiraStatus,
   driveStatus,
-  jiraOauthReady,
   driveOauthReady,
   banners,
   ideasEnabled = false,
   jiraProject = "",
-  jiraIssueType = "",
-  jiraNeedsReconnect = false,
+  jiraHealth = "not_connected",
   driveEnabled = true,
 }: IntegrationsPanelProps) {
   const [jiraExpanded, setJiraExpanded] = useState(true);
-  const router = useRouter();
-  const { confirm } = useConfirm();
-  const [jiraDisconnectError, setJiraDisconnectError] = useState("");
-  async function disconnectJira() {
-    if (
-      !(await confirm({
-        title: "Disconnect Jira?",
-        message:
-          "Imports stop matching against the Jira backlog and Sync to Jira is off until someone connects again. Ideas already created stay as they are.",
-        confirmLabel: "Disconnect",
-        tone: "danger",
-      }))
-    )
-      return;
-    setJiraDisconnectError("");
-    const res = await fetch("/api/jira/settings", { method: "DELETE" });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({ error: undefined }));
-      setJiraDisconnectError(data.error ?? "Disconnect failed");
-      return;
-    }
-    router.refresh();
-  }
+  // Members never connect, reconnect or disconnect Jira: PM-OS support holds
+  // the PM-OS user's token. The card only reports; every non-ok state ends
+  // in "contact support" (lib/jira-health-copy.ts).
+  const jiraNotice = jiraStatus?.connected
+    ? jiraHealthMessage(jiraHealth === "not_connected" ? "ok" : jiraHealth)
+    : jiraHealthMessage("not_connected");
   const [driveExpanded, setDriveExpanded] = useState(Boolean(driveStatus?.connected));
   const [driveConnected, setDriveConnected] = useState(Boolean(driveStatus?.connected));
   const [driveEmail, setDriveEmail] = useState(driveStatus?.email);
 
   return (
     <div className="space-y-4">
-      {banners?.jiraSuccess && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-          Jira connected successfully.
-        </div>
-      )}
       {driveEnabled && banners?.driveSuccess && (
         <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
           Google Drive connected successfully.
-        </div>
-      )}
-      {banners?.jiraError && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {formatIntegrationError(banners.jiraError)}
         </div>
       )}
       {driveEnabled && banners?.driveError && (
@@ -246,61 +206,26 @@ export function IntegrationsPanel({
         name="Jira Integration"
         connected={Boolean(jiraStatus?.connected)}
         detail={jiraStatus?.siteUrl}
-        connectHref="/api/auth/jira"
-        connectLabel="Connect"
-        oauthReady={jiraOauthReady}
-        unavailableLabel="Not available"
         expanded={jiraExpanded}
         onToggle={() => setJiraExpanded((v) => !v)}
         flat
-        needsReconnect={jiraNeedsReconnect && jiraStatus?.authType !== "basic"}
-        onDisconnect={jiraStatus?.connected && jiraStatus.authType !== "basic" ? disconnectJira : undefined}
+        unavailable={jiraHealth === "unavailable"}
+        notice={jiraNotice}
         detailHref={jiraStatus?.siteUrl}
       >
-        {jiraDisconnectError && <div className="text-sm text-[#c94266]">{jiraDisconnectError}</div>}
         {jiraStatus?.connected && ideasEnabled && (
-          <div className="text-sm">
-            {jiraStatus.authType === "basic" ? (
-              <p className="mb-1 text-muted">
-                Connected as the PM-OS user{" "}
-                <span className="font-medium text-foreground">
-                  {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail ?? "PM-OS"}
-                </span>
-                {jiraStatus.apiTokenExpiresAt
-                  ? ` · access valid until ${new Date(jiraStatus.apiTokenExpiresAt).toLocaleDateString()}`
-                  : ""}
-                . Everything PM-OS writes in Jira shows as this user; renewal is done by your PM-OS admin.
-              </p>
-            ) : (
-              (jiraStatus.connectedByName || jiraStatus.connectedByEmail) && (
-                <p className="mb-1 text-muted">
-                  Connected by{" "}
-                  <span className="font-medium text-foreground">
-                    {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail}
-                  </span>
-                  {jiraStatus.connectedByName && jiraStatus.connectedByEmail ? ` (${jiraStatus.connectedByEmail})` : ""}
-                  . Any user of the Jira site can reconnect with their own account when needed.
-                </p>
-              )
-            )}
-            {(
-              <p className="text-muted">
-                {jiraProject ? (
-                  <>
-                    Ideas are read from and written to{" "}
-                    <span className="font-mono text-primary">{jiraProject}</span>
-                    {jiraIssueType ? (
-                      <>
-                        ; new ideas are created as <span className="font-medium text-foreground">{jiraIssueType}</span>
-                      </>
-                    ) : null}
-                    . Set by your PM-OS admin.
-                  </>
-                ) : (
-                  "The Jira project for ideas is not set yet — your PM-OS admin sets it."
-                )}
-              </p>
-            )}
+          <div className="text-sm leading-6 text-muted">
+            <p>
+              Connected as{" "}
+              <span className="font-medium text-foreground">
+                {jiraStatus.connectedByName ?? jiraStatus.connectedByEmail ?? "PM-OS"}
+              </span>{" "}
+              user
+            </p>
+            <p>
+              Configured Jira-Space:{" "}
+              {jiraProject ? <span className="font-mono text-primary">{jiraProject}</span> : "not set yet"}
+            </p>
           </div>
         )}
       </IntegrationRow>

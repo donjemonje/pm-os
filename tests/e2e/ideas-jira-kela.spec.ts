@@ -100,7 +100,7 @@ const JIRA_REPORTER = "Noa Reporter (QA)";
 const JIRA_ASSIGNEE = "Eitan Assignee (QA)";
 const QA_JK_CLOUD = "qa-jk-cloud";
 
-const NOT_CONNECTED_BLOCKER = "Jira is not connected — connect it in Settings → Integrations.";
+const NOT_CONNECTED_BLOCKER = "Jira is temporarily unavailable — Sync to Jira is paused. Contact support@pm-os.io.";
 const READ_POLICY = "Read on import — shown on the raw Jira issue, never written";
 
 let roomlensOrgId: string;
