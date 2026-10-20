@@ -261,7 +261,7 @@ export function IdeaDrawer({
   // that handle these keys themselves (the editor's link bar) stop propagation.
   // Esc acts on the innermost thing that has focus: the customer typeahead
   // list closes itself (and stops the event), then this leaves the edit —
-  // tags mode just closes (already saved), the text edit is cancelled — and
+  // the tag draft is discarded, the text edit is cancelled — and
   // only when nothing is being edited does Esc close the drawer (window
   // listener above). ⌘↵ saves the text edit.
   const onEditKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -274,45 +274,39 @@ export function IdeaDrawer({
       e.preventDefault();
       saveEdit();
     } else if (e.key === "Enter" && editSection === "tags") {
-      // Enter = done (every tag change is already saved); the customer box
-      // swallows Enter itself while it holds text to add.
+      // Enter = save the tag draft; the customer box swallows Enter itself
+      // while it holds text to add.
       e.preventDefault();
-      setEditSection(null);
+      saveTags();
     }
   };
   const sameName = (a: string, b: string) => a.toLowerCase() === b.trim().toLowerCase();
   const toggleIn = (list: string[], name: string) =>
     list.some((x) => sameName(x, name)) ? list.filter((x) => !sameName(x, name)) : [...list, name];
-  /** Tag edits save on every change (no Save/Cancel — Daniel, 2026-10-19):
-   *  one call per click with the full lists; a ticket-derived customer
-   *  removed in this click goes out as a dismissal. */
-  const commitTags = (next: {
-    products?: string[];
-    platforms?: string[];
-    added?: string[];
-    removed?: string[];
-  }) => {
+  /** Tag edits are a draft (Daniel, 2026-10-20): nothing reaches the server
+   *  — or the "Changes to sync" section — until ✓ / Enter saves the whole
+   *  set in one call; ✕ / Esc discards. A ticket-derived customer removed
+   *  in the draft goes out as a dismissal on save. */
+  const saveTags = () => {
     if (!idea) return;
     onSave?.({
       title: idea.title,
       details: idea.details,
       manual: idea.manual ?? null,
-      products: next.products ?? editProducts,
-      platforms: next.platforms ?? editPlatforms,
-      addedCustomers: next.added ?? editAdded,
-      removeCustomers: next.removed ?? [],
+      products: editProducts,
+      platforms: editPlatforms,
+      addedCustomers: editAdded,
+      removeCustomers: editRemoved,
     });
+    setEditSection(null);
   };
   const toggleProduct = (p: string) => {
     const next = toggleIn(editProducts, p);
     if (next.length === 0) return; // one product line is mandatory
     setEditProducts(next);
-    commitTags({ products: next });
   };
   const togglePlatform = (p: string) => {
-    const next = toggleIn(editPlatforms, p);
-    setEditPlatforms(next);
-    commitTags({ platforms: next });
+    setEditPlatforms(toggleIn(editPlatforms, p));
   };
   const addCustomer = (name: string) => {
     const n = name.trim();
@@ -321,19 +315,15 @@ export function IdeaDrawer({
       return;
     }
     setEditCustomers((l) => [...l, n]);
-    const added = [...editAdded, n];
-    setEditAdded(added);
+    setEditAdded((l) => [...l, n]);
     setNewCustomer("");
-    commitTags({ added });
   };
   const removeCustomer = (name: string) => {
     setEditCustomers((l) => l.filter((c) => !sameName(c, name)));
     if (editAdded.some((c) => sameName(c, name))) {
-      const added = editAdded.filter((c) => !sameName(c, name));
-      setEditAdded(added);
-      commitTags({ added });
+      setEditAdded((l) => l.filter((c) => !sameName(c, name)));
     } else {
-      commitTags({ removed: [name] });
+      setEditRemoved((l) => (l.some((c) => sameName(c, name)) ? l : [...l, name]));
     }
   };
 
@@ -504,18 +494,18 @@ export function IdeaDrawer({
         })()}
       <button
         type="button"
-        onClick={() => setEditSection(null)}
-        title="Done — Enter (every change is already saved)"
-        aria-label="Done editing tags"
+        onClick={saveTags}
+        title="Save — Enter"
+        aria-label="Save tag changes"
         className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-[#0f7a47] hover:bg-[rgba(23,178,106,.16)]"
       >
         <Check size={14} strokeWidth={2.75} />
       </button>
       <button
         type="button"
-        onClick={() => setEditSection(null)}
-        title="Close — Esc"
-        aria-label="Close tag editing"
+        onClick={cancelEdit}
+        title="Cancel — Esc (discards the tag changes)"
+        aria-label="Cancel tag editing"
         className="flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
       >
         <X size={14} strokeWidth={2.5} />
