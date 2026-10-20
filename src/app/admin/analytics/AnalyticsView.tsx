@@ -92,8 +92,10 @@ function describe(action: string, payload: unknown): string {
       const changed: string[] = [];
       if (typeof before.title === "string" && typeof after.title === "string" && before.title !== after.title)
         changed.push(`title: "${before.title}" → "${after.title}"`);
-      if (typeof before.details === "string" && typeof after.details === "string" && before.details !== after.details)
-        changed.push(`text (${before.details.length} → ${after.details.length} chars)`);
+      const chars = (o: Record<string, unknown>) =>
+        typeof o.detailsChars === "number" ? o.detailsChars : typeof o.details === "string" ? o.details.length : null;
+      const cb0 = chars(before), ca0 = chars(after);
+      if (cb0 != null && ca0 != null && cb0 !== ca0) changed.push(`text (${cb0} → ${ca0} chars)`);
       const pb = arr(before.products), pa = arr(after.products);
       const addL = pa.filter((x) => !pb.includes(x)), remL = pb.filter((x) => !pa.includes(x));
       if (addL.length || remL.length)

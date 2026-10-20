@@ -1669,9 +1669,11 @@ export async function mutateIdeas(
             ideaId: idea.id,
             action: "edit",
             payload: {
+              // The text itself stays on the idea; the ledger keeps its size
+              // only (Daniel, 2026-10-20).
               before: {
                 title: idea.title,
-                details: idea.details,
+                detailsChars: idea.details.length,
                 manual: idea.manualScore,
                 products: idea.products,
                 platforms: idea.platforms,
@@ -1679,7 +1681,7 @@ export async function mutateIdeas(
               },
               after: {
                 title: mutation.title,
-                details: mutation.details,
+                detailsChars: mutation.details.length,
                 manual: mutation.manual,
                 products: products ?? idea.products,
                 platforms: platforms ?? idea.platforms,
