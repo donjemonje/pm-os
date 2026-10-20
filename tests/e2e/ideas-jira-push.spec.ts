@@ -307,13 +307,14 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       string,
       { jiraField: string; type: string; policy: string; enabled: boolean }
     >;
+    // Customers default to Jira labels since 2026-10-20 (no admin right to grow
+    // the list); the typed field name is kept, the type and prefix follow the default.
     expect(fields.customers).toEqual({
       jiraField: "QA_Customers",
-      type: "multi_select",
+      type: "labels",
       policy: "union",
       enabled: true,
-      // Default ON since feature/jira-support-kela (customer names arrive with every import).
-      createOptions: true,
+      labelPrefix: "cs_",
     });
     expect(fields.platforms.enabled).toBe(true);
     expect(fields.votes).toEqual({
