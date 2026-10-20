@@ -77,6 +77,13 @@ export interface JiraSource {
   url?: string;
   /** Product lines: the mapped field (Kela: Module) or Components. */
   products: string[];
+  /** Customers read from the issue text (customer-mentions.ts); catalog names + as-written suggestions. */
+  customers?: string[];
+  /** Jira labels (customer labels among them when the org maps customers to labels). */
+  labels?: string[];
+  /** Raw customer label values: the custom labels field's values, or the
+   *  prefixed system labels — whichever the org maps. */
+  customerLabels?: string[];
 }
 
 export interface Idea {
@@ -97,13 +104,18 @@ export interface Idea {
   /** Customers a PM added by hand (subset of `customers`); removing one deletes it, not a dismissal. */
   addedCustomers?: string[];
   batch: IdeaBatchStatus;
-  /** For Updated ideas: what this import did (votes, enrichment, added metadata). */
-  batchChanges?: string[];
+  /** The description before this batch / the PM's changes (the idea's
+   *  baseline), when it differs from the current one — the drawer's undo
+   *  opens the editor on it. */
+  previousDetails?: string;
   decision: IdeaDecision;
   /** Set while this idea's write from the LAST merge is still undoable. */
   undoable?: { action: "create" | "update"; jiraKey: string };
-  /** Where this idea came from this batch. */
-  origin: "zendesk" | "jira";
+  /** A PM changed the sources after PMOS AI wrote the text: approval waits
+   *  for a rewrite or an explicit "keep the text". */
+  sourcesChanged?: boolean;
+  /** Where this idea came from: a Zendesk import, Jira, or a PM who wrote it from scratch. */
+  origin: "zendesk" | "jira" | "manual";
   /** Computed score — null until the scoring pipeline exists. */
   pmScore: number | null;
   /** PM-entered override; when set it IS the displayed score. */

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Building2,
@@ -11,6 +12,7 @@ import {
   Trash2,
   UserPlus,
   UserX,
+  ShieldCheck,
 } from "lucide-react";
 import { ORG_DELETE_CONFIRMATION } from "@/lib/admin-guard";
 import { cn } from "@/lib/utils";
@@ -20,7 +22,7 @@ type Member = {
   id: string;
   email: string;
   name: string;
-  role: "USER" | "PMOS_ADMIN";
+  role: "USER" | "CUSTOMER_ADMIN" | "PMOS_ADMIN";
   hasPassword: boolean;
   providers: string[];
   activated: boolean;
@@ -49,6 +51,7 @@ export function UserManagement({
   initialOrganizations: Organization[];
 }) {
   const { confirm } = useConfirm();
+  const router = useRouter();
   const [organizations, setOrganizations] =
     useState<Organization[]>(initialOrganizations);
   const [showAddUser, setShowAddUser] = useState(false);
@@ -62,15 +65,21 @@ export function UserManagement({
     [organizations]
   );
 
+  // Admin screens show ONE organization (the banner's choice, server-side);
+  // a refresh re-reads that org only, never the whole list.
+  const shownOrgIds = useMemo(() => new Set(initialOrganizations.map((o) => o.id)), [initialOrganizations]);
   async function refresh() {
     const res = await fetch("/api/admin/organizations");
     if (res.ok) {
       const data = await res.json();
-      setOrganizations(data.organizations ?? []);
+      setOrganizations(((data.organizations ?? []) as Organization[]).filter((o) => shownOrgIds.has(o.id)));
     }
   }
 
-  async function patchMember(member: Member, change: { deactivated: boolean }) {
+  async function patchMember(
+    member: Member,
+    change: { deactivated: boolean } | { role: "USER" | "CUSTOMER_ADMIN" }
+  ) {
     setBusyUserId(member.id);
     setActionError("");
     try {
@@ -103,6 +112,11 @@ export function UserManagement({
       return;
     }
     await patchMember(member, { deactivated });
+  }
+
+  /** USER ↔ CUSTOMER_ADMIN only; a pmos-admin's row offers no role control. */
+  async function setCustomerAdmin(member: Member, customerAdmin: boolean) {
+    await patchMember(member, { role: customerAdmin ? "CUSTOMER_ADMIN" : "USER" });
   }
 
   async function resendInvite(member: Member) {
@@ -152,9 +166,10 @@ export function UserManagement({
     }
   }
 
-  // Role changes are deliberately absent from this UI (and rejected by the
-  // API): they happen only via scripts/set-user-role.mjs — Daniel's call,
-  // 2026-08-27. The role badge below is display-only.
+  // The pmos-admin role is deliberately not changeable from this UI (and
+  // rejected by the API): it moves only via scripts/seed-admin.mjs — Daniel's
+  // call, 2026-08-27. Customer admin (own-org settings, no /admin) is the one
+  // role an admin may grant and revoke here (2026-10-18).
 
   return (
     <div className="space-y-6">
@@ -181,6 +196,16 @@ export function UserManagement({
             setShowAddUser(false);
             setActionError("");
             setNotice("");
+            // A user added to a NEW organization: make that org the selected
+            // one, so the screen shows what was just created.
+            if (created.organizationId && !shownOrgIds.has(created.organizationId)) {
+              await fetch("/api/admin/current-org", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orgId: created.organizationId }),
+              });
+              router.refresh();
+            }
             if (created.invite === null) {
               setNotice(`${created.email} added.`);
             } else if (created.invite.sent) {
@@ -286,10 +311,16 @@ export function UserManagement({
                               "rounded-full px-2 py-0.5 text-xs font-medium",
                               member.role === "PMOS_ADMIN"
                                 ? "bg-violet-50 text-violet-700"
-                                : "bg-slate-100 text-slate-600"
+                                : member.role === "CUSTOMER_ADMIN"
+                                  ? "bg-sky-50 text-sky-700"
+                                  : "bg-slate-100 text-slate-600"
                             )}
                           >
-                            {member.role === "PMOS_ADMIN" ? "pmos-admin" : "user"}
+                            {member.role === "PMOS_ADMIN"
+                              ? "pmos-admin"
+                              : member.role === "CUSTOMER_ADMIN"
+                                ? "customer-admin"
+                                : "user"}
                           </span>
                         </td>
                         <td className="px-5 py-3">
@@ -345,6 +376,22 @@ export function UserManagement({
                                 <UserX className="h-3.5 w-3.5" />
                               )}
                               Deactivate
+                            </button>
+                          )}
+                          {member.role !== "PMOS_ADMIN" && (
+                            <button
+                              type="button"
+                              onClick={() => setCustomerAdmin(member, member.role !== "CUSTOMER_ADMIN")}
+                              disabled={busyUserId === member.id}
+                              className="ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                              title={
+                                member.role === "CUSTOMER_ADMIN"
+                                  ? "Back to a plain member: no organization settings"
+                                  : "Lets them manage their organization's settings (product lines); no PM-OS Admin access"
+                              }
+                            >
+                              <ShieldCheck className="h-3.5 w-3.5" />
+                              {member.role === "CUSTOMER_ADMIN" ? "Make user" : "Make customer admin"}
                             </button>
                           )}
                           {!member.deactivatedAt && !member.activated && (
@@ -510,6 +557,8 @@ function inviteNotice(email: string, delivered: boolean): string {
 }
 
 type CreatedUser = {
+  /** The user's organization — the screen switches to it when it is a new one. */
+  organizationId?: string | null;
   email: string;
   invite: { sent: boolean; delivered?: boolean; error?: string } | null;
 };
@@ -563,7 +612,11 @@ function AddUserForm({
         setError(data.error || "Failed to add user");
         return;
       }
-      await onCreated({ email: data.user.email, invite: data.invite ?? null });
+      await onCreated({
+        email: data.user.email,
+        organizationId: typeof data.user.organizationId === "string" ? data.user.organizationId : null,
+        invite: data.invite ?? null,
+      });
     } catch {
       setError("Something went wrong. Try again.");
     } finally {

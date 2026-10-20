@@ -27,9 +27,11 @@ export interface FieldMapping {
    *  for Product Line also at pull time — the pull reads this field as the
    *  issue's product line, Components when it is empty). */
   jiraField: string;
-  type: "single_select" | "number" | "multi_select" | "text";
+  type: "single_select" | "number" | "multi_select" | "text" | "labels";
   policy: FieldPolicy;
   enabled: boolean;
+  /** Labels type only: prefix every customer label carries ("cs_"). */
+  labelPrefix?: string;
   /** Select fields: when a value is not yet an option of the Jira field, add
    *  the option during the sync instead of skipping the value. Customer names
    *  arrive with every import, so a static option list can't work for them
@@ -53,6 +55,18 @@ export interface IdeasJiraConfig {
   descriptionMode: "overwrite";
   /** How the Jira backlog is pulled at import. */
   pull: JiraPullConfig;
+  /** The Jira site the org works on ("https://d3east.atlassian.net"). On
+   *  (re)connect the OAuth callback binds to THIS site from the account's
+   *  accessible list — never "the first site", which for a PM with several
+   *  Atlassian sites could be the wrong one. "" = first site (legacy). */
+  jiraSiteUrl: string;
+  /** The one Jira project this org manages its ideas in (Admin → Ideas →
+   *  Jira; Kela: "PRDT"). Read on import, written on sync. "" = not set
+   *  (falls back to the connection's own selection, e.g. QA seeds). */
+  jiraProject: string;
+  /** Work type new ideas are created as in that project ("" = not set →
+   *  the connection's saved type, else the type the pulled issues share). */
+  jiraIssueType: string;
   /** Blank lines between the details text and the tickets block. */
   descriptionGapLines: number;
   supportedTicketsHeading: string;
@@ -103,6 +117,9 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
   csv: DEFAULT_CSV_MAPPING,
   descriptionMode: "overwrite",
   pull: DEFAULT_JIRA_PULL_CONFIG,
+  jiraSiteUrl: "",
+  jiraProject: "",
+  jiraIssueType: "",
   descriptionGapLines: 2,
   supportedTicketsHeading: "Supported Tickets:",
   zendeskTicketUrlTemplate: "",
@@ -122,12 +139,15 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       policy: "increment",
       enabled: true,
     },
+    // Customers ride on Jira's built-in Labels (prefixed slugs): adding a
+    // label needs no admin right, unlike a select field's options
+    // (Daniel, 2026-10-20). An org can still map a select field instead.
     customers: {
-      jiraField: "Customers",
-      type: "multi_select",
+      jiraField: "Labels",
+      type: "labels",
       policy: "union",
       enabled: true,
-      createOptions: true,
+      labelPrefix: "cs_",
     },
     // Jira's built-in "Components" name was taken, hence P_Components.
     // Off by default (Daniel, 2026-09-03): most Jira projects have no
@@ -199,12 +219,31 @@ export function mergeIdeasJiraConfig(raw: unknown): IdeasJiraConfig {
         ? Math.min(Math.floor(storedPull.maxIssues), JIRA_PULL_MAX_ISSUES)
         : DEFAULT_JIRA_PULL_CONFIG.maxIssues,
   };
+  const legacy = (stored as { jiraProjects?: unknown }).jiraProjects;
+  const rawProject =
+    typeof stored.jiraProject === "string"
+      ? stored.jiraProject
+      : Array.isArray(legacy) && typeof legacy[0] === "string"
+        ? legacy[0]
+        : "";
+  const jiraProject = /^[A-Z][A-Z0-9_]{0,19}$/.test(rawProject.trim().toUpperCase())
+    ? rawProject.trim().toUpperCase()
+    : "";
+  const jiraIssueType =
+    typeof stored.jiraIssueType === "string" ? stored.jiraIssueType.trim().slice(0, 60) : "";
+  const rawSite = typeof stored.jiraSiteUrl === "string" ? stored.jiraSiteUrl.trim() : "";
+  const jiraSiteUrl = /^https:\/\/[a-z0-9-]+\.atlassian\.net$/i.test(rawSite.replace(/\/+$/, ""))
+    ? rawSite.replace(/\/+$/, "").toLowerCase()
+    : "";
   return {
     csv,
     ideaTemplate,
     fieldParsing,
     descriptionMode: "overwrite",
     pull,
+    jiraSiteUrl,
+    jiraProject,
+    jiraIssueType,
     descriptionGapLines:
       typeof stored.descriptionGapLines === "number" &&
       stored.descriptionGapLines >= 0

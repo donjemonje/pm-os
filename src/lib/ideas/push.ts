@@ -1,4 +1,9 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import {
+  JIRA_SYNC_NOT_CONNECTED_BLOCKER,
+  JIRA_SYNC_UNAVAILABLE_BLOCKER,
+  SUPPORT_EMAIL,
+} from "../jira-health-copy";
 import { db } from "../db";
 import {
   addJiraCommentAdf,
@@ -9,7 +14,6 @@ import {
   getEditMetaFields,
   getJiraConnectionStatus,
   hasValidJiraConnection,
-  listAllFields,
   textToAdf,
   updateJiraIssue,
   type JiraFieldMeta,
@@ -17,11 +21,12 @@ import {
 import {
   ATTRIBUTE_LABELS,
   mergeIdeasJiraConfig,
-  writableAttributes,
   type IdeasJiraConfig,
   type MappedAttribute,
 } from "./jira-mapping";
 import { primaryJiraKey } from "./jira-keys";
+import { resolveWritableFieldIds } from "./jira-fields";
+import { DEFAULT_CUSTOMER_LABEL_PREFIX, customerLabel } from "./customer-labels";
 import { buildProductLineResolver } from "./product-line-key";
 import { getIdeasState, type IdeasState } from "./store";
 
@@ -94,6 +99,17 @@ function ticketUrl(config: IdeasJiraConfig, ticket: TicketRef): string | null {
   return config.zendeskTicketUrlTemplate.replace("{id}", encodeURIComponent(ticket.id));
 }
 
+/** The one issue type every pulled issue of the project has, or null when mixed / none pulled. */
+export async function pulledIssueType(workspaceId: string, projectKey: string): Promise<string | null> {
+  const rows = await db.jiraIdeaSnapshot.findMany({
+    where: { workspaceId, key: { startsWith: `${projectKey}-` } },
+    select: { issueType: true },
+    distinct: ["issueType"],
+  });
+  const types = rows.map((r) => r.issueType).filter((t): t is string => Boolean(t));
+  return types.length === 1 ? types[0] : null;
+}
+
 /** The full new description as ADF plus its plain-text twin (for diffing). */
 function buildDescription(
   config: IdeasJiraConfig,
@@ -156,6 +172,11 @@ export function readNumber(v: unknown): number {
 }
 
 /** Split wanted option values into allowed / rejected per Jira's own list. */
+/** A Labels-type custom field's value: an array of strings (anything else → none). */
+function readStringList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
 function filterAllowed(
   wanted: string[],
   meta: JiraFieldMeta | undefined
@@ -243,7 +264,7 @@ type PushIdeaRow = Prisma.IdeaGetPayload<{ include: typeof PUSH_INCLUDE }>;
 
 /** One written custom field's before/after, captured for per-idea undo. */
 export interface UndoFieldSnap {
-  kind: "number" | "single" | "multi";
+  kind: "number" | "single" | "multi" | "labels";
   /** number → previous number; single → always null (set-if-empty); multi → previous option values. */
   before: number | string[] | null;
   /** Exactly what the push wrote — undo restores only while Jira still holds this. */
@@ -253,6 +274,8 @@ export interface UndoFieldSnap {
 /** Everything a per-idea undo of the last merge needs; stored in IdeasPushUndo.payload. */
 export interface PushUndoPayload {
   summary?: { before: string; after: string };
+  /** Customer labels written (full label set before/after). */
+  labels?: { before: string[]; after: string[] };
   description?: { beforeAdf: unknown; afterTextNorm: string };
   /** Keyed by Jira field id. */
   fields: Record<string, UndoFieldSnap>;
@@ -264,6 +287,8 @@ interface UpdateWrite {
   jiraKey: string;
   summary?: string;
   descriptionAdf?: unknown;
+  /** Full label set (customers as labels, the team's own labels kept). */
+  labels?: string[];
   extraFields?: Record<string, unknown>;
   commentLabels: string[];
   undo: PushUndoPayload;
@@ -271,6 +296,7 @@ interface UpdateWrite {
 interface CreateWrite {
   summary: string;
   descriptionAdf: unknown;
+  labels?: string[];
   extraFields: Record<string, unknown>;
   /** Idea.origin before markInjected flips it — restored on undo. */
   beforeOrigin: string;
@@ -289,14 +315,31 @@ interface PushWrites {
   newOptions: Map<string, NewOptions>;
 }
 
-function ideaCustomers(row: PushIdeaRow): string[] {
+/** Customers read from a Jira issue's text at import, and the PM's dismissals on it. */
+type JiraCustomerRows = Map<string, { affectedCustomers: unknown; dismissedCustomers: unknown }>;
+
+/**
+ * The customers a sync writes for an idea — the same set the idea shows:
+ * names from its tickets, names read from its Jira issues' text, and the
+ * ones a PM added by hand, minus dismissals — and only names in the
+ * catalog (Settings → Ideas → Customers). A suggested customer the PM has
+ * not approved yet is never written (Daniel, 2026-10-20).
+ */
+function ideaCustomers(row: PushIdeaRow, ctx: { catalog: Set<string>; jira: JiraCustomerRows }): string[] {
   const tickets = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
-  const dismissed = new Set(
-    tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
-  );
-  return distinct(tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? [])).filter(
-    (c) => !dismissed.has(c.toLowerCase())
-  );
+  const issues = row.sources.flatMap((s) => {
+    const r = s.kind === "jira" && s.jiraKey ? ctx.jira.get(s.jiraKey) : undefined;
+    return r ? [r] : [];
+  });
+  const dismissed = new Set([
+    ...tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase())),
+    ...issues.flatMap((j) => ((j.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase())),
+  ]);
+  return distinct([
+    ...tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+    ...issues.flatMap((j) => (j.affectedCustomers as string[]) ?? []),
+    ...(((row as { addedCustomers?: unknown }).addedCustomers as string[]) ?? []),
+  ]).filter((c) => !dismissed.has(c.toLowerCase()) && ctx.catalog.has(c.toLowerCase()));
 }
 
 function ideaTickets(row: PushIdeaRow): TicketRef[] {
@@ -322,11 +365,23 @@ function ideaJiraKey(row: PushIdeaRow): string | null {
 
 // ————— plan —————
 
+/**
+ * `opts.ideaIds` narrows the plan to those ideas; `opts.includePending`
+ * previews pending ideas too; `opts.fromSnapshot` diffs against the issue
+ * fields stored at import (JiraIdeaSnapshot.syncState) instead of reading
+ * Jira — the drawer's "Changes to sync" (no Jira call per open; Jira is
+ * assumed not to change during a merge). A real sync always reads live.
+ */
 async function derivePlan(
   workspaceId: string,
-  scope: string[] | null
+  scope: string[] | null,
+  opts: { ideaIds?: string[]; includePending?: boolean; fromSnapshot?: boolean } = {}
 ): Promise<{ plan: PushPlan; writes: PushWrites; config: IdeasJiraConfig }> {
   const blockers: string[] = [];
+  // Offline preview has no edit metadata: a field with unknown options is
+  // taken as writable with the wanted value (the sync re-checks live).
+  const pick = (candidates: string[], meta: JiraFieldMeta | undefined): { allowed: string[]; rejected: string[] } =>
+    opts.fromSnapshot && !meta ? { allowed: candidates, rejected: [] } : filterAllowed(candidates, meta);
   const warnings: string[] = [];
   const notes: string[] = [];
   const items: PushPlanItem[] = [];
@@ -347,8 +402,9 @@ async function derivePlan(
     writes.newOptions.set(k, cur);
   };
 
-  // Row-existence gates the button; writing needs a usable token too, so the
-  // preview blocker also covers a configured-but-dead connection.
+  // Row-existence gates the button; writing needs a working token too (a
+  // fresh health probe), so the preview blocker also covers a dead
+  // connection. Either way the customer's only move is to contact support.
   const status = await getJiraConnectionStatus(workspaceId);
   if (!status?.connected || !(await hasValidJiraConnection(workspaceId))) {
     return {
@@ -358,7 +414,7 @@ async function derivePlan(
         warnings,
         notes,
         skipped,
-        blockers: ["Jira is not connected — connect it in Settings → Integrations."],
+        blockers: [status?.connected ? JIRA_SYNC_UNAVAILABLE_BLOCKER : JIRA_SYNC_NOT_CONNECTED_BLOCKER],
         scope,
         pendingInScope: 0,
       },
@@ -367,17 +423,55 @@ async function derivePlan(
     };
   }
 
+  // The org's one Jira project and work type come from Admin → Ideas → Jira
+  // (Daniel, 2026-10-19: one project per customer at this stage). The
+  // connection's own fields are the fallback for orgs the admin has not
+  // onboarded (QA seeds); the type the pulled issues share, then "Story",
+  // close the chain.
   const targetProject =
-    status.ideasProjectKey ?? (status.projectKeys.length === 1 ? status.projectKeys[0] : null);
+    config.jiraProject ||
+    status.ideasProjectKey ||
+    (status.projectKeys.length === 1 ? status.projectKeys[0] : null);
   const target = targetProject
-    ? { projectKey: targetProject, issueType: status.ideasIssueType || "Story" }
+    ? {
+        projectKey: targetProject,
+        issueType:
+          config.jiraIssueType ||
+          status.ideasIssueType ||
+          (await pulledIssueType(workspaceId, targetProject)) ||
+          "Story",
+      }
     : null;
 
   const rows = await db.idea.findMany({
-    where: { workspaceId, batchStatus: { not: "deleted" } },
+    where: {
+      workspaceId,
+      batchStatus: { not: "deleted" },
+      ...(opts.ideaIds ? { id: { in: opts.ideaIds } } : {}),
+    },
     include: PUSH_INCLUDE,
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
+  // Approved customers only, from tickets, Jira issue text and the PM's
+  // additions alike (see ideaCustomers).
+  const customerCtx = {
+    catalog: new Set(
+      (await db.customer.findMany({ where: { workspaceId }, select: { name: true } })).map((c) =>
+        c.name.toLowerCase()
+      )
+    ),
+    jira: new Map(
+      (
+        await db.jiraIdeaSnapshot.findMany({
+          where: {
+            workspaceId,
+            key: { in: rows.flatMap((r) => r.sources.flatMap((x) => (x.kind === "jira" && x.jiraKey ? [x.jiraKey] : []))) },
+          },
+          select: { key: true, affectedCustomers: true, dismissedCustomers: true },
+        })
+      ).map((r) => [r.key, r] as const)
+    ) as JiraCustomerRows,
+  };
 
   const scoped = rows.filter((r) => inScope((r.products as string[]) ?? [], scope));
   // Pending ideas never block a merge — only approved ones go.
@@ -385,7 +479,7 @@ async function derivePlan(
     (r) => !APPROVAL_EXEMPT.includes(r.batchStatus) && r.decision === "pending"
   ).length;
 
-  const candidates = scoped.filter((r) => r.decision === "reviewed");
+  const candidates = opts.includePending ? scoped : scoped.filter((r) => r.decision === "reviewed");
   const updates: PushIdeaRow[] = [];
   const creates: PushIdeaRow[] = [];
   for (const row of candidates) {
@@ -401,17 +495,22 @@ async function derivePlan(
     else creates.push(row);
   }
 
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && !opts.includePending) {
     blockers.push("Nothing approved in the selected product lines.");
   }
   if (creates.length > 0 && !target) {
     blockers.push(
-      "Pick which Jira project new ideas are created in (Settings → Integrations → Jira)."
+      "The Jira project for new ideas is not set — a PM-OS admin sets it in Admin → Ideas → Jira."
     );
   }
-  if (creates.length > 0 && target && !status.projectKeys.includes(target.projectKey)) {
+  if (
+    creates.length > 0 &&
+    target &&
+    !config.jiraProject &&
+    !status.projectKeys.includes(target.projectKey)
+  ) {
     blockers.push(
-      `Ideas target project ${target.projectKey} is not in the connected project list — the next import would not see created issues. Fix it in Settings → Integrations → Jira.`
+      `Ideas target project ${target.projectKey} is not in the connected project list — the next import would not see created issues.`
     );
   }
   if (blockers.length > 0) {
@@ -422,23 +521,13 @@ async function derivePlan(
     };
   }
 
-  // Resolve the configured Jira fields (by display name) to field ids once.
-  const enabledAttrs = writableAttributes(config);
+  // Resolve the configured Jira fields (by display name) to field ids once
+  // (site field list cached a few minutes — shared with the import).
   let fieldIdByAttr = new Map<MappedAttribute, string>();
   try {
-    const allFields = await listAllFields(workspaceId);
-    fieldIdByAttr = new Map(
-      enabledAttrs.flatMap((attr) => {
-        const hit = allFields.get(config.fields[attr].jiraField.toLowerCase());
-        if (!hit) {
-          warnings.push(
-            `Jira field "${config.fields[attr].jiraField}" (${ATTRIBUTE_LABELS[attr]}) not found on this Jira site — skipped. Fix the name in Admin → Ideas.`
-          );
-          return [];
-        }
-        return [[attr, hit.id] as const];
-      })
-    );
+    const resolved = await resolveWritableFieldIds(workspaceId, config);
+    fieldIdByAttr = resolved.byAttr;
+    warnings.push(...resolved.warnings);
   } catch (err) {
     blockers.push(
       `Could not read Jira's field list: ${err instanceof Error ? err.message : "unknown error"}`
@@ -456,9 +545,35 @@ async function derivePlan(
     await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
   );
 
-  // Live state for updates — diffs run against Jira right now, not a snapshot.
+  // State for updates: live Jira for a sync; the import-time snapshot for the
+  // drawer's preview (opts.fromSnapshot).
   let liveByKey = new Map<string, Awaited<ReturnType<typeof fetchIssuesRaw>>[number]>();
-  if (updates.length > 0) {
+  if (updates.length > 0 && opts.fromSnapshot) {
+    const keys = updates.map((r) => ideaJiraKey(r)!) as string[];
+    const snaps = await db.jiraIdeaSnapshot.findMany({
+      where: { workspaceId, key: { in: keys } },
+      select: { key: true, syncState: true },
+    });
+    for (const snap of snaps) {
+      const st = snap.syncState as {
+        summary?: string;
+        descriptionText?: string;
+        labels?: string[];
+        components?: string[];
+        extra?: Record<string, unknown>;
+      } | null;
+      if (!st || typeof st !== "object") continue;
+      liveByKey.set(snap.key, {
+        key: snap.key,
+        summary: st.summary ?? "",
+        descriptionText: st.descriptionText ?? "",
+        labels: st.labels ?? [],
+        components: st.components ?? [],
+        descriptionAdf: null,
+        extra: st.extra ?? {},
+      });
+    }
+  } else if (updates.length > 0) {
     const keys = updates.map((r) => ideaJiraKey(r)!) as string[];
     try {
       const live = await fetchIssuesRaw(workspaceId, keys, extraFieldIds);
@@ -483,15 +598,18 @@ async function derivePlan(
       skipped.push({
         ideaId: row.id,
         title: row.title,
-        reason: `${key} no longer exists in Jira — re-import to resync before merging.`,
+        reason: opts.fromSnapshot
+          ? `${key} has no import-time snapshot yet — run an import to compare.`
+          : `${key} no longer exists in Jira — re-import to resync before merging.`,
       });
       continue;
     }
 
-    // Which fields Jira lets us edit on this issue (with allowed options).
+    // Which fields Jira lets us edit on this issue (with allowed options) —
+    // a sync asks Jira; the offline preview takes the mapped fields as is.
     let editMeta = new Map<string, JiraFieldMeta>();
     try {
-      editMeta = await getEditMetaFields(workspaceId, key);
+      if (!opts.fromSnapshot) editMeta = await getEditMetaFields(workspaceId, key);
     } catch (err) {
       warnings.push(
         `Could not read edit metadata of ${key}: ${err instanceof Error ? err.message : "unknown error"} — custom fields skipped for it.`
@@ -513,20 +631,69 @@ async function derivePlan(
     // The idea text is the description — whatever Jira holds is replaced
     // when the rendered text differs (the idea is where Jira's original text
     // and the ticket evidence were merged, at match time).
-    const desc = buildDescription(config, row.details, ideaTickets(row));
+    const tickets = ideaTickets(row);
+    const desc = buildDescription(config, row.details, tickets);
     if (normText(desc.text) !== normText(live.descriptionText)) {
-      changes.push({
-        field: "description",
-        label: ATTRIBUTE_LABELS.description,
-        from: "(replaced)",
-        to: desc.text,
-      });
+      // The description is the idea TEXT plus the supported-tickets block.
+      // Say which one differs: a PM who reverted the text must not keep
+      // seeing "Description updated" just because the tickets list grew
+      // (Daniel, 2026-10-20). Jira's text is compared with its own tickets
+      // block cut off.
+      const heading = config.supportedTicketsHeading.trim();
+      const jiraText = (() => {
+        const t = live.descriptionText;
+        const at = heading ? t.indexOf(heading) : -1;
+        return at >= 0 ? t.slice(0, at) : t;
+      })();
+      const textChanged = normText(row.details) !== normText(jiraText);
+      changes.push(
+        textChanged
+          ? {
+              field: "description",
+              label: ATTRIBUTE_LABELS.description,
+              from: "(replaced)",
+              to: desc.text,
+            }
+          : {
+              field: "tickets",
+              label: "Ticket links",
+              from: "",
+              to: `${tickets.length} ticket${tickets.length === 1 ? "" : "s"} listed in the description`,
+            },
+      );
       write.descriptionAdf = desc.adf;
       write.undo.description = { beforeAdf: live.descriptionAdf, afterTextNorm: normText(desc.text) };
     }
 
     const attrValue = (attr: MappedAttribute, fieldId: string): PushFieldChange | null => {
       const mapping = config.fields[attr];
+      if (mapping.type === "labels") {
+        // Customers as labels: union with whatever the field holds; the
+        // team's own labels are never touched. No option list, no admin right.
+        // Jira's own Labels field (prefixed) or a custom Labels-type field
+        // (its own namespace, no prefix needed) — same wire shape.
+        const system = fieldId === "labels";
+        const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
+        const cur = system ? live.labels : readStringList(live.extra[fieldId]);
+        const wanted = ideaCustomers(row, customerCtx).map((c) => customerLabel(c, prefix));
+        const missing = wanted.filter((w) => !cur.includes(w));
+        if (missing.length === 0) return null;
+        const next = distinct([...cur, ...missing]);
+        if (system) {
+          write.labels = next;
+          write.undo.labels = { before: cur, after: next };
+        } else {
+          extraFields[fieldId] = next;
+          undoFields[fieldId] = { kind: "labels", before: cur, after: next };
+        }
+        const ours = (l: string) => !prefix || l.startsWith(prefix);
+        return {
+          field: attr,
+          label: ATTRIBUTE_LABELS[attr],
+          from: cur.filter(ours).join(", ") || "(none)",
+          to: next.filter(ours).join(", "),
+        };
+      }
       const meta = editMeta.get(fieldId);
       if (editMeta.size > 0 && !meta) {
         warnings.push(
@@ -552,7 +719,7 @@ async function derivePlan(
         if (cur) return null;
         const wanted = ((row.products as string[]) ?? []).filter((p) => p !== "Other");
         if (wanted.length === 0) return null;
-        let { allowed } = filterAllowed(productResolver.spellings(wanted[0]), meta);
+        let { allowed } = pick(productResolver.spellings(wanted[0]), meta);
         if (allowed.length === 0 && mapping.createOptions && meta) {
           queueOptions(attr, fieldId, key.split("-")[0], [wanted[0]]);
           allowed = [wanted[0]];
@@ -571,7 +738,7 @@ async function derivePlan(
       const cur = readMultiSelect(live.extra[fieldId]);
       const wanted =
         attr === "customers"
-          ? ideaCustomers(row)
+          ? ideaCustomers(row, customerCtx)
           : ((row.platforms as string[]) ?? []).filter(Boolean);
       const missing = wanted.filter((w) => !cur.some((c) => c.toLowerCase() === w.toLowerCase()));
       if (missing.length === 0) return null;
@@ -605,6 +772,15 @@ async function derivePlan(
     for (const [attr, fieldId] of fieldIdByAttr) {
       const change = attrValue(attr, fieldId);
       if (change) changes.push(change);
+    }
+    // Votes and the tickets block are one fact (the evidence) written in two
+    // places; show one line when both move, the tickets line alone only when
+    // the list changed without the count (a reassign that swapped tickets).
+    const ticketsIdx = changes.findIndex((c) => c.field === "tickets");
+    const votesIdx = changes.findIndex((c) => c.field === "votes");
+    if (ticketsIdx >= 0 && votesIdx >= 0) {
+      changes[votesIdx] = { ...changes[votesIdx], to: `${changes[votesIdx].to} · ${changes[ticketsIdx].to} in the description` };
+      changes.splice(ticketsIdx, 1);
     }
 
     if (Object.keys(extraFields).length > 0) write.extraFields = extraFields;
@@ -645,6 +821,7 @@ async function derivePlan(
       { field: "description", label: ATTRIBUTE_LABELS.description, from: "", to: desc.text },
     ];
     const extraFields: Record<string, unknown> = {};
+    let createLabels: string[] | undefined;
 
     for (const [attr, fieldId] of fieldIdByAttr) {
       const mapping = config.fields[attr];
@@ -662,15 +839,26 @@ async function derivePlan(
         }
         continue;
       }
+      if (mapping.type === "labels") {
+        const system = fieldId === "labels";
+        const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
+        const labels = ideaCustomers(row, customerCtx).map((c) => customerLabel(c, prefix));
+        if (labels.length > 0) {
+          if (system) createLabels = labels;
+          else extraFields[fieldId] = labels;
+          changes.push({ field: attr, label: ATTRIBUTE_LABELS[attr], from: "", to: labels.join(", ") });
+        }
+        continue;
+      }
       const wanted =
         attr === "productLine"
           ? ((row.products as string[]) ?? []).filter((p) => p !== "Other").slice(0, 1)
           : attr === "customers"
-            ? ideaCustomers(row)
+            ? ideaCustomers(row, customerCtx)
             : ((row.platforms as string[]) ?? []).filter(Boolean);
       if (wanted.length === 0) continue;
       const candidates = attr === "productLine" ? productResolver.spellings(wanted[0]) : wanted;
-      const filtered = filterAllowed(candidates, meta);
+      const filtered = pick(candidates, meta);
       let allowed = filtered.allowed;
       // For the product line, "rejected" means none of its spellings is an option.
       const rejected =
@@ -698,6 +886,7 @@ async function derivePlan(
     writes.creates.set(row.id, {
       summary: row.title,
       descriptionAdf: desc.adf,
+      labels: createLabels,
       extraFields,
       beforeOrigin: row.origin,
     });
@@ -737,6 +926,63 @@ export async function buildPushPlan(
   return plan;
 }
 
+/** What a sync would write for ONE idea — the drawer's section. Compared
+ *  against the issue as imported (no Jira call); the sync itself reads live. */
+export interface IdeaSyncPreview {
+  action: "create" | "update" | null;
+  jiraKey: string | null;
+  url: string | null;
+  /** Field by field, Jira's current value → the idea's. Empty = in sync. */
+  changes: PushFieldChange[];
+  /** Why nothing can be previewed / written (connection, project, field list). */
+  blockers: string[];
+  warnings: string[];
+  /** The idea is skipped by a sync (e.g. its issue is gone) — the reason. */
+  skipped: string | null;
+}
+
+export async function buildIdeaSyncPreview(workspaceId: string, ideaId: string): Promise<IdeaSyncPreview> {
+  return (await buildIdeasSyncPreviews(workspaceId, [ideaId]))[ideaId];
+}
+
+/**
+ * Previews for every Jira-backed idea (or the given ones) in ONE plan run —
+ * the Ideas page prefetches these in the background so opening an idea is
+ * instant. Keyed by idea id; ideas without an issue are left out.
+ */
+export async function buildIdeasSyncPreviews(
+  workspaceId: string,
+  ideaIds?: string[]
+): Promise<Record<string, IdeaSyncPreview>> {
+  const { plan } = await derivePlan(workspaceId, null, {
+    ideaIds,
+    includePending: true,
+    fromSnapshot: true,
+  });
+  const out: Record<string, IdeaSyncPreview> = {};
+  const skippedById = new Map(plan.skipped.map((x) => [x.ideaId, x.reason]));
+  for (const item of plan.items) {
+    if (item.action !== "update") continue;
+    out[item.ideaId] = {
+      action: item.action,
+      jiraKey: item.jiraKey,
+      url: item.url,
+      changes: item.changes,
+      blockers: plan.blockers,
+      warnings: plan.warnings,
+      skipped: null,
+    };
+  }
+  for (const [ideaId, reason] of skippedById) {
+    out[ideaId] = { action: null, jiraKey: null, url: null, changes: [], blockers: plan.blockers, warnings: plan.warnings, skipped: reason };
+  }
+  for (const id of ideaIds ?? []) {
+    if (!out[id])
+      out[id] = { action: null, jiraKey: null, url: null, changes: [], blockers: plan.blockers, warnings: plan.warnings, skipped: null };
+  }
+  return out;
+}
+
 // ————— execute —————
 
 function buildUpdateComment(config: IdeasJiraConfig, labels: string[]): unknown {
@@ -767,7 +1013,7 @@ export async function executePush(
   const { plan, writes, config } = await derivePlan(workspaceId, scope);
   if (plan.blockers.length > 0) return { ok: false, blockers: plan.blockers };
   const status = await getJiraConnectionStatus(workspaceId);
-  if (!status) return { ok: false, blockers: ["Jira is not connected."] };
+  if (!status) return { ok: false, blockers: [JIRA_SYNC_NOT_CONNECTED_BLOCKER] };
 
   // Options first, all of them, before a single issue is written — a refusal
   // here (401/403: no admin rights, or a connection that predates the
@@ -782,8 +1028,8 @@ export async function executePush(
         ok: false,
         blockers: [
           `Could not add options to Jira field "${o.label}": ${msg}` +
-            (/\((401|403)\)|scope does not match/i.test(msg)
-              ? " — adding options needs Jira admin rights on the connected account, and a connection made before 2026-10-13 lacks the configuration permission: reconnect Jira in Settings → Integrations (the project selection is kept), then sync again."
+            (/\((401|403)\)/.test(msg)
+              ? ` — the PM-OS user lacks the Jira permission to add field options. Contact ${SUPPORT_EMAIL}.`
               : ""),
         ],
       };
@@ -822,6 +1068,8 @@ export async function executePush(
       where: { id: ideaId },
       data: {
         decision: "injected",
+        // Jira now holds what the idea says: nothing left to compare against.
+        batchBaseline: Prisma.JsonNull,
         // A created issue now lives in Jira: flip origin so the next import's
         // resync upserts it by key instead of duplicating it.
         ...(alsoJiraSource
@@ -888,6 +1136,7 @@ export async function executePush(
           issueTypeName: plan.target.issueType,
           summary: write.summary,
           descriptionAdf: write.descriptionAdf,
+          labels: write.labels,
           extraFields: write.extraFields,
         });
         await recordUndo(

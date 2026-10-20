@@ -42,7 +42,7 @@ export interface MatchHooks extends StageHooks {
  * cached prefix instead of ~50 near-copies.
  */
 
-export const MATCH_PROMPT_VERSION = "match-v11";
+export const MATCH_PROMPT_VERSION = "match-v12";
 
 /** Bump IDEAS_MATCH_MODEL in env to change; recorded on every ledger row. */
 export function getMatchModel(): string {
@@ -632,4 +632,69 @@ export async function matchTickets(
   });
 
   return { results, model, promptVersion: MATCH_PROMPT_VERSION, called };
+}
+
+/**
+ * Rewrite one idea from its CURRENT sources (after a PM changed them on the
+ * merge board): the same reconciliation prompt the match stage uses for a
+ * group, fed every ticket and Jira issue the idea holds now, one call. The
+ * largest group the model returns is the idea; nothing else is touched.
+ */
+export async function rewriteIdeaFromSources(
+  workspaceId: string,
+  members: MatchInput[],
+  hooks?: StageHooks,
+): Promise<MatchRewrite | null> {
+  if (members.length === 0) return null;
+  const ctx = await prepareMatch(workspaceId);
+  const groupShared = ctx.groupPrefix.shared;
+  const groupBlock = [
+    "RESOLVED GROUP: every request below is evidence for ONE idea — write that idea from all of them.",
+    `GROUP REQUESTS:\n\n${members
+      .map((u) => [`[${u.key}]`, renderRequest(u)].join("\n"))
+      .join("\n\n")}`,
+  ].join("\n\n");
+  const aiStart = performance.now();
+  const message = await getIdeasClient().messages.create({
+    model: ctx.model,
+    max_tokens: 3000,
+    system: MATCH_GROUP_SYSTEM_PROMPT,
+    tools: [GROUP_TOOL],
+    tool_choice: GROUP_TOOL_CHOICE,
+    messages: prefixedUserMessage(groupShared, groupBlock),
+  });
+  const aiMs = performance.now() - aiStart;
+  const toolUse = message.content.find((block) => block.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") throw new Error("Rewrite model returned no verdict");
+  const raw = toolUse.input as { groups?: unknown; reason?: unknown };
+  const groups = (Array.isArray(raw.groups) ? raw.groups : []).map((g) => {
+    const row = (g ?? {}) as Record<string, unknown>;
+    return {
+      members: toNames(row.members),
+      rewrite: {
+        productTitle: typeof row.product_title === "string" ? row.product_title.trim() : "",
+        productSummary: typeof row.product_summary === "string" ? row.product_summary.trim() : "",
+        productLines: toNames(row.product_lines),
+        platforms: toNames(row.platforms),
+      } as MatchRewrite,
+    };
+  });
+  const ledgerInput = { system: MATCH_GROUP_SYSTEM_PROMPT, user: `${groupShared}\n\n${groupBlock}` };
+  const dbStart = performance.now();
+  await recordVerdict(
+    workspaceId,
+    ledgerKey("rewrite", MATCH_PROMPT_VERSION, ctx.model, ledgerInput),
+    {
+      stage: "rewrite",
+      promptVersion: MATCH_PROMPT_VERSION,
+      model: ctx.model,
+      input: ledgerInput,
+      verdict: { groups, reason: typeof raw.reason === "string" ? raw.reason : "" },
+    },
+  );
+  hooks?.call({ aiMs, dbMs: performance.now() - dbStart, tokens: anthropicUsage(message.usage) });
+  const best = groups
+    .filter((g) => g.rewrite.productTitle || g.rewrite.productSummary)
+    .sort((a, b) => b.members.length - a.members.length)[0];
+  return best?.rewrite ?? null;
 }

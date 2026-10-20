@@ -33,6 +33,8 @@ export interface JiraIssue {
   status: string;
   issueType: string;
   labels: string[];
+  /** Values of the custom Labels-type customers field, when one is mapped. */
+  customerLabels?: string[];
   components: string[];
   /** Value of the configured product-line field (e.g. Kela's "Module"); only
    *  set when the pull was given a field id. */

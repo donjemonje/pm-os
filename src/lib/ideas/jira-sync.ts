@@ -1,7 +1,9 @@
 import { db } from "../db";
+import { SUPPORT_EMAIL } from "../jira-health-copy";
 import { fetchIssuesForScopePaged, getJiraConnectionStatus, listAllFields } from "../jira";
 import { mergeIdeasJiraConfig, type JiraPullConfig } from "./jira-mapping";
 import { buildProductLineResolver } from "./product-line-key";
+import { DEFAULT_CUSTOMER_LABEL_PREFIX, isCustomerLabel } from "./customer-labels";
 import type { JiraSource } from "./types";
 
 export interface JiraLiveResult {
@@ -39,7 +41,10 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   ]);
   const config = mergeIdeasJiraConfig(wsRow?.ideasConfig);
   const pull = config.pull;
-  if (!status?.connected || status.projectKeys.length === 0) {
+  // Admin → Ideas → Jira: the org's one project; the connection's own
+  // selection only when the admin has not set it (QA seeds, RoomLens).
+  const projectKeys = config.jiraProject ? [config.jiraProject] : (status?.projectKeys ?? []);
+  if (!status?.connected || projectKeys.length === 0) {
     return { connected: false, sources: [], truncatedProjects: [], unresolvedProductLines: [], pull };
   }
   // Module values land under the catalog's spelling ("Platform General" →
@@ -58,13 +63,20 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
   let productLineFieldId: string | undefined;
   let reporterFieldId: string | undefined;
   let assigneeFieldId: string | undefined;
+  let customersFieldId: string | undefined;
   const mappedName = config.fields.productLine.jiraField.trim().toLowerCase();
   const reporterName = config.fields.reporter.jiraField.trim().toLowerCase();
   const assigneeName = config.fields.assignee.jiraField.trim().toLowerCase();
+  // Customers as labels: either Jira's own Labels (prefixed) or a custom
+  // Labels-type field — the latter is read by id like the product line.
+  const customersMapping = config.fields.customers;
+  const customersName = customersMapping.jiraField.trim().toLowerCase();
+  const customersIsCustomLabels = customersMapping.type === "labels" && customersName !== "labels";
   const needLookup =
     (mappedName && mappedName !== "components") ||
     (reporterName && reporterName !== "reporter") ||
-    (assigneeName && assigneeName !== "assignee");
+    (assigneeName && assigneeName !== "assignee") ||
+    customersIsCustomLabels;
   if (needLookup) {
     try {
       const all = await listAllFields(workspaceId);
@@ -72,17 +84,18 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       const custom = (id?: string) => (id && id.startsWith("customfield_") ? id : undefined);
       if (reporterName && reporterName !== "reporter") reporterFieldId = custom(all.get(reporterName)?.id);
       if (assigneeName && assigneeName !== "assignee") assigneeFieldId = custom(all.get(assigneeName)?.id);
+      if (customersIsCustomLabels) customersFieldId = custom(all.get(customersName)?.id);
     } catch (err) {
       // Silently falling back to Components would move every issue to "Other"
       // and the resync would rewrite every idea's product line — fail loudly.
       throw new Error(
-        `Could not read Jira's field list (${err instanceof Error ? err.message : "unknown error"}) — the import stopped before touching any idea. Retry; if it persists, reconnect Jira in Settings → Integrations.`
+        `Could not read Jira's field list (${err instanceof Error ? err.message : "unknown error"}) — the import stopped before touching any idea. Retry; if it persists, contact ${SUPPORT_EMAIL}.`
       );
     }
   }
 
   const perProject = await Promise.all(
-    status.projectKeys.map(async (projectKey) => ({
+    projectKeys.map(async (projectKey) => ({
       projectKey,
       ...(await fetchIssuesForScopePaged(workspaceId, {
         projectKey,
@@ -90,6 +103,7 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
         productLineFieldId,
         reporterFieldId,
         assigneeFieldId,
+        customersFieldId,
       })),
     }))
   );
@@ -119,6 +133,13 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       createdAt: issue.created,
       url: `${status.siteUrl}/browse/${issue.key}`,
       // Mapped field first (Kela: Module); Components when it is empty.
+      labels: issue.labels,
+      customerLabels:
+        customersMapping.type !== "labels"
+          ? []
+          : customersFieldId
+            ? (issue.customerLabels ?? [])
+            : issue.labels.filter((l) => isCustomerLabel(l, customersMapping.labelPrefix ?? DEFAULT_CUSTOMER_LABEL_PREFIX)),
       products: (issue.productLine ? [issue.productLine] : issue.components).map((v) => {
         const hit = resolver.resolve(v);
         if (!hit) unresolved.set(v.trim().toLowerCase(), v.trim());

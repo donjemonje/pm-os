@@ -17,8 +17,9 @@ import { RESOLVED_ENV } from "./test-env";
  *   shared Status filter is the only scope): unchanged ideas and the Jira
  *   sources backing only unchanged ideas hide by default and show under
  *   Unchanged / All; edit mode always shows the full source pool. Entering
- *   the view no longer auto-starts an edit — clicking a Final row does, and
- *   that row grows discard (×) / save (✓) icon buttons.
+ *   the view no longer auto-starts an edit — clicking a row's "N src" chip
+ *   does (the row itself opens the drawer), and that row grows discard (×) /
+ *   save (✓) icon buttons.
  * - A manual reassign on the merge page recomputes status and votes: adding
  *   ticket evidence to a Jira-origin idea flips it to Updated and moves
  *   newVotes by the zendesk-source delta; removing it flips it back.
@@ -268,7 +269,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
   const SAVE_TITLE = "Save source changes";
 
   /** A merge-board column (glass card), scoped by its header label. */
-  function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "Final") {
+  function mergeColumn(page: Page, label: "Zendesk" | "Jira" | "PM-OS Ideas") {
     return page
       .locator("div.overflow-hidden.rounded-card")
       .filter({ has: page.getByText(label, { exact: true }) });
@@ -343,11 +344,11 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await expect(rowA.getByTitle("Mark reviewed")).toHaveCount(0);
     await expect(rowA.getByTitle("Mark unreviewed")).toHaveCount(0);
 
-    // Its drawer has no Approve button either (Merge/Edit still render).
+    // Its drawer has no Approve button either (the sources pencil still renders).
     await rowA.click();
     const drawer = page.locator("div.fixed.bottom-0.right-0.top-0");
     await expect(drawer.getByRole("heading", { name: UNCHANGED_A_TITLE })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: "Merge" })).toBeVisible();
+    await expect(drawer.getByRole("button", { name: "Edit sources on the Merge board" })).toBeVisible();
     await expect(drawer.getByRole("button", { name: /^Approved?$/ })).toHaveCount(0);
 
     // Belt and braces: the API itself refuses decision "reviewed" for an
@@ -386,7 +387,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     // Jira keys that back only it are hidden.
     await pageToggle(page, "Merge").click();
     const jiraCol = mergeColumn(page, "Jira");
-    const finalCol = mergeColumn(page, "Final");
+    const finalCol = mergeColumn(page, "PM-OS Ideas");
     await expect(finalCol.getByText(UPDATED_TITLE)).toBeVisible();
     await expect(finalCol.getByTitle(DISCARD_TITLE)).toHaveCount(0);
     await expect(jiraCol.getByRole("button", { name: JIRA_C })).toBeVisible();
@@ -416,7 +417,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await pickStatus(page, "All");
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toHaveCount(0);
     const updatedRow = finalCol.locator("div.cursor-pointer", { hasText: UPDATED_TITLE });
-    await updatedRow.click();
+    await updatedRow.getByTitle("Edit sources").click();
     await expect(updatedRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_A })).toBeVisible();
     await expect(jiraCol.getByRole("button", { name: JIRA_B })).toBeVisible();
@@ -434,15 +435,15 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await pageToggle(page, "Merge").click();
 
     const zenCol = mergeColumn(page, "Zendesk");
-    const finalCol = mergeColumn(page, "Final");
+    const finalCol = mergeColumn(page, "PM-OS Ideas");
     const orphanRow = zenCol.locator("div.cursor-pointer", { hasText: TICKET_ORPHAN_SUBJECT });
     const targetRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
 
     // Start editing the unchanged Jira idea (visible only under Status:
-    // Unchanged) by clicking its row, and attach the orphan ticket as
+    // Unchanged) by clicking its src chip, and attach the orphan ticket as
     // evidence. The save (✓) icon appears only once the edit is dirty.
     await pickStatus(page, "Unchanged");
-    await targetRow.click();
+    await targetRow.getByTitle("Edit sources").click();
     await expect(targetRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await expect(targetRow.getByTitle(SAVE_TITLE)).toHaveCount(0);
     await orphanRow.click();
@@ -476,7 +477,7 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     // Reverse it: detach the ticket → back to Unchanged, delta gone.
     await pageToggle(page, "Merge").click();
     const updatedRow = finalCol.locator("div.cursor-pointer", { hasText: UNCHANGED_B_TITLE });
-    await updatedRow.click();
+    await updatedRow.getByTitle("Edit sources").click();
     await expect(updatedRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await orphanRow.click();
     await expect(updatedRow.getByTitle(SAVE_TITLE)).toBeVisible();

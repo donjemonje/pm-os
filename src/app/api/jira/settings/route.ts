@@ -42,3 +42,6 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ ok: true });
 }
+
+// No DELETE: customers cannot disconnect Jira — the PM-OS admin removes the
+// connection in Admin → Ideas (/api/admin/organizations/[id]/jira-token).

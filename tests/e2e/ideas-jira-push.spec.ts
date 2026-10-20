@@ -62,7 +62,7 @@ const IDEA_B_TITLE = "QA-PJ vendor sync"; // Beta, pending
 const TICKET_PREFIX = "QA-PJ-T";
 
 const NOT_CONNECTED_BLOCKER =
-  "Jira is not connected — connect it in Settings → Integrations.";
+  "Jira is temporarily unavailable — Sync to Jira is paused. Contact support@pm-os.io.";
 
 let orgId: string;
 let workspaceId: string;
@@ -272,7 +272,8 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await labeledInput(page, "Zendesk ticket link template").fill(
       "https://qa.zendesk.example/agent/tickets/{id}"
     );
-    await fieldRow(page, "Customers").locator('input[type="text"]').fill("QA_Customers");
+    // The Customers row has two text inputs since 2026-10-20 (Jira field + label prefix).
+    await fieldRow(page, "Customers").locator('input[type="text"]').first().fill("QA_Customers");
     // Components (platforms → P_Components) is OFF by default since
     // 2026-09-03, so its field-name input starts disabled; enabling the
     // attribute enables the input.
@@ -287,7 +288,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     ).toBeEnabled();
     await labeledInput(page, "Prefix").fill("QA update:");
 
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Saved — applies to the next sync")).toBeVisible();
 
     // Persisted normalized: the stored config is always complete.
@@ -306,13 +307,14 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       string,
       { jiraField: string; type: string; policy: string; enabled: boolean }
     >;
+    // Customers default to Jira labels since 2026-10-20 (no admin right to grow
+    // the list); the typed field name is kept, the type and prefix follow the default.
     expect(fields.customers).toEqual({
       jiraField: "QA_Customers",
-      type: "multi_select",
+      type: "labels",
       policy: "union",
       enabled: true,
-      // Default ON since feature/jira-support-kela (customer names arrive with every import).
-      createOptions: true,
+      labelPrefix: "cs_",
     });
     expect(fields.platforms.enabled).toBe(true);
     expect(fields.votes).toEqual({
@@ -327,7 +329,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await expect(labeledInput(page, "Tickets heading")).toHaveValue("QA Supported:");
     await expect(labeledInput(page, "Blank lines before the list")).toHaveValue("3");
     await expect(
-      fieldRow(page, "Customers").locator('input[type="text"]')
+      fieldRow(page, "Customers").locator('input[type="text"]').first()
     ).toHaveValue("QA_Customers");
     await expect(fieldRow(page, "Components").getByRole("checkbox").first()).toBeChecked();
 
@@ -480,7 +482,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       has: page.getByRole("heading", { name: "My Product Lines" }),
     });
     await panel.getByRole("button", { name: LINE_A, exact: true }).click();
-    await panel.getByRole("button", { name: "Save" }).click();
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
     await expect(panel.getByText("Saved", { exact: true })).toBeVisible();
     const prefs = await withDb(async (db) => {
       const user = await db.user.findUniqueOrThrow({ where: { email: QA_USER.email } });

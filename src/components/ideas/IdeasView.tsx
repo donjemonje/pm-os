@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { jiraHealthMessage, jiraHealthTitle, type JiraHealthStatus } from "@/lib/jira-health-copy";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   Check,
   CheckCheck,
   ChevronDown,
-  GitMerge,
   Layers,
   PlusCircle,
   RefreshCw,
@@ -16,8 +16,14 @@ import {
   Trash2,
   Upload,
   ExternalLink,
+  Undo2,
+  Share2,
+  Flag,
+  Plus,
 } from "lucide-react";
+import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
+import { track } from "@/lib/analytics/track";
 import { type CsvMapping, DEFAULT_CSV_MAPPING } from "@/lib/ideas/csv-mapping";
 import {
   badgeOf,
@@ -29,7 +35,7 @@ import {
   STATUS_TONES,
   zenLabel,
 } from "@/lib/ideas/idea";
-import type { PushPlan, PushResult } from "@/lib/ideas/push";
+import type { IdeaSyncPreview, PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
 import { PmosMark } from "@/components/brand/PmosMark";
@@ -48,6 +54,7 @@ import {
 } from "@/lib/ideas/colors";
 import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
+import { NewIdeaDrawer } from "./NewIdeaDrawer";
 
 const MONO_LABEL =
   "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
@@ -68,12 +75,16 @@ const IMPORT_STEPS: { label: string; hint: string; pmos?: boolean }[] = [
   { label: "Preparing ideas for review", hint: "Almost there" },
 ];
 
+const WarmDetailsEditor = LazyIdeaDetailsEditor;
+
 interface ServerState {
   tickets: ZendeskTicket[];
   jiraSources: JiraSource[];
   ideas: Idea[];
   customerCatalog?: string[];
   jiraConnected?: boolean;
+  jiraEnabled?: boolean;
+  jiraHealth?: JiraHealthStatus;
   csvMapping?: CsvMapping;
   jiraSiteUrl?: string | null;
   jiraProductLineField?: string;
@@ -133,6 +144,8 @@ export function IdeasView({
   // customer flips its chips without a reload; the prop is only the first paint.
   const [customerCatalog, setCustomerCatalog] = useState<string[]>(catalogCustomers);
   const [jiraConnected, setJiraConnected] = useState(false);
+  const [jiraEnabled, setJiraEnabled] = useState(false);
+  const [jiraHealth, setJiraHealth] = useState<JiraHealthStatus>("ok");
   const [jiraSiteUrl, setJiraSiteUrl] = useState<string | null>(null);
   const [jiraProductLineField, setJiraProductLineField] = useState("Product line");
   const [csvMapping, setCsvMapping] = useState<CsvMapping>(DEFAULT_CSV_MAPPING);
@@ -147,13 +160,24 @@ export function IdeasView({
   const [jiraStatusFilter, setJiraStatusFilter] = useState<string[]>([]);
   const [pendingOnly, setPendingOnly] = useState(false);
 
-  const [page, setPage] = useState<"final" | "merge">("final");
+  const [page, setPageState] = useState<"final" | "merge">("final");
+  const setPage = (p: "final" | "merge") => {
+    track("page_toggle", { to: p });
+    setPageState(p);
+  };
   const [edit, setEdit] = useState<MergeEdit | null>(null);
   const [selectedFinalId, setSelectedFinalId] = useState<string | null>(null);
 
   /** Product-line groups the PM folded shut on the Final page ("" = unassigned). */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   const [drawerId, setDrawerId] = useState<string | null>(null);
+  /** "New idea" — a PM writes one from scratch (origin "manual"). */
+  const [newIdeaOpen, setNewIdeaOpen] = useState(false);
+  /** "Changes to sync" for every Jira-backed idea, prefetched in the
+   *  background on load and after every change (one plan run, ~1 s), so the
+   *  drawer opens with its section already in hand. */
+  const [previews, setPreviews] = useState<Record<string, IdeaSyncPreview>>({});
+  const [stateVersion, setStateVersion] = useState(0);
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
   /** Drawer views left behind by in-drawer navigation (ticket → idea); Back pops one. */
   const [drawerHistory, setDrawerHistory] = useState<
@@ -179,15 +203,30 @@ export function IdeasView({
   const [importing, setImporting] = useState(false);
   /** Index into IMPORT_STEPS while the import overlay is up; null = closed. */
   const [importStep, setImportStep] = useState<number | null>(null);
+  /** A PMOS AI call started from the drawer (rewrite / create from ticket):
+   *  shown as a full-screen wait owned by the page, so closing the drawer
+   *  neither hides it nor looks like it stopped. */
+  const [aiWait, setAiWait] = useState<{ title: string; what: string } | null>(null);
+  const withAiWait = async (title: string, what: string, run: () => Promise<boolean>) => {
+    setAiWait({ title, what });
+    try {
+      return await run();
+    } finally {
+      setAiWait(null);
+    }
+  };
 
   const fileRef = useRef<HTMLInputElement>(null);
 
   const applyState = (state: ServerState, opts: { refreshShell?: boolean } = { refreshShell: true }) => {
+    setStateVersion((v) => v + 1);
     setTickets(state.tickets);
     setJiraSources(state.jiraSources);
     setIdeas(state.ideas);
     if (state.customerCatalog) setCustomerCatalog(state.customerCatalog);
     if (state.jiraConnected !== undefined) setJiraConnected(state.jiraConnected);
+    if (state.jiraEnabled !== undefined) setJiraEnabled(state.jiraEnabled);
+    if (state.jiraHealth !== undefined) setJiraHealth(state.jiraHealth);
     if (state.jiraSiteUrl !== undefined) setJiraSiteUrl(state.jiraSiteUrl);
     if (state.jiraProductLineField) setJiraProductLineField(state.jiraProductLineField);
     if (state.csvMapping) setCsvMapping(state.csvMapping);
@@ -195,6 +234,28 @@ export function IdeasView({
     // server; a mutation here must re-render it (client state survives).
     if (opts.refreshShell) router.refresh();
   };
+
+  // The drawer's text editor (Tiptap) pays a one-time cost the first time it
+  // mounts in a page: chunk fetch (and compile in dev), schema and extension
+  // setup, first layout. A hidden instance mounts right after the page is up
+  // and goes away a moment later, so the first real edit is as instant as
+  // the second (Daniel, 2026-10-19).
+  const [warmEditor, setWarmEditor] = useState(true);
+  useEffect(() => {
+    track("page_view", { name: "ideas" });
+  }, []);
+  // Searches: one event per settled query (not per keystroke).
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) return;
+    const t = setTimeout(() => track("search", { query: q.slice(0, 80), page }), 900);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+  useEffect(() => {
+    const t = setTimeout(() => setWarmEditor(false), 4000);
+    return () => clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -228,6 +289,11 @@ export function IdeasView({
         return false;
       }
       applyState(data.state);
+      // The touched idea's preview comes with the response: exact at once,
+      // the background run refreshes the rest.
+      if (data.previews && typeof data.previews === "object") {
+        setPreviews((prev) => ({ ...prev, ...(data.previews as Record<string, IdeaSyncPreview>) }));
+      }
       if (typeof data.notice === "string" && data.notice) setToast(data.notice);
       return true;
     } catch {
@@ -237,6 +303,34 @@ export function IdeasView({
   };
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
+
+  useEffect(() => {
+    if (!jiraConnected || ideas.length === 0) {
+      setPreviews({});
+      return;
+    }
+    // Debounced: a burst of state applies (import steps, quick clicks) runs
+    // one prefetch; a newer version cancels an older in-flight one.
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetch("/api/ideas/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "previewAll" }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!cancelled && d?.previews) setPreviews(d.previews);
+        })
+        .catch(() => {});
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // stateVersion bumps on every server state apply.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateVersion, jiraConnected, ideas.length > 0]);
   const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
   // Issues a sync created exist in Jira but not in the snapshot until the next
   // import — they get a stand-in source (idea title, browse link) so the drawer
@@ -307,6 +401,8 @@ export function IdeasView({
     setError("");
     setImporting(true);
     setImportStep(0);
+    track("import_start", { bytes: file.size });
+    const importStarted = Date.now();
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     try {
       const text = await file.text();
@@ -315,6 +411,32 @@ export function IdeasView({
         setError(result.errors[0]);
         return;
       }
+      // Jira is expected for this org: probe the connection right now (a
+      // fresh check, not the cached one) and let the user decide — import
+      // Zendesk only (no matching against the backlog) or stop. Nothing to
+      // fix on their side: a dead connection is PM-OS support's to replace.
+      let skipJira = false;
+      if (jiraEnabled) {
+        const health = await fetch("/api/jira/health?fresh=1")
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        const status: JiraHealthStatus = health?.status ?? "unavailable";
+        setJiraHealth(status);
+        if (status !== "ok") {
+          setImporting(false);
+          setImportStep(null);
+          const proceed = await confirm({
+            title: jiraHealthTitle(status),
+            message: `${jiraHealthMessage(status)} You can import Zendesk only — tickets will not be matched against your Jira backlog.`,
+            confirmLabel: "Import without Jira",
+            cancelLabel: "Cancel",
+          });
+          if (!proceed) return;
+          skipJira = true;
+          setImporting(true);
+          setImportStep(0);
+        }
+      }
       // The overlay steps are a high-level narration of one server call; the
       // AI-review step holds until the response lands (it dominates the wait).
       await sleep(600);
@@ -322,7 +444,7 @@ export function IdeasView({
       const resPromise = fetch("/api/ideas/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tickets: result.tickets }),
+        body: JSON.stringify({ tickets: result.tickets, skipJira }),
       });
       await sleep(900);
       setImportStep(2);
@@ -330,9 +452,11 @@ export function IdeasView({
       const data = await res.json();
       if (!res.ok) {
         setError(`Import failed: ${data.error ?? res.statusText}`);
+        track("import_failed", { ms: Date.now() - importStarted });
         return;
       }
       setImportStep(3);
+      track("import_done", { ms: Date.now() - importStarted, tickets: result.tickets.length, skipJira });
       await sleep(800);
       // The KPI panel and the grouped list tell the whole story — no
       // summary line.
@@ -490,8 +614,9 @@ export function IdeasView({
     });
     if (!ok) return;
     setEdit(null);
-    // Keep the edited idea selected so the saved reassignment stays visible.
-    setSelectedFinalId(edit.ideaId);
+    // Nothing stays highlighted after a save (Daniel, 2026-10-19): the board
+    // returns to its plain state, the saved sources speak for themselves.
+    setSelectedFinalId(null);
     setNote("");
   };
 
@@ -512,7 +637,7 @@ export function IdeasView({
   // No Jira integration → no export, whatever the review state.
   const injectDisabled = !jiraConnected || reviewed === 0;
   const injectHint = !jiraConnected
-    ? "Connect Jira in Settings → Integrations to export"
+    ? "Jira is not connected for your organization"
     : reviewed === 0
       ? pending > 0
         ? `Approve ideas to enable exporting — ${pending} awaiting review`
@@ -595,6 +720,7 @@ export function IdeasView({
         }`;
 
   const openMerge = () => {
+    track("sync_open");
     // Default the scope to the PM's own product lines when they have any.
     setScopeSel(defaultProducts.filter((p) => allProducts.some((a) => a.toLowerCase() === p.toLowerCase())));
     setPlan(null);
@@ -768,6 +894,16 @@ export function IdeasView({
     editedIdea != null &&
     !(sameSet(edit.zen, editedIdea.zen) && sameSet(edit.jira, editedIdea.jira));
   const editCount = edit ? edit.zen.length + edit.jira.length : 0;
+  const editAdded =
+    edit && editedIdea
+      ? edit.zen.filter((k) => !editedIdea.zen.includes(k)).length +
+        edit.jira.filter((k) => !editedIdea.jira.includes(k)).length
+      : 0;
+  const editRemoved =
+    edit && editedIdea
+      ? editedIdea.zen.filter((k) => !edit.zen.includes(k)).length +
+        editedIdea.jira.filter((k) => !edit.jira.includes(k)).length
+      : 0;
 
   const productChip = (p: string, dot?: boolean) => {
     // Flag names the model returned that aren't in the Settings → Ideas
@@ -868,6 +1004,15 @@ export function IdeasView({
     );
 
   return (
+    <>
+      {warmEditor && (
+        <div
+          aria-hidden
+          style={{ position: "fixed", left: -10000, top: 0, width: 600, visibility: "hidden", pointerEvents: "none" }}
+        >
+          <WarmDetailsEditor defaultValue={"## Warm-up\n\n- one\n"} onChange={() => {}} />
+        </div>
+      )}
     <div className="app-canvas font-title min-h-full">
       <div className="mx-auto w-full max-w-[1680px] px-7 pb-24 pt-6">
         <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFile} />
@@ -875,7 +1020,6 @@ export function IdeasView({
         {/* Header */}
         <div className="mb-4 flex items-center gap-3.5">
           <div>
-            <div className="eyebrow mb-1 text-primary">Zendesk → Ideas → Jira</div>
             <h1 className="font-title m-0 text-[26px] font-bold leading-none tracking-[-0.02em]">
               Ideas
             </h1>
@@ -912,6 +1056,11 @@ export function IdeasView({
           </div>
         </div>
 
+        {jiraEnabled && jiraHealth !== "ok" && (
+          <div className="mb-4 rounded-inner border border-[#f3dcb0] bg-[#fdf6e7] px-4 py-2.5 text-[13px] text-[#8a5a00]">
+            {jiraHealthMessage(jiraHealth)}
+          </div>
+        )}
         {error && (
           <div className="mb-4 rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">
             {error}
@@ -1052,7 +1201,7 @@ export function IdeasView({
                     type="text"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search ideas…"
+                    placeholder={edit ? "Search tickets and Jira issues…" : "Search ideas…"}
                     className="h-8 w-full rounded-control border border-border bg-[var(--app-glass)] pl-9 pr-3 text-[13px] shadow-sm outline-none placeholder:text-fg-faint focus:border-primary focus:bg-white focus:shadow-[0_0_0_2px_var(--app-accent-soft)]"
                   />
                 </div>
@@ -1133,18 +1282,60 @@ export function IdeasView({
                       Grouped by <b className="font-semibold text-fg-2">Product line</b>
                     </span>
                   )}
+                  {/* A PM writes an idea from scratch — next to the review controls. */}
                   {page === "final" && (
-                    <span title={pending > 0 ? `${pending} awaiting review` : "All approved"}>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setNote("");
-                          void callMutate({ type: "approveAll" });
-                        }}
-                      >
-                        <CheckCheck size={13} strokeWidth={2.25} />
-                        {pending > 0 ? "Approve all" : "Undo approve all"}
-                      </Button>
+                    <Button size="sm" onClick={() => setNewIdeaOpen(true)} disabled={importing}>
+                      <Plus size={13} strokeWidth={2.25} />
+                      New idea
+                    </Button>
+                  )}
+                  {/* Approve all while anything is pending; Undo while anything is
+                      approved — both when the batch is mixed (e.g. ideas skipped for
+                      an open suggestion), so an approve is always reversible. */}
+                  {page === "final" && (pending > 0 || reviewed > 0) && (
+                    <span className="inline-flex items-center gap-1">
+                      {pending > 0 ? (
+                        <span title={`${pending} awaiting review`}>
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setNote("");
+                              void callMutate({ type: "approveAll", revert: false });
+                            }}
+                          >
+                            <CheckCheck size={13} strokeWidth={2.25} />
+                            Approve all
+                          </Button>
+                        </span>
+                      ) : (
+                        <span title="Every idea is approved — back to pending">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setNote("");
+                              void callMutate({ type: "approveAll", revert: true });
+                            }}
+                          >
+                            <Undo2 size={13} strokeWidth={2.25} />
+                            Undo approve all
+                          </Button>
+                        </span>
+                      )}
+                      {/* Mixed batch: a compact undo next to Approve all, no second line. */}
+                      {pending > 0 && reviewed > 0 && (
+                        <button
+                          type="button"
+                          title={`Undo: ${reviewed} approved back to pending`}
+                          aria-label="Undo approve all"
+                          onClick={() => {
+                            setNote("");
+                            void callMutate({ type: "approveAll", revert: true });
+                          }}
+                          className="inline-flex h-[30px] w-[30px] items-center justify-center rounded-control border border-border bg-[var(--app-glass)] text-fg-2 shadow-sm hover:border-primary/60 hover:bg-white"
+                        >
+                          <Undo2 size={13} strokeWidth={2.25} />
+                        </button>
+                      )}
                     </span>
                   )}
                 </div>
@@ -1211,18 +1402,41 @@ export function IdeasView({
             {page === "merge" ? (
               <div className="flex flex-col gap-3">
                 {edit && editedIdea ? (
-                  <div className="flex items-center gap-2.5 rounded-inner border border-[rgba(23,178,106,.35)] bg-[rgba(23,178,106,.12)] px-3.5 py-2.5 text-[13px] text-[#0f7a47]">
-                    <GitMerge size={15} strokeWidth={2.25} className="shrink-0" />
+                  // Two states the PM can tell apart at a glance: untouched
+                  // (neutral, nothing to save) and changed (green, with the
+                  // delta — ✓ saves, ✕ / Esc discards).
+                  <div
+                    className={`flex items-center gap-2.5 rounded-inner border px-3.5 py-2.5 text-[13px] ${
+                      editDirty
+                        ? "border-[rgba(23,178,106,.35)] bg-[rgba(23,178,106,.12)] text-[#0f7a47]"
+                        : "border-border bg-[var(--app-glass)] text-fg-2"
+                    }`}
+                  >
+                    <Share2 size={15} strokeWidth={2.25} className="shrink-0" />
                     <span className="min-w-0 flex-1 truncate">
-                      Editing <b className="font-semibold">{editedIdea.title}</b> —{" "}
-                      {editCount} source{editCount === 1 ? "" : "s"} selected. Tick a Zendesk or Jira
-                      row to attach it; ✓ on the idea saves, ✕ or Esc discards.
+                      {editDirty ? (
+                        <>
+                          <b className="font-semibold">
+                            {editAdded > 0 ? `Added ${editAdded} source${editAdded === 1 ? "" : "s"}` : ""}
+                            {editAdded > 0 && editRemoved > 0 ? ", " : ""}
+                            {editRemoved > 0
+                              ? `${editAdded > 0 ? "removed" : "Removed"} ${editRemoved} source${editRemoved === 1 ? "" : "s"}`
+                              : ""}
+                          </b>
+                          . ✓ saves, ✕ or Esc discards.
+                        </>
+                      ) : (
+                        <>
+                          <b className="font-semibold">No changes</b>. Tick a Zendesk or Jira row to add it,
+                          untick to remove.
+                        </>
+                      )}
                     </span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2.5 px-1 text-[12.5px] text-fg-3">
-                    <GitMerge size={14} className="text-primary" />
-                    Pick an idea in Final to edit its sources
+                    <Share2 size={14} className="text-primary" />
+                    Click an idea src chip to edit its sources
                   </div>
                 )}
                 <MergePage
@@ -1248,6 +1462,7 @@ export function IdeasView({
                     setDrawerSrc(null);
                   }}
                   onOpenSource={(kind, key) => {
+                    track("source_open", { kind, from: "merge" });
                     setDrawerHistory([]);
                     setDrawerSrc({ kind, key });
                     setDrawerId(null);
@@ -1320,13 +1535,15 @@ export function IdeasView({
                           const score = SCORING_ENABLED ? scoreOf(idea) : null;
                           const isOpen = drawerId === idea.id;
                           const blocked =
-                            idea.decision === "pending" && unresolvedSuggested(idea).length > 0;
+                            idea.decision === "pending" &&
+                            (unresolvedSuggested(idea).length > 0 || !!idea.sourcesChanged);
                           const firstTicket = idea.zen[0] ? ticketsByKey.get(idea.zen[0]) : undefined;
                           const customers = idea.customers ?? [];
                           return (
                             <div
                               key={idea.id}
                               onClick={() => {
+                                track("drawer_open", { from: "final", ideaId: idea.id });
                                 setDrawerHistory([]);
                                 setDrawerId(idea.id);
                               }}
@@ -1346,7 +1563,9 @@ export function IdeasView({
                                   blocked={blocked}
                                   title={
                                     blocked
-                                      ? "Approve or dismiss the suggested customers first"
+                                      ? idea.sourcesChanged
+                                        ? "Sources changed — rewrite or keep the text first"
+                                        : "Approve or dismiss the suggested customers first"
                                       : idea.decision === "pending"
                                         ? "Mark reviewed"
                                         : "Mark unreviewed"
@@ -1391,6 +1610,14 @@ export function IdeasView({
                                     </span>
                                   )}
                                   {(firstTicket || idea.jira[0]) && <span>·</span>}
+                                  {idea.sourcesChanged && (
+                                    <span
+                                      title="Sources changed by a PM — rewrite or keep the text before approving"
+                                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-[var(--app-warn)] bg-[var(--app-warn-bg)] px-[6px] py-px font-mono text-[9.5px] font-semibold text-[var(--app-warn-fg)]"
+                                    >
+                                      <Flag size={9} /> sources changed
+                                    </span>
+                                  )}
                                   {idea.products.slice(1).map((p) => productChip(p))}
                                   {(idea.platforms ?? []).map((p) => (
                                     <Chip key={`platform-${p}`} kind="platform">
@@ -1451,11 +1678,7 @@ export function IdeasView({
                                 {badge && (
                                   <Pill
                                     badge={badge}
-                                    title={
-                                      idea.batch === "updated" && (idea.batchChanges ?? []).length > 0
-                                        ? (idea.batchChanges ?? []).join("\n")
-                                        : undefined
-                                    }
+                                    title={undefined}
                                   />
                                 )}
                               </span>
@@ -1539,10 +1762,51 @@ export function IdeasView({
           }
           onSave={
             drawerIdea
-              ? (patch) => void callMutate({ type: "edit", ideaId: drawerIdea.id, ...patch })
+              ? (patch) => callMutate({ type: "edit", ideaId: drawerIdea.id, ...patch })
               : undefined
           }
           onMerge={drawerIdea ? () => gotoMerge(drawerIdea.id) : undefined}
+          onRewrite={
+            drawerIdea
+              ? () =>
+                  withAiWait(drawerIdea.title, "Rewriting the idea from its current sources", () =>
+                    callMutate({ type: "rewrite", ideaId: drawerIdea.id }),
+                  )
+              : undefined
+          }
+          onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
+          syncPreview={
+            drawerIdea && drawerIdea.jira.length > 0 && jiraConnected
+              ? previews[drawerIdea.id] ?? "loading"
+              : null
+          }
+          onCreateIdeaFromTicket={(ticketKey) =>
+            withAiWait(
+              ticketsByKey.get(ticketKey)?.subject ?? ticketKey,
+              "Reading the ticket and writing an idea",
+              () => callMutate({ type: "createIdeaFromTicket", ticketKey }),
+            )
+          }
+        />
+      )}
+
+      {newIdeaOpen && (
+        <NewIdeaDrawer
+          catalogProducts={catalogProducts}
+          catalogPlatforms={catalogPlatforms}
+          customerCatalog={customerCatalog}
+          productColors={productColors}
+          customerColors={customerColors}
+          // Tickets that back no live idea — orphans on the merge board and
+          // parked ones — are the only sources a hand-written idea can take.
+          freeTickets={tickets.filter((t) => !ideas.some((i) => i.batch !== "deleted" && i.zen.includes(t.key)))}
+          freeJira={jiraSources.filter((s) => !ideas.some((i) => i.batch !== "deleted" && i.jira.includes(s.key)))}
+          onClose={() => setNewIdeaOpen(false)}
+          onCreate={async (draft) => {
+            const ok = await callMutate({ type: "createIdea", ...draft });
+            if (ok) setNewIdeaOpen(false);
+            return ok;
+          }}
         />
       )}
 
@@ -1552,6 +1816,31 @@ export function IdeasView({
           className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-inner bg-[#0b1430] px-4 py-2.5 text-[13px] font-medium text-white shadow-[0_12px_32px_rgba(10,22,40,.3)]"
         >
           {toast}
+        </div>
+      )}
+
+      {/* PMOS AI wait (rewrite / create from ticket) — blocks the page until the call returns. */}
+      {aiWait && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(12,25,41,.42)] p-10 backdrop-blur-[6px]">
+          <div className="glass-strong flex w-[440px] max-w-full flex-col gap-5 overflow-hidden rounded-[18px] shadow-[var(--app-shadow-modal)]">
+            <div className="h-[3px] bg-[linear-gradient(90deg,var(--app-accent),#17b26a)]" />
+            <div className="flex flex-col gap-4 px-6 pb-6">
+              <div>
+                <div className="eyebrow mb-1.5 inline-flex items-center gap-1.5 text-primary">
+                  <PmosMark size={18} />
+                  PMOS AI
+                </div>
+                <div className="font-title text-[20px] font-bold">{aiWait.what}…</div>
+                <div className="mt-1 truncate text-[13px] text-fg-3" title={aiWait.title}>
+                  {aiWait.title}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 rounded-control bg-[var(--app-accent-soft)] px-3 py-2.5 text-[13px] text-foreground">
+                <span className="h-[18px] w-[18px] shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                One call — usually a few seconds.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1932,5 +2221,6 @@ export function IdeasView({
         </div>
       )}
     </div>
+    </>
   );
 }

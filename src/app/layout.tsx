@@ -10,6 +10,7 @@ import {
 import { brand } from "@/lib/brand";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { Shell } from "@/components/layout/Shell";
+import { jiraLaunchNotice } from "@/lib/jira-launch-notice";
 import { APP_VERSION } from "@/lib/version";
 import { db } from "@/lib/db";
 
@@ -70,6 +71,13 @@ export default async function RootLayout({
       }
     : null;
 
+  // Jira health on every app load (probe cached a few minutes): a dead PM-OS
+  // user token shows as a banner with the support message, on every page.
+  const jiraNotice =
+    user?.workspaceId && ideasEnabled && (await featureEnabledForCurrentUser("jira"))
+      ? await jiraLaunchNotice(user.workspaceId)
+      : null;
+
   // The rail starts collapsed; it stays open only once the user expanded it.
   const sidebarCollapsed = (await cookies()).get("pmos_sidebar")?.value !== "expanded";
 
@@ -102,6 +110,7 @@ export default async function RootLayout({
           user={menuUser}
           organization={organization}
           appVersion={APP_VERSION}
+          jiraNotice={jiraNotice}
         >
           {children}
         </Shell>

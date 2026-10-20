@@ -1,133 +1,129 @@
 import { db } from "./db";
-import {
-  assertJiraOAuthReady,
-  getJiraRedirectUri,
-  JIRA_OAUTH_SCOPES,
-} from "./jira-oauth-config";
+import { decryptSecret, encryptSecret } from "./two-factor";
+import { recordJiraHealth } from "./jira-alerts";
 import { adfToMarkdown, markdownToAdf } from "./jira-adf";
 import { buildIssueImages, extractAttachmentIdsFromAdf } from "./jira-attachments";
 import type { JiraIssue, JiraProject, JiraVersion } from "./types";
 import { parseJsonArray } from "./utils";
 
-const ATLASSIAN_AUTH_URL = "https://auth.atlassian.com";
-const ATLASSIAN_API_URL = "https://api.atlassian.com";
-
-export function getJiraAuthUrl(state: string): string {
-  assertJiraOAuthReady();
-
-  const clientId = process.env.ATLASSIAN_CLIENT_ID!.trim();
-  const redirectUri = getJiraRedirectUri()!;
-  const scope = JIRA_OAUTH_SCOPES.join(" ");
-
-  const params = new URLSearchParams({
-    audience: "api.atlassian.com",
-    client_id: clientId,
-    scope,
-    redirect_uri: redirectUri,
-    state,
-    response_type: "code",
-    prompt: "consent",
-  });
-
-  return `${ATLASSIAN_AUTH_URL}/authorize?${params.toString()}`;
-}
-
-export async function exchangeJiraCode(code: string) {
-  assertJiraOAuthReady();
-  const redirectUri = getJiraRedirectUri()!;
-  const response = await fetch(`${ATLASSIAN_AUTH_URL}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "authorization_code",
-      client_id: process.env.ATLASSIAN_CLIENT_ID!.trim(),
-      client_secret: process.env.ATLASSIAN_CLIENT_SECRET!.trim(),
-      code,
-      redirect_uri: redirectUri,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Token exchange failed: ${await response.text()}`);
-  }
-
-  return response.json() as Promise<{
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  }>;
-}
-
-export async function refreshJiraToken(refreshToken: string) {
-  const response = await fetch(`${ATLASSIAN_AUTH_URL}/oauth/token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      client_id: process.env.ATLASSIAN_CLIENT_ID!.trim(),
-      client_secret: process.env.ATLASSIAN_CLIENT_SECRET!.trim(),
-      refresh_token: refreshToken,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Token refresh failed: ${await response.text()}`);
-  }
-
-  return response.json() as Promise<{
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  }>;
-}
-
-export async function getAccessibleResources(accessToken: string) {
-  const response = await fetch(`${ATLASSIAN_API_URL}/oauth/token/accessible-resources`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to get accessible resources: ${await response.text()}`);
-  }
-
-  return response.json() as Promise<Array<{ id: string; url: string; name: string }>>;
-}
-
 /**
- * True when a Jira connection exists AND its token is usable (fresh, or
- * refreshable with the configured Atlassian OAuth creds). A configured but
- * dead connection is "not connected" for anything that needs to write.
+ * One connection style only (since 2026-10-20): a dedicated PM-OS user +
+ * Atlassian API token per organization, set by the PM-OS admin in
+ * Admin → Ideas → Connection. Customers never authorize, reconnect or
+ * disconnect Jira themselves — the OAuth self-connect path was removed.
+ * Rows with authType "oauth" are legacy and count as unavailable until the
+ * PM-OS user is set. accessToken holds base64(email:token) sealed at rest;
+ * every request goes to siteUrl directly.
  */
-export async function hasValidJiraConnection(workspaceId: string): Promise<boolean> {
-  try {
-    return (await getValidConnection(workspaceId)) !== null;
-  } catch {
-    return false;
-  }
+
+export type JiraHealth = {
+  status: "not_connected" | "ok" | "unavailable";
+  /** Internal cause for the admin page and the support alert — never shown to customers. */
+  cause?: string;
+};
+
+/** A passing probe is trusted for this long; imports and syncs ask fresh. */
+const HEALTH_TTL_MS = 5 * 60 * 1000;
+const PROBE_TIMEOUT_MS = 6_000;
+const healthCache = new Map<string, { expiresAt: number; value: JiraHealth }>();
+
+/** Forget the cached probe — after a token change, or a 401/403 on a real call. */
+export function invalidateJiraHealth(workspaceId: string): void {
+  healthCache.delete(workspaceId);
 }
 
 type JiraConnectionRow = NonNullable<
   Awaited<ReturnType<typeof db.jiraConnection.findUnique>>
 >;
 
+/** Live check: GET /myself as the PM-OS user. Network errors count as unavailable. */
+async function probeJira(connection: JiraConnectionRow): Promise<JiraHealth> {
+  try {
+    const response = await fetch(`${apiBase(connection)}/rest/api/3/myself`, {
+      headers: { Authorization: authHeader(connection), Accept: "application/json" },
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      cache: "no-store",
+    });
+    // 429 means Jira accepted the credentials and is merely throttling.
+    if (response.ok || response.status === 429) return { status: "ok" };
+    if (response.status === 401 || response.status === 403) {
+      return {
+        status: "unavailable",
+        cause: `Jira refused the PM-OS user's token (${response.status}) — revoked, expired, or the user was deactivated or lost access to the site.`,
+      };
+    }
+    return { status: "unavailable", cause: `Jira answered ${response.status} to the health check.` };
+  } catch (err) {
+    return {
+      status: "unavailable",
+      cause: `Jira did not answer the health check (${err instanceof Error ? err.message : "network error"}).`,
+    };
+  }
+}
+
 /**
- * Two auth styles share every call below:
- * - "oauth" (product): Bearer token against api.atlassian.com/ex/jira/<cloudId>.
- * - "basic" (QA only): email + API token (stored base64-encoded in
- *   accessToken) against the site URL itself. Lets the e2e suite hold a
- *   connection to the TEST project across DB resets — OAuth refresh tokens
- *   rotate on use, so a seeded one would die after the first refresh.
+ * Connection health: no row, usable (live probe passed, cached for
+ * HEALTH_TTL_MS), or unavailable — the customer sees the support message.
+ * Every uncached result also goes through the alerts (src/lib/jira-alerts.ts):
+ * with Jira enabled for the org, anything but a working connection with a
+ * project set emails PM-OS support once per incident.
+ * `fresh` skips the cache: used right before an import or a sync.
  */
+export async function getJiraHealth(
+  workspaceId: string,
+  opts: { fresh?: boolean } = {}
+): Promise<JiraHealth> {
+  const row = await db.jiraConnection.findUnique({ where: { workspaceId } });
+  if (!row) {
+    const health: JiraHealth = { status: "not_connected" };
+    await recordJiraHealth(workspaceId, health, null);
+    return health;
+  }
+
+  let health: JiraHealth;
+  if (row.authType !== "basic" || !row.accessToken) {
+    health = {
+      status: "unavailable",
+      cause: "No PM-OS user token is set for this organization (legacy or empty connection).",
+    };
+  } else if (row.apiTokenExpiresAt && row.apiTokenExpiresAt.getTime() <= Date.now()) {
+    health = {
+      status: "unavailable",
+      cause: `The PM-OS user's API token expired on ${row.apiTokenExpiresAt.toISOString().slice(0, 10)}.`,
+    };
+  } else {
+    const cached = opts.fresh ? undefined : healthCache.get(workspaceId);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    health = await probeJira(row);
+    healthCache.set(workspaceId, { expiresAt: Date.now() + HEALTH_TTL_MS, value: health });
+  }
+  await recordJiraHealth(workspaceId, health, row);
+  return health;
+}
+
+/** True only when a fresh probe passes — what every write path gates on. */
+export async function hasValidJiraConnection(workspaceId: string): Promise<boolean> {
+  return (await getJiraHealth(workspaceId, { fresh: true })).status === "ok";
+}
+
+/**
+ * Tokens are sealed at rest (AES-GCM, "enc:" prefix). Rows written before
+ * sealing (no prefix) still read as plain text — no migration needed; they
+ * are re-sealed when a new token is saved.
+ */
+export function sealToken(value: string): string {
+  return value ? `enc:${encryptSecret(value)}` : value;
+}
+export function openToken(stored: string): string {
+  return stored.startsWith("enc:") ? decryptSecret(stored.slice(4)) : stored;
+}
+
 function authHeader(connection: JiraConnectionRow): string {
-  return connection.authType === "basic"
-    ? `Basic ${connection.accessToken}`
-    : `Bearer ${connection.accessToken}`;
+  return `Basic ${openToken(connection.accessToken)}`;
 }
 
 function apiBase(connection: JiraConnectionRow): string {
-  return connection.authType === "basic"
-    ? connection.siteUrl.replace(/\/+$/, "")
-    : `${ATLASSIAN_API_URL}/ex/jira/${connection.cloudId}`;
+  return connection.siteUrl.replace(/\/+$/, "");
 }
 
 /** Value for JiraConnection.accessToken when authType is "basic". */
@@ -135,38 +131,15 @@ export function basicAuthToken(email: string, apiToken: string): string {
   return Buffer.from(`${email.trim()}:${apiToken.trim()}`, "utf8").toString("base64");
 }
 
-async function getValidConnection(workspaceId: string) {
+/** The usable connection row, or null (no row, legacy OAuth row, empty token). */
+async function getConnection(workspaceId: string): Promise<JiraConnectionRow | null> {
   const connection = await db.jiraConnection.findUnique({ where: { workspaceId } });
-  if (!connection) return null;
-
-  // API tokens don't expire on a schedule — nothing to refresh.
-  if (connection.authType === "basic") return connection;
-
-  if (connection.expiresAt.getTime() <= Date.now() + 60_000) {
-    // Without Atlassian OAuth credentials a refresh is impossible; report
-    // "not connected" instead of crashing on the missing env.
-    if (
-      !process.env.ATLASSIAN_CLIENT_ID?.trim() ||
-      !process.env.ATLASSIAN_CLIENT_SECRET?.trim()
-    ) {
-      return null;
-    }
-    const tokens = await refreshJiraToken(connection.refreshToken);
-    return db.jiraConnection.update({
-      where: { id: connection.id },
-      data: {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
-      },
-    });
-  }
-
+  if (!connection || connection.authType !== "basic" || !connection.accessToken) return null;
   return connection;
 }
 
 async function jiraFetch(workspaceId: string, path: string, init?: RequestInit) {
-  const connection = await getValidConnection(workspaceId);
+  const connection = await getConnection(workspaceId);
   if (!connection) {
     throw new Error("Jira not connected");
   }
@@ -183,6 +156,9 @@ async function jiraFetch(workspaceId: string, path: string, init?: RequestInit) 
   });
 
   if (!response.ok) {
+    // A refusal on a real call: the next health check must probe again
+    // instead of trusting the cached pass.
+    if (response.status === 401 || response.status === 403) invalidateJiraHealth(workspaceId);
     throw new Error(`Jira API error (${response.status}): ${await response.text()}`);
   }
 
@@ -236,6 +212,8 @@ interface MapIssueOptions {
    *  demo keeps the names in P_Reporter / P_Assignee). Unset = system fields. */
   reporterFieldId?: string;
   assigneeFieldId?: string;
+  /** Custom Labels-type field holding customer names (Admin → Ideas → Customers = a custom labels field). */
+  customersFieldId?: string;
 }
 
 function userName(v: unknown): string | undefined {
@@ -275,6 +253,9 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
   const issueKey = String(issue.key);
   const productLine = opts.productLineFieldId
     ? readProductLineValue(fields[opts.productLineFieldId])
+    : undefined;
+  const customerLabels = opts.customersFieldId
+    ? ((fields[opts.customersFieldId] as unknown[]) ?? []).filter((v): v is string => typeof v === "string")
     : undefined;
   const priority = ((fields.priority as { name?: string }) ?? {}).name || undefined;
   const reporter =
@@ -345,6 +326,7 @@ function mapIssue(issue: Record<string, unknown>, opts: MapIssueOptions = {}): J
     status,
     issueType,
     labels,
+    customerLabels,
     components,
     productLine,
     priority,
@@ -368,7 +350,7 @@ export async function fetchJiraAttachmentBytes(
     `/rest/api/3/attachment/${attachmentId}`
   )) as { content: string; mimeType: string; filename: string };
 
-  const connection = await getValidConnection(workspaceId);
+  const connection = await getConnection(workspaceId);
   if (!connection) throw new Error("Jira not connected");
 
   const response = await fetch(meta.content, {
@@ -505,6 +487,8 @@ export interface IssueScopeParams {
   /** Custom text field ids read as reporter / assignee names (see MapIssueOptions). */
   reporterFieldId?: string;
   assigneeFieldId?: string;
+  /** Custom Labels-type field read as the issue's customers. */
+  customersFieldId?: string;
 }
 
 function scopeJql(params: IssueScopeParams): string {
@@ -537,11 +521,13 @@ export async function fetchIssuesForScopePaged(
   const fieldId = params.productLineFieldId?.trim() || undefined;
   const reporterFieldId = params.reporterFieldId?.trim() || undefined;
   const assigneeFieldId = params.assigneeFieldId?.trim() || undefined;
+  const customersFieldId = params.customersFieldId?.trim() || undefined;
   return searchJiraPaged(workspaceId, scopeJql(params), params.maxResults ?? 100, {
     productLineFieldId: fieldId,
     reporterFieldId,
     assigneeFieldId,
-    extraFields: [fieldId, reporterFieldId, assigneeFieldId].filter((x): x is string => Boolean(x)),
+    customersFieldId,
+    extraFields: [fieldId, reporterFieldId, assigneeFieldId, customersFieldId].filter((x): x is string => Boolean(x)),
   });
 }
 
@@ -972,6 +958,10 @@ export async function getJiraConnectionStatus(workspaceId: string) {
     prdSource: connection.prdSource,
     ideasProjectKey: connection.ideasProjectKey,
     ideasIssueType: connection.ideasIssueType,
+    connectedByName: connection.connectedByName,
+    connectedByEmail: connection.connectedByEmail,
+    authType: connection.authType,
+    apiTokenExpiresAt: connection.apiTokenExpiresAt?.toISOString() ?? null,
     connected: true,
   };
 }
@@ -992,4 +982,28 @@ export function buildIssueContext(issues: JiraIssue[]): string {
       return parts.filter(Boolean).join("\n");
     })
     .join("\n\n---\n\n");
+}
+
+/**
+ * Checks a dedicated-user API token against the site (GET /myself with basic
+ * auth) and returns who it is. Throws with Jira's answer when it is refused.
+ */
+export async function validateBasicCredentials(
+  siteUrl: string,
+  email: string,
+  apiToken: string,
+): Promise<{ displayName: string; accountId: string; emailAddress: string | null }> {
+  const base = siteUrl.replace(/\/+$/, "");
+  const response = await fetch(`${base}/rest/api/3/myself`, {
+    headers: { Authorization: `Basic ${basicAuthToken(email, apiToken)}`, Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(
+      response.status === 401
+        ? "Jira refused the email + token (401). Check both, and that the user is active on this site."
+        : `Jira answered ${response.status}: ${(await response.text()).slice(0, 200)}`,
+    );
+  }
+  const me = (await response.json()) as { displayName?: string; accountId?: string; emailAddress?: string };
+  return { displayName: me.displayName ?? email, accountId: me.accountId ?? "", emailAddress: me.emailAddress ?? null };
 }

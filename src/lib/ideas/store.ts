@@ -1,18 +1,24 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { PrefixWarmer } from "./ai-cache";
 import { nextChipColor } from "./colors";
 import { ALL_CUSTOMERS_NAME, buildCustomerResolver, customerKey } from "./customer-key";
+import { customersTextHash, findCatalogCustomers, issueCustomerText } from "./customer-mentions";
+import { DEFAULT_CUSTOMER_LABEL_PREFIX, labelToCustomerName } from "./customer-labels";
+import { extractJiraCustomers } from "./jira-customers";
 import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
-import { getJiraConnectionStatus } from "../jira";
+import { fetchIssuesRaw, getJiraConnectionStatus, getJiraHealth } from "../jira";
+import { resolveWritableFieldIds } from "./jira-fields";
+import type { JiraHealthStatus } from "../jira-health-copy";
+import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { type CsvMapping } from "./csv-mapping";
 import { mergeIdeasJiraConfig } from "./jira-mapping";
 import { primaryJiraKey } from "./jira-keys";
 import { citationsByTicket } from "./jira-links";
 import { fetchJiraLiveSources } from "./jira-sync";
 import { buildProductLineResolver } from "./product-line-key";
-import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch } from "./match";
+import { MATCH_GROUP_PREFIX_KEY, matchTickets, prepareMatch, rewriteIdeaFromSources } from "./match";
 import { parseCustomerCells, type ParsedCell } from "./field-parse";
 import {
   SPLIT_PREFIX_KEY,
@@ -21,6 +27,7 @@ import {
   type SplitRequest,
 } from "./split";
 import { ImportTrace, markAbandonedImports } from "./trace";
+import { diffIdea, type IdeaBaseline, type IdeaLike } from "./changes";
 import type {
   CatalogKind,
   Idea,
@@ -43,6 +50,11 @@ export interface IdeasState {
   customerCatalog: string[];
   /** Jira integration is set up for the workspace — gates Sync to Jira. */
   jiraConnected: boolean;
+  /** Admin → Enablements "Jira integration" for the org: Jira is expected. */
+  jiraEnabled: boolean;
+  /** Connection health at read time (one refresh attempt at most);
+   *  not_configured = connected but the admin has not set the org's project. */
+  jiraHealth: JiraHealthStatus;
   /** Browse base of the connected site ("https://x.atlassian.net"); null when
    *  not connected. The client links every issue key with it, created ones
    *  (not yet in the snapshot) included. */
@@ -120,6 +132,103 @@ const IDEA_INCLUDE = {
 } as const;
 type IdeaRow = Prisma.IdeaGetPayload<{ include: typeof IDEA_INCLUDE }>;
 
+// ————— baseline + live diff (lib/ideas/changes.ts) —————
+
+/** Statuses of an idea that pre-dates the batch — the only ones that get a baseline. */
+const PRE_EXISTING = ["unchanged", "updated"];
+
+function likeOf(row: IdeaRow): IdeaLike {
+  // Customers as the idea shows them from its tickets (+ added, − dismissed);
+  // Jira-text customers are left out on both sides, so the delta stays fair.
+  const tickets = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
+  const dismissed = new Set(
+    tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase())),
+  );
+  const customers = distinct([
+    ...tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+    ...(tickets.some((t) => t.affectsAllCustomers) ? [ALL_CUSTOMERS_NAME] : []),
+    ...((row.addedCustomers as string[]) ?? []),
+  ]).filter((c) => !dismissed.has(c.toLowerCase()));
+  return {
+    title: row.title,
+    details: row.details,
+    manual: row.manualScore,
+    products: (row.products as string[]) ?? [],
+    platforms: (row.platforms as string[]) ?? [],
+    addedCustomers: (row.addedCustomers as string[]) ?? [],
+    customers,
+    zen: row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [])),
+    jira: row.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [])),
+  };
+}
+
+function baselineOf(row: { batchBaseline: Prisma.JsonValue | null }): IdeaBaseline | null {
+  const b = row.batchBaseline;
+  return b && typeof b === "object" && !Array.isArray(b) ? (b as unknown as IdeaBaseline) : null;
+}
+
+/**
+ * The data patch that captures the baseline — once, right before the first
+ * change to a pre-existing idea. Empty when one exists already or the idea
+ * is New (new ideas have nothing to compare to; a PM edits them by hand).
+ */
+async function baselinePatch(
+  ideaId: string,
+  opts: { force?: boolean } = {}
+): Promise<{ batchBaseline?: Prisma.InputJsonValue }> {
+  const row = await db.idea.findUnique({ where: { id: ideaId }, include: IDEA_INCLUDE });
+  if (!row || row.batchBaseline) return {};
+  // `force`: the import knows the idea pre-dates this batch even when it is
+  // still New (created by an earlier import, never synced).
+  if (!opts.force && !PRE_EXISTING.includes(row.batchStatus)) return {};
+  return { batchBaseline: likeOf(row) as unknown as Prisma.InputJsonValue };
+}
+
+/** Votes = merged evidence: every ticket and every merged Jira issue, minus a Jira idea's own issue. */
+function evidenceOf(like: { zen: string[]; jira: string[] }, origin: string): number {
+  return like.zen.length + Math.max(0, like.jira.length - (origin === "jira" ? 1 : 0));
+}
+
+/**
+ * After any change: the status and vote delta that follow from the diff.
+ * No sources → Deleted. With a baseline: a non-empty diff is Updated, an
+ * empty one is back to Unchanged (Jira idea) or New (never synced); the
+ * batch votes are the evidence gained over the baseline. Without a baseline
+ * (a New idea) nothing moves. Flipping into Updated re-opens review.
+ */
+async function settleIdea(ideaId: string): Promise<void> {
+  const row = await db.idea.findUnique({ where: { id: ideaId }, include: IDEA_INCLUDE });
+  if (!row || row.batchStatus === "deleted") return;
+  const like = likeOf(row);
+  let batchStatus = row.batchStatus;
+  let newVotes = row.newVotes;
+  if (row.sources.length === 0) batchStatus = "deleted";
+  else {
+    const base = baselineOf(row);
+    if (base) {
+      const changed = diffIdea(like, base).length > 0;
+      batchStatus = changed ? "updated" : row.origin === "jira" ? "unchanged" : "new";
+      // Votes follow the evidence gained over the baseline — but only when
+      // the source set actually moved. A reassign that re-sends the same
+      // sources (or a text/tag edit) leaves the batch votes an import gave
+      // (MRG-04: consolidated ideas untouched).
+      const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+      if (!(sameSet(like.zen, base.zen) && sameSet(like.jira, base.jira)))
+        newVotes = Math.max(0, evidenceOf(like, row.origin) - evidenceOf(base, row.origin));
+    }
+  }
+  if (batchStatus === row.batchStatus && newVotes === row.newVotes) return;
+  await db.idea.update({
+    where: { id: row.id },
+    data: {
+      batchStatus,
+      newVotes,
+      ...(batchStatus === "updated" && row.batchStatus === "unchanged" ? { decision: "pending" } : {}),
+    },
+  });
+}
+
+
 /**
  * Narration of what an import did to an idea, one line per kind of change:
  * every "+1 vote (ticket X)" folds into a single "+N votes (tickets X, Y)"
@@ -184,18 +293,40 @@ function toClientTicket(row: TicketRow): ZendeskTicket {
   };
 }
 
-function toClientIdea(row: IdeaRow): Idea {
-  // Reporters and affected customers are derived from the linked tickets on
+/** Per Jira issue: the customers read from its text and the PM's dismissals. */
+type JiraCustomerRow = { affectedCustomers: unknown; dismissedCustomers: unknown };
+type JiraCustomerMap = Map<string, JiraCustomerRow>;
+const NO_JIRA_CUSTOMERS: JiraCustomerMap = new Map();
+
+async function jiraCustomerRows(workspaceId: string): Promise<JiraCustomerMap> {
+  const rows = await db.jiraIdeaSnapshot.findMany({
+    where: { workspaceId },
+    select: { key: true, affectedCustomers: true, dismissedCustomers: true },
+  });
+  return new Map(rows.map((r) => [r.key, r]));
+}
+
+function jiraRowsOf(row: IdeaRow, jiraCustomers: JiraCustomerMap): JiraCustomerRow[] {
+  return row.sources.flatMap((s) => {
+    const r = s.kind === "jira" && s.jiraKey ? jiraCustomers.get(s.jiraKey) : undefined;
+    return r ? [r] : [];
+  });
+}
+
+function toClientIdea(row: IdeaRow, jiraCustomers: JiraCustomerMap = NO_JIRA_CUSTOMERS): Idea {
+  // Reporters and affected customers are derived from the linked sources on
   // every read — reassigning sources keeps them correct with no stored copy
-  // to go stale.
+  // to go stale. Jira issues contribute the customers read from their text.
   const ticketRows = row.sources.flatMap((s) =>
     s.kind === "zendesk" && s.ticket ? [s.ticket] : [],
   );
+  const jiraRows = jiraRowsOf(row, jiraCustomers);
   // Dismissals subtract at read time; the extraction itself is never edited,
   // so a dismissed customer can always be restored.
-  const dismissed = distinct(
-    ticketRows.flatMap((t) => (t.dismissedCustomers as string[]) ?? []),
-  );
+  const dismissed = distinct([
+    ...ticketRows.flatMap((t) => (t.dismissedCustomers as string[]) ?? []),
+    ...jiraRows.flatMap((j) => (j.dismissedCustomers as string[]) ?? []),
+  ]);
   const dismissedKeys = new Set(dismissed.map((d) => d.toLowerCase()));
   return {
     id: row.id,
@@ -210,6 +341,7 @@ function toClientIdea(row: IdeaRow): Idea {
     // the built-in row existed carry the flag but not the name).
     customers: distinct([
       ...ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+      ...jiraRows.flatMap((j) => (j.affectedCustomers as string[]) ?? []),
       ...(ticketRows.some((t) => t.affectsAllCustomers) ? [ALL_CUSTOMERS_NAME] : []),
       ...((row.addedCustomers as string[]) ?? []),
     ]).filter((c) => !dismissedKeys.has(c.toLowerCase())),
@@ -218,8 +350,12 @@ function toClientIdea(row: IdeaRow): Idea {
       ticketRows.some((t) => t.affectsAllCustomers) || undefined,
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
-    batchChanges: (row.batchChanges as string[]) ?? [],
+    previousDetails: (() => {
+      const base = baselineOf(row);
+      return base && base.details.trim() !== row.details.trim() ? base.details : undefined;
+    })(),
     decision: row.decision as Idea["decision"],
+    sourcesChanged: row.sourcesChanged || undefined,
     origin: row.origin as Idea["origin"],
     pmScore: row.pmScore,
     manual: row.manualScore,
@@ -270,10 +406,21 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
     getJiraConnectionStatus(workspaceId),
     db.workspace.findUnique({
       where: { id: workspaceId },
-      select: { ideasConfig: true },
+      select: { ideasConfig: true, organization: { select: { features: true } } },
     }),
   ]);
+  const jiraEnabled = resolveFeature(
+    wsRow?.organization?.features,
+    "jira",
+    envFeatureDefault("jira"),
+  );
+  const rawHealth = (await getJiraHealth(workspaceId)).status;
+  const jiraHealth =
+    rawHealth === "ok" && jiraEnabled && !mergeIdeasJiraConfig(wsRow?.ideasConfig).jiraProject
+      ? "not_configured"
+      : rawHealth;
 
+  const jiraCustomersByKey: JiraCustomerMap = new Map(snapshotRows.map((r) => [r.key, r]));
   const undoByIdea = new Map(
     undoRows.map((u) => [
       u.ideaId,
@@ -283,6 +430,8 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
 
   return {
     jiraConnected: Boolean(jiraStatus?.connected),
+    jiraEnabled,
+    jiraHealth,
     jiraSiteUrl: jiraStatus?.siteUrl ?? null,
     csvMapping: mergeIdeasJiraConfig(wsRow?.ideasConfig).csv,
     jiraProductLineField: mergeIdeasJiraConfig(wsRow?.ideasConfig).fields.productLine.jiraField,
@@ -300,9 +449,10 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
       createdAt: s.sourceCreatedAt?.toISOString(),
       url: s.url ?? undefined,
       products: (s.components as string[]) ?? [],
+      customers: (s.affectedCustomers as string[]) ?? [],
     })),
     ideas: ideaRows.map((row) => {
-      const idea = toClientIdea(row);
+      const idea = toClientIdea(row, jiraCustomersByKey);
       const undo = undoByIdea.get(row.id);
       return undo ? { ...idea, undoable: undo } : idea;
     }),
@@ -321,9 +471,16 @@ export async function getIdeasState(workspaceId: string): Promise<IdeasState> {
  * (stage timings, calls, tokens, errors) — a run that dies is recorded as
  * such, never silently missing.
  */
+export interface ImportOptions {
+  /** Run without Jira even if a connection row exists (the user chose
+   *  "import without Jira" when the connection was unavailable). */
+  skipJira?: boolean;
+}
+
 export async function importBatch(
   workspaceId: string,
   inputs: ImportTicketInput[],
+  options: ImportOptions = {},
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
   // The built-in All Customers row must exist before the catalog is read.
   await ensureAllCustomers(workspaceId);
@@ -335,7 +492,7 @@ export async function importBatch(
     `[ideas:import ${batch.id.slice(0, 8)}] start · ${inputs.length} tickets uploaded · workspace ${workspaceId}`,
   );
   try {
-    return await runImport(workspaceId, inputs, batch.id, trace);
+    return await runImport(workspaceId, inputs, batch.id, trace, options);
   } catch (err) {
     const message = trace.fail(err);
     await trace.flush({ status: "failed", error: message });
@@ -348,6 +505,7 @@ async function runImport(
   inputs: ImportTicketInput[],
   batchId: string,
   trace: ImportTrace,
+  options: ImportOptions = {},
 ): Promise<{ summary: ImportSummary; state: IdeasState }> {
   trace.begin("dedupe", "db", inputs.length);
   const existing = await db.zendeskTicketRaw.findMany({
@@ -363,9 +521,19 @@ async function runImport(
   // Jira live state is fetched before any judgment: FRs are matched against
   // the same backlog this batch will display.
   trace.begin("jira-fetch", "http");
-  const jira = await fetchJiraLiveSources(workspaceId);
+  const jira = options.skipJira
+    ? {
+        connected: false,
+        sources: [],
+        truncatedProjects: [],
+        unresolvedProductLines: [],
+        pull: mergeIdeasJiraConfig(null).pull,
+      }
+    : await fetchJiraLiveSources(workspaceId);
   trace.end({
-    note: jira.connected
+    note: options.skipJira
+      ? "Jira skipped by the user (connection unavailable)"
+      : jira.connected
       ? `${jira.sources.length} live issues` +
         (jira.truncatedProjects.length > 0
           ? ` · CAPPED at ${jira.pull.maxIssues} in ${jira.truncatedProjects.join(", ")}`
@@ -772,16 +940,106 @@ async function runImport(
   ]);
   trace.end({ note: `${truthNames.size} added to the catalog` });
 
-  // Snapshots are replaced wholesale; Jira-origin ideas are upserted by key
-  // so evidence matched in earlier batches survives the resync.
+  // Snapshots and Jira-origin ideas are upserted by key so evidence matched
+  // in earlier batches — and the customers read from issue text — survive
+  // the resync.
   let jiraCited = 0;
+  let jiraCustomersNote = "";
   trace.begin("jira-sync", "db", jira.connected ? jira.sources.length : 0);
   if (jira.connected) {
-    await db.jiraIdeaSnapshot.deleteMany({ where: { workspaceId } });
-    await db.jiraIdeaSnapshot.createMany({
-      data: jira.sources.map((s) => ({
+    // Snapshot rows are upserted, never wiped: affectedCustomers /
+    // dismissedCustomers are PM-OS data (customer-mentions.ts) and must
+    // survive the pull. Issues gone from Jira are deleted.
+    const prior = new Map(
+      (
+        await db.jiraIdeaSnapshot.findMany({
+          where: { workspaceId },
+          select: { key: true, affectedCustomers: true, customersTextHash: true },
+        })
+      ).map((r) => [r.key, r] as const),
+    );
+    const liveKeySet = new Set(jira.sources.map((s) => s.key));
+    await db.jiraIdeaSnapshot.deleteMany({
+      where: { workspaceId, key: { notIn: Array.from(liveKeySet) } },
+    });
+    const customerCatalog = await db.customer.findMany({
+      where: { workspaceId },
+      select: { name: true, aliases: true },
+    });
+    const catalogRows = customerCatalog.map((c) => ({
+      name: c.name,
+      aliases: ((c.aliases as string[]) ?? []).filter((a) => typeof a === "string"),
+    }));
+    // Tier 2 (AI) only for issues whose text changed since it was last read.
+    const texts = new Map(jira.sources.map((s) => [s.key, issueCustomerText(s.title, s.body)]));
+    const hashes = new Map(Array.from(texts, ([k, t]) => [k, customersTextHash(t)]));
+    const changed = jira.sources.filter((s) => prior.get(s.key)?.customersTextHash !== hashes.get(s.key));
+    let aiNames = new Map<string, string[]>();
+    let aiNote = "";
+    if (changed.length > 0) {
+      const hooks = trace.side("jira-customers", "ai");
+      try {
+        const res = await extractJiraCustomers(
+          workspaceId,
+          changed.map((s) => ({ key: s.key, title: s.title, body: s.body })),
+          catalogRows,
+          hooks,
+        );
+        aiNames = res.byKey;
+        aiNote = ` · customers read in ${changed.length} changed issue${changed.length === 1 ? "" : "s"} (${res.calls} call${res.calls === 1 ? "" : "s"})`;
+      } catch (err) {
+        // Never blocks the import: catalog hits still land; the issue keeps
+        // its old hash so the next pull retries the AI pass.
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[ideas:jira-customers] ${message}`);
+        aiNote = ` · AI customer pass failed (${message.slice(0, 120)}) — catalog names only`;
+      }
+    }
+    // The fields a sync compares, as they are right now — stored on the
+    // snapshot so the drawer's "Changes to sync" never has to ask Jira.
+    // Never blocks the import: on failure the previous state stays.
+    const syncStateByKey = new Map<string, Prisma.InputJsonValue>();
+    try {
+      const { byAttr } = await resolveWritableFieldIds(workspaceId, importCfg);
+      const raw = await fetchIssuesRaw(
         workspaceId,
-        key: s.key,
+        jira.sources.map((s) => s.key),
+        Array.from(byAttr.values()),
+      );
+      for (const r of raw) {
+        syncStateByKey.set(r.key, {
+          summary: r.summary,
+          descriptionText: r.descriptionText,
+          labels: r.labels,
+          components: r.components,
+          extra: r.extra,
+        } as unknown as Prisma.InputJsonValue);
+      }
+    } catch (err) {
+      console.warn(`[ideas:jira-sync-state] ${err instanceof Error ? err.message : String(err)}`);
+    }
+    for (const s of jira.sources) {
+      const text = texts.get(s.key) ?? "";
+      const previous = prior.get(s.key);
+      const catalogHits = findCatalogCustomers(text, catalogRows);
+      // AI names for a changed issue replace last time's AI names; an
+      // unchanged issue keeps what was stored (minus nothing — catalog hits
+      // are recomputed every pull and merged in).
+      const aiRead = aiNames.has(s.key)
+        ? aiNames.get(s.key)!
+        : ((previous?.affectedCustomers as string[]) ?? []);
+      // Customer labels (cs_…) the team or an earlier sync put on the issue
+      // are customers too — read deterministically, catalog spelling first.
+      const customersMapping = importCfg.fields.customers;
+      const labelPrefix =
+        customersMapping.labelPrefix ??
+        (customersMapping.jiraField.trim().toLowerCase() === "labels" ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
+      const labelNames = (s.customerLabels ?? []).map((l) => labelToCustomerName(l, catalogRows, labelPrefix));
+      const affected = distinct([...catalogHits, ...labelNames, ...aiRead]);
+      const hashNow = aiNames.has(s.key) || !changed.some((c) => c.key === s.key)
+        ? hashes.get(s.key)!
+        : (previous?.customersTextHash ?? null);
+      const jiraFields = {
         title: s.title,
         body: s.body,
         status: s.status ?? null,
@@ -792,8 +1050,18 @@ async function runImport(
         reporter: s.reporter ?? null,
         assignee: s.assignee ?? null,
         sourceCreatedAt: s.createdAt ? new Date(s.createdAt) : null,
-      })),
-    });
+        syncedAt: new Date(),
+        affectedCustomers: affected as Prisma.InputJsonValue,
+        customersTextHash: hashNow,
+        ...(syncStateByKey.has(s.key) ? { syncState: syncStateByKey.get(s.key) } : {}),
+      };
+      await db.jiraIdeaSnapshot.upsert({
+        where: { workspaceId_key: { workspaceId, key: s.key } },
+        create: { workspaceId, key: s.key, ...jiraFields },
+        update: jiraFields,
+      });
+    }
+    jiraCustomersNote = aiNote;
 
     const jiraIdeas = await db.idea.findMany({
       where: { workspaceId, origin: "jira" },
@@ -837,8 +1105,10 @@ async function runImport(
                   existingVotes: cur.existingVotes + cur.newVotes,
                   newVotes: 0,
                   batchStatus: "unchanged",
-                  // Last import's narration is stale once the batch rolls over.
+                  // Last import's narration and baseline are stale once the
+                  // batch rolls over — Jira's state is the new baseline.
                   batchChanges: [] as unknown as Prisma.InputJsonValue,
+                  batchBaseline: Prisma.JsonNull,
                 }
               : {}),
           },
@@ -860,7 +1130,7 @@ async function runImport(
     }
   }
 
-  trace.end(jira.connected ? {} : { note: "skipped" });
+  trace.end(jira.connected ? (jiraCustomersNote ? { note: jiraCustomersNote.replace(/^ · /, "") } : {}) : { note: "skipped" });
 
   trace.begin("write", "db", fresh.length);
   let frs = 0;
@@ -967,30 +1237,40 @@ async function runImport(
           matched++;
           const curProducts = (target.products as string[]) ?? [];
           const curPlatforms = (target.platforms as string[]) ?? [];
-          let nextProducts = distinct([
-            ...curProducts,
-            ...unit.rewrite.productLines,
-          ]);
-          // A real product line replaces the "Other" placeholder.
-          if (nextProducts.length > 1)
-            nextProducts = nextProducts.filter((p) => p !== "Other");
+          // A product line the ticket carries in its Module column (or the
+          // idea carries from Jira's mapped field) was GIVEN to us, not found
+          // by PMOS AI — it is never narrated as a change and never widens an
+          // idea that already has a real product line; it only fills in the
+          // "Other" placeholder (Daniel, 2026-10-19). A model-inferred line
+          // (ticket without a Module) is a finding: added and narrated.
+          const givenLine = moduleProductLine(input.module);
+          const curReal = curProducts.filter((p) => p !== "Other");
+          let nextProducts: string[];
+          const changes: string[] = [`+1 vote (ticket ${input.key})`];
+          if (givenLine) {
+            // Silent even when it fills in "Other": given data is never
+            // narrated as something this import did.
+            nextProducts =
+              curReal.length > 0 || givenLine === "Other" ? curProducts : [givenLine];
+          } else {
+            nextProducts = distinct([...curProducts, ...unit.rewrite.productLines]);
+            // A real product line replaces the "Other" placeholder.
+            if (nextProducts.length > 1)
+              nextProducts = nextProducts.filter((p) => p !== "Other");
+            for (const p of nextProducts)
+              if (!curProducts.some((c) => c.toLowerCase() === p.toLowerCase()))
+                changes.push(`Product line added: ${p}`);
+          }
           const nextPlatforms = distinct([
             ...curPlatforms,
             ...unit.rewrite.platforms,
           ]);
-          const addedProducts = nextProducts.filter(
-            (p) =>
-              !curProducts.some((c) => c.toLowerCase() === p.toLowerCase()),
-          );
           const addedPlatforms = nextPlatforms.filter(
             (p) =>
               !curPlatforms.some((c) => c.toLowerCase() === p.toLowerCase()),
           );
 
-          const changes: string[] = [`+1 vote (ticket ${input.key})`];
           if (m?.enrichedSummary) changes.push("Summary updated");
-          for (const p of addedProducts)
-            changes.push(`Product line added: ${p}`);
           for (const p of addedPlatforms) changes.push(`Platform added: ${p}`);
           // Several tickets can match the same idea in one import — accumulate.
           // (fresh tickets exist here, so rollover already reset last batch's
@@ -1003,6 +1283,7 @@ async function runImport(
           await db.idea.update({
             where: { id: target.id },
             data: {
+              ...(await baselinePatch(target.id, { force: !createdThisBatch.has(target.id) })),
               newVotes: { increment: 1 },
               // An idea born in THIS import that absorbs another ticket is
               // still New — Updated is for ideas that pre-date the import.
@@ -1090,10 +1371,12 @@ async function runImport(
         });
         if (!idea) continue;
         if (idea.sources.some((src) => src.kind === "zendesk" && src.ticketId === ticket.id)) continue;
+        const citedBaseline = await baselinePatch(idea.id);
         await db.ideaSource.create({ data: { ideaId: idea.id, kind: "zendesk", ticketId: ticket.id } });
         await db.idea.update({
           where: { id: idea.id },
           data: {
+            ...citedBaseline,
             batchStatus: "updated",
             decision: idea.decision === "injected" ? "pending" : idea.decision,
             newVotes: idea.newVotes + 1,
@@ -1156,11 +1439,32 @@ export type IdeasMutation =
       /** Ticket-derived names the PM removed — dismissed on their tickets (reversible). */
       removeCustomers?: string[];
     }
-  | { type: "approveAll" }
+  /** `revert` true = every reviewed idea back to pending; false = approve every
+   *  pending idea; omitted = approve when anything is pending, else revert. */
+  | { type: "approveAll"; revert?: boolean }
   | { type: "reassign"; ideaId: string; zen: string[]; jira: string[] }
+  /** Rewrite title + text (and lines) from the idea's current sources — PMOS AI, one call. */
+  | { type: "rewrite"; ideaId: string }
+  /** The PM keeps the text as written despite changed sources. */
+  | { type: "keepText"; ideaId: string }
+  /** A ticket with no idea (orphaned on the merge board, or parked): PMOS AI
+   *  reads it alone — an FR becomes a New idea, anything else is parked. */
+  | { type: "createIdeaFromTicket"; ticketKey: string }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
-  | { type: "undismissCustomer"; ideaId: string; name: string };
+  | { type: "undismissCustomer"; ideaId: string; name: string }
+  /** A PM writes an idea from scratch (origin "manual"); sources optional. */
+  | {
+      type: "createIdea";
+      title: string;
+      details: string;
+      manual: number | null;
+      products: string[];
+      platforms: string[];
+      addedCustomers: string[];
+      zen: string[];
+      jira: string[];
+    };
 
 /**
  * Suggested metadata still awaiting the PM's call on this idea. Today that is
@@ -1172,17 +1476,19 @@ export type IdeasMutation =
 function unresolvedSuggestions(
   row: IdeaRow,
   catalogLower: Set<string>,
+  jiraCustomers: JiraCustomerMap,
 ): string[] {
   const ticketRows = row.sources.flatMap((s) =>
     s.kind === "zendesk" && s.ticket ? [s.ticket] : [],
   );
+  const jiraRows = jiraRowsOf(row, jiraCustomers);
   const dismissed = new Set(
-    ticketRows.flatMap((t) =>
+    [...ticketRows, ...jiraRows].flatMap((t) =>
       ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()),
     ),
   );
   return distinct(
-    ticketRows.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+    [...ticketRows, ...jiraRows].flatMap((t) => (t.affectedCustomers as string[]) ?? []),
   ).filter(
     (c) =>
       !dismissed.has(c.toLowerCase()) && !catalogLower.has(c.toLowerCase()),
@@ -1197,6 +1503,9 @@ async function customerCatalogLower(workspaceId: string): Promise<Set<string>> {
   return new Set(rows.map((c) => c.name.toLowerCase()));
 }
 
+/** The user behind the current mutateIdeas call (Admin → Analytics attributes events to them). */
+let currentActorId: string | null = null;
+
 async function logEvents(
   workspaceId: string,
   events: { ideaId: string; action: string; payload?: unknown }[],
@@ -1207,6 +1516,7 @@ async function logEvents(
       workspaceId,
       ideaId: e.ideaId,
       action: e.action,
+      userId: currentActorId,
       payload: (e.payload ?? undefined) as Prisma.InputJsonValue | undefined,
     })),
   });
@@ -1221,7 +1531,9 @@ export interface MutateResult {
 export async function mutateIdeas(
   workspaceId: string,
   mutation: IdeasMutation,
+  actorId: string | null = null,
 ): Promise<MutateResult> {
+  currentActorId = actorId;
   let notice: string | undefined;
   switch (mutation.type) {
     case "decision": {
@@ -1238,10 +1550,16 @@ export async function mutateIdeas(
       ) {
         break;
       }
+      if (mutation.decision === "reviewed" && idea && idea.sourcesChanged) {
+        throw new Error(
+          "Sources changed since PMOS AI wrote this idea — rewrite it from the current sources or keep the text first",
+        );
+      }
       if (mutation.decision === "reviewed" && idea) {
         const open = unresolvedSuggestions(
           idea,
           await customerCatalogLower(workspaceId),
+          await jiraCustomerRows(workspaceId),
         );
         if (open.length > 0) {
           throw new Error(
@@ -1283,9 +1601,11 @@ export async function mutateIdeas(
         const products = clean(mutation.products);
         const platforms = clean(mutation.platforms);
         const addedCustomers = clean(mutation.addedCustomers);
+        const editBaseline = await baselinePatch(idea.id);
         await db.idea.update({
           where: { id: idea.id },
           data: {
+            ...editBaseline,
             title: mutation.title,
             details: mutation.details,
             manualScore: mutation.manual,
@@ -1330,6 +1650,25 @@ export async function mutateIdeas(
               },
             });
           }
+          // A name read from a Jira issue's text (or its customer labels)
+          // lives on the issue snapshot — dismiss it there too, or it is
+          // back the moment the drawer re-reads the idea (seen 2026-10-20).
+          for (const s of idea.sources) {
+            if (s.kind !== "jira" || !s.jiraKey) continue;
+            const snap = await db.jiraIdeaSnapshot.findUnique({
+              where: { workspaceId_key: { workspaceId, key: s.jiraKey } },
+              select: { id: true, affectedCustomers: true, dismissedCustomers: true },
+            });
+            if (!snap) continue;
+            const affected = (snap.affectedCustomers as string[]) ?? [];
+            const dismissed = (snap.dismissedCustomers as string[]) ?? [];
+            if (!affected.some((c) => c.toLowerCase() === wanted)) continue;
+            if (dismissed.some((c) => c.toLowerCase() === wanted)) continue;
+            await db.jiraIdeaSnapshot.update({
+              where: { id: snap.id },
+              data: { dismissedCustomers: [...dismissed, name.trim()] as Prisma.InputJsonValue },
+            });
+          }
         }
         await logEvents(workspaceId, [
           {
@@ -1356,6 +1695,8 @@ export async function mutateIdeas(
             },
           },
         ]);
+        // An edited Unchanged idea has something to sync now (and to review).
+        await settleIdea(idea.id);
       }
       break;
     }
@@ -1364,17 +1705,22 @@ export async function mutateIdeas(
         where: { workspaceId, batchStatus: { notIn: APPROVAL_EXEMPT } },
         include: IDEA_INCLUDE,
       });
-      const revert = approvable.every((i) => i.decision !== "pending");
+      const revert =
+        typeof mutation.revert === "boolean"
+          ? mutation.revert
+          : approvable.every((i) => i.decision !== "pending");
       // Bulk approve skips (never fails on) ideas with unresolved suggested
       // metadata — those need a per-idea call; reverting is always allowed.
       const catalogLower = revert
         ? null
         : await customerCatalogLower(workspaceId);
+      const jiraCustomers = revert ? NO_JIRA_CUSTOMERS : await jiraCustomerRows(workspaceId);
       const targets = approvable.filter((i) =>
         revert
           ? i.decision === "reviewed"
           : i.decision === "pending" &&
-            unresolvedSuggestions(i, catalogLower!).length === 0,
+            !i.sourcesChanged &&
+            unresolvedSuggestions(i, catalogLower!, jiraCustomers).length === 0,
       );
       await db.idea.updateMany({
         where: { id: { in: targets.map((i) => i.id) } },
@@ -1386,7 +1732,7 @@ export async function mutateIdeas(
         ).length;
         notice =
           skipped > 0
-            ? `${targets.length} approved · ${skipped} skipped — review the suggested customer${skipped === 1 ? "" : "s"} on ${skipped === 1 ? "that idea" : "those ideas"} first`
+            ? `${targets.length} approved · ${skipped} skipped — ${skipped === 1 ? "that idea needs" : "those ideas need"} a decision first (suggested customers, or sources changed by a PM)`
             : `${targets.length} approved`;
       } else {
         notice = `${targets.length} back to pending`;
@@ -1407,6 +1753,9 @@ export async function mutateIdeas(
         include: IDEA_INCLUDE,
       });
       if (!idea) break;
+      const reassignBaseline = await baselinePatch(idea.id);
+      if (reassignBaseline.batchBaseline)
+        await db.idea.update({ where: { id: idea.id }, data: reassignBaseline });
       const ticketRows = await db.zendeskTicketRaw.findMany({
         where: { workspaceId, externalId: { in: mutation.zen } },
         select: { id: true },
@@ -1436,12 +1785,36 @@ export async function mutateIdeas(
       const newEvidence =
         ticketRows.length + Math.max(0, mutation.jira.length - selfJira);
       const voteDelta = newEvidence - oldEvidence;
-      if (voteDelta !== 0) {
-        await db.idea.update({
-          where: { id: idea.id },
-          data: { newVotes: Math.max(0, idea.newVotes + voteDelta) },
-        });
-      }
+      const before = toClientIdea(idea);
+      const added =
+        mutation.zen.filter((k) => !before.zen.includes(k)).length +
+        mutation.jira.filter((k) => !before.jira.includes(k)).length;
+      const removed =
+        before.zen.filter((k) => !mutation.zen.includes(k)).length +
+        before.jira.filter((k) => !mutation.jira.includes(k)).length;
+      const changed = added > 0 || removed > 0;
+      // Changed sources flag the idea: the text was written from the old
+      // set, so approval waits for a rewrite or an explicit keep. The
+      // narration says a PM did it, not an import.
+      await db.idea.update({
+        where: { id: idea.id },
+        data: {
+          ...(voteDelta !== 0 ? { newVotes: Math.max(0, idea.newVotes + voteDelta) } : {}),
+          ...(changed
+            ? {
+                sourcesChanged: true,
+                batchChanges: mergeBatchChanges((idea.batchChanges as string[]) ?? [], [
+                  `Sources edited by a PM: ${[
+                    added > 0 ? `+${added}` : "",
+                    removed > 0 ? `−${removed}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}`,
+                ]) as Prisma.InputJsonValue,
+              }
+            : {}),
+        },
+      });
       await logEvents(workspaceId, [
         {
           ideaId: idea.id,
@@ -1457,27 +1830,8 @@ export async function mutateIdeas(
       ]);
 
       // Manual reassignment moves ideas between states (PRD): no sources →
-      // Deleted; a Jira idea with ticket evidence → Updated (back to
-      // Unchanged when evidence is removed); a batch-created idea stays New.
-      const all = await db.idea.findMany({
-        where: { workspaceId },
-        include: { sources: true },
-      });
-      for (const i of all) {
-        const zenCount = i.sources.filter((s) => s.kind === "zendesk").length;
-        const total = i.sources.length;
-        let next: string;
-        if (total === 0) next = "deleted";
-        else if (i.origin === "jira")
-          next = zenCount > 0 ? "updated" : "unchanged";
-        else next = "new";
-        if (next !== i.batchStatus) {
-          await db.idea.update({
-            where: { id: i.id },
-            data: { batchStatus: next },
-          });
-        }
-      }
+      // Deleted; otherwise the live diff decides (Updated / Unchanged / New).
+      await settleIdea(idea.id);
       break;
     }
     // A suggested customer (extracted from ticket text, not yet in the
@@ -1516,6 +1870,188 @@ export async function mutateIdeas(
     // …or dismissed: marked on this idea's tickets, never deleted — the
     // extraction stays intact so the PM can restore it at any time. A future
     // ticket naming the same customer is new evidence and suggests again.
+    case "rewrite": {
+      const idea = await db.idea.findFirst({
+        where: { id: mutation.ideaId, workspaceId },
+        include: {
+          sources: {
+            include: { ticket: { select: { externalId: true, subject: true, body: true } } },
+          },
+        },
+      });
+      if (!idea) break;
+      const jiraKeys = idea.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : []));
+      const issues = jiraKeys.length
+        ? await db.jiraIdeaSnapshot.findMany({
+            where: { workspaceId, key: { in: jiraKeys } },
+            select: { key: true, title: true, body: true },
+          })
+        : [];
+      const members = [
+        ...idea.sources.flatMap((s) =>
+          s.kind === "zendesk" && s.ticket
+            ? [{ key: `ZEN-${s.ticket.externalId}`, subject: s.ticket.subject, body: s.ticket.body, productTitle: "", productSummary: "" }]
+            : [],
+        ),
+        ...issues.map((i) => ({ key: i.key, subject: i.title, body: i.body, productTitle: "", productSummary: "" })),
+      ];
+      const rewrite = await rewriteIdeaFromSources(workspaceId, members);
+      if (!rewrite) throw new Error("PMOS AI returned no text for this idea — nothing changed");
+      const lines = rewrite.productLines.filter(Boolean);
+      const rewriteBaseline = await baselinePatch(idea.id);
+      // An existing idea keeps its title (it is what Jira and the team know
+      // it by — Daniel, 2026-10-20); only a New idea takes the rewritten one.
+      const keepTitle = idea.batchStatus !== "new";
+      await db.idea.update({
+        where: { id: idea.id },
+        data: {
+          ...rewriteBaseline,
+          title: keepTitle ? idea.title : rewrite.productTitle || idea.title,
+          details: rewrite.productSummary || idea.details,
+          ...(lines.length > 0 ? { products: lines as Prisma.InputJsonValue } : {}),
+          sourcesChanged: false,
+          batchChanges: mergeBatchChanges((idea.batchChanges as string[]) ?? [], [
+            "Rewritten by PMOS AI from the current sources",
+          ]) as Prisma.InputJsonValue,
+        },
+      });
+      await logEvents(workspaceId, [
+        { ideaId: idea.id, action: "rewrite", payload: { sources: members.map((x) => x.key) } },
+      ]);
+      await settleIdea(idea.id);
+      notice = "Rewritten from the current sources";
+      break;
+    }
+    case "createIdeaFromTicket": {
+      const ticket = await db.zendeskTicketRaw.findFirst({
+        where: { workspaceId, externalId: mutation.ticketKey },
+      });
+      if (!ticket) throw new Error("Ticket not found");
+      const live = await db.ideaSource.findFirst({
+        where: { ticketId: ticket.id, kind: "zendesk", idea: { batchStatus: { not: "deleted" } } },
+        select: { ideaId: true },
+      });
+      if (live) throw new Error("This ticket already backs an idea");
+      const [verdict] = (
+        await catalogTickets(workspaceId, [
+          {
+            key: ticket.externalId,
+            subject: ticket.subject,
+            body: ticket.body,
+            requester: ticket.requester ?? undefined,
+            tags: ((ticket.tags as string[]) ?? []).filter((t) => typeof t === "string"),
+            module: ticket.module ?? undefined,
+            whyBuild: ticket.whyBuild ?? undefined,
+            insights: ticket.insights ?? undefined,
+          },
+        ])
+      ).results;
+      if (!verdict) throw new Error("PMOS AI returned no verdict for this ticket");
+      const affected = distinct([
+        ...(((ticket.affectedCustomers as string[]) ?? []) as string[]),
+        ...verdict.affectedCustomers,
+      ]);
+      if (verdict.kind !== "fr") {
+        await db.zendeskTicketRaw.update({
+          where: { id: ticket.id },
+          data: {
+            catalogKind: verdict.kind,
+            catalogReason: verdict.reason,
+            affectedCustomers: affected as Prisma.InputJsonValue,
+          },
+        });
+        notice = `PMOS AI read it as ${verdict.kind.replace("_", " ")} — parked, no idea created${verdict.reason ? `: ${verdict.reason}` : ""}`;
+        break;
+      }
+      const resolver = buildProductLineResolver(
+        await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } }),
+      );
+      const givenLine = ticket.module?.trim() ? (resolver.resolve(ticket.module) ?? "Other") : undefined;
+      const products = givenLine
+        ? [givenLine]
+        : verdict.productLines.length > 0
+          ? verdict.productLines
+          : ["Other"];
+      const created = await db.idea.create({
+        data: {
+          workspaceId,
+          title: verdict.productTitle || ticket.subject,
+          details: verdict.productSummary || ticket.body,
+          products: products as Prisma.InputJsonValue,
+          platforms: verdict.platforms as Prisma.InputJsonValue,
+          batchStatus: "new",
+          decision: "pending",
+          origin: "zendesk",
+          newVotes: 1,
+          batchChanges: ["Created by a PM from this ticket"] as unknown as Prisma.InputJsonValue,
+          sources: { create: [{ kind: "zendesk", ticketId: ticket.id }] },
+        },
+      });
+      await db.zendeskTicketRaw.update({
+        where: { id: ticket.id },
+        data: {
+          catalogKind: "fr",
+          catalogReason: verdict.reason,
+          affectedCustomers: affected as Prisma.InputJsonValue,
+          matchNotes: [
+            { unit: ticket.externalId, ideaId: created.id, merged: false, reason: "Created by a PM from this ticket" },
+          ] as unknown as Prisma.InputJsonValue,
+        },
+      });
+      await logEvents(workspaceId, [
+        { ideaId: created.id, action: "create_from_ticket", payload: { ticket: ticket.externalId } },
+      ]);
+      notice = `New idea created from ticket ${ticket.externalId}`;
+      break;
+    }
+    case "createIdea": {
+      const clean = (v: string[]) => distinct(v.map((x) => x.trim()).filter(Boolean));
+      const title = mutation.title.trim();
+      if (!title) throw new Error("A title is required");
+      const products = clean(mutation.products);
+      const zen = clean(mutation.zen);
+      const jira = clean(mutation.jira ?? []);
+      const ticketRows = zen.length
+        ? await db.zendeskTicketRaw.findMany({
+            where: { workspaceId, externalId: { in: zen } },
+            select: { id: true },
+          })
+        : [];
+      const created = await db.idea.create({
+        data: {
+          workspaceId,
+          title,
+          details: mutation.details,
+          manualScore: mutation.manual,
+          products: (products.length > 0 ? products : ["Other"]) as Prisma.InputJsonValue,
+          platforms: clean(mutation.platforms) as Prisma.InputJsonValue,
+          addedCustomers: clean(mutation.addedCustomers) as Prisma.InputJsonValue,
+          batchStatus: "new",
+          decision: "pending",
+          origin: "manual",
+          // Evidence = every attached ticket and issue (a manual idea owns no issue of its own).
+          newVotes: ticketRows.length + jira.length,
+          batchChanges: ["Written by a PM"] as unknown as Prisma.InputJsonValue,
+          sources: {
+            create: [
+              ...ticketRows.map((t) => ({ kind: "zendesk", ticketId: t.id })),
+              ...jira.map((key) => ({ kind: "jira", jiraKey: key })),
+            ],
+          },
+        },
+      });
+      await logEvents(workspaceId, [{ ideaId: created.id, action: "create", payload: { title, zen, jira } }]);
+      const n = ticketRows.length + jira.length;
+      notice = `Idea created${n ? ` with ${n} source${n === 1 ? "" : "s"}` : ""}`;
+      break;
+    }
+    case "keepText": {
+      const idea = await db.idea.findFirst({ where: { id: mutation.ideaId, workspaceId } });
+      if (!idea) break;
+      await db.idea.update({ where: { id: idea.id }, data: { sourcesChanged: false } });
+      await logEvents(workspaceId, [{ ideaId: idea.id, action: "keep_text", payload: {} }]);
+      break;
+    }
     case "dismissCustomer": {
       const idea = await db.idea.findFirst({
         where: { id: mutation.ideaId, workspaceId },
@@ -1549,6 +2085,22 @@ export async function mutateIdeas(
             },
           });
         }
+        for (const s of idea.sources) {
+          if (s.kind !== "jira" || !s.jiraKey) continue;
+          const snap = await db.jiraIdeaSnapshot.findUnique({
+            where: { workspaceId_key: { workspaceId, key: s.jiraKey } },
+            select: { id: true, affectedCustomers: true, dismissedCustomers: true },
+          });
+          if (!snap) continue;
+          const affected = (snap.affectedCustomers as string[]) ?? [];
+          const dismissed = (snap.dismissedCustomers as string[]) ?? [];
+          if (!affected.some((c) => c.toLowerCase() === wanted)) continue;
+          if (dismissed.some((c) => c.toLowerCase() === wanted)) continue;
+          await db.jiraIdeaSnapshot.update({
+            where: { id: snap.id },
+            data: { dismissedCustomers: [...dismissed, name] as Prisma.InputJsonValue },
+          });
+        }
         await logEvents(workspaceId, [
           { ideaId: idea.id, action: "dismiss_customer", payload: { name } },
         ]);
@@ -1576,6 +2128,22 @@ export async function mutateIdeas(
           if (next.length !== current.length) {
             await db.zendeskTicketRaw.update({
               where: { id: s.ticket.id },
+              data: { dismissedCustomers: next as Prisma.InputJsonValue },
+            });
+          }
+        }
+        for (const s of idea.sources) {
+          if (s.kind !== "jira" || !s.jiraKey) continue;
+          const snap = await db.jiraIdeaSnapshot.findUnique({
+            where: { workspaceId_key: { workspaceId, key: s.jiraKey } },
+            select: { id: true, dismissedCustomers: true },
+          });
+          if (!snap) continue;
+          const current = (snap.dismissedCustomers as string[]) ?? [];
+          const next = current.filter((c) => c.toLowerCase() !== wanted);
+          if (next.length !== current.length) {
+            await db.jiraIdeaSnapshot.update({
+              where: { id: snap.id },
               data: { dismissedCustomers: next as Prisma.InputJsonValue },
             });
           }

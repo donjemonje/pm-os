@@ -111,7 +111,7 @@ test.describe("Ideas rules: product lines authz, bad CSV input, all-evidence vot
       ] as const) {
         const res = await user.request.fetch(LIST, { method: method.toUpperCase(), data });
         expect(res.status(), `USER ${method}`).toBe(403);
-        expect((await res.json()).error).toBe("Only a PM-OS admin can change product lines");
+        expect((await res.json()).error).toBe("Only an admin can change product lines");
       }
       expect((await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: created!.id } }))).name).toBe(SET_RENAMED);
     } finally {

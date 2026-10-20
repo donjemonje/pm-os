@@ -43,6 +43,7 @@ const ORG_NAME = "RoomLens";
 const EMAIL = "qa+roomlens@pm-os.io";
 const EMAIL2 = "qa+roomlens-2@pm-os.io";
 const ADMIN_EMAIL = "qa+roomlens-admin@pm-os.io"; // must match QA_ADMIN in helpers.ts
+const CUSTOMER_ADMIN_EMAIL = "qa+roomlens-customer-admin@pm-os.io"; // must match QA_CUSTOMER_ADMIN in helpers.ts
 const PASSWORD = "roomlens-qa-pass1";
 
 // Fixed synthetic TOTP secrets — must match TEST_TOTP_SECRET /
@@ -141,6 +142,15 @@ async function main() {
     deactivatedAt: null,
     totpSecretEnc: null,
     totpEnabledAt: null,
+    totpLastUsedStep: null,
+  });
+  // Customer admin: a member who may change the org's product lines but has
+  // no /admin access (ideas-rules.spec.ts SET-02).
+  await upsertQaUser(org.id, CUSTOMER_ADMIN_EMAIL, "QA RoomLens Customer Admin", {
+    role: "CUSTOMER_ADMIN",
+    deactivatedAt: null,
+    totpSecretEnc: encryptTotpSecret(TEST_TOTP_SECRET),
+    totpEnabledAt: new Date(),
     totpLastUsedStep: null,
   });
   // PM-OS Admin console user (admin.spec.ts) — the only seeded PMOS_ADMIN.

@@ -261,12 +261,12 @@ test.describe("Ideas — customers & reporters", () => {
     // Server-rendered initial items include the seeded catalog row.
     await expect(panel.getByText(CATALOGED, { exact: true })).toBeVisible();
 
-    // Add — name + description land in the list.
+    // Add — the header button opens the form; name + alias land in the list
+    // (the description field is gone since 2026-10-19: aliases carry it).
+    await panel.getByRole("button", { name: "Add customer" }).click();
     await panel.getByPlaceholder("Customer name").fill(SETTINGS_CUSTOMER);
-    await panel
-      .getByPlaceholder(/aliases or tier/)
-      .fill("QA fixture — settings CRUD");
-    await panel.getByRole("button", { name: "Add" }).click();
+    await panel.getByPlaceholder(/Aliases, comma-separated/).fill("QA fixture alias");
+    await panel.getByRole("button", { name: "Add", exact: true }).click();
     // 15s: first hit on the customers API — local runs `next dev`, and the
     // on-demand route compile can hold the POST past the default 5s expect
     // timeout (seen 2026-08-31; form correctly disabled mid-flight, product
@@ -274,15 +274,16 @@ test.describe("Ideas — customers & reporters", () => {
     await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toBeVisible({
       timeout: 15_000,
     });
-    await expect(panel.getByText("QA fixture — settings CRUD")).toBeVisible();
+    await expect(panel.getByText("QA fixture alias")).toBeVisible();
 
     // Persisted, not just optimistic UI.
     await page.reload();
     await expect(panel.getByText(SETTINGS_CUSTOMER, { exact: true })).toBeVisible();
 
     // Duplicate names are rejected case-insensitively.
+    await panel.getByRole("button", { name: "Add customer" }).click();
     await panel.getByPlaceholder("Customer name").fill(SETTINGS_CUSTOMER.toLowerCase());
-    await panel.getByRole("button", { name: "Add" }).click();
+    await panel.getByRole("button", { name: "Add", exact: true }).click();
     await expect(panel.getByText(/already exists/)).toBeVisible();
 
     // Delete — gone from the list and stays gone after a reload.

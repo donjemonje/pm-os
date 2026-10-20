@@ -22,11 +22,12 @@ model Organization {
   workspace Workspace?
 }
 
-/// Minimized IAM. PMOS_ADMIN (not plain "admin" — that name is reserved for a
-/// future customer-admin role) grants access to PM-OS Admin. Default USER =
-/// deny-by-default.
+/// Minimized IAM. PMOS_ADMIN grants access to PM-OS Admin. CUSTOMER_ADMIN is a
+/// plain user who may also change their own organization's settings (product
+/// lines) — never /admin. Default USER = deny-by-default.
 enum UserRole {
   USER
+  CUSTOMER_ADMIN
   PMOS_ADMIN
 }
 
@@ -98,6 +99,12 @@ model Workspace {
   /// often, so they live in Admin → Ideas, not in code. Shape:
   /// lib/ideas/jira-mapping.ts.
   ideasConfig    Json         @default("{}")
+  /// Jira is enabled for the organization, so it must work: when PM-OS
+  /// support was last emailed that it is not working (first failure, then
+  /// one reminder a day — src/lib/jira-alerts.ts) and when the current
+  /// incident started. Both null = healthy; cleared when a check passes.
+  jiraAlertedAt    DateTime?
+  jiraAlertedSince DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -114,6 +121,7 @@ model Workspace {
   jiraIdeaSnapshots     JiraIdeaSnapshot[]
   reviewEvents          ReviewEvent[]
   productLines          ProductLine[]
+  usageEvents           UsageEvent[]
   platforms             Platform[]
   customers             Customer[]
   ideasPushUndos        IdeasPushUndo[]
@@ -207,12 +215,23 @@ model JiraConnection {
   accessToken     String
   refreshToken    String
   expiresAt       DateTime
-  /// "oauth" (Atlassian 3LO, the product path) or "basic" (email + API
-  /// token, QA only: OAuth refresh tokens rotate on use and the test DB is
-  /// wiped per run). For "basic", accessToken holds base64(email:token),
-  /// refreshToken is empty, expiresAt is far future, and requests go to
-  /// siteUrl directly instead of api.atlassian.com/ex/jira/<cloudId>.
-  authType        String    @default("oauth")
+  /// "basic" — the only supported style since 2026-10-20: a dedicated PM-OS
+  /// user + Atlassian API token per organization, set by the PM-OS admin.
+  /// accessToken holds base64(email:token) sealed at rest, refreshToken is
+  /// empty, expiresAt is far future, requests go to siteUrl directly.
+  /// "oauth" rows are legacy (the customer self-connect path was removed)
+  /// and count as unavailable until the PM-OS user is set.
+  authType        String    @default("basic")
+  /// The Jira account behind the token (GET /myself at save time) — shown
+  /// in Settings as "Connected as <name> user".
+  connectedByName  String?
+  connectedByEmail String?
+  /// When the API token expires (admin-set at creation, max 1 year). Null = unknown.
+  apiTokenExpiresAt DateTime?
+  /// When the "token expires soon" email went out to PM-OS support
+  /// (src/lib/jira-alerts.ts); cleared when a new token is saved. The
+  /// outage flag lives on Workspace.jiraAlertedAt (a missing row must alert too).
+  expiryWarnedAt  DateTime?
   projectKeys     String    @default("[]")
   prdSource       String    @default("epic_description")
   /// Ideas write-back target: new ideas become issues of this type in this
@@ -442,7 +461,17 @@ model Idea {
   batchChanges   Json      @default("[]")
   /// Customers a PM added by hand (names). Ticket-derived customers are
   /// never stored here; removing one of those is a dismissal on its tickets.
+  /// The idea as it was before the current batch / before the first PM
+  /// change (lib/ideas/changes.ts IdeaBaseline). Null = nothing to compare
+  /// (a New idea, or an Unchanged one nobody touched). Set once, cleared on
+  /// rollover and after a successful sync to Jira. The drawer's "what
+  /// changed" section is the live diff against it.
+  batchBaseline  Json?
   addedCustomers Json      @default("[]")
+  /// A PM changed the sources after PMOS AI wrote the text: approval is
+  /// blocked until the idea is rewritten from its current sources or the PM
+  /// explicitly keeps the text (Daniel, 2026-10-19).
+  sourcesChanged Boolean   @default(false)
   pmScore        Int?
   manualScore    Int?
   existingVotes  Int       @default(0)
@@ -490,6 +519,20 @@ model JiraIdeaSnapshot {
   assignee        String?
   sourceCreatedAt DateTime?
   syncedAt        DateTime  @default(now())
+  /// Customers read from the issue's summary + description (customer-mentions.ts):
+  /// catalog names from the deterministic pass, as-written names from the AI
+  /// pass (suggestions until approved). PM-OS data, not Jira's — the sync
+  /// upserts rows so these survive every pull.
+  affectedCustomers  Json    @default("[]")
+  /// Names the PM dismissed on this issue (reversible, like a ticket's).
+  dismissedCustomers Json    @default("[]")
+  /// Hash of the text the AI pass last read; unchanged text = no new call.
+  customersTextHash  String?
+  /// The issue's fields as the sync compares them (summary, description
+  /// text, labels, components, mapped custom fields), read at import. The
+  /// drawer's "Changes to sync" diffs against this — no Jira call per open;
+  /// Jira is assumed not to change during a merge (Daniel, 2026-10-20).
+  syncState          Json?
 
   @@unique([workspaceId, key])
 }
@@ -503,9 +546,33 @@ model ReviewEvent {
   idea        Idea      @relation(fields: [ideaId], references: [id], onDelete: Cascade)
   action      String
   payload     Json?
+  /// Who did it (null for events logged before 2026-10-19 or by jobs).
+  userId      String?
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId, ideaId])
+  @@index([workspaceId, createdAt])
+}
+
+/// Product-usage telemetry (Admin → Analytics): one narrow append-only row
+/// per client event — page views, drawer opens, filters, searches, imports.
+/// Behaviour only; decisions and edits are ReviewEvents. Same Postgres for
+/// now (one customer, a few thousand rows a day at most); the client batches
+/// writes, rows older than the retention window are purged on admin read.
+model UsageEvent {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String?
+  /// Client tab id for the browsing session (not the auth session).
+  sessionId   String?
+  event       String
+  path        String?
+  props       Json?
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@index([workspaceId, event, createdAt])
 }
 
 /// Single-use password-reset tokens (forgot-password email links). Only the

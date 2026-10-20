@@ -5,6 +5,7 @@ import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { CUSTOMER_CHIP_DEFAULT } from "@/lib/ideas/colors";
 import { customerKey } from "@/lib/ideas/customer-key";
 import { ColorSwatch } from "./ColorSwatch";
+import { UsageCounts } from "./UsageCounts";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export interface SettingsListItem {
@@ -17,6 +18,10 @@ export interface SettingsListItem {
   aliases?: string[];
   /** "jira" when the Jira pull created the row (product lines only). */
   origin?: string;
+  /** Part of PM-OS (e.g. the All Customers row): color only — no edit, delete or merge. */
+  builtIn?: boolean;
+  /** What the row is attached to today (Settings shows it next to the name). */
+  usage?: { zen: number; jira: number; ideas: number };
 }
 
 const INPUT_CLASS =
@@ -29,6 +34,8 @@ export function SettingsListPanel({
   mergeEndpoint,
   namePlaceholder,
   descriptionPlaceholder,
+  aliasesPlaceholder,
+  addLabel,
   emptyLabel,
   initialItems,
 }: {
@@ -39,7 +46,12 @@ export function SettingsListPanel({
   /** When set, near-duplicate rows get a Merge action (customers). */
   mergeEndpoint?: string;
   namePlaceholder: string;
-  descriptionPlaceholder: string;
+  /** Omit to drop the description field (customers: aliases carry what people put there). */
+  descriptionPlaceholder?: string;
+  /** When set, the add/edit forms take comma-separated aliases (customers). */
+  aliasesPlaceholder?: string;
+  /** Header button label; the add form opens under the header when clicked. */
+  addLabel?: string;
   emptyLabel: string;
   initialItems: SettingsListItem[];
 }) {
@@ -47,6 +59,11 @@ export function SettingsListPanel({
   const [items, setItems] = useState(initialItems);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [aliases, setAliases] = useState("");
+  const [editAliases, setEditAliases] = useState("");
+  /** Add form open (same pattern as Product Lines: header button → form on top). */
+  const [adding, setAdding] = useState(false);
+  const addButtonLabel = addLabel ?? `Add ${title.toLowerCase().replace(/s$/, "")}`;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -68,7 +85,14 @@ export function SettingsListPanel({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
-      setItems(data.items);
+      // The API returns rows without usage counts — keep the ones the page computed.
+      setItems((prev) =>
+        (data.items as SettingsListItem[]).map((it) => ({
+          ...it,
+          usage: prev.find((p) => p.id === it.id)?.usage,
+          builtIn: prev.find((p) => p.id === it.id)?.builtIn,
+        })),
+      );
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
@@ -81,7 +105,15 @@ export function SettingsListPanel({
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    if (await call("POST", { name, description })) {
+    if (
+      await call("POST", {
+        name,
+        ...(descriptionPlaceholder ? { description } : {}),
+        ...(aliasesPlaceholder ? { aliases } : {}),
+      })
+    ) {
+      setAliases("");
+      setAdding(false);
       setName("");
       setDescription("");
     }
@@ -91,11 +123,19 @@ export function SettingsListPanel({
     setEditingId(item.id);
     setEditName(item.name);
     setEditDescription(item.description);
+    setEditAliases((item.aliases ?? []).join(", "));
     setError(null);
   }
 
   async function onSaveEdit(id: string) {
-    if (await call("PATCH", { id, name: editName, description: editDescription })) {
+    if (
+      await call("PATCH", {
+        id,
+        name: editName,
+        ...(descriptionPlaceholder ? { description: editDescription } : {}),
+        ...(aliasesPlaceholder ? { aliases: editAliases } : {}),
+      })
+    ) {
       setEditingId(null);
     }
   }
@@ -121,9 +161,11 @@ export function SettingsListPanel({
   // Same company under two spellings: the normalized key says so, the PM
   // decides which spelling survives.
   const duplicateOf = (item: SettingsListItem): SettingsListItem | null => {
-    if (!mergeEndpoint) return null;
+    if (!mergeEndpoint || item.builtIn) return null;
     const key = customerKey(item.name);
-    return items.find((o) => o.id !== item.id && customerKey(o.name) === key) ?? null;
+    return (
+      items.find((o) => o.id !== item.id && !o.builtIn && customerKey(o.name) === key) ?? null
+    );
   };
   async function onMerge(keep: SettingsListItem, merge: SettingsListItem) {
     if (
@@ -143,13 +185,34 @@ export function SettingsListPanel({
   }
 
   return (
-    <section className="max-w-3xl rounded-xl border border-border bg-card">
+    <section className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-5 py-4">
-        <div className="font-medium text-foreground">{title}</div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="font-medium text-foreground">{title}</div>
+          {!adding && (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-white px-3 text-[12px] font-medium hover:border-primary"
+            >
+              <Plus size={13} /> {addButtonLabel}
+            </button>
+          )}
+        </div>
         <p className="mt-1 text-sm text-muted">{blurb}</p>
       </div>
 
-      <form onSubmit={onAdd} className="flex items-start gap-2 border-b border-border px-5 py-4">
+      {adding && (
+      <form
+        onSubmit={onAdd}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setAdding(false);
+          }
+        }}
+        className="flex items-start gap-2 border-b border-border px-5 py-4"
+      >
         <div className="w-48 shrink-0">
           <input
             type="text"
@@ -158,16 +221,38 @@ export function SettingsListPanel({
             placeholder={namePlaceholder}
             className={INPUT_CLASS}
             disabled={busy}
+            autoFocus
           />
         </div>
-        <input
-          type="text"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={descriptionPlaceholder}
-          className={INPUT_CLASS}
+        {aliasesPlaceholder && (
+          <input
+            type="text"
+            value={aliases}
+            onChange={(e) => setAliases(e.target.value)}
+            placeholder={aliasesPlaceholder}
+            title="Other spellings that mean this customer. Imports map any of them here; PMOS AI sees them too."
+            className={INPUT_CLASS}
+            disabled={busy}
+          />
+        )}
+        {descriptionPlaceholder && (
+          <input
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={descriptionPlaceholder}
+            className={INPUT_CLASS}
+            disabled={busy}
+          />
+        )}
+        <button
+          type="button"
+          onClick={() => setAdding(false)}
           disabled={busy}
-        />
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary"
+        >
+          <X size={13} /> Cancel
+        </button>
         <button
           type="submit"
           disabled={busy || !name.trim()}
@@ -177,6 +262,7 @@ export function SettingsListPanel({
           Add
         </button>
       </form>
+      )}
 
       {error && <div className="px-5 pt-3 text-sm text-red-600">{error}</div>}
 
@@ -187,7 +273,7 @@ export function SettingsListPanel({
           {items.map((item) => (
             <li
               key={item.id}
-              className="flex items-start gap-2 border-b border-border px-5 py-3 last:border-b-0"
+              className="flex items-center gap-2 border-b border-border px-5 py-3 last:border-b-0"
             >
               {editingId === item.id ? (
                 <>
@@ -202,19 +288,32 @@ export function SettingsListPanel({
                       autoFocus
                     />
                   </div>
-                  <input
-                    type="text"
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    onKeyDown={onEditKeyDown(item.id)}
-                    placeholder={descriptionPlaceholder}
-                    className={INPUT_CLASS}
-                    disabled={busy}
-                  />
+                  {aliasesPlaceholder && (
+                    <input
+                      type="text"
+                      value={editAliases}
+                      onChange={(e) => setEditAliases(e.target.value)}
+                      onKeyDown={onEditKeyDown(item.id)}
+                      placeholder={aliasesPlaceholder}
+                      className={INPUT_CLASS}
+                      disabled={busy}
+                    />
+                  )}
+                  {descriptionPlaceholder && (
+                    <input
+                      type="text"
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      onKeyDown={onEditKeyDown(item.id)}
+                      placeholder={descriptionPlaceholder}
+                      className={INPUT_CLASS}
+                      disabled={busy}
+                    />
+                  )}
                   <button
                     onClick={() => onSaveEdit(item.id)}
                     disabled={busy || !editName.trim()}
-                    className="rounded-md p-2 text-primary hover:bg-background disabled:opacity-50"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-primary hover:bg-background disabled:opacity-50"
                     aria-label="Save"
                   >
                     <Check size={15} />
@@ -222,7 +321,7 @@ export function SettingsListPanel({
                   <button
                     onClick={() => setEditingId(null)}
                     disabled={busy}
-                    className="rounded-md p-2 text-muted hover:bg-background"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-muted hover:bg-background"
                     aria-label="Cancel"
                   >
                     <X size={15} />
@@ -238,8 +337,19 @@ export function SettingsListPanel({
                     onPick={(color) => call("PATCH", { id: item.id, color })}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-foreground">{item.name}</div>
-                    {item.description && (
+                    <div className="flex min-h-7 items-center gap-2 text-sm">
+                      <div className="font-medium text-foreground">{item.name}</div>
+                      {item.usage && <UsageCounts {...item.usage} />}
+                      {item.builtIn && (
+                        <span
+                          title="Part of PM-OS: tickets that affect everyone land here. Pick its color; it can't be renamed or deleted."
+                          className="rounded-full border border-[#dde5ef] bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] text-[#7a8496]"
+                        >
+                          Built-in
+                        </span>
+                      )}
+                    </div>
+                    {item.description && (descriptionPlaceholder || item.builtIn) && (
                       <div className="mt-0.5 text-sm text-muted">{item.description}</div>
                     )}
                     {(item.aliases ?? []).length > 0 && (
@@ -282,22 +392,26 @@ export function SettingsListPanel({
                       ) : null;
                     })()}
                   </div>
-                  <button
-                    onClick={() => startEdit(item)}
-                    disabled={busy}
-                    className="rounded-md p-2 text-muted hover:bg-background hover:text-foreground"
-                    aria-label={`Edit ${item.name}`}
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    onClick={() => onDelete(item)}
-                    disabled={busy}
-                    className="rounded-md p-2 text-muted hover:bg-background hover:text-red-600"
-                    aria-label={`Delete ${item.name}`}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  {!item.builtIn && (
+                    <>
+                      <button
+                        onClick={() => startEdit(item)}
+                        disabled={busy}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-background hover:text-foreground"
+                        aria-label={`Edit ${item.name}`}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        onClick={() => onDelete(item)}
+                        disabled={busy}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-background hover:text-red-600"
+                        aria-label={`Delete ${item.name}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </li>

@@ -38,23 +38,19 @@ export async function PUT(
     data: { ideasConfig: config as unknown as Prisma.InputJsonValue },
   });
 
-  // The Jira issue type created ideas get lives on the workspace's Jira
-  // connection (also settable in Settings → Jira) — mergeIdeasJiraConfig
-  // drops it from the stored config, so it never exists in two places.
-  let ideasIssueType = workspace.jiraConnection?.ideasIssueType ?? null;
-  const requestedIssueType =
-    body && typeof body === "object" ? (body as Record<string, unknown>).ideasIssueType : undefined;
-  if (
-    workspace.jiraConnection &&
-    typeof requestedIssueType === "string" &&
-    requestedIssueType.trim().length > 0
-  ) {
-    ideasIssueType = requestedIssueType.trim();
+  // The config is the source of truth for the org's Jira project and work
+  // type; the connection row mirrors them so every reader of the connection
+  // (Docs catalog, legacy paths) sees the same project.
+  if (workspace.jiraConnection && config.jiraProject) {
     await db.jiraConnection.update({
       where: { id: workspace.jiraConnection.id },
-      data: { ideasIssueType },
+      data: {
+        projectKeys: JSON.stringify([config.jiraProject]),
+        ideasProjectKey: config.jiraProject,
+        ...(config.jiraIssueType ? { ideasIssueType: config.jiraIssueType } : {}),
+      },
     });
   }
 
-  return NextResponse.json({ config, ideasIssueType });
+  return NextResponse.json({ config });
 }
