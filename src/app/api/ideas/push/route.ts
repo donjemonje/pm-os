@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
-import { buildIdeaSyncPreview, buildPushPlan, executePush } from "@/lib/ideas/push";
+import { buildIdeaSyncPreview, buildIdeasSyncPreviews, buildPushPlan, executePush } from "@/lib/ideas/push";
 
 /**
  * Merge-to-Jira endpoint. `preview` returns the plan (what will be created /
@@ -30,6 +30,11 @@ export async function POST(request: NextRequest) {
     if (body.mode === "preview") {
       const plan = await buildPushPlan(workspaceResult, scope);
       return NextResponse.json({ plan });
+    }
+    if (body.mode === "previewAll") {
+      // Every Jira-backed idea in one run — the page prefetches these so the
+      // drawer opens with its "Changes to sync" already in hand.
+      return NextResponse.json({ previews: await buildIdeasSyncPreviews(workspaceResult) });
     }
     if (body.mode === "previewIdea") {
       if (typeof body.ideaId !== "string" || !body.ideaId) {

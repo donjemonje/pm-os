@@ -173,12 +173,11 @@ export function IdeasView({
   const [drawerId, setDrawerId] = useState<string | null>(null);
   /** "New idea" — a PM writes one from scratch (origin "manual"). */
   const [newIdeaOpen, setNewIdeaOpen] = useState(false);
-  /** The open idea's "changes to sync": the sync's own per-field diff, live
-   *  against its Jira issue. Re-fetched whenever the idea changes. */
-  const [syncPreview, setSyncPreview] = useState<{ ideaId: string; data: IdeaSyncPreview | null }>({
-    ideaId: "",
-    data: null,
-  });
+  /** "Changes to sync" for every Jira-backed idea, prefetched in the
+   *  background on load and after every change (one plan run, ~1 s), so the
+   *  drawer opens with its section already in hand. */
+  const [previews, setPreviews] = useState<Record<string, IdeaSyncPreview>>({});
+  const [stateVersion, setStateVersion] = useState(0);
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
   /** Drawer views left behind by in-drawer navigation (ticket → idea); Back pops one. */
   const [drawerHistory, setDrawerHistory] = useState<
@@ -220,6 +219,7 @@ export function IdeasView({
   const fileRef = useRef<HTMLInputElement>(null);
 
   const applyState = (state: ServerState, opts: { refreshShell?: boolean } = { refreshShell: true }) => {
+    setStateVersion((v) => v + 1);
     setTickets(state.tickets);
     setJiraSources(state.jiraSources);
     setIdeas(state.ideas);
@@ -299,31 +299,33 @@ export function IdeasView({
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
 
-  const drawerIdeaForPreview = drawerId ? ideas.find((i) => i.id === drawerId) ?? null : null;
   useEffect(() => {
-    // Only ideas that live in Jira have something to compare against.
-    if (!drawerIdeaForPreview || drawerIdeaForPreview.jira.length === 0 || !jiraConnected) {
-      setSyncPreview({ ideaId: "", data: null });
+    if (!jiraConnected || ideas.length === 0) {
+      setPreviews({});
       return;
     }
+    // Debounced: a burst of state applies (import steps, quick clicks) runs
+    // one prefetch; a newer version cancels an older in-flight one.
     let cancelled = false;
-    const ideaId = drawerIdeaForPreview.id;
-    setSyncPreview({ ideaId, data: null });
-    fetch("/api/ideas/push", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "previewIdea", ideaId }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!cancelled && d?.preview) setSyncPreview({ ideaId, data: d.preview });
+    const timer = setTimeout(() => {
+      fetch("/api/ideas/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "previewAll" }),
       })
-      .catch(() => {});
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!cancelled && d?.previews) setPreviews(d.previews);
+        })
+        .catch(() => {});
+    }, 250);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-    // The idea object is replaced on every state apply, so any change refetches.
-  }, [drawerIdeaForPreview, jiraConnected]);
+    // stateVersion bumps on every server state apply.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateVersion, jiraConnected, ideas.length > 0]);
   const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
   // Issues a sync created exist in Jira but not in the snapshot until the next
   // import — they get a stand-in source (idea title, browse link) so the drawer
@@ -1769,7 +1771,9 @@ export function IdeasView({
           }
           onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
           syncPreview={
-            drawerIdea && syncPreview.ideaId === drawerIdea.id ? syncPreview.data ?? "loading" : null
+            drawerIdea && drawerIdea.jira.length > 0 && jiraConnected
+              ? previews[drawerIdea.id] ?? "loading"
+              : null
           }
           onCreateIdeaFromTicket={(ticketKey) =>
             withAiWait(

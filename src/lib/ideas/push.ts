@@ -887,21 +887,45 @@ export interface IdeaSyncPreview {
 }
 
 export async function buildIdeaSyncPreview(workspaceId: string, ideaId: string): Promise<IdeaSyncPreview> {
+  return (await buildIdeasSyncPreviews(workspaceId, [ideaId]))[ideaId];
+}
+
+/**
+ * Previews for every Jira-backed idea (or the given ones) in ONE plan run —
+ * the Ideas page prefetches these in the background so opening an idea is
+ * instant. Keyed by idea id; ideas without an issue are left out.
+ */
+export async function buildIdeasSyncPreviews(
+  workspaceId: string,
+  ideaIds?: string[]
+): Promise<Record<string, IdeaSyncPreview>> {
   const { plan } = await derivePlan(workspaceId, null, {
-    ideaIds: [ideaId],
+    ideaIds,
     includePending: true,
     fromSnapshot: true,
   });
-  const item = plan.items.find((i) => i.ideaId === ideaId) ?? null;
-  return {
-    action: item?.action ?? null,
-    jiraKey: item?.jiraKey ?? null,
-    url: item?.url ?? null,
-    changes: item?.changes ?? [],
-    blockers: plan.blockers,
-    warnings: plan.warnings,
-    skipped: plan.skipped.find((x) => x.ideaId === ideaId)?.reason ?? null,
-  };
+  const out: Record<string, IdeaSyncPreview> = {};
+  const skippedById = new Map(plan.skipped.map((x) => [x.ideaId, x.reason]));
+  for (const item of plan.items) {
+    if (item.action !== "update") continue;
+    out[item.ideaId] = {
+      action: item.action,
+      jiraKey: item.jiraKey,
+      url: item.url,
+      changes: item.changes,
+      blockers: plan.blockers,
+      warnings: plan.warnings,
+      skipped: null,
+    };
+  }
+  for (const [ideaId, reason] of skippedById) {
+    out[ideaId] = { action: null, jiraKey: null, url: null, changes: [], blockers: plan.blockers, warnings: plan.warnings, skipped: reason };
+  }
+  for (const id of ideaIds ?? []) {
+    if (!out[id])
+      out[id] = { action: null, jiraKey: null, url: null, changes: [], blockers: plan.blockers, warnings: plan.warnings, skipped: null };
+  }
+  return out;
 }
 
 // ————— execute —————
