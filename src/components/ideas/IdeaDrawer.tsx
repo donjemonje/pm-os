@@ -273,6 +273,11 @@ export function IdeaDrawer({
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && editSection === "details") {
       e.preventDefault();
       saveEdit();
+    } else if (e.key === "Enter" && editSection === "tags") {
+      // Enter = done (every tag change is already saved); the customer box
+      // swallows Enter itself while it holds text to add.
+      e.preventDefault();
+      setEditSection(null);
     }
   };
   const sameName = (a: string, b: string) => a.toLowerCase() === b.trim().toLowerCase();
@@ -452,7 +457,10 @@ export function IdeaDrawer({
                 onBlur={() => setTimeout(() => setCustomerListOpen(false), 120)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
+                    // Empty box: let Enter bubble — it closes the editor (done).
+                    if (!newCustomer.trim()) return;
                     e.preventDefault();
+                    e.stopPropagation();
                     // Enter takes the first match when the typed text
                     // is a prefix of it; otherwise the text as typed.
                     const first = options[0];
@@ -497,9 +505,18 @@ export function IdeaDrawer({
       <button
         type="button"
         onClick={() => setEditSection(null)}
-        title="Stop editing (every change is already saved) — Esc"
-        aria-label="Stop editing tags"
-        className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
+        title="Done — Enter (every change is already saved)"
+        aria-label="Done editing tags"
+        className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-[#0f7a47] hover:bg-[rgba(23,178,106,.16)]"
+      >
+        <Check size={14} strokeWidth={2.75} />
+      </button>
+      <button
+        type="button"
+        onClick={() => setEditSection(null)}
+        title="Close — Esc"
+        aria-label="Close tag editing"
+        className="flex h-7 w-7 shrink-0 items-center justify-center self-center rounded-[7px] text-fg-muted hover:bg-[var(--app-accent-soft)] hover:text-foreground"
       >
         <X size={14} strokeWidth={2.5} />
       </button>
