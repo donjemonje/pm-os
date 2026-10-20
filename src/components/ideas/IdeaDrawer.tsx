@@ -165,6 +165,9 @@ export function IdeaDrawer({
   /** Product-line multi-select dropdown (tags edit); closes on outside click. */
   const [productMenuOpen, setProductMenuOpen] = useState(false);
   const productMenuRef = useRef<HTMLDivElement>(null);
+  const tagsRowRef = useRef<HTMLDivElement>(null);
+  /** Latest saveTags for the window listener (declared later in the component). */
+  const saveTagsRef = useRef<(() => Promise<void>) | null>(null);
   useEffect(() => {
     if (!productMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -192,12 +195,24 @@ export function IdeaDrawer({
   // themselves stop propagation, so this sees only what nobody else took.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      if (productMenuOpen) setProductMenuOpen(false);
-      else if (customerListOpen) setCustomerListOpen(false);
-      else if (editSection !== null) setEditSection(null);
-      else onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (productMenuOpen) setProductMenuOpen(false);
+        else if (customerListOpen) setCustomerListOpen(false);
+        else if (editSection !== null) setEditSection(null);
+        else onClose();
+        return;
+      }
+      // Enter = ✓, the mirror of Esc = ✕: saves the tag draft from wherever
+      // focus sits (after clicking the pencil or a chip, focus is on nothing
+      // inside the row). Inputs inside the editor row handle Enter themselves
+      // and the row's own handler covers everything within it.
+      if (e.key === "Enter" && editSection === "tags" && !productMenuOpen) {
+        const target = e.target as HTMLElement | null;
+        if (tagsRowRef.current && target && tagsRowRef.current.contains(target)) return;
+        e.preventDefault();
+        void saveTagsRef.current?.();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -311,6 +326,7 @@ export function IdeaDrawer({
       setSaving(false);
     }
   };
+  saveTagsRef.current = saveTags;
   const toggleProduct = (p: string) => {
     const next = toggleIn(editProducts, p);
     if (next.length === 0) return; // one product line is mandatory
@@ -342,7 +358,7 @@ export function IdeaDrawer({
    *  get an × and the add field sits at the end of the row; the rest of the
    *  drawer stays as it is (Daniel, 2026-10-19). */
   const tagsEditor = (
-    <div className="flex flex-wrap items-center gap-1.5" onKeyDown={onEditKeyDown}>
+    <div ref={tagsRowRef} className="flex flex-wrap items-center gap-1.5" onKeyDown={onEditKeyDown}>
       <div ref={productMenuRef} className="relative flex flex-wrap items-center gap-1.5">
         {editProducts.map((p) => (
           <button
@@ -475,6 +491,7 @@ export function IdeaDrawer({
                   }
                 }}
                 placeholder="Add customer…"
+                autoFocus
                 className="min-w-[180px] rounded-lg border border-border px-2 py-1 text-[12px] outline-none focus:border-primary"
               />
               {customerListOpen && options.length > 0 && (
