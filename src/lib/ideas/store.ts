@@ -343,13 +343,10 @@ function toClientIdea(row: IdeaRow, jiraCustomers: JiraCustomerMap = NO_JIRA_CUS
       ticketRows.some((t) => t.affectsAllCustomers) || undefined,
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
-    changes: (() => {
+    previousDetails: (() => {
       const base = baselineOf(row);
-      return base ? diffIdea(likeOf(row), base) : [];
+      return base && base.details.trim() !== row.details.trim() ? base.details : undefined;
     })(),
-    changesBase: row.origin === "jira" ? "jira" : "import",
-    legacyChanges:
-      !baselineOf(row) && row.batchStatus === "updated" ? ((row.batchChanges as string[]) ?? []) : [],
     decision: row.decision as Idea["decision"],
     sourcesChanged: row.sourcesChanged || undefined,
     origin: row.origin as Idea["origin"],

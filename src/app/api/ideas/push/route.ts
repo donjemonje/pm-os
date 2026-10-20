@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiWorkspaceId, ideasDisabledResponse } from "@/lib/api-auth";
-import { buildPushPlan, executePush } from "@/lib/ideas/push";
+import { buildIdeaSyncPreview, buildPushPlan, executePush } from "@/lib/ideas/push";
 
 /**
  * Merge-to-Jira endpoint. `preview` returns the plan (what will be created /
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
   const workspaceResult = await apiWorkspaceId();
   if (workspaceResult instanceof NextResponse) return workspaceResult;
 
-  let body: { mode?: string; productLines?: unknown };
+  let body: { mode?: string; productLines?: unknown; ideaId?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -30,6 +30,12 @@ export async function POST(request: NextRequest) {
     if (body.mode === "preview") {
       const plan = await buildPushPlan(workspaceResult, scope);
       return NextResponse.json({ plan });
+    }
+    if (body.mode === "previewIdea") {
+      if (typeof body.ideaId !== "string" || !body.ideaId) {
+        return NextResponse.json({ error: "ideaId is required" }, { status: 400 });
+      }
+      return NextResponse.json({ preview: await buildIdeaSyncPreview(workspaceResult, body.ideaId) });
     }
     if (body.mode === "execute") {
       const result = await executePush(workspaceResult, scope);

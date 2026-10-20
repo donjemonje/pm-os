@@ -35,7 +35,7 @@ import {
   STATUS_TONES,
   zenLabel,
 } from "@/lib/ideas/idea";
-import type { PushPlan, PushResult } from "@/lib/ideas/push";
+import type { IdeaSyncPreview, PushPlan, PushResult } from "@/lib/ideas/push";
 import type { Idea, JiraSource, MergeEdit, ZendeskTicket } from "@/lib/ideas/types";
 import { FILTER_ACCENTS, FilterPopover } from "@/components/ui/FilterPopover";
 import { PmosMark } from "@/components/brand/PmosMark";
@@ -173,6 +173,12 @@ export function IdeasView({
   const [drawerId, setDrawerId] = useState<string | null>(null);
   /** "New idea" — a PM writes one from scratch (origin "manual"). */
   const [newIdeaOpen, setNewIdeaOpen] = useState(false);
+  /** The open idea's "changes to sync": the sync's own per-field diff, live
+   *  against its Jira issue. Re-fetched whenever the idea changes. */
+  const [syncPreview, setSyncPreview] = useState<{ ideaId: string; data: IdeaSyncPreview | null }>({
+    ideaId: "",
+    data: null,
+  });
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
   /** Drawer views left behind by in-drawer navigation (ticket → idea); Back pops one. */
   const [drawerHistory, setDrawerHistory] = useState<
@@ -292,6 +298,32 @@ export function IdeasView({
   };
 
   const ticketsByKey = useMemo(() => new Map(tickets.map((t) => [t.key, t])), [tickets]);
+
+  const drawerIdeaForPreview = drawerId ? ideas.find((i) => i.id === drawerId) ?? null : null;
+  useEffect(() => {
+    // Only ideas that live in Jira have something to compare against.
+    if (!drawerIdeaForPreview || drawerIdeaForPreview.jira.length === 0 || !jiraConnected) {
+      setSyncPreview({ ideaId: "", data: null });
+      return;
+    }
+    let cancelled = false;
+    const ideaId = drawerIdeaForPreview.id;
+    setSyncPreview({ ideaId, data: null });
+    fetch("/api/ideas/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "previewIdea", ideaId }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.preview) setSyncPreview({ ideaId, data: d.preview });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // The idea object is replaced on every state apply, so any change refetches.
+  }, [drawerIdeaForPreview, jiraConnected]);
   const ideasById = useMemo(() => new Map(ideas.map((i) => [i.id, i])), [ideas]);
   // Issues a sync created exist in Jira but not in the snapshot until the next
   // import — they get a stand-in source (idea title, browse link) so the drawer
@@ -1639,13 +1671,7 @@ export function IdeasView({
                                 {badge && (
                                   <Pill
                                     badge={badge}
-                                    title={
-                                      (idea.changes ?? []).length > 0
-                                        ? (idea.changes ?? []).map((c) => c.label).join("\n")
-                                        : (idea.legacyChanges ?? []).length > 0
-                                          ? (idea.legacyChanges ?? []).join("\n")
-                                          : undefined
-                                    }
+                                    title={undefined}
                                   />
                                 )}
                               </span>
@@ -1742,6 +1768,9 @@ export function IdeasView({
               : undefined
           }
           onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
+          syncPreview={
+            drawerIdea && syncPreview.ideaId === drawerIdea.id ? syncPreview.data ?? "loading" : null
+          }
           onCreateIdeaFromTicket={(ticketKey) =>
             withAiWait(
               ticketsByKey.get(ticketKey)?.subject ?? ticketKey,

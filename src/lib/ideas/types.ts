@@ -1,4 +1,3 @@
-import type { IdeaChange } from "./changes";
 export type IdeaBatchStatus = "new" | "updated" | "unchanged" | "archive" | "deleted";
 export type IdeaDecision = "pending" | "reviewed" | "injected";
 
@@ -105,15 +104,10 @@ export interface Idea {
   /** Customers a PM added by hand (subset of `customers`); removing one deletes it, not a dismissal. */
   addedCustomers?: string[];
   batch: IdeaBatchStatus;
-  /** Live diff against the idea's baseline (lib/ideas/changes.ts) — every
-   *  line undoable. Empty for New ideas and untouched Unchanged ones. */
-  changes?: IdeaChange[];
-  /** What the baseline is: Jira's state (Jira-origin idea) or the idea as it
-   *  was before this import. */
-  changesBase?: "jira" | "import";
-  /** Ideas marked Updated before baselines existed: the import's own
-   *  narration (not undoable). Empty once a baseline exists. */
-  legacyChanges?: string[];
+  /** The description before this batch / the PM's changes (the idea's
+   *  baseline), when it differs from the current one — the drawer's undo
+   *  opens the editor on it. */
+  previousDetails?: string;
   decision: IdeaDecision;
   /** Set while this idea's write from the LAST merge is still undoable. */
   undoable?: { action: "create" | "update"; jiraKey: string };

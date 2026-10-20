@@ -27,6 +27,7 @@ import {
   CATALOG_KIND_LABELS,
 } from "@/lib/ideas/idea";
 import type { Idea, JiraSource, ZendeskTicket } from "@/lib/ideas/types";
+import type { IdeaSyncPreview } from "@/lib/ideas/push";
 import {
   DEFAULT_CSV_MAPPING,
   extractMappedFields,
@@ -101,6 +102,10 @@ interface IdeaDrawerProps {
   onKeepText?: () => Promise<boolean>;
   /** A ticket with no live idea: PMOS AI reads it alone and creates one (or parks it). */
   onCreateIdeaFromTicket?: (ticketKey: string) => Promise<boolean>;
+  /** "Changes to sync": the sync's own per-field diff for this idea, live
+   *  against its Jira issue — "loading" while it is fetched, null when the
+   *  idea has no issue (New) or Jira is off. */
+  syncPreview?: IdeaSyncPreview | "loading" | null;
 }
 
 const MONO_LABEL =
@@ -138,6 +143,7 @@ export function IdeaDrawer({
   onRewrite,
   onKeepText,
   onCreateIdeaFromTicket,
+  syncPreview = null,
 }: IdeaDrawerProps) {
   // Opens at half the window (sidebar included); the PM can still drag it
   // between 380px and 90% of the window.
@@ -972,54 +978,80 @@ export function IdeaDrawer({
             </>
           ) : idea ? (
             <>
-              {/* What changed — the live diff against the idea's baseline
-                  (Jira's state, or the idea before this import), so it is
-                  true after an import, an edit, a move or an undo. Every
-                  line puts that one thing back; "Undo all" restores the
-                  baseline and the idea drops out of review. */}
-              {(idea.changes ?? []).length === 0 && (idea.legacyChanges ?? []).length > 0 && (
+              {/* Changes to sync — exactly what Sync to Jira would write to
+                  this issue, field by field, Jira's current value → the
+                  idea's (the sync's own diff, live). Empty = in sync. */}
+              {syncPreview && (
                 <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
-                  <div className={`${MONO_LABEL} mb-1.5 text-[#2a5fd0]`}>Updated this import</div>
-                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                    {(idea.legacyChanges ?? []).map((c, i) => (
-                      <li key={`${i}-${c}`} className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]">
-                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
-                        {c}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {(idea.changes ?? []).length > 0 && (
-                <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
-                  <div className={`${MONO_LABEL} mb-1.5 text-[#2a5fd0]`}>
-                    Changed {idea.changesBase === "jira" ? "vs. Jira" : "since the previous import"}
-                  </div>
-                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
-                    {(idea.changes ?? []).map((c) => (
-                      <li
-                        key={c.id}
-                        className="group flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
-                        title={c.kind === "title" ? `Was: ${c.from}` : undefined}
-                      >
-                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
-                        <span className="min-w-0">{c.label}</span>
-                        {/* Only the description is undone here (sources on the Merge
-                            board): the editor opens on the previous text; Save commits it. */}
-                        {c.kind === "details" && c.from !== undefined && onSave && (
-                          <button
-                            type="button"
-                            onClick={() => startEdit("details", c.from)}
-                            title="Undo — opens the editor on the previous description; nothing changes until you save"
-                            aria-label="Undo the description update"
-                            className="ml-1 flex shrink-0 rounded p-0.5 text-[#7a8aa3] hover:bg-white hover:text-[#2a5fd0]"
-                          >
-                            <Undo2 size={11} strokeWidth={2.5} />
-                          </button>
+                  <div className={`${MONO_LABEL} mb-1.5 flex items-center gap-1.5 text-[#2a5fd0]`}>
+                    <span>Changes to sync</span>
+                    {syncPreview !== "loading" && syncPreview.jiraKey && (
+                      <>
+                        <span className="text-[#7a8aa3]">→</span>
+                        {syncPreview.url ? (
+                          <a href={syncPreview.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+                            {syncPreview.jiraKey}
+                          </a>
+                        ) : (
+                          <span>{syncPreview.jiraKey}</span>
                         )}
-                      </li>
-                    ))}
-                  </ul>
+                      </>
+                    )}
+                    {syncPreview === "loading" && <Loader2 size={11} className="ml-auto animate-spin text-[#7a8aa3]" />}
+                  </div>
+                  {syncPreview === "loading" ? (
+                    <div className="text-[12.5px] text-[#7a8aa3]">Comparing with Jira…</div>
+                  ) : syncPreview.blockers.length > 0 ? (
+                    <div className="text-[12.5px] text-[var(--app-warn-fg)]">{syncPreview.blockers[0]}</div>
+                  ) : syncPreview.skipped ? (
+                    <div className="text-[12.5px] text-[var(--app-warn-fg)]">{syncPreview.skipped}</div>
+                  ) : syncPreview.changes.length === 0 ? (
+                    <div className="text-[12.5px] text-[#33445e]">In sync — nothing to write.</div>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {syncPreview.changes.map((c) => {
+                        const isDesc = c.field === "description";
+                        const clip = (v: string) => (v.length > 90 ? `${v.slice(0, 90)}…` : v);
+                        return (
+                          <li
+                            key={c.field}
+                            className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]"
+                            title={isDesc ? undefined : `${c.label}: ${c.from || "(empty)"} → ${c.to}`}
+                          >
+                            <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
+                            <span className="min-w-0">
+                              <b className="font-semibold">{c.label}</b>
+                              {isDesc ? (
+                                " updated"
+                              ) : (
+                                <>
+                                  : {c.from ? <span className="line-through opacity-70">{clip(c.from)}</span> : "(empty)"}{" "}
+                                  → {clip(c.to)}
+                                </>
+                              )}
+                            </span>
+                            {/* Only the description is undone here (sources on the
+                                Merge board): the editor opens on the previous text;
+                                Save commits it. */}
+                            {isDesc && idea.previousDetails !== undefined && onSave && (
+                              <button
+                                type="button"
+                                onClick={() => startEdit("details", idea.previousDetails)}
+                                title="Undo — opens the editor on the previous description; nothing changes until you save"
+                                aria-label="Undo the description update"
+                                className="ml-1 flex shrink-0 rounded p-0.5 text-[#7a8aa3] hover:bg-white hover:text-[#2a5fd0]"
+                              >
+                                <Undo2 size={11} strokeWidth={2.5} />
+                              </button>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  {syncPreview !== "loading" && syncPreview.warnings.length > 0 && (
+                    <div className="mt-1.5 text-[11.5px] text-[var(--app-warn-fg)]">{syncPreview.warnings[0]}</div>
+                  )}
                 </div>
               )}
               <div

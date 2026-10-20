@@ -316,16 +316,21 @@ interface PushWrites {
   newOptions: Map<string, NewOptions>;
 }
 
-function ideaCustomers(row: PushIdeaRow): string[] {
+/**
+ * The customers a sync writes for an idea: ticket-derived names plus the
+ * ones a PM added by hand, minus dismissals — and only names in the
+ * catalog (Settings → Ideas → Customers). A suggested customer the PM has
+ * not approved yet is never written (Daniel, 2026-10-20).
+ */
+function ideaCustomers(row: PushIdeaRow, catalog: Set<string>): string[] {
   const tickets = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
   const dismissed = new Set(
     tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
   );
-  // Ticket-derived names plus the ones a PM added by hand on the idea.
   return distinct([
     ...tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
     ...(((row as { addedCustomers?: unknown }).addedCustomers as string[]) ?? []),
-  ]).filter((c) => !dismissed.has(c.toLowerCase()));
+  ]).filter((c) => !dismissed.has(c.toLowerCase()) && catalog.has(c.toLowerCase()));
 }
 
 function ideaTickets(row: PushIdeaRow): TicketRef[] {
@@ -351,9 +356,15 @@ function ideaJiraKey(row: PushIdeaRow): string | null {
 
 // ————— plan —————
 
+/**
+ * `opts.ideaIds` narrows the plan to those ideas; `opts.includePending`
+ * previews pending ideas too (the drawer's "changes to sync" section — the
+ * same diff the Sync dialog shows, live against Jira, approval or not).
+ */
 async function derivePlan(
   workspaceId: string,
-  scope: string[] | null
+  scope: string[] | null,
+  opts: { ideaIds?: string[]; includePending?: boolean } = {}
 ): Promise<{ plan: PushPlan; writes: PushWrites; config: IdeasJiraConfig }> {
   const blockers: string[] = [];
   const warnings: string[] = [];
@@ -418,10 +429,20 @@ async function derivePlan(
     : null;
 
   const rows = await db.idea.findMany({
-    where: { workspaceId, batchStatus: { not: "deleted" } },
+    where: {
+      workspaceId,
+      batchStatus: { not: "deleted" },
+      ...(opts.ideaIds ? { id: { in: opts.ideaIds } } : {}),
+    },
     include: PUSH_INCLUDE,
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
+  // Approved customers only (see ideaCustomers).
+  const catalog = new Set(
+    (await db.customer.findMany({ where: { workspaceId }, select: { name: true } })).map((c) =>
+      c.name.toLowerCase()
+    )
+  );
 
   const scoped = rows.filter((r) => inScope((r.products as string[]) ?? [], scope));
   // Pending ideas never block a merge — only approved ones go.
@@ -429,7 +450,7 @@ async function derivePlan(
     (r) => !APPROVAL_EXEMPT.includes(r.batchStatus) && r.decision === "pending"
   ).length;
 
-  const candidates = scoped.filter((r) => r.decision === "reviewed");
+  const candidates = opts.includePending ? scoped : scoped.filter((r) => r.decision === "reviewed");
   const updates: PushIdeaRow[] = [];
   const creates: PushIdeaRow[] = [];
   for (const row of candidates) {
@@ -445,7 +466,7 @@ async function derivePlan(
     else creates.push(row);
   }
 
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && !opts.includePending) {
     blockers.push("Nothing approved in the selected product lines.");
   }
   if (creates.length > 0 && !target) {
@@ -584,7 +605,7 @@ async function derivePlan(
         const system = fieldId === "labels";
         const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
         const cur = system ? live.labels : readStringList(live.extra[fieldId]);
-        const wanted = ideaCustomers(row).map((c) => customerLabel(c, prefix));
+        const wanted = ideaCustomers(row, catalog).map((c) => customerLabel(c, prefix));
         const missing = wanted.filter((w) => !cur.includes(w));
         if (missing.length === 0) return null;
         const next = distinct([...cur, ...missing]);
@@ -647,7 +668,7 @@ async function derivePlan(
       const cur = readMultiSelect(live.extra[fieldId]);
       const wanted =
         attr === "customers"
-          ? ideaCustomers(row)
+          ? ideaCustomers(row, catalog)
           : ((row.platforms as string[]) ?? []).filter(Boolean);
       const missing = wanted.filter((w) => !cur.some((c) => c.toLowerCase() === w.toLowerCase()));
       if (missing.length === 0) return null;
@@ -742,7 +763,7 @@ async function derivePlan(
       if (mapping.type === "labels") {
         const system = fieldId === "labels";
         const prefix = mapping.labelPrefix ?? (system ? DEFAULT_CUSTOMER_LABEL_PREFIX : "");
-        const labels = ideaCustomers(row).map((c) => customerLabel(c, prefix));
+        const labels = ideaCustomers(row, catalog).map((c) => customerLabel(c, prefix));
         if (labels.length > 0) {
           if (system) createLabels = labels;
           else extraFields[fieldId] = labels;
@@ -754,7 +775,7 @@ async function derivePlan(
         attr === "productLine"
           ? ((row.products as string[]) ?? []).filter((p) => p !== "Other").slice(0, 1)
           : attr === "customers"
-            ? ideaCustomers(row)
+            ? ideaCustomers(row, catalog)
             : ((row.platforms as string[]) ?? []).filter(Boolean);
       if (wanted.length === 0) continue;
       const candidates = attr === "productLine" ? productResolver.spellings(wanted[0]) : wanted;
@@ -824,6 +845,34 @@ export async function buildPushPlan(
 ): Promise<PushPlan> {
   const { plan } = await derivePlan(workspaceId, scope);
   return plan;
+}
+
+/** What a sync would write for ONE idea, right now — the drawer's section. */
+export interface IdeaSyncPreview {
+  action: "create" | "update" | null;
+  jiraKey: string | null;
+  url: string | null;
+  /** Field by field, Jira's current value → the idea's. Empty = in sync. */
+  changes: PushFieldChange[];
+  /** Why nothing can be previewed / written (connection, project, field list). */
+  blockers: string[];
+  warnings: string[];
+  /** The idea is skipped by a sync (e.g. its issue is gone) — the reason. */
+  skipped: string | null;
+}
+
+export async function buildIdeaSyncPreview(workspaceId: string, ideaId: string): Promise<IdeaSyncPreview> {
+  const { plan } = await derivePlan(workspaceId, null, { ideaIds: [ideaId], includePending: true });
+  const item = plan.items.find((i) => i.ideaId === ideaId) ?? null;
+  return {
+    action: item?.action ?? null,
+    jiraKey: item?.jiraKey ?? null,
+    url: item?.url ?? null,
+    changes: item?.changes ?? [],
+    blockers: plan.blockers,
+    warnings: plan.warnings,
+    skipped: plan.skipped.find((x) => x.ideaId === ideaId)?.reason ?? null,
+  };
 }
 
 // ————— execute —————
