@@ -120,9 +120,27 @@ function describe(action: string, payload: unknown): string {
 
 function csvOf(rows: Data["decisions"]["latest"]): string {
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const text = (p: unknown, side: "before" | "after") => {
+    const o = (p ?? {}) as Record<string, { details?: unknown }>;
+    const v = o[side]?.details;
+    return typeof v === "string" ? v : "";
+  };
   return [
-    ["at", "user", "action", "idea", "change", "ideaId"].join(","),
-    ...rows.map((r) => [r.at, r.user, r.action, r.idea, describe(r.action, r.payload), r.ideaId].map(esc).join(",")),
+    ["at", "user", "action", "idea", "change", "text_before", "text_after", "ideaId"].join(","),
+    ...rows.map((r) =>
+      [
+        r.at,
+        r.user,
+        r.action,
+        r.idea,
+        describe(r.action, r.payload),
+        r.action === "edit" && text(r.payload, "before") !== text(r.payload, "after") ? text(r.payload, "before") : "",
+        r.action === "edit" && text(r.payload, "before") !== text(r.payload, "after") ? text(r.payload, "after") : "",
+        r.ideaId,
+      ]
+        .map(esc)
+        .join(","),
+    ),
   ].join("\n");
 }
 
