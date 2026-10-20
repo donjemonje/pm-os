@@ -446,9 +446,17 @@ test.describe("Ideas — Jira match stage (unchanged handling + reassign)", () =
     await targetRow.getByTitle("Edit sources").click();
     await expect(targetRow.getByTitle(DISCARD_TITLE)).toBeVisible();
     await expect(targetRow.getByTitle(SAVE_TITLE)).toHaveCount(0);
+    // MRG-06 (4.0.0): the edit banner narrates the delta — "No changes"
+    // until a row is ticked, then the added row carries a "+ added" tag and
+    // the banner counts it; after the save nothing stays highlighted.
+    await expect(page.getByText("No changes", { exact: true })).toBeVisible();
     await orphanRow.click();
+    await expect(orphanRow.getByText("+ added", { exact: true })).toBeVisible();
+    await expect(page.getByText("Added 1 source", { exact: true })).toBeVisible();
     await expect(targetRow.getByTitle(SAVE_TITLE)).toBeVisible();
     await targetRow.getByTitle(SAVE_TITLE).click();
+    await expect(page.getByText("+ added", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Click an idea src chip to edit its sources")).toBeVisible();
 
     // Saved: now Updated, so it left the Unchanged listing and shows in the
     // default scope with both sources.
