@@ -93,7 +93,7 @@ function describe(action: string, payload: unknown): string {
       if (typeof before.title === "string" && typeof after.title === "string" && before.title !== after.title)
         changed.push(`title: "${before.title}" → "${after.title}"`);
       if (typeof before.details === "string" && typeof after.details === "string" && before.details !== after.details)
-        changed.push(`text (${before.details.length} → ${after.details.length} chars)`);
+        changed.push(`text changed (${before.details.length} → ${after.details.length} chars — expand below for the full text)`);
       const pb = arr(before.products), pa = arr(after.products);
       const addL = pa.filter((x) => !pb.includes(x)), remL = pb.filter((x) => !pa.includes(x));
       if (addL.length || remL.length)
@@ -323,7 +323,23 @@ export function AnalyticsView({ organizations }: { organizations: { id: string; 
                       <td className="max-w-[280px] truncate py-1.5 pr-4" title={r.idea}>
                         {r.idea}
                       </td>
-                      <td className="py-1.5 font-mono text-xs text-slate-700">{describe(r.action, r.payload)}</td>
+                      <td className="py-1.5 font-mono text-xs text-slate-700">
+                        {describe(r.action, r.payload)}
+                        {(() => {
+                          const p = (r.payload ?? {}) as { before?: { details?: unknown }; after?: { details?: unknown } };
+                          const b = p.before?.details, a = p.after?.details;
+                          if (r.action !== "edit" || typeof b !== "string" || typeof a !== "string" || b === a) return null;
+                          return (
+                            <details className="mt-1">
+                              <summary className="cursor-pointer text-[11px] text-slate-500">Full text before → after</summary>
+                              <div className="mt-1 grid gap-2 md:grid-cols-2">
+                                <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-red-200 bg-red-50 p-2 font-sans text-[11.5px] text-slate-800">{b}</pre>
+                                <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded border border-emerald-200 bg-emerald-50 p-2 font-sans text-[11.5px] text-slate-800">{a}</pre>
+                              </div>
+                            </details>
+                          );
+                        })()}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
