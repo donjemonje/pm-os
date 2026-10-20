@@ -289,6 +289,11 @@ export function IdeasView({
         return false;
       }
       applyState(data.state);
+      // The touched idea's preview comes with the response: exact at once,
+      // the background run refreshes the rest.
+      if (data.previews && typeof data.previews === "object") {
+        setPreviews((prev) => ({ ...prev, ...(data.previews as Record<string, IdeaSyncPreview>) }));
+      }
       if (typeof data.notice === "string" && data.notice) setToast(data.notice);
       return true;
     } catch {

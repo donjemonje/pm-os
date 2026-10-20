@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildIdeasSyncPreviews } from "@/lib/ideas/push";
 import { apiAuthContext, ideasDisabledResponse } from "@/lib/api-auth";
 import { mutateIdeas, type IdeasMutation } from "@/lib/ideas/store";
 
@@ -35,7 +36,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const { state, notice } = await mutateIdeas(workspaceResult, mutation, auth.userId);
-    return NextResponse.json({ state, notice });
+    // The touched idea's "Changes to sync" rides along, so the drawer shows
+    // the new comparison the moment the state lands — no second round trip.
+    const touched = (mutation as { ideaId?: unknown }).ideaId;
+    const previews =
+      typeof touched === "string" && state.jiraConnected
+        ? await buildIdeasSyncPreviews(workspaceResult, [touched])
+        : undefined;
+    return NextResponse.json({ state, notice, previews });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Update failed" },
