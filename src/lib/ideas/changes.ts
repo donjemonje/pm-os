@@ -22,32 +22,31 @@ export interface IdeaBaseline {
   products: string[];
   platforms: string[];
   addedCustomers: string[];
+  /** Customers as shown on the idea (ticket-derived + added, minus dismissed).
+   *  Optional: baselines captured before 2026-10-20 lack it. */
+  customers?: string[];
   /** Zendesk ticket keys (externalId) and Jira issue keys. */
   zen: string[];
   jira: string[];
 }
 
 export type IdeaChangeKind =
-  | "source_added"
-  | "source_removed"
+  | "sources"
   | "title"
   | "details"
   | "score"
-  | "product_added"
-  | "product_removed"
-  | "platform_added"
-  | "platform_removed"
-  | "customer_added"
-  | "customer_removed";
+  | "products"
+  | "platforms"
+  | "customers";
 
 export interface IdeaChange {
-  /** Stable id for undo: "source:zen:+:KEY", "title", "product:-:Fraud", … */
+  /** Stable id: "sources:zen:+", "title", "products:-", … */
   id: string;
   kind: IdeaChangeKind;
-  /** Human line for the section. */
+  /** Human line for the section — related items are folded into one line. */
   label: string;
-  /** Before → after for title / score; the item for list changes; the
-   *  previous text for "details" (the drawer's undo opens the editor on it). */
+  /** Before → after for title / score; the previous text for "details"
+   *  (the drawer's undo opens the editor on it). */
   from?: string;
   to?: string;
 }
@@ -59,23 +58,35 @@ export interface IdeaLike {
   products: string[];
   platforms: string[];
   addedCustomers: string[];
+  customers?: string[];
   zen: string[];
   jira: string[];
 }
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const minus = (a: string[], b: string[]) => a.filter((x) => !b.some((y) => same(x, y)));
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/**
+ * One line per kind of change, related items folded together:
+ *   +4 votes: 825, 112, 624, 633 · Jira merges 2: PRDT-331, PRDT-338 ·
+ *   Title changed · Text updated · Product lines added: Monitor, Platform ·
+ *   +5 customers
+ */
 export function diffIdea(now: IdeaLike, base: IdeaBaseline): IdeaChange[] {
   const out: IdeaChange[] = [];
-  for (const k of minus(now.zen, base.zen))
-    out.push({ id: `source:zen:+:${k}`, kind: "source_added", label: `+1 vote (ticket ${k})`, to: k });
-  for (const k of minus(base.zen, now.zen))
-    out.push({ id: `source:zen:-:${k}`, kind: "source_removed", label: `Ticket ${k} removed`, from: k });
-  for (const k of minus(now.jira, base.jira))
-    out.push({ id: `source:jira:+:${k}`, kind: "source_added", label: `${k} merged in`, to: k });
-  for (const k of minus(base.jira, now.jira))
-    out.push({ id: `source:jira:-:${k}`, kind: "source_removed", label: `${k} removed`, from: k });
+  const zenAdded = minus(now.zen, base.zen);
+  const zenRemoved = minus(base.zen, now.zen);
+  const jiraAdded = minus(now.jira, base.jira);
+  const jiraRemoved = minus(base.jira, now.jira);
+  if (zenAdded.length)
+    out.push({ id: "sources:zen:+", kind: "sources", label: `+${plural(zenAdded.length, "vote")}: ${zenAdded.join(", ")}` });
+  if (zenRemoved.length)
+    out.push({ id: "sources:zen:-", kind: "sources", label: `−${plural(zenRemoved.length, "vote")}: ${zenRemoved.join(", ")}` });
+  if (jiraAdded.length)
+    out.push({ id: "sources:jira:+", kind: "sources", label: `Jira merges ${jiraAdded.length}: ${jiraAdded.join(", ")}` });
+  if (jiraRemoved.length)
+    out.push({ id: "sources:jira:-", kind: "sources", label: `Jira removed ${jiraRemoved.length}: ${jiraRemoved.join(", ")}` });
   if (now.title.trim() !== base.title.trim())
     out.push({ id: "title", kind: "title", label: "Title changed", from: base.title, to: now.title });
   if (now.details.trim() !== base.details.trim())
@@ -88,71 +99,20 @@ export function diffIdea(now: IdeaLike, base: IdeaBaseline): IdeaChange[] {
       from: base.manual === null ? "" : String(base.manual),
       to: now.manual === null ? "" : String(now.manual),
     });
-  for (const p of minus(now.products, base.products))
-    out.push({ id: `product:+:${p}`, kind: "product_added", label: `Product line added: ${p}`, to: p });
-  for (const p of minus(base.products, now.products))
-    out.push({ id: `product:-:${p}`, kind: "product_removed", label: `Product line removed: ${p}`, from: p });
-  for (const p of minus(now.platforms, base.platforms))
-    out.push({ id: `platform:+:${p}`, kind: "platform_added", label: `Platform added: ${p}`, to: p });
-  for (const p of minus(base.platforms, now.platforms))
-    out.push({ id: `platform:-:${p}`, kind: "platform_removed", label: `Platform removed: ${p}`, from: p });
-  for (const c of minus(now.addedCustomers, base.addedCustomers))
-    out.push({ id: `customer:+:${c}`, kind: "customer_added", label: `Customer added: ${c}`, to: c });
-  for (const c of minus(base.addedCustomers, now.addedCustomers))
-    out.push({ id: `customer:-:${c}`, kind: "customer_removed", label: `Customer removed: ${c}`, from: c });
+  const list = (id: string, kind: IdeaChangeKind, label: string, items: string[]) => {
+    if (items.length) out.push({ id, kind, label: `${label}: ${items.join(", ")}` });
+  };
+  list("products:+", "products", "Product lines added", minus(now.products, base.products));
+  list("products:-", "products", "Product lines removed", minus(base.products, now.products));
+  list("platforms:+", "platforms", "Platforms added", minus(now.platforms, base.platforms));
+  list("platforms:-", "platforms", "Platforms removed", minus(base.platforms, now.platforms));
+  // Customers: a count is enough (the chips show who) — only when the
+  // baseline knows them.
+  if (base.customers && now.customers) {
+    const added = minus(now.customers, base.customers).length;
+    const removed = minus(base.customers, now.customers).length;
+    if (added) out.push({ id: "customers:+", kind: "customers", label: `+${plural(added, "customer")}` });
+    if (removed) out.push({ id: "customers:-", kind: "customers", label: `−${plural(removed, "customer")}` });
+  }
   return out;
-}
-
-/**
- * The idea after undoing ONE change (by id) against its baseline. Returns the
- * next field values; unknown ids return `now` unchanged. A product-line list
- * never ends up empty — it falls back to the baseline's lines.
- */
-export function undoOne(now: IdeaLike, base: IdeaBaseline, changeId: string): IdeaLike {
-  const next: IdeaLike = {
-    ...now,
-    products: [...now.products],
-    platforms: [...now.platforms],
-    addedCustomers: [...now.addedCustomers],
-    zen: [...now.zen],
-    jira: [...now.jira],
-  };
-  const m = changeId.match(/^source:(zen|jira):([+-]):(.+)$/);
-  if (m) {
-    const [, kind, sign, key] = m;
-    const list = kind === "zen" ? next.zen : next.jira;
-    if (sign === "+") {
-      const filtered = list.filter((k) => !same(k, key));
-      if (kind === "zen") next.zen = filtered;
-      else next.jira = filtered;
-    } else if (!list.some((k) => same(k, key))) list.push(key);
-    return next;
-  }
-  if (changeId === "title") next.title = base.title;
-  else if (changeId === "details") next.details = base.details;
-  else if (changeId === "score") next.manual = base.manual;
-  else {
-    const l = changeId.match(/^(product|platform|customer):([+-]):(.+)$/);
-    if (!l) return now;
-    const [, field, sign, value] = l;
-    const key = field === "product" ? "products" : field === "platform" ? "platforms" : "addedCustomers";
-    const list = next[key];
-    if (sign === "+") next[key] = list.filter((x) => !same(x, value));
-    else if (!list.some((x) => same(x, value))) next[key] = [...list, value];
-    if (key === "products" && next.products.length === 0) next.products = [...base.products];
-  }
-  return next;
-}
-
-export function undoAll(base: IdeaBaseline): IdeaLike {
-  return {
-    title: base.title,
-    details: base.details,
-    manual: base.manual,
-    products: [...base.products],
-    platforms: [...base.platforms],
-    addedCustomers: [...base.addedCustomers],
-    zen: [...base.zen],
-    jira: [...base.jira],
-  };
 }

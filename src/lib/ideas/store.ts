@@ -137,6 +137,17 @@ type IdeaRow = Prisma.IdeaGetPayload<{ include: typeof IDEA_INCLUDE }>;
 const PRE_EXISTING = ["unchanged", "updated"];
 
 function likeOf(row: IdeaRow): IdeaLike {
+  // Customers as the idea shows them from its tickets (+ added, − dismissed);
+  // Jira-text customers are left out on both sides, so the delta stays fair.
+  const tickets = row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket] : []));
+  const dismissed = new Set(
+    tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase())),
+  );
+  const customers = distinct([
+    ...tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+    ...(tickets.some((t) => t.affectsAllCustomers) ? [ALL_CUSTOMERS_NAME] : []),
+    ...((row.addedCustomers as string[]) ?? []),
+  ]).filter((c) => !dismissed.has(c.toLowerCase()));
   return {
     title: row.title,
     details: row.details,
@@ -144,6 +155,7 @@ function likeOf(row: IdeaRow): IdeaLike {
     products: (row.products as string[]) ?? [],
     platforms: (row.platforms as string[]) ?? [],
     addedCustomers: (row.addedCustomers as string[]) ?? [],
+    customers,
     zen: row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [])),
     jira: row.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [])),
   };
