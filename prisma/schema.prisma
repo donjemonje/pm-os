@@ -528,6 +528,11 @@ model JiraIdeaSnapshot {
   dismissedCustomers Json    @default("[]")
   /// Hash of the text the AI pass last read; unchanged text = no new call.
   customersTextHash  String?
+  /// The issue's fields as the sync compares them (summary, description
+  /// text, labels, components, mapped custom fields), read at import. The
+  /// drawer's "Changes to sync" diffs against this — no Jira call per open;
+  /// Jira is assumed not to change during a merge (Daniel, 2026-10-20).
+  syncState          Json?
 
   @@unique([workspaceId, key])
 }

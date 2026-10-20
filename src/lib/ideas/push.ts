@@ -14,7 +14,6 @@ import {
   getEditMetaFields,
   getJiraConnectionStatus,
   hasValidJiraConnection,
-  listAllFields,
   textToAdf,
   updateJiraIssue,
   type JiraFieldMeta,
@@ -22,11 +21,11 @@ import {
 import {
   ATTRIBUTE_LABELS,
   mergeIdeasJiraConfig,
-  writableAttributes,
   type IdeasJiraConfig,
   type MappedAttribute,
 } from "./jira-mapping";
 import { primaryJiraKey } from "./jira-keys";
+import { resolveWritableFieldIds } from "./jira-fields";
 import { DEFAULT_CUSTOMER_LABEL_PREFIX, customerLabel } from "./customer-labels";
 import { buildProductLineResolver } from "./product-line-key";
 import { getIdeasState, type IdeasState } from "./store";
@@ -358,15 +357,21 @@ function ideaJiraKey(row: PushIdeaRow): string | null {
 
 /**
  * `opts.ideaIds` narrows the plan to those ideas; `opts.includePending`
- * previews pending ideas too (the drawer's "changes to sync" section — the
- * same diff the Sync dialog shows, live against Jira, approval or not).
+ * previews pending ideas too; `opts.fromSnapshot` diffs against the issue
+ * fields stored at import (JiraIdeaSnapshot.syncState) instead of reading
+ * Jira — the drawer's "Changes to sync" (no Jira call per open; Jira is
+ * assumed not to change during a merge). A real sync always reads live.
  */
 async function derivePlan(
   workspaceId: string,
   scope: string[] | null,
-  opts: { ideaIds?: string[]; includePending?: boolean } = {}
+  opts: { ideaIds?: string[]; includePending?: boolean; fromSnapshot?: boolean } = {}
 ): Promise<{ plan: PushPlan; writes: PushWrites; config: IdeasJiraConfig }> {
   const blockers: string[] = [];
+  // Offline preview has no edit metadata: a field with unknown options is
+  // taken as writable with the wanted value (the sync re-checks live).
+  const pick = (candidates: string[], meta: JiraFieldMeta | undefined): { allowed: string[]; rejected: string[] } =>
+    opts.fromSnapshot && !meta ? { allowed: candidates, rejected: [] } : filterAllowed(candidates, meta);
   const warnings: string[] = [];
   const notes: string[] = [];
   const items: PushPlanItem[] = [];
@@ -492,23 +497,13 @@ async function derivePlan(
     };
   }
 
-  // Resolve the configured Jira fields (by display name) to field ids once.
-  const enabledAttrs = writableAttributes(config);
+  // Resolve the configured Jira fields (by display name) to field ids once
+  // (site field list cached a few minutes — shared with the import).
   let fieldIdByAttr = new Map<MappedAttribute, string>();
   try {
-    const allFields = await listAllFields(workspaceId);
-    fieldIdByAttr = new Map(
-      enabledAttrs.flatMap((attr) => {
-        const hit = allFields.get(config.fields[attr].jiraField.toLowerCase());
-        if (!hit) {
-          warnings.push(
-            `Jira field "${config.fields[attr].jiraField}" (${ATTRIBUTE_LABELS[attr]}) not found on this Jira site — skipped. Fix the name in Admin → Ideas.`
-          );
-          return [];
-        }
-        return [[attr, hit.id] as const];
-      })
-    );
+    const resolved = await resolveWritableFieldIds(workspaceId, config);
+    fieldIdByAttr = resolved.byAttr;
+    warnings.push(...resolved.warnings);
   } catch (err) {
     blockers.push(
       `Could not read Jira's field list: ${err instanceof Error ? err.message : "unknown error"}`
@@ -526,9 +521,35 @@ async function derivePlan(
     await db.productLine.findMany({ where: { workspaceId }, select: { name: true, aliases: true } })
   );
 
-  // Live state for updates — diffs run against Jira right now, not a snapshot.
+  // State for updates: live Jira for a sync; the import-time snapshot for the
+  // drawer's preview (opts.fromSnapshot).
   let liveByKey = new Map<string, Awaited<ReturnType<typeof fetchIssuesRaw>>[number]>();
-  if (updates.length > 0) {
+  if (updates.length > 0 && opts.fromSnapshot) {
+    const keys = updates.map((r) => ideaJiraKey(r)!) as string[];
+    const snaps = await db.jiraIdeaSnapshot.findMany({
+      where: { workspaceId, key: { in: keys } },
+      select: { key: true, syncState: true },
+    });
+    for (const snap of snaps) {
+      const st = snap.syncState as {
+        summary?: string;
+        descriptionText?: string;
+        labels?: string[];
+        components?: string[];
+        extra?: Record<string, unknown>;
+      } | null;
+      if (!st || typeof st !== "object") continue;
+      liveByKey.set(snap.key, {
+        key: snap.key,
+        summary: st.summary ?? "",
+        descriptionText: st.descriptionText ?? "",
+        labels: st.labels ?? [],
+        components: st.components ?? [],
+        descriptionAdf: null,
+        extra: st.extra ?? {},
+      });
+    }
+  } else if (updates.length > 0) {
     const keys = updates.map((r) => ideaJiraKey(r)!) as string[];
     try {
       const live = await fetchIssuesRaw(workspaceId, keys, extraFieldIds);
@@ -553,15 +574,18 @@ async function derivePlan(
       skipped.push({
         ideaId: row.id,
         title: row.title,
-        reason: `${key} no longer exists in Jira — re-import to resync before merging.`,
+        reason: opts.fromSnapshot
+          ? `${key} has no import-time snapshot yet — run an import to compare.`
+          : `${key} no longer exists in Jira — re-import to resync before merging.`,
       });
       continue;
     }
 
-    // Which fields Jira lets us edit on this issue (with allowed options).
+    // Which fields Jira lets us edit on this issue (with allowed options) —
+    // a sync asks Jira; the offline preview takes the mapped fields as is.
     let editMeta = new Map<string, JiraFieldMeta>();
     try {
-      editMeta = await getEditMetaFields(workspaceId, key);
+      if (!opts.fromSnapshot) editMeta = await getEditMetaFields(workspaceId, key);
     } catch (err) {
       warnings.push(
         `Could not read edit metadata of ${key}: ${err instanceof Error ? err.message : "unknown error"} — custom fields skipped for it.`
@@ -649,7 +673,7 @@ async function derivePlan(
         if (cur) return null;
         const wanted = ((row.products as string[]) ?? []).filter((p) => p !== "Other");
         if (wanted.length === 0) return null;
-        let { allowed } = filterAllowed(productResolver.spellings(wanted[0]), meta);
+        let { allowed } = pick(productResolver.spellings(wanted[0]), meta);
         if (allowed.length === 0 && mapping.createOptions && meta) {
           queueOptions(attr, fieldId, key.split("-")[0], [wanted[0]]);
           allowed = [wanted[0]];
@@ -779,7 +803,7 @@ async function derivePlan(
             : ((row.platforms as string[]) ?? []).filter(Boolean);
       if (wanted.length === 0) continue;
       const candidates = attr === "productLine" ? productResolver.spellings(wanted[0]) : wanted;
-      const filtered = filterAllowed(candidates, meta);
+      const filtered = pick(candidates, meta);
       let allowed = filtered.allowed;
       // For the product line, "rejected" means none of its spellings is an option.
       const rejected =
@@ -847,7 +871,8 @@ export async function buildPushPlan(
   return plan;
 }
 
-/** What a sync would write for ONE idea, right now — the drawer's section. */
+/** What a sync would write for ONE idea — the drawer's section. Compared
+ *  against the issue as imported (no Jira call); the sync itself reads live. */
 export interface IdeaSyncPreview {
   action: "create" | "update" | null;
   jiraKey: string | null;
@@ -862,7 +887,11 @@ export interface IdeaSyncPreview {
 }
 
 export async function buildIdeaSyncPreview(workspaceId: string, ideaId: string): Promise<IdeaSyncPreview> {
-  const { plan } = await derivePlan(workspaceId, null, { ideaIds: [ideaId], includePending: true });
+  const { plan } = await derivePlan(workspaceId, null, {
+    ideaIds: [ideaId],
+    includePending: true,
+    fromSnapshot: true,
+  });
   const item = plan.items.find((i) => i.ideaId === ideaId) ?? null;
   return {
     action: item?.action ?? null,

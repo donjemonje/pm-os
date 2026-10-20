@@ -987,7 +987,7 @@ export function IdeaDrawer({
                     <span>Changes to sync</span>
                     {syncPreview !== "loading" && syncPreview.jiraKey && (
                       <>
-                        <span className="text-[#7a8aa3]">→</span>
+                        <span className="text-[#7a8aa3]" title="Compared with the issue as it was at the last import">→</span>
                         {syncPreview.url ? (
                           <a href={syncPreview.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
                             {syncPreview.jiraKey}
@@ -1000,7 +1000,7 @@ export function IdeaDrawer({
                     {syncPreview === "loading" && <Loader2 size={11} className="ml-auto animate-spin text-[#7a8aa3]" />}
                   </div>
                   {syncPreview === "loading" ? (
-                    <div className="text-[12.5px] text-[#7a8aa3]">Comparing with Jira…</div>
+                    <div className="text-[12.5px] text-[#7a8aa3]">Comparing…</div>
                   ) : syncPreview.blockers.length > 0 ? (
                     <div className="text-[12.5px] text-[var(--app-warn-fg)]">{syncPreview.blockers[0]}</div>
                   ) : syncPreview.skipped ? (

@@ -8,7 +8,8 @@ import { DEFAULT_CUSTOMER_LABEL_PREFIX, labelToCustomerName } from "./customer-l
 import { extractJiraCustomers } from "./jira-customers";
 import { ensureAllCustomers } from "./catalog-colors";
 import { CATALOG_PREFIX_KEY, catalogTickets, prepareCatalog } from "./catalog";
-import { getJiraConnectionStatus, getJiraHealth } from "../jira";
+import { fetchIssuesRaw, getJiraConnectionStatus, getJiraHealth } from "../jira";
+import { resolveWritableFieldIds } from "./jira-fields";
 import type { JiraHealthStatus } from "../jira-health-copy";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { type CsvMapping } from "./csv-mapping";
@@ -988,6 +989,29 @@ async function runImport(
         aiNote = ` · AI customer pass failed (${message.slice(0, 120)}) — catalog names only`;
       }
     }
+    // The fields a sync compares, as they are right now — stored on the
+    // snapshot so the drawer's "Changes to sync" never has to ask Jira.
+    // Never blocks the import: on failure the previous state stays.
+    const syncStateByKey = new Map<string, Prisma.InputJsonValue>();
+    try {
+      const { byAttr } = await resolveWritableFieldIds(workspaceId, importCfg);
+      const raw = await fetchIssuesRaw(
+        workspaceId,
+        jira.sources.map((s) => s.key),
+        Array.from(byAttr.values()),
+      );
+      for (const r of raw) {
+        syncStateByKey.set(r.key, {
+          summary: r.summary,
+          descriptionText: r.descriptionText,
+          labels: r.labels,
+          components: r.components,
+          extra: r.extra,
+        } as unknown as Prisma.InputJsonValue);
+      }
+    } catch (err) {
+      console.warn(`[ideas:jira-sync-state] ${err instanceof Error ? err.message : String(err)}`);
+    }
     for (const s of jira.sources) {
       const text = texts.get(s.key) ?? "";
       const previous = prior.get(s.key);
@@ -1023,6 +1047,7 @@ async function runImport(
         syncedAt: new Date(),
         affectedCustomers: affected as Prisma.InputJsonValue,
         customersTextHash: hashNow,
+        ...(syncStateByKey.has(s.key) ? { syncState: syncStateByKey.get(s.key) } : {}),
       };
       await db.jiraIdeaSnapshot.upsert({
         where: { workspaceId_key: { workspaceId, key: s.key } },
