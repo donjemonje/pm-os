@@ -986,6 +986,19 @@ export function IdeaDrawer({
                   true after an import, an edit, a move or an undo. Every
                   line puts that one thing back; "Undo all" restores the
                   baseline and the idea drops out of review. */}
+              {(idea.changes ?? []).length === 0 && (idea.legacyChanges ?? []).length > 0 && (
+                <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
+                  <div className={`${MONO_LABEL} mb-1.5 text-[#2a5fd0]`}>Updated this import</div>
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {(idea.legacyChanges ?? []).map((c, i) => (
+                      <li key={`${i}-${c}`} className="flex items-start gap-1.5 text-[12.5px] leading-snug text-[#33445e]">
+                        <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#3b7cf6]" />
+                        {c}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {(idea.changes ?? []).length > 0 && (
                 <div className="rounded-[10px] border border-[rgba(59,124,246,.35)] bg-[rgba(59,124,246,.09)] px-3.5 py-2.5">
                   <div className={`${MONO_LABEL} mb-1.5 flex items-center gap-2 text-[#2a5fd0]`}>

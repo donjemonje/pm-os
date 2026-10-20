@@ -111,6 +111,9 @@ export interface Idea {
   /** What the baseline is: Jira's state (Jira-origin idea) or the idea as it
    *  was before this import. */
   changesBase?: "jira" | "import";
+  /** Ideas marked Updated before baselines existed: the import's own
+   *  narration (not undoable). Empty once a baseline exists. */
+  legacyChanges?: string[];
   decision: IdeaDecision;
   /** Set while this idea's write from the LAST merge is still undoable. */
   undoable?: { action: "create" | "update"; jiraKey: string };

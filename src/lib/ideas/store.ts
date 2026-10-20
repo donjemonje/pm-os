@@ -350,6 +350,8 @@ function toClientIdea(row: IdeaRow, jiraCustomers: JiraCustomerMap = NO_JIRA_CUS
       return base ? diffIdea(likeOf(row), base) : [];
     })(),
     changesBase: row.origin === "jira" ? "jira" : "import",
+    legacyChanges:
+      !baselineOf(row) && row.batchStatus === "updated" ? ((row.batchChanges as string[]) ?? []) : [],
     decision: row.decision as Idea["decision"],
     sourcesChanged: row.sourcesChanged || undefined,
     origin: row.origin as Idea["origin"],
@@ -1435,6 +1437,7 @@ export type IdeasMutation =
       platforms: string[];
       addedCustomers: string[];
       zen: string[];
+      jira: string[];
     }
   /** Move one source from the idea holding it to another idea, in one step. */
   | { type: "moveSource"; kind: "zen" | "jira"; key: string; toIdeaId: string }
@@ -1965,6 +1968,7 @@ export async function mutateIdeas(
       if (!title) throw new Error("A title is required");
       const products = clean(mutation.products);
       const zen = clean(mutation.zen);
+      const jira = clean(mutation.jira ?? []);
       const ticketRows = zen.length
         ? await db.zendeskTicketRaw.findMany({
             where: { workspaceId, externalId: { in: zen } },
@@ -1983,13 +1987,20 @@ export async function mutateIdeas(
           batchStatus: "new",
           decision: "pending",
           origin: "manual",
-          newVotes: ticketRows.length,
+          // Evidence = every attached ticket and issue (a manual idea owns no issue of its own).
+          newVotes: ticketRows.length + jira.length,
           batchChanges: ["Written by a PM"] as unknown as Prisma.InputJsonValue,
-          sources: { create: ticketRows.map((t) => ({ kind: "zendesk", ticketId: t.id })) },
+          sources: {
+            create: [
+              ...ticketRows.map((t) => ({ kind: "zendesk", ticketId: t.id })),
+              ...jira.map((key) => ({ kind: "jira", jiraKey: key })),
+            ],
+          },
         },
       });
-      await logEvents(workspaceId, [{ ideaId: created.id, action: "create", payload: { title, zen } }]);
-      notice = `Idea created${ticketRows.length ? ` with ${ticketRows.length} source${ticketRows.length === 1 ? "" : "s"}` : ""}`;
+      await logEvents(workspaceId, [{ ideaId: created.id, action: "create", payload: { title, zen, jira } }]);
+      const n = ticketRows.length + jira.length;
+      notice = `Idea created${n ? ` with ${n} source${n === 1 ? "" : "s"}` : ""}`;
       break;
     }
     case "moveSource": {

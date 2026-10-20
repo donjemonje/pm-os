@@ -1630,7 +1630,9 @@ export function IdeasView({
                                     title={
                                       (idea.changes ?? []).length > 0
                                         ? (idea.changes ?? []).map((c) => c.label).join("\n")
-                                        : undefined
+                                        : (idea.legacyChanges ?? []).length > 0
+                                          ? (idea.legacyChanges ?? []).join("\n")
+                                          : undefined
                                     }
                                   />
                                 )}
@@ -1744,6 +1746,7 @@ export function IdeasView({
           // Tickets that back no live idea — orphans on the merge board and
           // parked ones — are the only sources a hand-written idea can take.
           freeTickets={tickets.filter((t) => !ideas.some((i) => i.batch !== "deleted" && i.zen.includes(t.key)))}
+          freeJira={jiraSources.filter((s) => !ideas.some((i) => i.batch !== "deleted" && i.jira.includes(s.key)))}
           onClose={() => setNewIdeaOpen(false)}
           onCreate={async (draft) => {
             const ok = await callMutate({ type: "createIdea", ...draft });
