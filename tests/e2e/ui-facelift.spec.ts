@@ -335,19 +335,20 @@ test.describe("UI facelift v1 — ideas toolbar, customer colors/merge, drawer e
     const patch = page.waitForResponse(
       (r) => r.url().includes("/api/ideas/lists/customers") && r.request().method() === "PATCH"
     );
-    await panel.getByRole("button", { name: "Red", exact: true }).click();
+    // Palette 24 (2026-10-19): the red id is labelled "Stuck red".
+    await panel.getByRole("button", { name: "Stuck red", exact: true }).click();
     const patchRes = await patch;
     expect(patchRes.status()).toBe(200);
     const body = patchRes.request().postDataJSON() as Record<string, unknown>;
     expect(body.color).toBe("red");
     expect(typeof body.id).toBe("string");
     expect(body.name).toBeUndefined();
-    // Red's foreground (#a32a2a) paints the swatch; still after a reload.
-    await expect(swatchButton.locator("span")).toHaveCSS("background-color", "rgb(163, 42, 42)");
+    // The dot shows the solid swatch color of red (#e2445c); still after a reload.
+    await expect(swatchButton.locator("span")).toHaveCSS("background-color", "rgb(226, 68, 92)");
     await page.reload();
     await expect(
       panel.getByRole("button", { name: `Chip color for ${SWATCH}` }).locator("span")
-    ).toHaveCSS("background-color", "rgb(163, 42, 42)");
+    ).toHaveCSS("background-color", "rgb(226, 68, 92)");
     const listed = await page.request.get("/api/ideas/lists/customers");
     expect(listed.status()).toBe(200);
     const { items } = (await listed.json()) as {

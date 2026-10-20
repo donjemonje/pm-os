@@ -272,7 +272,8 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     await labeledInput(page, "Zendesk ticket link template").fill(
       "https://qa.zendesk.example/agent/tickets/{id}"
     );
-    await fieldRow(page, "Customers").locator('input[type="text"]').fill("QA_Customers");
+    // The Customers row has two text inputs since 2026-10-20 (Jira field + label prefix).
+    await fieldRow(page, "Customers").locator('input[type="text"]').first().fill("QA_Customers");
     // Components (platforms → P_Components) is OFF by default since
     // 2026-09-03, so its field-name input starts disabled; enabling the
     // attribute enables the input.

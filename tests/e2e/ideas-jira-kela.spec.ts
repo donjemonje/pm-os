@@ -568,6 +568,7 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
       "Module",
       "Reporter",
       "Assignee",
+      "Customers (read from text)",
       "Created",
       "Link",
     ]);
