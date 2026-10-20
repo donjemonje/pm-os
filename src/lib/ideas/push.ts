@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   JIRA_SYNC_NOT_CONNECTED_BLOCKER,
   JIRA_SYNC_UNAVAILABLE_BLOCKER,
@@ -911,6 +911,8 @@ export async function executePush(
       where: { id: ideaId },
       data: {
         decision: "injected",
+        // Jira now holds what the idea says: nothing left to compare against.
+        batchBaseline: Prisma.JsonNull,
         // A created issue now lives in Jira: flip origin so the next import's
         // resync upserts it by key instead of duplicating it.
         ...(alsoJiraSource

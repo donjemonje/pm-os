@@ -19,6 +19,7 @@ import {
   Undo2,
   Share2,
   Flag,
+  Plus,
 } from "lucide-react";
 import { LazyIdeaDetailsEditor } from "@/components/ideas/LazyIdeaDetailsEditor";
 import { ticketsFromCsv } from "@/lib/ideas/csv";
@@ -53,6 +54,7 @@ import {
 } from "@/lib/ideas/colors";
 import { IdeaDrawer } from "./IdeaDrawer";
 import { MergePage } from "./MergePage";
+import { NewIdeaDrawer } from "./NewIdeaDrawer";
 
 const MONO_LABEL =
   "font-mono text-[10px] font-semibold tracking-[0.06em] text-[#7a8aa3]";
@@ -169,6 +171,8 @@ export function IdeasView({
   /** Product-line groups the PM folded shut on the Final page ("" = unassigned). */
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([]);
   const [drawerId, setDrawerId] = useState<string | null>(null);
+  /** "New idea" — a PM writes one from scratch (origin "manual"). */
+  const [newIdeaOpen, setNewIdeaOpen] = useState(false);
   const [drawerSrc, setDrawerSrc] = useState<{ kind: "zen" | "jira"; key: string } | null>(null);
   /** Drawer views left behind by in-drawer navigation (ticket → idea); Back pops one. */
   const [drawerHistory, setDrawerHistory] = useState<
@@ -986,6 +990,10 @@ export function IdeasView({
                 Clear import
               </Button>
             )}
+            <Button onClick={() => setNewIdeaOpen(true)} disabled={importing}>
+              <Plus size={13} />
+              New idea
+            </Button>
             <Button onClick={() => fileRef.current?.click()} disabled={importing}>
               <Upload size={13} />
               {importing ? "Importing…" : "Upload Zendesk CSV"}
@@ -1617,8 +1625,8 @@ export function IdeasView({
                                   <Pill
                                     badge={badge}
                                     title={
-                                      idea.batch === "updated" && (idea.batchChanges ?? []).length > 0
-                                        ? (idea.batchChanges ?? []).join("\n")
+                                      (idea.changes ?? []).length > 0
+                                        ? (idea.changes ?? []).map((c) => c.label).join("\n")
                                         : undefined
                                     }
                                   />
@@ -1711,6 +1719,34 @@ export function IdeasView({
           onRewrite={drawerIdea ? () => callMutate({ type: "rewrite", ideaId: drawerIdea.id }) : undefined}
           onKeepText={drawerIdea ? () => callMutate({ type: "keepText", ideaId: drawerIdea.id }) : undefined}
           onCreateIdeaFromTicket={(ticketKey) => callMutate({ type: "createIdeaFromTicket", ticketKey })}
+          onUndoChange={
+            drawerIdea
+              ? (changeId) => void callMutate({ type: "undoChange", ideaId: drawerIdea.id, changeId })
+              : undefined
+          }
+          onUndoAllChanges={
+            drawerIdea ? () => void callMutate({ type: "undoAllChanges", ideaId: drawerIdea.id }) : undefined
+          }
+          onMoveSource={(kind, key, toIdeaId) => callMutate({ type: "moveSource", kind, key, toIdeaId })}
+        />
+      )}
+
+      {newIdeaOpen && (
+        <NewIdeaDrawer
+          catalogProducts={catalogProducts}
+          catalogPlatforms={catalogPlatforms}
+          customerCatalog={customerCatalog}
+          productColors={productColors}
+          customerColors={customerColors}
+          // Tickets that back no live idea — orphans on the merge board and
+          // parked ones — are the only sources a hand-written idea can take.
+          freeTickets={tickets.filter((t) => !ideas.some((i) => i.batch !== "deleted" && i.zen.includes(t.key)))}
+          onClose={() => setNewIdeaOpen(false)}
+          onCreate={async (draft) => {
+            const ok = await callMutate({ type: "createIdea", ...draft });
+            if (ok) setNewIdeaOpen(false);
+            return ok;
+          }}
         />
       )}
 

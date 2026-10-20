@@ -461,6 +461,12 @@ model Idea {
   batchChanges   Json      @default("[]")
   /// Customers a PM added by hand (names). Ticket-derived customers are
   /// never stored here; removing one of those is a dismissal on its tickets.
+  /// The idea as it was before the current batch / before the first PM
+  /// change (lib/ideas/changes.ts IdeaBaseline). Null = nothing to compare
+  /// (a New idea, or an Unchanged one nobody touched). Set once, cleared on
+  /// rollover and after a successful sync to Jira. The drawer's "what
+  /// changed" section is the live diff against it.
+  batchBaseline  Json?
   addedCustomers Json      @default("[]")
   /// A PM changed the sources after PMOS AI wrote the text: approval is
   /// blocked until the idea is rewritten from its current sources or the PM

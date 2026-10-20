@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { PrefixWarmer } from "./ai-cache";
 import { nextChipColor } from "./colors";
@@ -26,6 +26,7 @@ import {
   type SplitRequest,
 } from "./split";
 import { ImportTrace, markAbandonedImports } from "./trace";
+import { diffIdea, undoAll, undoOne, type IdeaBaseline, type IdeaLike } from "./changes";
 import type {
   CatalogKind,
   Idea,
@@ -129,6 +130,99 @@ const IDEA_INCLUDE = {
   },
 } as const;
 type IdeaRow = Prisma.IdeaGetPayload<{ include: typeof IDEA_INCLUDE }>;
+
+// ————— baseline + live diff (lib/ideas/changes.ts) —————
+
+/** Statuses of an idea that pre-dates the batch — the only ones that get a baseline. */
+const PRE_EXISTING = ["unchanged", "updated"];
+
+function likeOf(row: IdeaRow): IdeaLike {
+  return {
+    title: row.title,
+    details: row.details,
+    manual: row.manualScore,
+    products: (row.products as string[]) ?? [],
+    platforms: (row.platforms as string[]) ?? [],
+    addedCustomers: (row.addedCustomers as string[]) ?? [],
+    zen: row.sources.flatMap((s) => (s.kind === "zendesk" && s.ticket ? [s.ticket.externalId] : [])),
+    jira: row.sources.flatMap((s) => (s.kind === "jira" && s.jiraKey ? [s.jiraKey] : [])),
+  };
+}
+
+function baselineOf(row: { batchBaseline: Prisma.JsonValue | null }): IdeaBaseline | null {
+  const b = row.batchBaseline;
+  return b && typeof b === "object" && !Array.isArray(b) ? (b as unknown as IdeaBaseline) : null;
+}
+
+/**
+ * The data patch that captures the baseline — once, right before the first
+ * change to a pre-existing idea. Empty when one exists already or the idea
+ * is New (new ideas have nothing to compare to; a PM edits them by hand).
+ */
+async function baselinePatch(
+  ideaId: string,
+  opts: { force?: boolean } = {}
+): Promise<{ batchBaseline?: Prisma.InputJsonValue }> {
+  const row = await db.idea.findUnique({ where: { id: ideaId }, include: IDEA_INCLUDE });
+  if (!row || row.batchBaseline) return {};
+  // `force`: the import knows the idea pre-dates this batch even when it is
+  // still New (created by an earlier import, never synced).
+  if (!opts.force && !PRE_EXISTING.includes(row.batchStatus)) return {};
+  return { batchBaseline: likeOf(row) as unknown as Prisma.InputJsonValue };
+}
+
+/** Votes = merged evidence: every ticket and every merged Jira issue, minus a Jira idea's own issue. */
+function evidenceOf(like: { zen: string[]; jira: string[] }, origin: string): number {
+  return like.zen.length + Math.max(0, like.jira.length - (origin === "jira" ? 1 : 0));
+}
+
+/**
+ * After any change: the status and vote delta that follow from the diff.
+ * No sources → Deleted. With a baseline: a non-empty diff is Updated, an
+ * empty one is back to Unchanged (Jira idea) or New (never synced); the
+ * batch votes are the evidence gained over the baseline. Without a baseline
+ * (a New idea) nothing moves. Flipping into Updated re-opens review.
+ */
+async function settleIdea(ideaId: string): Promise<void> {
+  const row = await db.idea.findUnique({ where: { id: ideaId }, include: IDEA_INCLUDE });
+  if (!row || row.batchStatus === "deleted") return;
+  const like = likeOf(row);
+  let batchStatus = row.batchStatus;
+  let newVotes = row.newVotes;
+  if (row.sources.length === 0) batchStatus = "deleted";
+  else {
+    const base = baselineOf(row);
+    if (base) {
+      const changed = diffIdea(like, base).length > 0;
+      batchStatus = changed ? "updated" : row.origin === "jira" ? "unchanged" : "new";
+      newVotes = Math.max(0, evidenceOf(like, row.origin) - evidenceOf(base, row.origin));
+    }
+  }
+  if (batchStatus === row.batchStatus && newVotes === row.newVotes) return;
+  await db.idea.update({
+    where: { id: row.id },
+    data: {
+      batchStatus,
+      newVotes,
+      ...(batchStatus === "updated" && row.batchStatus === "unchanged" ? { decision: "pending" } : {}),
+    },
+  });
+}
+
+/** Replace an idea's sources with the given keys (tickets by externalId). */
+async function writeSources(workspaceId: string, ideaId: string, zen: string[], jira: string[]): Promise<void> {
+  const ticketRows = await db.zendeskTicketRaw.findMany({
+    where: { workspaceId, externalId: { in: zen } },
+    select: { id: true },
+  });
+  await db.ideaSource.deleteMany({ where: { ideaId } });
+  await db.ideaSource.createMany({
+    data: [
+      ...ticketRows.map((t) => ({ ideaId, kind: "zendesk", ticketId: t.id })),
+      ...jira.map((key) => ({ ideaId, kind: "jira", jiraKey: key })),
+    ],
+  });
+}
 
 /**
  * Narration of what an import did to an idea, one line per kind of change:
@@ -251,7 +345,11 @@ function toClientIdea(row: IdeaRow, jiraCustomers: JiraCustomerMap = NO_JIRA_CUS
       ticketRows.some((t) => t.affectsAllCustomers) || undefined,
     dismissedCustomers: dismissed,
     batch: row.batchStatus as Idea["batch"],
-    batchChanges: (row.batchChanges as string[]) ?? [],
+    changes: (() => {
+      const base = baselineOf(row);
+      return base ? diffIdea(likeOf(row), base) : [];
+    })(),
+    changesBase: row.origin === "jira" ? "jira" : "import",
     decision: row.decision as Idea["decision"],
     sourcesChanged: row.sourcesChanged || undefined,
     origin: row.origin as Idea["origin"],
@@ -979,8 +1077,10 @@ async function runImport(
                   existingVotes: cur.existingVotes + cur.newVotes,
                   newVotes: 0,
                   batchStatus: "unchanged",
-                  // Last import's narration is stale once the batch rolls over.
+                  // Last import's narration and baseline are stale once the
+                  // batch rolls over — Jira's state is the new baseline.
                   batchChanges: [] as unknown as Prisma.InputJsonValue,
+                  batchBaseline: Prisma.JsonNull,
                 }
               : {}),
           },
@@ -1155,6 +1255,7 @@ async function runImport(
           await db.idea.update({
             where: { id: target.id },
             data: {
+              ...(await baselinePatch(target.id, { force: !createdThisBatch.has(target.id) })),
               newVotes: { increment: 1 },
               // An idea born in THIS import that absorbs another ticket is
               // still New — Updated is for ideas that pre-date the import.
@@ -1242,10 +1343,12 @@ async function runImport(
         });
         if (!idea) continue;
         if (idea.sources.some((src) => src.kind === "zendesk" && src.ticketId === ticket.id)) continue;
+        const citedBaseline = await baselinePatch(idea.id);
         await db.ideaSource.create({ data: { ideaId: idea.id, kind: "zendesk", ticketId: ticket.id } });
         await db.idea.update({
           where: { id: idea.id },
           data: {
+            ...citedBaseline,
             batchStatus: "updated",
             decision: idea.decision === "injected" ? "pending" : idea.decision,
             newVotes: idea.newVotes + 1,
@@ -1321,7 +1424,24 @@ export type IdeasMutation =
   | { type: "createIdeaFromTicket"; ticketKey: string }
   | { type: "approveCustomer"; ideaId: string; name: string }
   | { type: "dismissCustomer"; ideaId: string; name: string }
-  | { type: "undismissCustomer"; ideaId: string; name: string };
+  | { type: "undismissCustomer"; ideaId: string; name: string }
+  /** A PM writes an idea from scratch (origin "manual"); sources optional. */
+  | {
+      type: "createIdea";
+      title: string;
+      details: string;
+      manual: number | null;
+      products: string[];
+      platforms: string[];
+      addedCustomers: string[];
+      zen: string[];
+    }
+  /** Move one source from the idea holding it to another idea, in one step. */
+  | { type: "moveSource"; kind: "zen" | "jira"; key: string; toIdeaId: string }
+  /** Undo one line of the "what changed" section (lib/ideas/changes.ts ids). */
+  | { type: "undoChange"; ideaId: string; changeId: string }
+  /** Restore the idea's baseline entirely. */
+  | { type: "undoAllChanges"; ideaId: string };
 
 /**
  * Suggested metadata still awaiting the PM's call on this idea. Today that is
@@ -1458,9 +1578,11 @@ export async function mutateIdeas(
         const products = clean(mutation.products);
         const platforms = clean(mutation.platforms);
         const addedCustomers = clean(mutation.addedCustomers);
+        const editBaseline = await baselinePatch(idea.id);
         await db.idea.update({
           where: { id: idea.id },
           data: {
+            ...editBaseline,
             title: mutation.title,
             details: mutation.details,
             manualScore: mutation.manual,
@@ -1531,6 +1653,8 @@ export async function mutateIdeas(
             },
           },
         ]);
+        // An edited Unchanged idea has something to sync now (and to review).
+        await settleIdea(idea.id);
       }
       break;
     }
@@ -1587,6 +1711,9 @@ export async function mutateIdeas(
         include: IDEA_INCLUDE,
       });
       if (!idea) break;
+      const reassignBaseline = await baselinePatch(idea.id);
+      if (reassignBaseline.batchBaseline)
+        await db.idea.update({ where: { id: idea.id }, data: reassignBaseline });
       const ticketRows = await db.zendeskTicketRaw.findMany({
         where: { workspaceId, externalId: { in: mutation.zen } },
         select: { id: true },
@@ -1661,27 +1788,8 @@ export async function mutateIdeas(
       ]);
 
       // Manual reassignment moves ideas between states (PRD): no sources →
-      // Deleted; a Jira idea with ticket evidence → Updated (back to
-      // Unchanged when evidence is removed); a batch-created idea stays New.
-      const all = await db.idea.findMany({
-        where: { workspaceId },
-        include: { sources: true },
-      });
-      for (const i of all) {
-        const zenCount = i.sources.filter((s) => s.kind === "zendesk").length;
-        const total = i.sources.length;
-        let next: string;
-        if (total === 0) next = "deleted";
-        else if (i.origin === "jira")
-          next = zenCount > 0 ? "updated" : "unchanged";
-        else next = "new";
-        if (next !== i.batchStatus) {
-          await db.idea.update({
-            where: { id: i.id },
-            data: { batchStatus: next },
-          });
-        }
-      }
+      // Deleted; otherwise the live diff decides (Updated / Unchanged / New).
+      await settleIdea(idea.id);
       break;
     }
     // A suggested customer (extracted from ticket text, not yet in the
@@ -1748,9 +1856,11 @@ export async function mutateIdeas(
       const rewrite = await rewriteIdeaFromSources(workspaceId, members);
       if (!rewrite) throw new Error("PMOS AI returned no text for this idea — nothing changed");
       const lines = rewrite.productLines.filter(Boolean);
+      const rewriteBaseline = await baselinePatch(idea.id);
       await db.idea.update({
         where: { id: idea.id },
         data: {
+          ...rewriteBaseline,
           title: rewrite.productTitle || idea.title,
           details: rewrite.productSummary || idea.details,
           ...(lines.length > 0 ? { products: lines as Prisma.InputJsonValue } : {}),
@@ -1763,6 +1873,7 @@ export async function mutateIdeas(
       await logEvents(workspaceId, [
         { ideaId: idea.id, action: "rewrite", payload: { sources: members.map((x) => x.key) } },
       ]);
+      await settleIdea(idea.id);
       notice = "Rewritten from the current sources";
       break;
     }
@@ -1846,6 +1957,130 @@ export async function mutateIdeas(
         { ideaId: created.id, action: "create_from_ticket", payload: { ticket: ticket.externalId } },
       ]);
       notice = `New idea created from ticket ${ticket.externalId}`;
+      break;
+    }
+    case "createIdea": {
+      const clean = (v: string[]) => distinct(v.map((x) => x.trim()).filter(Boolean));
+      const title = mutation.title.trim();
+      if (!title) throw new Error("A title is required");
+      const products = clean(mutation.products);
+      const zen = clean(mutation.zen);
+      const ticketRows = zen.length
+        ? await db.zendeskTicketRaw.findMany({
+            where: { workspaceId, externalId: { in: zen } },
+            select: { id: true },
+          })
+        : [];
+      const created = await db.idea.create({
+        data: {
+          workspaceId,
+          title,
+          details: mutation.details,
+          manualScore: mutation.manual,
+          products: (products.length > 0 ? products : ["Other"]) as Prisma.InputJsonValue,
+          platforms: clean(mutation.platforms) as Prisma.InputJsonValue,
+          addedCustomers: clean(mutation.addedCustomers) as Prisma.InputJsonValue,
+          batchStatus: "new",
+          decision: "pending",
+          origin: "manual",
+          newVotes: ticketRows.length,
+          batchChanges: ["Written by a PM"] as unknown as Prisma.InputJsonValue,
+          sources: { create: ticketRows.map((t) => ({ kind: "zendesk", ticketId: t.id })) },
+        },
+      });
+      await logEvents(workspaceId, [{ ideaId: created.id, action: "create", payload: { title, zen } }]);
+      notice = `Idea created${ticketRows.length ? ` with ${ticketRows.length} source${ticketRows.length === 1 ? "" : "s"}` : ""}`;
+      break;
+    }
+    case "moveSource": {
+      const to = await db.idea.findFirst({
+        where: { id: mutation.toIdeaId, workspaceId, batchStatus: { not: "deleted" } },
+        include: IDEA_INCLUDE,
+      });
+      if (!to) throw new Error("Target idea not found");
+      const sourceWhere =
+        mutation.kind === "zen"
+          ? { kind: "zendesk", ticket: { externalId: mutation.key } }
+          : { kind: "jira", jiraKey: mutation.key };
+      const from = await db.idea.findFirst({
+        where: { workspaceId, batchStatus: { not: "deleted" }, sources: { some: sourceWhere } },
+        include: IDEA_INCLUDE,
+      });
+      if (!from) throw new Error("That source backs no idea");
+      if (from.id === to.id) break;
+      const fromLike = likeOf(from);
+      const toLike = likeOf(to);
+      const without = (l: string[]) => l.filter((k) => k !== mutation.key);
+      const withKey = (l: string[]) => (l.includes(mutation.key) ? l : [...l, mutation.key]);
+      const fromNext =
+        mutation.kind === "zen"
+          ? { zen: without(fromLike.zen), jira: fromLike.jira }
+          : { zen: fromLike.zen, jira: without(fromLike.jira) };
+      const toNext =
+        mutation.kind === "zen"
+          ? { zen: withKey(toLike.zen), jira: toLike.jira }
+          : { zen: toLike.zen, jira: withKey(toLike.jira) };
+      for (const [row, next] of [
+        [from, fromNext],
+        [to, toNext],
+      ] as const) {
+        const patch = await baselinePatch(row.id);
+        await writeSources(workspaceId, row.id, next.zen, next.jira);
+        // The text was written from the old set: approval waits for a
+        // rewrite or an explicit keep, on both sides of the move.
+        await db.idea.update({ where: { id: row.id }, data: { ...patch, sourcesChanged: true } });
+        await settleIdea(row.id);
+      }
+      await logEvents(workspaceId, [
+        { ideaId: from.id, action: "move_source_out", payload: { kind: mutation.kind, key: mutation.key, to: to.id } },
+        { ideaId: to.id, action: "move_source_in", payload: { kind: mutation.kind, key: mutation.key, from: from.id } },
+      ]);
+      notice = `${mutation.kind === "zen" ? "Ticket" : "Issue"} ${mutation.key} moved to “${to.title}”`;
+      break;
+    }
+    case "undoChange":
+    case "undoAllChanges": {
+      const idea = await db.idea.findFirst({
+        where: { id: mutation.ideaId, workspaceId },
+        include: IDEA_INCLUDE,
+      });
+      if (!idea) break;
+      const base = baselineOf(idea);
+      if (!base) throw new Error("Nothing to undo on this idea");
+      const now = likeOf(idea);
+      const next =
+        mutation.type === "undoAllChanges" ? undoAll(base) : undoOne(now, base, mutation.changeId);
+      const sourcesMoved =
+        next.zen.join("|") !== now.zen.join("|") || next.jira.join("|") !== now.jira.join("|");
+      if (sourcesMoved) await writeSources(workspaceId, idea.id, next.zen, next.jira);
+      await db.idea.update({
+        where: { id: idea.id },
+        data: {
+          title: next.title,
+          details: next.details,
+          manualScore: next.manual,
+          products: next.products as Prisma.InputJsonValue,
+          platforms: next.platforms as Prisma.InputJsonValue,
+          addedCustomers: next.addedCustomers as Prisma.InputJsonValue,
+          // Undo-all restores text and sources together — they agree again.
+          // A single source undo leaves text written from another set.
+          sourcesChanged:
+            mutation.type === "undoAllChanges" ? false : sourcesMoved ? true : idea.sourcesChanged,
+        },
+      });
+      await logEvents(workspaceId, [
+        {
+          ideaId: idea.id,
+          action: mutation.type === "undoAllChanges" ? "undo_all" : "undo_change",
+          payload: {
+            changeId: mutation.type === "undoChange" ? mutation.changeId : "*",
+            before: now,
+            after: next,
+          },
+        },
+      ]);
+      await settleIdea(idea.id);
+      notice = mutation.type === "undoAllChanges" ? "All changes undone" : "Change undone";
       break;
     }
     case "keepText": {

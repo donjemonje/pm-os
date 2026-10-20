@@ -1,3 +1,4 @@
+import type { IdeaChange } from "./changes";
 export type IdeaBatchStatus = "new" | "updated" | "unchanged" | "archive" | "deleted";
 export type IdeaDecision = "pending" | "reviewed" | "injected";
 
@@ -104,16 +105,20 @@ export interface Idea {
   /** Customers a PM added by hand (subset of `customers`); removing one deletes it, not a dismissal. */
   addedCustomers?: string[];
   batch: IdeaBatchStatus;
-  /** For Updated ideas: what this import did (votes, enrichment, added metadata). */
-  batchChanges?: string[];
+  /** Live diff against the idea's baseline (lib/ideas/changes.ts) — every
+   *  line undoable. Empty for New ideas and untouched Unchanged ones. */
+  changes?: IdeaChange[];
+  /** What the baseline is: Jira's state (Jira-origin idea) or the idea as it
+   *  was before this import. */
+  changesBase?: "jira" | "import";
   decision: IdeaDecision;
   /** Set while this idea's write from the LAST merge is still undoable. */
   undoable?: { action: "create" | "update"; jiraKey: string };
   /** A PM changed the sources after PMOS AI wrote the text: approval waits
    *  for a rewrite or an explicit "keep the text". */
   sourcesChanged?: boolean;
-  /** Where this idea came from this batch. */
-  origin: "zendesk" | "jira";
+  /** Where this idea came from: a Zendesk import, Jira, or a PM who wrote it from scratch. */
+  origin: "zendesk" | "jira" | "manual";
   /** Computed score — null until the scoring pipeline exists. */
   pmScore: number | null;
   /** PM-entered override; when set it IS the displayed score. */
