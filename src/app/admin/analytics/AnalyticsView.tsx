@@ -119,29 +119,76 @@ function describe(action: string, payload: unknown): string {
 }
 
 function csvOf(rows: Data["decisions"]["latest"]): string {
+  // Everything the ledger holds, flattened, plus the raw payload — this file
+  // is handed to Claude to learn from (Daniel, 2026-10-20), so nothing is
+  // summarized away.
   const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const text = (p: unknown, side: "before" | "after") => {
-    const o = (p ?? {}) as Record<string, { details?: unknown }>;
-    const v = o[side]?.details;
-    return typeof v === "string" ? v : "";
-  };
-  return [
-    ["at", "user", "action", "idea", "change", "text_before", "text_after", "ideaId"].join(","),
-    ...rows.map((r) =>
-      [
-        r.at,
-        r.user,
-        r.action,
-        r.idea,
-        describe(r.action, r.payload),
-        r.action === "edit" && text(r.payload, "before") !== text(r.payload, "after") ? text(r.payload, "before") : "",
-        r.action === "edit" && text(r.payload, "before") !== text(r.payload, "after") ? text(r.payload, "after") : "",
-        r.ideaId,
-      ]
-        .map(esc)
-        .join(","),
-    ),
-  ].join("\n");
+  const list = (v: unknown) => (Array.isArray(v) ? (v as unknown[]).map(String).join(" | ") : "");
+  const side = (p: unknown, which: "before" | "after") =>
+    ((p ?? {}) as Record<string, Record<string, unknown> | undefined>)[which] ?? {};
+  const header = [
+    "at",
+    "user",
+    "action",
+    "idea",
+    "ideaId",
+    "change_summary",
+    "title_before",
+    "title_after",
+    "text_before",
+    "text_after",
+    "products_before",
+    "products_after",
+    "customers_added",
+    "customers_removed",
+    "sources_before",
+    "sources_after",
+    "payload_json",
+  ];
+  const lines = rows.map((r) => {
+    const p = (r.payload ?? {}) as Record<string, unknown>;
+    const b = side(r.payload, "before"), a = side(r.payload, "after");
+    const isEdit = r.action === "edit";
+    const isReassign = r.action === "reassign";
+    const name = typeof p.name === "string" ? p.name : "";
+    const customersAdded = isEdit
+      ? list(((a.addedCustomers as string[]) ?? []).filter((c) => !((b.addedCustomers as string[]) ?? []).includes(c)))
+      : r.action === "approve_customer" || r.action === "undismiss_customer"
+        ? name
+        : "";
+    const customersRemoved = isEdit
+      ? list([
+          ...((b.addedCustomers as string[]) ?? []).filter((c) => !((a.addedCustomers as string[]) ?? []).includes(c)),
+          ...((a.removedCustomers as string[]) ?? []),
+        ])
+      : r.action === "dismiss_customer"
+        ? name
+        : "";
+    const src = (o: Record<string, unknown>) =>
+      list([...(((o.zen as string[]) ?? []).map((k) => `ZEN-${k}`)), ...((o.jira as string[]) ?? [])]);
+    return [
+      r.at,
+      r.user,
+      r.action,
+      r.idea,
+      r.ideaId,
+      describe(r.action, r.payload),
+      isEdit ? String(b.title ?? "") : "",
+      isEdit ? String(a.title ?? "") : "",
+      isEdit && b.details !== a.details ? String(b.details ?? "") : "",
+      isEdit && b.details !== a.details ? String(a.details ?? "") : "",
+      isEdit ? list(b.products) : "",
+      isEdit ? list(a.products) : "",
+      customersAdded,
+      customersRemoved,
+      isReassign ? src(b) : "",
+      isReassign ? src(a) : "",
+      JSON.stringify(r.payload ?? {}),
+    ]
+      .map(esc)
+      .join(",");
+  });
+  return [header.join(","), ...lines].join("\n");
 }
 
 export function AnalyticsView({ organizations }: { organizations: { id: string; name: string; slug: string }[] }) {
