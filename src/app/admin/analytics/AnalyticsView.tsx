@@ -118,78 +118,6 @@ function describe(action: string, payload: unknown): string {
   }
 }
 
-function csvOf(rows: Data["decisions"]["latest"]): string {
-  // Everything the ledger holds, flattened, plus the raw payload — this file
-  // is handed to Claude to learn from (Daniel, 2026-10-20), so nothing is
-  // summarized away.
-  const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const list = (v: unknown) => (Array.isArray(v) ? (v as unknown[]).map(String).join(" | ") : "");
-  const side = (p: unknown, which: "before" | "after") =>
-    ((p ?? {}) as Record<string, Record<string, unknown> | undefined>)[which] ?? {};
-  const header = [
-    "at",
-    "user",
-    "action",
-    "idea",
-    "ideaId",
-    "change_summary",
-    "title_before",
-    "title_after",
-    "text_before",
-    "text_after",
-    "products_before",
-    "products_after",
-    "customers_added",
-    "customers_removed",
-    "sources_before",
-    "sources_after",
-    "payload_json",
-  ];
-  const lines = rows.map((r) => {
-    const p = (r.payload ?? {}) as Record<string, unknown>;
-    const b = side(r.payload, "before"), a = side(r.payload, "after");
-    const isEdit = r.action === "edit";
-    const isReassign = r.action === "reassign";
-    const name = typeof p.name === "string" ? p.name : "";
-    const customersAdded = isEdit
-      ? list(((a.addedCustomers as string[]) ?? []).filter((c) => !((b.addedCustomers as string[]) ?? []).includes(c)))
-      : r.action === "approve_customer" || r.action === "undismiss_customer"
-        ? name
-        : "";
-    const customersRemoved = isEdit
-      ? list([
-          ...((b.addedCustomers as string[]) ?? []).filter((c) => !((a.addedCustomers as string[]) ?? []).includes(c)),
-          ...((a.removedCustomers as string[]) ?? []),
-        ])
-      : r.action === "dismiss_customer"
-        ? name
-        : "";
-    const src = (o: Record<string, unknown>) =>
-      list([...(((o.zen as string[]) ?? []).map((k) => `ZEN-${k}`)), ...((o.jira as string[]) ?? [])]);
-    return [
-      r.at,
-      r.user,
-      r.action,
-      r.idea,
-      r.ideaId,
-      describe(r.action, r.payload),
-      isEdit ? String(b.title ?? "") : "",
-      isEdit ? String(a.title ?? "") : "",
-      isEdit && b.details !== a.details ? String(b.details ?? "") : "",
-      isEdit && b.details !== a.details ? String(a.details ?? "") : "",
-      isEdit ? list(b.products) : "",
-      isEdit ? list(a.products) : "",
-      customersAdded,
-      customersRemoved,
-      isReassign ? src(b) : "",
-      isReassign ? src(a) : "",
-      JSON.stringify(r.payload ?? {}),
-    ]
-      .map(esc)
-      .join(",");
-  });
-  return [header.join(","), ...lines].join("\n");
-}
 
 export function AnalyticsView({ organizations }: { organizations: { id: string; name: string; slug: string }[] }) {
   const [orgId, setOrgId] = useState(organizations[0]?.id ?? "");
@@ -349,20 +277,13 @@ export function AnalyticsView({ organizations }: { organizations: { id: string; 
                   </option>
                 ))}
               </select>
-              <button
-                type="button"
-                onClick={() => {
-                  const blob = new Blob([csvOf(latest)], { type: "text/csv" });
-                  const a = document.createElement("a");
-                  a.href = URL.createObjectURL(blob);
-                  a.download = `pmos-analytics-${orgId}-${days}d.csv`;
-                  a.click();
-                  URL.revokeObjectURL(a.href);
-                }}
+              <a
+                href={`/api/admin/analytics/export?org=${encodeURIComponent(orgId)}&days=${days}`}
+                title="Every decision and edit in this window (no cap, no action filter), with the full before/after and the raw payload"
                 className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-medium hover:border-slate-500"
               >
-                <Download size={13} /> CSV
-              </button>
+                <Download size={13} /> CSV — full ledger
+              </a>
             </div>
             {latest.length === 0 ? (
               <div className="text-xs text-slate-500">No decisions or edits in this window.</div>
