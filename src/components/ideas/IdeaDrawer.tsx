@@ -16,6 +16,7 @@ import {
   Share2,
   Loader2,
   Sparkles,
+  Undo2,
 } from "lucide-react";
 import {
   badgeOf,
@@ -1012,7 +1013,7 @@ export function IdeaDrawer({
                         title="Put everything back the way it was — the idea leaves review as Unchanged"
                         className="ml-auto inline-flex h-6 items-center gap-1 rounded-[7px] px-1.5 font-mono text-[10px] font-semibold text-[#2a5fd0] hover:bg-white"
                       >
-                        <RotateCcw size={11} strokeWidth={2.5} />
+                        <Undo2 size={11} strokeWidth={2.5} />
                         Undo all
                       </button>
                     )}
@@ -1034,7 +1035,7 @@ export function IdeaDrawer({
                             aria-label={`Undo: ${c.label}`}
                             className="flex shrink-0 rounded p-0.5 text-[#7a8aa3] opacity-60 hover:bg-white hover:text-[#2a5fd0] group-hover:opacity-100"
                           >
-                            <RotateCcw size={11} strokeWidth={2.5} />
+                            <Undo2 size={11} strokeWidth={2.5} />
                           </button>
                         )}
                       </li>
