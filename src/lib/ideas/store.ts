@@ -1644,6 +1644,25 @@ export async function mutateIdeas(
               },
             });
           }
+          // A name read from a Jira issue's text (or its customer labels)
+          // lives on the issue snapshot — dismiss it there too, or it is
+          // back the moment the drawer re-reads the idea (seen 2026-10-20).
+          for (const s of idea.sources) {
+            if (s.kind !== "jira" || !s.jiraKey) continue;
+            const snap = await db.jiraIdeaSnapshot.findUnique({
+              where: { workspaceId_key: { workspaceId, key: s.jiraKey } },
+              select: { id: true, affectedCustomers: true, dismissedCustomers: true },
+            });
+            if (!snap) continue;
+            const affected = (snap.affectedCustomers as string[]) ?? [];
+            const dismissed = (snap.dismissedCustomers as string[]) ?? [];
+            if (!affected.some((c) => c.toLowerCase() === wanted)) continue;
+            if (dismissed.some((c) => c.toLowerCase() === wanted)) continue;
+            await db.jiraIdeaSnapshot.update({
+              where: { id: snap.id },
+              data: { dismissedCustomers: [...dismissed, name.trim()] as Prisma.InputJsonValue },
+            });
+          }
         }
         await logEvents(workspaceId, [
           {
