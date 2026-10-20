@@ -656,9 +656,9 @@ async function derivePlan(
             }
           : {
               field: "tickets",
-              label: "Supported tickets",
+              label: "Ticket links",
               from: "",
-              to: `${tickets.length} ticket${tickets.length === 1 ? "" : "s"} listed`,
+              to: `${tickets.length} ticket${tickets.length === 1 ? "" : "s"} listed in the description`,
             },
       );
       write.descriptionAdf = desc.adf;
@@ -772,6 +772,15 @@ async function derivePlan(
     for (const [attr, fieldId] of fieldIdByAttr) {
       const change = attrValue(attr, fieldId);
       if (change) changes.push(change);
+    }
+    // Votes and the tickets block are one fact (the evidence) written in two
+    // places; show one line when both move, the tickets line alone only when
+    // the list changed without the count (a reassign that swapped tickets).
+    const ticketsIdx = changes.findIndex((c) => c.field === "tickets");
+    const votesIdx = changes.findIndex((c) => c.field === "votes");
+    if (ticketsIdx >= 0 && votesIdx >= 0) {
+      changes[votesIdx] = { ...changes[votesIdx], to: `${changes[votesIdx].to} · ${changes[ticketsIdx].to} in the description` };
+      changes.splice(ticketsIdx, 1);
     }
 
     if (Object.keys(extraFields).length > 0) write.extraFields = extraFields;
