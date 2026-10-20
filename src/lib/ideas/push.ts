@@ -631,14 +631,36 @@ async function derivePlan(
     // The idea text is the description — whatever Jira holds is replaced
     // when the rendered text differs (the idea is where Jira's original text
     // and the ticket evidence were merged, at match time).
-    const desc = buildDescription(config, row.details, ideaTickets(row));
+    const tickets = ideaTickets(row);
+    const desc = buildDescription(config, row.details, tickets);
     if (normText(desc.text) !== normText(live.descriptionText)) {
-      changes.push({
-        field: "description",
-        label: ATTRIBUTE_LABELS.description,
-        from: "(replaced)",
-        to: desc.text,
-      });
+      // The description is the idea TEXT plus the supported-tickets block.
+      // Say which one differs: a PM who reverted the text must not keep
+      // seeing "Description updated" just because the tickets list grew
+      // (Daniel, 2026-10-20). Jira's text is compared with its own tickets
+      // block cut off.
+      const heading = config.supportedTicketsHeading.trim();
+      const jiraText = (() => {
+        const t = live.descriptionText;
+        const at = heading ? t.indexOf(heading) : -1;
+        return at >= 0 ? t.slice(0, at) : t;
+      })();
+      const textChanged = normText(row.details) !== normText(jiraText);
+      changes.push(
+        textChanged
+          ? {
+              field: "description",
+              label: ATTRIBUTE_LABELS.description,
+              from: "(replaced)",
+              to: desc.text,
+            }
+          : {
+              field: "tickets",
+              label: "Supported tickets",
+              from: "",
+              to: `${tickets.length} ticket${tickets.length === 1 ? "" : "s"} listed`,
+            },
+      );
       write.descriptionAdf = desc.adf;
       write.undo.description = { beforeAdf: live.descriptionAdf, afterTextNorm: normText(desc.text) };
     }
