@@ -53,6 +53,7 @@ const TYPE_LABELS: Record<string, string> = {
   single_select: "Single select",
   number: "Number",
   multi_select: "Multi select",
+  labels: "Labels (prefixed)",
 };
 
 export function IdeasOutputConfig({
@@ -560,9 +561,40 @@ export function IdeasOutputConfig({
                     className={`${inputCls} w-44 disabled:opacity-50`}
                   />
                 </label>
-                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                  {TYPE_LABELS[f.type]}
-                </span>
+                {attr === "customers" ? (
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                    <select
+                      value={f.type === "labels" ? "labels" : "multi_select"}
+                      onChange={(e) =>
+                        patchField(attr, {
+                          type: e.target.value as "labels" | "multi_select",
+                          jiraField: e.target.value === "labels" ? "Labels" : f.jiraField === "Labels" ? "Customers" : f.jiraField,
+                          ...(e.target.value === "labels" ? { labelPrefix: f.labelPrefix ?? "cs_" } : {}),
+                        })
+                      }
+                      disabled={!f.enabled}
+                      className={`${inputCls} w-40 disabled:opacity-50`}
+                      title="Labels: any user who can edit the issue may add one (no admin right). Multi select: options must exist or be created, which needs Administer Jira."
+                    >
+                      <option value="labels">Labels (prefixed)</option>
+                      <option value="multi_select">Multi select field</option>
+                    </select>
+                    {f.type === "labels" && (
+                      <input
+                        type="text"
+                        value={f.labelPrefix ?? "cs_"}
+                        onChange={(e) => patchField(attr, { labelPrefix: e.target.value.replace(/\s+/g, "") })}
+                        disabled={!f.enabled}
+                        title="Prefix on every customer label, e.g. cs_kensington-securities"
+                        className={`${inputCls} w-20 disabled:opacity-50`}
+                      />
+                    )}
+                  </label>
+                ) : (
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+                    {TYPE_LABELS[f.type]}
+                  </span>
+                )}
                 <span className="text-xs text-slate-500">
                   {POLICY_LABELS[f.policy]}
                 </span>

@@ -22,6 +22,7 @@ import {
   type MappedAttribute,
 } from "./jira-mapping";
 import { primaryJiraKey } from "./jira-keys";
+import { DEFAULT_CUSTOMER_LABEL_PREFIX, customerLabel } from "./customer-labels";
 import { buildProductLineResolver } from "./product-line-key";
 import { getIdeasState, type IdeasState } from "./store";
 
@@ -264,6 +265,8 @@ export interface UndoFieldSnap {
 /** Everything a per-idea undo of the last merge needs; stored in IdeasPushUndo.payload. */
 export interface PushUndoPayload {
   summary?: { before: string; after: string };
+  /** Customer labels written (full label set before/after). */
+  labels?: { before: string[]; after: string[] };
   description?: { beforeAdf: unknown; afterTextNorm: string };
   /** Keyed by Jira field id. */
   fields: Record<string, UndoFieldSnap>;
@@ -275,6 +278,8 @@ interface UpdateWrite {
   jiraKey: string;
   summary?: string;
   descriptionAdf?: unknown;
+  /** Full label set (customers as labels, the team's own labels kept). */
+  labels?: string[];
   extraFields?: Record<string, unknown>;
   commentLabels: string[];
   undo: PushUndoPayload;
@@ -282,6 +287,7 @@ interface UpdateWrite {
 interface CreateWrite {
   summary: string;
   descriptionAdf: unknown;
+  labels?: string[];
   extraFields: Record<string, unknown>;
   /** Idea.origin before markInjected flips it — restored on undo. */
   beforeOrigin: string;
@@ -305,9 +311,11 @@ function ideaCustomers(row: PushIdeaRow): string[] {
   const dismissed = new Set(
     tickets.flatMap((t) => ((t.dismissedCustomers as string[]) ?? []).map((c) => c.toLowerCase()))
   );
-  return distinct(tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? [])).filter(
-    (c) => !dismissed.has(c.toLowerCase())
-  );
+  // Ticket-derived names plus the ones a PM added by hand on the idea.
+  return distinct([
+    ...tickets.flatMap((t) => (t.affectedCustomers as string[]) ?? []),
+    ...(((row as { addedCustomers?: unknown }).addedCustomers as string[]) ?? []),
+  ]).filter((c) => !dismissed.has(c.toLowerCase()));
 }
 
 function ideaTickets(row: PushIdeaRow): TicketRef[] {
@@ -557,6 +565,24 @@ async function derivePlan(
 
     const attrValue = (attr: MappedAttribute, fieldId: string): PushFieldChange | null => {
       const mapping = config.fields[attr];
+      if (mapping.type === "labels") {
+        // Customers as labels: union with whatever labels the issue has; the
+        // team's own labels are never touched. No option list, no admin right.
+        const prefix = mapping.labelPrefix ?? DEFAULT_CUSTOMER_LABEL_PREFIX;
+        const cur = live.labels;
+        const wanted = ideaCustomers(row).map((c) => customerLabel(c, prefix));
+        const missing = wanted.filter((w) => !cur.includes(w));
+        if (missing.length === 0) return null;
+        const next = distinct([...cur, ...missing]);
+        write.labels = next;
+        write.undo.labels = { before: cur, after: next };
+        return {
+          field: attr,
+          label: ATTRIBUTE_LABELS[attr],
+          from: cur.filter((l) => l.startsWith(prefix)).join(", ") || "(none)",
+          to: next.filter((l) => l.startsWith(prefix)).join(", "),
+        };
+      }
       const meta = editMeta.get(fieldId);
       if (editMeta.size > 0 && !meta) {
         warnings.push(
@@ -675,6 +701,7 @@ async function derivePlan(
       { field: "description", label: ATTRIBUTE_LABELS.description, from: "", to: desc.text },
     ];
     const extraFields: Record<string, unknown> = {};
+    let createLabels: string[] | undefined;
 
     for (const [attr, fieldId] of fieldIdByAttr) {
       const mapping = config.fields[attr];
@@ -689,6 +716,15 @@ async function derivePlan(
         if (votes > 0) {
           extraFields[fieldId] = votes;
           changes.push({ field: attr, label: ATTRIBUTE_LABELS[attr], from: "", to: String(votes) });
+        }
+        continue;
+      }
+      if (mapping.type === "labels") {
+        const prefix = mapping.labelPrefix ?? DEFAULT_CUSTOMER_LABEL_PREFIX;
+        const labels = ideaCustomers(row).map((c) => customerLabel(c, prefix));
+        if (labels.length > 0) {
+          createLabels = labels;
+          changes.push({ field: attr, label: ATTRIBUTE_LABELS[attr], from: "", to: labels.join(", ") });
         }
         continue;
       }
@@ -728,6 +764,7 @@ async function derivePlan(
     writes.creates.set(row.id, {
       summary: row.title,
       descriptionAdf: desc.adf,
+      labels: createLabels,
       extraFields,
       beforeOrigin: row.origin,
     });
@@ -918,6 +955,7 @@ export async function executePush(
           issueTypeName: plan.target.issueType,
           summary: write.summary,
           descriptionAdf: write.descriptionAdf,
+          labels: write.labels,
           extraFields: write.extraFields,
         });
         await recordUndo(

@@ -73,8 +73,15 @@ export async function undoIdeaPush(
     const write: {
       summary?: string;
       descriptionAdf?: unknown;
+      labels?: string[];
       extraFields?: Record<string, unknown>;
     } = {};
+    if (payload.labels) {
+      const now = [...live.labels].sort().join("\n");
+      const wrote = [...payload.labels.after].sort().join("\n");
+      if (now === wrote) write.labels = payload.labels.before;
+      else warnings.push(`Labels changed in Jira after the merge — left as is.`);
+    }
     const extraFields: Record<string, unknown> = {};
 
     if (payload.summary) {
@@ -117,7 +124,7 @@ export async function undoIdeaPush(
     }
     if (Object.keys(extraFields).length > 0) write.extraFields = extraFields;
 
-    if (write.summary !== undefined || write.descriptionAdf !== undefined || write.extraFields) {
+    if (write.summary !== undefined || write.descriptionAdf !== undefined || write.labels !== undefined || write.extraFields) {
       await updateJiraIssue(workspaceId, record.jiraKey, write);
     }
     if (record.commentId) {

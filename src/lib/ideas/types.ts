@@ -79,6 +79,8 @@ export interface JiraSource {
   products: string[];
   /** Customers read from the issue text (customer-mentions.ts); catalog names + as-written suggestions. */
   customers?: string[];
+  /** Jira labels (customer labels among them when the org maps customers to labels). */
+  labels?: string[];
 }
 
 export interface Idea {

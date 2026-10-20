@@ -694,7 +694,8 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
 
     // Field mapping, Kela's config: Product Line → Module (single select)
     // with the Create missing options toggle; Votes (number) without it;
-    // Customers (multi select) with it ON by default.
+    // Customers as prefixed Labels by default (2026-10-20: no admin right
+    // needed) — a type switch, a prefix, no Create missing options.
     const productLine = fieldRow(page, "Product Line");
     await expect(productLine.locator('input[type="text"]')).toHaveValue("Module");
     await expect(productLine.getByText("Single select")).toBeVisible();
@@ -703,8 +704,9 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     await expect(productLine.getByRole("checkbox").nth(1)).not.toBeChecked();
     await expect(fieldRow(page, "Votes").getByText("Create missing options")).toHaveCount(0);
     const customers = fieldRow(page, "Customers");
-    await expect(customers.getByText("Create missing options")).toBeVisible();
-    await expect(customers.getByRole("checkbox").nth(1)).toBeChecked();
+    await expect(customers.locator("select")).toHaveValue("labels");
+    await expect(customers.locator('input[type="text"]').nth(1)).toHaveValue("cs_");
+    await expect(customers.getByText("Create missing options")).toHaveCount(0);
 
     // Read-only rows: Kela's P_Reporter / P_Assignee, text type, read policy,
     // no create-options toggle.

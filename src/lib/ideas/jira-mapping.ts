@@ -27,9 +27,11 @@ export interface FieldMapping {
    *  for Product Line also at pull time — the pull reads this field as the
    *  issue's product line, Components when it is empty). */
   jiraField: string;
-  type: "single_select" | "number" | "multi_select" | "text";
+  type: "single_select" | "number" | "multi_select" | "text" | "labels";
   policy: FieldPolicy;
   enabled: boolean;
+  /** Labels type only: prefix every customer label carries ("cs_"). */
+  labelPrefix?: string;
   /** Select fields: when a value is not yet an option of the Jira field, add
    *  the option during the sync instead of skipping the value. Customer names
    *  arrive with every import, so a static option list can't work for them
@@ -137,12 +139,15 @@ export const DEFAULT_IDEAS_JIRA_CONFIG: IdeasJiraConfig = {
       policy: "increment",
       enabled: true,
     },
+    // Customers ride on Jira's built-in Labels (prefixed slugs): adding a
+    // label needs no admin right, unlike a select field's options
+    // (Daniel, 2026-10-20). An org can still map a select field instead.
     customers: {
-      jiraField: "Customers",
-      type: "multi_select",
+      jiraField: "Labels",
+      type: "labels",
       policy: "union",
       enabled: true,
-      createOptions: true,
+      labelPrefix: "cs_",
     },
     // Jira's built-in "Components" name was taken, hence P_Components.
     // Off by default (Daniel, 2026-09-03): most Jira projects have no

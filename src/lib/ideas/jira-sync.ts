@@ -122,6 +122,7 @@ export async function fetchJiraLiveSources(workspaceId: string): Promise<JiraLiv
       createdAt: issue.created,
       url: `${status.siteUrl}/browse/${issue.key}`,
       // Mapped field first (Kela: Module); Components when it is empty.
+      labels: issue.labels,
       products: (issue.productLine ? [issue.productLine] : issue.components).map((v) => {
         const hit = resolver.resolve(v);
         if (!hit) unresolved.set(v.trim().toLowerCase(), v.trim());
