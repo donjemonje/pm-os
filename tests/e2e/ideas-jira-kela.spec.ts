@@ -410,7 +410,7 @@ test.describe("Ideas — Kela Jira support (aliases, Jira status, Sync to Jira, 
     await aliasInput.fill(
       ` ${RL_ALIAS_SEEDED} ,${RL_ALIAS_ADDED},  ${RL_ALIAS_ADDED.toLowerCase()} , ${RL_LINE}`
     );
-    await editRow.getByRole("button", { name: "Save" }).click();
+    await editRow.getByRole("button", { name: "Save", exact: true }).click();
     await expect(row.getByText(`Also called: ${RL_ALIAS_SEEDED}, ${RL_ALIAS_ADDED}`)).toBeVisible();
     await expect(panel.getByPlaceholder(aliasPlaceholder)).toHaveCount(0);
 

@@ -288,7 +288,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
     ).toBeEnabled();
     await labeledInput(page, "Prefix").fill("QA update:");
 
-    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Saved — applies to the next sync")).toBeVisible();
 
     // Persisted normalized: the stored config is always complete.
@@ -481,7 +481,7 @@ test.describe("Ideas → Jira push (config, authz, merge scope)", () => {
       has: page.getByRole("heading", { name: "My Product Lines" }),
     });
     await panel.getByRole("button", { name: LINE_A, exact: true }).click();
-    await panel.getByRole("button", { name: "Save" }).click();
+    await panel.getByRole("button", { name: "Save", exact: true }).click();
     await expect(panel.getByText("Saved", { exact: true })).toBeVisible();
     const prefs = await withDb(async (db) => {
       const user = await db.user.findUniqueOrThrow({ where: { email: QA_USER.email } });
