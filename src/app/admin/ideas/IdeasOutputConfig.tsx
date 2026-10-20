@@ -344,8 +344,9 @@ export function IdeasOutputConfig({
                   ) : (
                     " · token expiry unknown"
                   )}
-                  . Every write in Jira shows this user. Members see "Unavailable — contact support" when
-                  the token stops working, and support@pm-os.io gets one email per incident.
+                  . Every write in Jira shows this user. With Jira enabled for the organization, anything
+                  that stops it working (this token, a removed connection, no project) shows members
+                  "contact support" and emails support@pm-os.io once per incident.
                 </>
               ) : (
                 <>

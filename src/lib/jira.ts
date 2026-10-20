@@ -63,8 +63,10 @@ async function probeJira(connection: JiraConnectionRow): Promise<JiraHealth> {
 
 /**
  * Connection health: no row, usable (live probe passed, cached for
- * HEALTH_TTL_MS), or unavailable — the customer sees the support message
- * and PM-OS support gets the alert email (src/lib/jira-alerts.ts).
+ * HEALTH_TTL_MS), or unavailable — the customer sees the support message.
+ * Every uncached result also goes through the alerts (src/lib/jira-alerts.ts):
+ * with Jira enabled for the org, anything but a working connection with a
+ * project set emails PM-OS support once per incident.
  * `fresh` skips the cache: used right before an import or a sync.
  */
 export async function getJiraHealth(
@@ -72,7 +74,11 @@ export async function getJiraHealth(
   opts: { fresh?: boolean } = {}
 ): Promise<JiraHealth> {
   const row = await db.jiraConnection.findUnique({ where: { workspaceId } });
-  if (!row) return { status: "not_connected" };
+  if (!row) {
+    const health: JiraHealth = { status: "not_connected" };
+    await recordJiraHealth(workspaceId, health, null);
+    return health;
+  }
 
   let health: JiraHealth;
   if (row.authType !== "basic" || !row.accessToken) {
@@ -91,7 +97,7 @@ export async function getJiraHealth(
     health = await probeJira(row);
     healthCache.set(workspaceId, { expiresAt: Date.now() + HEALTH_TTL_MS, value: health });
   }
-  await recordJiraHealth(row, health);
+  await recordJiraHealth(workspaceId, health, row);
   return health;
 }
 

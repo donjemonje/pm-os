@@ -55,8 +55,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     apiTokenExpiresAt: expiresAt,
     connectedByName: me.displayName,
     connectedByEmail: me.emailAddress ?? email,
-    // A new token starts a clean alert cycle.
-    healthAlertedAt: null,
+    // A new token starts a clean expiry-warning cycle (the outage flag on
+    // the workspace clears itself on the next passing check).
     expiryWarnedAt: null,
     ...(cfg.jiraProject
       ? {

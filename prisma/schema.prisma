@@ -99,6 +99,11 @@ model Workspace {
   /// often, so they live in Admin → Ideas, not in code. Shape:
   /// lib/ideas/jira-mapping.ts.
   ideasConfig    Json         @default("{}")
+  /// Jira is enabled for the organization, so it must work: when the health
+  /// check last found it not working (no connection, project not set, or a
+  /// dead token) and emailed PM-OS support (src/lib/jira-alerts.ts). Null =
+  /// healthy / not yet alerted; cleared when a check passes again.
+  jiraAlertedAt  DateTime?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -222,11 +227,9 @@ model JiraConnection {
   connectedByEmail String?
   /// When the API token expires (admin-set at creation, max 1 year). Null = unknown.
   apiTokenExpiresAt DateTime?
-  /// Health alerts to PM-OS support (src/lib/jira-alerts.ts): when the
-  /// outage email for the current incident was sent (null = healthy / not
-  /// yet alerted; cleared when the probe passes again), and when the
-  /// "token expires soon" email went out (cleared when a new token is saved).
-  healthAlertedAt DateTime?
+  /// When the "token expires soon" email went out to PM-OS support
+  /// (src/lib/jira-alerts.ts); cleared when a new token is saved. The
+  /// outage flag lives on Workspace.jiraAlertedAt (a missing row must alert too).
   expiryWarnedAt  DateTime?
   projectKeys     String    @default("[]")
   prdSource       String    @default("epic_description")
