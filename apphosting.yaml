@@ -39,6 +39,25 @@ env:
       - BUILD
       - RUNTIME
 
+  - variable: COMPETITORS_ENABLED
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # --- Competitors scanner ---
+  # Website scans run in a Cloud Run job (scanner/Dockerfile: Node + Chromium),
+  # triggered by "Scan now" through the Cloud Run API and by Cloud Scheduler
+  # hourly with --due. Local dev leaves COMPETITORS_RUNNER unset (= inline).
+  - variable: COMPETITORS_RUNNER
+    value: "cloudrun"
+    availability:
+      - RUNTIME
+  - variable: COMPETITORS_JOB
+    value: "projects/pm-os-9d992/locations/us-east4/jobs/pmos-competitors-scanner"
+    availability:
+      - RUNTIME
+
   - variable: NEXT_PUBLIC_APP_URL
     value: "https://app.pm-os.io"
     availability:

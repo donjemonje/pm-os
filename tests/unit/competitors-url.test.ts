@@ -1,0 +1,73 @@
+/**
+ * Story 2 (competitors) — URL rules of the website scanner, pure module:
+ * normalization of what a PM types, the registrable host that bounds a
+ * crawl, the private-network guard (checklist §12), page priority.
+ */
+import { describe, expect, it } from "vitest";
+import {
+  InvalidUrlError,
+  isInsideSite,
+  looksLikePage,
+  normalizeWebsite,
+  pageKey,
+  pagePriority,
+  registrableHost,
+} from "@/lib/competitors/url";
+
+describe("normalizeWebsite", () => {
+  it("accepts a bare host, a www host and a URL with a path, and keeps the https origin", () => {
+    expect(normalizeWebsite("recordedfuture.com")).toEqual({ url: "https://recordedfuture.com", host: "recordedfuture.com" });
+    expect(normalizeWebsite(" www.Flashpoint.io/pricing ")).toEqual({ url: "https://www.flashpoint.io", host: "flashpoint.io" });
+    expect(normalizeWebsite("http://docs.example.co.uk/a?b=1")).toEqual({ url: "http://docs.example.co.uk", host: "example.co.uk" });
+  });
+  it("refuses private and local addresses before any fetch", () => {
+    for (const bad of ["http://10.0.0.1", "http://localhost", "http://127.0.0.1:3000", "http://192.168.1.4", "http://169.254.169.254", "http://[::1]"]) {
+      expect(() => normalizeWebsite(bad)).toThrow(InvalidUrlError);
+      try {
+        normalizeWebsite(bad);
+      } catch (e) {
+        expect((e as InvalidUrlError).reason).toBe("private");
+      }
+    }
+  });
+  it("refuses empty input, other schemes and credentials in the URL", () => {
+    expect(() => normalizeWebsite("")).toThrow(InvalidUrlError);
+    expect(() => normalizeWebsite("ftp://example.com")).toThrow(InvalidUrlError);
+    expect(() => normalizeWebsite("https://user:pw@example.com")).toThrow(InvalidUrlError);
+    expect(() => normalizeWebsite("not a url at all")).toThrow(InvalidUrlError);
+  });
+});
+
+describe("registrableHost / isInsideSite", () => {
+  it("collapses subdomains to the registrable host, with two-level public suffixes", () => {
+    expect(registrableHost("www.docs.example.com")).toBe("example.com");
+    expect(registrableHost("shop.example.co.il")).toBe("example.co.il");
+    expect(registrableHost("example.com")).toBe("example.com");
+  });
+  it("keeps the crawl inside the site: subdomains yes, other hosts and private hosts no", () => {
+    expect(isInsideSite(new URL("https://docs.example.com/x"), "example.com")).toBe(true);
+    expect(isInsideSite(new URL("https://example.com.evil.net/x"), "example.com")).toBe(false);
+    expect(isInsideSite(new URL("https://other.com/"), "example.com")).toBe(false);
+    expect(isInsideSite(new URL("mailto:a@example.com"), "example.com")).toBe(false);
+    expect(isInsideSite(new URL("http://10.1.2.3/"), "10.1.2.3")).toBe(false);
+  });
+});
+
+describe("pageKey / looksLikePage / pagePriority", () => {
+  it("drops query, hash and trailing slash so one page has one key", () => {
+    expect(pageKey(new URL("https://Example.com/pricing/?utm=1#top"))).toBe("https://example.com/pricing");
+    expect(pageKey(new URL("https://example.com/"))).toBe("https://example.com/");
+  });
+  it("skips assets and documents", () => {
+    expect(looksLikePage(new URL("https://e.com/platform"))).toBe(true);
+    for (const p of ["/a.css", "/b.js", "/c.png", "/d.pdf", "/sitemap.xml", "/f.woff2"]) {
+      expect(looksLikePage(new URL(`https://e.com${p}`))).toBe(false);
+    }
+  });
+  it("reads the home, pricing and product pages before blog and legal pages", () => {
+    const order = ["/", "/pricing", "/platform/threat-intel", "/integrations", "/trust", "/customers", "/about", "/release-notes", "/anything", "/blog/post"]
+      .map((p) => pagePriority(new URL(`https://e.com${p}`)));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(pagePriority(new URL("https://e.com/blog/x"))).toBeGreaterThan(pagePriority(new URL("https://e.com/products/x")));
+  });
+});

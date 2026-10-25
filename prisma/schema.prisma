@@ -105,6 +105,9 @@ model Workspace {
   /// incident started. Both null = healthy; cleared when a check passes.
   jiraAlertedAt    DateTime?
   jiraAlertedSince DateTime?
+  /// Competitors settings: { scanFrequency: "daily"|"weekly"|"monthly",
+  /// maxPagesPerScan: number }. Shape + defaults: lib/competitors/config.ts.
+  competitorsConfig Json       @default("{}")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -125,6 +128,9 @@ model Workspace {
   platforms             Platform[]
   customers             Customer[]
   ideasPushUndos        IdeasPushUndo[]
+  competitors           Competitor[]
+  competitorDomains     CompetitorDomain[]
+  capabilities          Capability[]
 }
 
 /// Per-idea undo snapshot for the LAST merge to Jira only — executePush
@@ -588,4 +594,237 @@ model PasswordResetToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+// ————— Competitors (story 2: website data → parity matrix + profile) —————
+//
+// Every row belongs to a workspace. The org's own site is a Competitor row
+// with isSelf = true: it seeds the capability catalog and is the matrix's
+// first column. Design of record: the C2 "full-screen matrix" board; spec:
+// "PM-OS Competitor Analysis — Spec", tab "Story 2 — Website data".
+
+/// A tracked company: the org itself (isSelf) or a competitor. One website
+/// source each in story 2; competition level (direct/indirect) arrives with
+/// story 7.
+model Competitor {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  /// Normalized https origin, e.g. https://www.recordedfuture.com
+  websiteUrl  String
+  /// Registrable host used to keep the crawl inside the site (recordedfuture.com).
+  host        String
+  logoUrl     String?
+  isSelf      Boolean   @default(false)
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  statuses CapabilityStatus[]
+  facts    ProfileFact[]
+  sources  CompetitorSource[]
+
+  @@unique([workspaceId, host])
+  @@index([workspaceId])
+}
+
+/// An industry problem/solution area above product lines (Threat intelligence,
+/// Exposure & response). Groups the matrix rows; sent to PMOS AI with the
+/// product lines as classification context. Settings → Competitors.
+model CompetitorDomain {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  description String    @default("")
+  /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
+  color       String?
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  capabilities Capability[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+/// A matrix row: one domain, many of the org's product lines (names, matched
+/// against ProductLine.name). origin "ai" = proposed from the own site or a
+/// competitor scan; state "suggested" rows wait for a PM to accept/dismiss.
+model Capability {
+  id             String           @id @default(uuid())
+  workspaceId    String
+  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  domainId       String
+  domain         CompetitorDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  name           String
+  description    String           @default("")
+  /// Product-line names of the org that serve this capability (story 2 decision:
+  /// product lines are the org's only; competitor products live in ProfileFact).
+  productLines   Json             @default("[]")
+  position       Int              @default(0)
+  /// "manual" | "ai"
+  origin         String           @default("manual")
+  /// "active" | "suggested" | "dismissed"
+  state          String           @default("active")
+  /// Which competitor's scan suggested it (null for own-site/manual rows).
+  suggestedById  String?
+  suggestedQuote String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  statuses CapabilityStatus[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, domainId])
+}
+
+/// One matrix cell. `value` is what the last scan found; the override fields,
+/// when set, win over every later scan until a PM resets them.
+model CapabilityStatus {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  capabilityId String
+  capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  /// "has" | "partial" | "missing" | "unknown"
+  value        String     @default("unknown")
+  /// 0–1 from PMOS AI; low confidence is shown as "partial?" to confirm.
+  confidence   Float?
+  quote        String?
+  sourceUrl    String?
+  scanId       String?
+  /// When `value` last changed (drives "New changes" and "Changed <date>").
+  changedAt    DateTime?
+  overrideValue  String?
+  overrideNote   String?
+  overrideUserId String?
+  overrideAt     DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  history StatusHistory[]
+
+  @@unique([competitorId, capabilityId])
+  @@index([workspaceId])
+  @@index([workspaceId, changedAt])
+}
+
+/// Append-only previous values of a cell — "New changes" now, the news feed later.
+model StatusHistory {
+  id        String           @id @default(uuid())
+  statusId  String
+  status    CapabilityStatus @relation(fields: [statusId], references: [id], onDelete: Cascade)
+  value     String
+  quote     String?
+  sourceUrl String?
+  scanId    String?
+  at        DateTime         @default(now())
+
+  @@index([statusId, at])
+}
+
+/// A lean-profile fact read off the website. `kind` is a closed list:
+/// tagline | product | pricingTier | integration | certification | customer | vertical.
+model ProfileFact {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  kind         String
+  value        String
+  sourceUrl    String?
+  scanId       String?
+  changedAt    DateTime   @default(now())
+  /// A PM's correction; wins over later scans until cleared.
+  overrideValue  String?
+  overrideUserId String?
+  overrideAt     DateTime?
+  /// A PM removed this fact; scans never re-add the same value.
+  dismissedAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([competitorId, kind, value])
+  @@index([workspaceId, competitorId])
+}
+
+/// Where a competitor's data comes from. Story 2 = one "website" source per
+/// competitor; later stories add more types. Schedule inherits the org's
+/// competitorsConfig.scanFrequency.
+model CompetitorSource {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// "website"
+  type         String     @default("website")
+  url          String
+  lastScanAt   DateTime?
+  /// "never" | "ok" | "partial" | "failed" | "running"
+  lastStatus   String     @default("never")
+  lastError    String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  scans CompetitorScan[]
+
+  @@unique([competitorId, type])
+  @@index([workspaceId])
+}
+
+/// One scan run of a source, with its log. `log` is an append-only JSON array
+/// of {at, level, msg, url?} lines; `pages` summarises each page fetched
+/// ({url, status, outcome: new|changed|unchanged|failed|skipped, chars}).
+model CompetitorScan {
+  id            String           @id @default(uuid())
+  workspaceId   String
+  sourceId      String
+  source        CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// "manual" | "scheduled"
+  trigger       String
+  startedById   String?
+  /// "queued" | "running" | "ok" | "partial" | "failed"
+  status        String           @default("queued")
+  /// "plain" | "browser" — how the pages were fetched (browser after a bot wall).
+  fetchMode     String?
+  startedAt     DateTime         @default(now())
+  finishedAt    DateTime?
+  heartbeatAt   DateTime         @default(now())
+  pagesFetched  Int              @default(0)
+  pagesChanged  Int              @default(0)
+  statusesChanged Int            @default(0)
+  factsChanged  Int              @default(0)
+  suggestions   Int              @default(0)
+  aiCalls       Int              @default(0)
+  /// "none" | "timeout" | "http4xx" | "http5xx" | "botwall" | "ai" | "limit" | "other"
+  errorKind     String?
+  error         String?
+  pages         Json             @default("[]")
+  log           Json             @default("[]")
+
+  pageTexts ScanPage[]
+
+  @@index([workspaceId, startedAt])
+  @@index([sourceId, startedAt])
+}
+
+/// Text of a fetched page, kept for the last 2 scans of a source (older rows
+/// keep only the hash); the diff compares hashes, PMOS AI reads the text.
+model ScanPage {
+  id          String         @id @default(uuid())
+  scanId      String
+  scan        CompetitorScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  sourceId    String
+  url         String
+  contentHash String
+  text        String?
+  chars       Int            @default(0)
+  fetchedAt   DateTime       @default(now())
+
+  @@index([sourceId, url])
+  @@index([scanId])
 }

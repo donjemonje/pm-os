@@ -1,9 +1,10 @@
 import { AppShell } from "@/components/layout/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
-import { ideasEnabledForCurrentUser } from "@/lib/org-features";
+import { featureEnabledForCurrentUser, ideasEnabledForCurrentUser } from "@/lib/org-features";
 
 export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
   const ideasEnabled = await ideasEnabledForCurrentUser();
+  const competitorsEnabled = await featureEnabledForCurrentUser("competitors");
   // One flat tab row (no nested tabs) and one centered reading-width column
   // shared by the title, the tabs and every card (Daniel, 2026-10-19).
   const sections = [
@@ -14,6 +15,7 @@ export default async function SettingsLayout({ children }: { children: React.Rea
           { href: "/settings/ideas/customers", label: "Customers" },
         ]
       : []),
+    ...(competitorsEnabled ? [{ href: "/settings/competitors", label: "Competitors" }] : []),
   ];
 
   return (
