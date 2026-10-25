@@ -83,6 +83,18 @@ export function isDashboardEnabled(): boolean {
   return value === "true" || value === "1";
 }
 
+/**
+ * Competitors gate — env default. Off when unset: the Competitors page is
+ * opted in per organization in Admin → Enablements, or globally with
+ * COMPETITORS_ENABLED=true.
+ */
+export function isCompetitorsEnabled(): boolean {
+  const raw = process.env.COMPETITORS_ENABLED;
+  if (!raw?.trim()) return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "1";
+}
+
 // ————— Per-organization feature overrides —————
 //
 // Organization.features is a JSON object like {"ideas": true}. Resolution
@@ -95,6 +107,7 @@ export const ORG_FEATURE_KEYS = [
   "docs",
   "chat",
   "dashboard",
+  "competitors",
   "ideasUndo",
   "myProductLines",
   "jira",
@@ -113,6 +126,8 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isChatEnabled();
     case "dashboard":
       return isDashboardEnabled();
+    case "competitors":
+      return isCompetitorsEnabled();
     case "ideasUndo":
       return isIdeasUndoEnabled();
     case "myProductLines":

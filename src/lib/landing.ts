@@ -11,6 +11,7 @@ import type { OrgFeatureKey } from "./feature-flags";
 const MENU_ORDER: { href: string; flag: OrgFeatureKey | null }[] = [
   { href: "/dashboard", flag: "dashboard" },
   { href: "/ideas", flag: "ideas" },
+  { href: "/competitors", flag: "competitors" },
   { href: "/docs", flag: "docs" },
   { href: "/chat", flag: "chat" },
   { href: "/settings/jira", flag: null },

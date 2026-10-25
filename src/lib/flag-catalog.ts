@@ -65,6 +65,17 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     ],
   },
   {
+    key: "competitors",
+    label: "Competitors",
+    flags: [
+      {
+        key: "competitors",
+        label: "Competitors",
+        description: "Competitors page: parity matrix, news feed, profiles, battle cards and roadmap.",
+      },
+    ],
+  },
+  {
     key: "docs",
     label: "Docs",
     flags: [
@@ -95,7 +106,7 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         key: "dashboard",
         label: "Dashboard",
         description:
-          "Dashboard page. The post-login landing is the first ON surface in menu order (Dashboard, Ideas, Docs, Chat, Settings).",
+          "Dashboard page. The post-login landing is the first ON surface in menu order (Dashboard, Ideas, Competitors, Docs, Chat, Settings).",
       },
     ],
   },

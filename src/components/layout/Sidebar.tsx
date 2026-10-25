@@ -12,12 +12,14 @@ import {
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CompetitorsIcon } from "@/components/competitors/CompetitorsIcon";
 import { BrandLockup } from "@/components/brand/BrandLockup";
 import { UserMenu, type MenuOrganization, type MenuUser } from "./UserMenu";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/ideas", label: "Ideas", icon: Lightbulb },
+  { href: "/competitors", label: "Competitors", icon: CompetitorsIcon },
   { href: "/docs", label: "Docs", icon: FileText },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/settings/jira", label: "Settings", icon: Settings },
@@ -57,6 +59,7 @@ export function Sidebar({
   defaultCollapsed,
   ideasEnabled,
   ideasPending = 0,
+  competitorsEnabled,
   docsEnabled,
   chatEnabled,
   dashboardEnabled,
@@ -69,6 +72,7 @@ export function Sidebar({
   ideasEnabled: boolean;
   /** Ideas awaiting review — badge on the Ideas item. */
   ideasPending?: number;
+  competitorsEnabled: boolean;
   docsEnabled: boolean;
   chatEnabled: boolean;
   dashboardEnabled: boolean;
@@ -89,6 +93,7 @@ export function Sidebar({
   const hidden = new Set([
     ...(dashboardEnabled ? [] : ["/dashboard"]),
     ...(ideasEnabled ? [] : ["/ideas"]),
+    ...(competitorsEnabled ? [] : ["/competitors"]),
     ...(docsEnabled ? [] : ["/docs"]),
     ...(chatEnabled ? [] : ["/chat"]),
   ]);
