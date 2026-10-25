@@ -3,8 +3,8 @@ import { db } from "../db";
 
 /**
  * Server-side usage events for the Competitors area (scans start and finish
- * without a browser). Same table as the client `track()` helper. Events record
- * customer users only: a PMOS_ADMIN actor writes nothing (Daniel, 2026-10-25).
+ * without a browser). Same table as the client `track()` helper; the actor is
+ * whoever started the scan (null when scheduled).
  */
 export async function recordCompetitorEvent(
   workspaceId: string,
@@ -13,10 +13,6 @@ export async function recordCompetitorEvent(
   props: Record<string, string | number | boolean | null>,
 ): Promise<void> {
   try {
-    if (userId) {
-      const u = await db.user.findUnique({ where: { id: userId }, select: { role: true } });
-      if (u?.role === "PMOS_ADMIN") return;
-    }
     await db.usageEvent.create({
       data: { workspaceId, userId, event, path: "/competitors", props: props as Prisma.InputJsonValue },
     });
