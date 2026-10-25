@@ -1,16 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
-import { apiAuthContext } from "@/lib/api-auth";
+import { isPmosAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { requireUser, UnauthorizedError } from "@/lib/workspace";
 
 const MAX_EVENTS = 100;
 const MAX_NAME = 60;
 const MAX_PATH = 200;
 
-/** Batched client telemetry → UsageEvent rows. Silent on bad input: never a user-facing error. */
+/**
+ * Batched client telemetry → UsageEvent rows. Silent on bad input: never a
+ * user-facing error. Product analytics describe customers: a PM-OS admin
+ * account (PMOS_ADMIN) writes nothing, whatever page it is on (Daniel,
+ * 2026-10-25) — its batches are accepted and dropped.
+ */
 export async function POST(request: NextRequest) {
-  const auth = await apiAuthContext();
-  if (auth instanceof NextResponse) return auth;
+  let user;
+  try {
+    user = await requireUser();
+  } catch (e) {
+    if (e instanceof UnauthorizedError) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    throw e;
+  }
+  if (!user.workspaceId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (isPmosAdmin(user)) return NextResponse.json({ ok: true, stored: 0 });
+  const auth = { userId: user.id, workspaceId: user.workspaceId };
   let body: { sessionId?: unknown; events?: unknown };
   try {
     body = await request.json();

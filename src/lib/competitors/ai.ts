@@ -16,7 +16,7 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 
 export const COMPETITORS_PROMPT_VERSION = "competitors-v1";
 
-function getModel(): string {
+export function getCompetitorsModel(): string {
   return process.env.COMPETITORS_MODEL?.trim() || process.env.IDEAS_CATALOG_MODEL?.trim() || "claude-opus-5";
 }
 
@@ -49,7 +49,7 @@ export interface AiResult<T> {
 
 async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number): Promise<AiResult<T>> {
   const message = await getCompetitorsClient().messages.create({
-    model: getModel(),
+    model: getCompetitorsModel(),
     max_tokens: maxTokens,
     system,
     tools: [tool as never],
@@ -68,7 +68,7 @@ const strs = (v: unknown, max = 120): string[] =>
 
 // ————— 1. Catalog proposal from the org's own site —————
 
-const CATALOG_SYSTEM = `You help a product team describe its own product as a capability catalog for competitive analysis.
+export const CATALOG_SYSTEM_PROMPT = `You help a product team describe its own product as a capability catalog for competitive analysis.
 
 You read the text of the organization's own public website and return:
 - domains: 3–7 problem/solution areas of the industry this product serves (e.g. for cyber threat intelligence: "Threat intelligence", "Exposure & response", "AI", "Integrations & buying"). Short noun phrases, title case first word only. Each with a one-sentence description.
@@ -77,7 +77,7 @@ You read the text of the organization's own public website and return:
 
 Use only what the pages say. Never invent capabilities the site does not describe.`;
 
-const CATALOG_TOOL = {
+export const CATALOG_TOOL = {
   name: "propose_catalog",
   description: "Propose the domains and capabilities that describe this product.",
   input_schema: {
@@ -125,7 +125,7 @@ export interface CatalogProposal { domains: ProposedDomain[]; capabilities: Prop
 export async function proposeCatalog(orgName: string, productLines: string[], pages: PageText[]): Promise<AiResult<CatalogProposal>> {
   const shared = `ORGANIZATION: ${orgName}\nPRODUCT LINES (the only allowed values for product_lines): ${productLines.length ? productLines.join(" | ") : "(none defined)"}`;
   const tail = `WEBSITE PAGES:\n\n${packPages(pages)}`;
-  const r = await callTool<Record<string, unknown>>(CATALOG_SYSTEM, shared, tail, CATALOG_TOOL, 6000);
+  const r = await callTool<Record<string, unknown>>(CATALOG_SYSTEM_PROMPT, shared, tail, CATALOG_TOOL, 6000);
   const lines = new Set(productLines.map((p) => p.toLowerCase()));
   const domains: ProposedDomain[] = arr(r.value.domains)
     .map((d) => {
@@ -152,7 +152,7 @@ export async function proposeCatalog(orgName: string, productLines: string[], pa
 
 // ————— 2. Status per capability for a competitor —————
 
-const CLASSIFY_SYSTEM = `You compare a competitor's public website against a fixed capability catalog for a product team.
+export const CLASSIFY_SYSTEM_PROMPT = `You compare a competitor's public website against a fixed capability catalog for a product team.
 
 For EVERY capability in the catalog, decide from the page text whether the competitor:
 - "has" it — the site clearly describes offering this capability;
@@ -165,7 +165,7 @@ Also list capabilities the competitor clearly advertises that are NOT in the cat
 
 Judge only from the pages provided. The previous statuses are given for context: keep them when the new pages say nothing new about a capability (answer the previous value with its previous confidence), change them only on evidence.`;
 
-const CLASSIFY_TOOL = {
+export const CLASSIFY_TOOL = {
   name: "classify_capabilities",
   description: "Record the competitor's status on every catalog capability, plus suggested new capabilities.",
   input_schema: {
@@ -228,7 +228,7 @@ export async function classifyCapabilities(
     ? `PREVIOUS STATUSES (from the last scan):\n${previous.map((p) => `- ${p.capability}: ${p.value}${p.confidence != null ? ` (${p.confidence.toFixed(2)})` : ""}`).join("\n")}\n\n`
     : "";
   const tail = `COMPETITOR: ${competitorName}\n\n${prev}WEBSITE PAGES:\n\n${packPages(pages)}`;
-  const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM, shared, tail, CLASSIFY_TOOL, 8000);
+  const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000);
   const names = new Map<string, string>();
   for (const d of catalog.domains) for (const k of d.capabilities) names.set(k.name.toLowerCase(), k.name);
   const domainNames = new Map(catalog.domains.map((d) => [d.name.toLowerCase(), d.name]));
@@ -255,7 +255,7 @@ export async function classifyCapabilities(
 
 // ————— 3. Lean-profile facts —————
 
-const FACTS_SYSTEM = `You extract company facts from a competitor's public website for a product team's competitor profile.
+export const FACTS_SYSTEM_PROMPT = `You extract company facts from a competitor's public website for a product team's competitor profile.
 
 Return facts of these kinds only:
 - tagline: the one-line positioning statement (at most one).
@@ -267,7 +267,7 @@ Return facts of these kinds only:
 - vertical: each industry it says it serves.
 Each fact is a short value (≤ 80 characters) and the URL of the page it came from. Only what the pages state; nothing inferred, no counts, no adjectives. Deduplicate.`;
 
-const FACTS_TOOL = {
+export const FACTS_TOOL = {
   name: "extract_facts",
   description: "Record the company facts found on the pages.",
   input_schema: {
@@ -295,7 +295,7 @@ export interface ExtractedFact { kind: FactKind; value: string; url: string }
 export async function extractFacts(competitorName: string, pages: PageText[]): Promise<AiResult<ExtractedFact[]>> {
   const shared = `Extract facts for the competitor profile.`;
   const tail = `COMPETITOR: ${competitorName}\n\nWEBSITE PAGES:\n\n${packPages(pages)}`;
-  const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM, shared, tail, FACTS_TOOL, 4000);
+  const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 4000);
   const seen = new Set<string>();
   const facts: ExtractedFact[] = [];
   for (const f of arr(r.value.facts)) {
