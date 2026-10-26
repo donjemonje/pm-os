@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, FileText, Globe, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { UmMarkdown } from "@/components/documents/UmMarkdown";
+import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { frequencyMs, MAX_MAX_PAGES, MIN_MAX_PAGES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
-import type { CapabilityRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
+import { frequencyMs, MAX_DOMAIN_DESCRIPTION, MAX_MAX_PAGES, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
+import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
+import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { timeAgo, timeUntil } from "@/lib/competitors/time";
 import { track } from "@/lib/analytics/track";
 import { cn } from "@/lib/utils";
@@ -30,9 +33,10 @@ const STATUS_PILL: Record<string, string> = {
 const POLL_MS = 3000;
 
 /**
- * Settings → Competitors: own website, competitors (with Scan now and the
- * scan log), suggestions waiting for review, domains, the capability catalog
- * and the scan schedule. Reads are for everyone; catalog and schedule writes
+ * Settings → Competitors: competitors (with Scan now and the scan log),
+ * suggestions waiting for review, domains (with the definition text PMOS AI
+ * reads), the capability catalog with the org's own status per row, and the
+ * scan schedule. The organization itself is never scanned. Reads are for everyone; catalog and schedule writes
  * need a customer admin (the API enforces the same). Scan now and the log are
  * for every member.
  */
@@ -50,7 +54,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
     if (res.ok) setState(data.state);
   }, []);
 
-  async function call(method: "POST" | "PATCH" | "DELETE", url: string, body?: unknown): Promise<boolean> {
+  async function call(method: "POST" | "PATCH" | "PUT" | "DELETE", url: string, body?: unknown): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
@@ -106,8 +110,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
     await call("DELETE", `/api/competitors/${c.id}`);
   }
 
-  const self = state.competitors.find((c) => c.isSelf) ?? null;
-  const others = state.competitors.filter((c) => !c.isSelf);
+  const competitors = state.competitors;
   const suggested = state.capabilities.filter((k) => k.state === "suggested");
   const active = state.capabilities.filter((k) => k.state === "active");
   const nextScanAt = (c: CompetitorRow) =>
@@ -118,32 +121,17 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       {error && <div className="rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">{error}</div>}
       {!canEdit && <div className="text-[12.5px] text-fg-muted">{C.settings.viewOnly}</div>}
 
-      {/* Own website */}
-      <section className="rounded-xl border border-border bg-card">
-        <div className="border-b border-border px-5 py-4">
-          <div className="font-medium text-foreground">{C.settings.ownSite}</div>
-          <p className="mt-1 text-sm text-muted">{C.settings.ownSiteBlurb}</p>
-        </div>
-        {self ? (
-          <CompetitorLine c={self} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(self)} onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
-        ) : canEdit ? (
-          <AddCompetitorForm label={C.settings.addOwnSite} isSelf busy={busy} onAdd={(body) => call("POST", "/api/competitors", body)} />
-        ) : (
-          <div className="px-5 py-4 text-sm text-muted">{C.settings.noOwnSite}</div>
-        )}
-      </section>
-
       {/* Competitors */}
       <section className="rounded-xl border border-border bg-card">
         <div className="border-b border-border px-5 py-4">
           <div className="font-medium text-foreground">{C.settings.competitorsTitle}</div>
           <p className="mt-1 text-sm text-muted">{C.settings.competitorsBlurb}</p>
         </div>
-        {canEdit && <AddCompetitorForm label={C.settings.addCompetitor} busy={busy} onAdd={(body) => call("POST", "/api/competitors", body)} />}
-        {others.length === 0 ? (
+        {canEdit && <AddCompetitorForm busy={busy} onAdd={(body) => call("POST", "/api/competitors", body)} />}
+        {competitors.length === 0 ? (
           <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCompetitors}</div>
         ) : (
-          others.map((c) => (
+          competitors.map((c) => (
             <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)} onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
           ))
         )}
@@ -155,7 +143,6 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
           suggested={suggested}
           domains={state.domains}
           competitors={state.competitors}
-          fromOwnSite={active.length === 0 && suggested.every((k) => k.suggestedById === self?.id)}
           canEdit={canEdit}
           busy={busy}
           onDecide={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
@@ -163,9 +150,10 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       )}
 
       {/* Domains */}
-      <DomainsPanel domains={state.domains} capabilities={active} canEdit={canEdit} busy={busy}
+      <DomainsPanel domains={state.domains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
         onAdd={(body) => call("POST", "/api/competitors/domains", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/domains/${id}`, body)}
+        onReorder={(order) => call("PUT", "/api/competitors/domains", { order })}
         onRemove={async (d) => {
           const n = active.filter((k) => k.domainId === d.id).length;
           if (!(await confirm({ title: C.settings.removeDomainTitle(d.name), message: C.settings.removeDomainBody(n), confirmLabel: C.settings.remove, tone: "danger" }))) return;
@@ -274,31 +262,30 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
   );
 }
 
-function AddCompetitorForm({ label, isSelf, busy, onAdd }: { label: string; isSelf?: boolean; busy: boolean; onAdd: (body: unknown) => Promise<boolean> }) {
+function AddCompetitorForm({ busy, onAdd }: { busy: boolean; onAdd: (body: unknown) => Promise<boolean> }) {
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
   const [website, setWebsite] = useState("");
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !website.trim()) return;
-    if (await onAdd({ name, website, isSelf: isSelf === true })) {
-      setName(""); setWebsite(""); setOpen(false);
-      track("cmp_competitor_added_ui", { isSelf: isSelf === true });
+    if (!website.trim()) return;
+    if (await onAdd({ website })) {
+      setWebsite("");
+      setOpen(false);
+      track("cmp_competitor_added_ui", {});
     }
   }
   if (!open) {
     return (
       <div className="border-b border-border px-5 py-3">
-        <button type="button" onClick={() => setOpen(true)} className={SMALL_BTN}><Plus size={13} /> {label}</button>
+        <button type="button" onClick={() => setOpen(true)} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCompetitor}</button>
       </div>
     );
   }
   return (
     <form onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setOpen(false); } }} className="flex items-start gap-2 border-b border-border px-5 py-4">
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.namePlaceholder} className={cn(INPUT, "w-48 shrink-0")} disabled={busy} autoFocus aria-label={C.settings.name} />
-      <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder={C.settings.websitePlaceholder} className={INPUT} disabled={busy} aria-label={C.settings.website} />
+      <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder={C.settings.websitePlaceholder} className={INPUT} disabled={busy} autoFocus aria-label={C.settings.website} />
       <Button type="button" onClick={() => setOpen(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
-      <Button type="submit" variant="primary" disabled={busy || !name.trim() || !website.trim()}>
+      <Button type="submit" variant="primary" disabled={busy || !website.trim()}>
         {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
       </Button>
     </form>
@@ -307,11 +294,10 @@ function AddCompetitorForm({ label, isSelf, busy, onAdd }: { label: string; isSe
 
 // ————— Suggestions —————
 
-function SuggestionsPanel({ suggested, domains, competitors, fromOwnSite, canEdit, busy, onDecide }: {
+function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, onDecide }: {
   suggested: CapabilityRow[];
   domains: DomainRow[];
   competitors: CompetitorRow[];
-  fromOwnSite: boolean;
   canEdit: boolean;
   busy: boolean;
   onDecide: (id: string, body: unknown) => Promise<boolean>;
@@ -321,24 +307,13 @@ function SuggestionsPanel({ suggested, domains, competitors, fromOwnSite, canEdi
   const domainName = (id: string) => domains.find((d) => d.id === id)?.name ?? "";
   const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
 
-  async function acceptAll() {
-    for (const k of suggested) {
-      await onDecide(k.id, { state: "active", ...(names[k.id] && names[k.id] !== k.name ? { name: names[k.id] } : {}), ...(domainOf[k.id] && domainOf[k.id] !== k.domainId ? { domainId: domainOf[k.id] } : {}) });
-    }
-  }
-
   return (
     <section className="rounded-xl border border-primary/40 bg-card shadow-[0_0_0_3px_rgba(36,87,245,.06)]">
       <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
         <div>
-          <div className="font-medium text-foreground">{fromOwnSite ? C.settings.proposalTitle : C.settings.suggestionsTitle}</div>
-          <p className="mt-1 text-sm text-muted">{fromOwnSite ? C.settings.proposalBlurb(suggested.length) : C.settings.suggestionsBlurb}</p>
+          <div className="font-medium text-foreground">{C.settings.suggestionsTitle}</div>
+          <p className="mt-1 text-sm text-muted">{C.settings.suggestionsBlurb}</p>
         </div>
-        {canEdit && fromOwnSite && (
-          <Button variant="primary" size="sm" onClick={acceptAll} disabled={busy}>
-            <Check size={13} /> Accept all
-          </Button>
-        )}
       </div>
       {suggested.map((k) => {
         const quote = k.suggestedQuote?.split(" — https") ?? [];
@@ -358,7 +333,7 @@ function SuggestionsPanel({ suggested, domains, competitors, fromOwnSite, canEdi
                 ) : (
                   <span className="text-[12px] text-fg-muted">{domainName(k.domainId)}</span>
                 )}
-                {!fromOwnSite && k.suggestedById && <span className="text-[12px] text-fg-muted">{C.settings.suggestedBy(competitorName(k.suggestedById))}</span>}
+                {k.suggestedById && <span className="text-[12px] text-fg-muted">{C.settings.suggestedBy(competitorName(k.suggestedById))}</span>}
               </div>
               {k.description && <div className="mt-1 text-[12.5px] text-fg-3">{k.description}</div>}
               {quote[0] && (
@@ -386,15 +361,21 @@ function SuggestionsPanel({ suggested, domains, competitors, fromOwnSite, canEdi
   );
 }
 
-// ————— Domains —————
+// ————— Domains (the product-lines pattern: color, name, counts, definition text, drag order) —————
 
-function DomainsPanel({ domains, capabilities, canEdit, busy, onAdd, onSave, onRemove }: {
+const EDITOR_BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary";
+const EDITOR_PRIMARY = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50";
+
+function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, onAdd, onSave, onReorder, onRemove }: {
   domains: DomainRow[];
   capabilities: CapabilityRow[];
+  cells: CellRow[];
+  competitors: CompetitorRow[];
   canEdit: boolean;
   busy: boolean;
   onAdd: (body: unknown) => Promise<boolean>;
   onSave: (id: string, body: unknown) => Promise<boolean>;
+  onReorder: (order: string[]) => Promise<boolean>;
   onRemove: (d: DomainRow) => Promise<void>;
 }) {
   const [adding, setAdding] = useState(false);
@@ -403,64 +384,143 @@ function DomainsPanel({ domains, capabilities, canEdit, busy, onAdd, onSave, onR
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [raw, setRaw] = useState<Record<string, boolean>>({});
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
 
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
+  /** Competitors that have a capability of this domain in full while the org doesn't. */
+  function competitorsAhead(d: DomainRow): number {
+    const caps = capabilities.filter((k) => k.domainId === d.id && k.ourStatus !== "has");
+    const ahead = new Set<string>();
+    for (const k of caps) for (const c of cells) if (c.capabilityId === k.id && c.value === "has") ahead.add(c.competitorId);
+    return [...ahead].filter((id) => competitors.some((c) => c.id === id)).length;
+  }
+
+  async function add() {
     if (!name.trim()) return;
     if (await onAdd({ name, description })) { setName(""); setDescription(""); setAdding(false); }
   }
   async function saveEdit(id: string) {
     if (await onSave(id, { name: editName, description: editDescription })) setEditingId(null);
   }
+  async function dropOn(targetId: string) {
+    const from = domains.findIndex((d) => d.id === dragId);
+    const to = domains.findIndex((d) => d.id === targetId);
+    setDragId(null);
+    setOverId(null);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...domains];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    await onReorder(next.map((d) => d.id));
+  }
+  const editorKeys = (onSubmit: () => void, onCancel: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); }
+    else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+  };
+  const descriptionEditor = (value: string, onChange: (v: string) => void) => (
+    <div>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={10} maxLength={MAX_DOMAIN_DESCRIPTION}
+        placeholder={C.settings.domainDescriptionPlaceholder}
+        className={cn(INPUT, "resize-y font-mono text-[12.5px] leading-relaxed")} disabled={busy} />
+      <div className="mt-1 text-right font-mono text-[10.5px] text-[#9aa8be]">{value.length}/{MAX_DOMAIN_DESCRIPTION}</div>
+    </div>
+  );
 
   return (
-    <section className="rounded-xl border border-border bg-card">
-      <div className="border-b border-border px-5 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="font-medium text-foreground">{C.settings.domainsTitle}</div>
-          {canEdit && !adding && <button type="button" onClick={() => setAdding(true)} className={SMALL_BTN}><Plus size={13} /> {C.settings.addDomain}</button>}
-        </div>
-        <p className="mt-1 text-sm text-muted">{C.settings.domainsBlurb}</p>
+    <section>
+      <div className="mb-1 flex items-end justify-between gap-4">
+        <h2 className="font-title m-0 text-[15px] font-semibold">{C.settings.domainsTitle}</h2>
+        {canEdit && !adding && (
+          <button onClick={() => setAdding(true)} className={SMALL_BTN}><Plus size={13} /> {C.settings.addDomain}</button>
+        )}
       </div>
-      {adding && (
-        <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } }} className="flex items-start gap-2 border-b border-border px-5 py-4">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} className={cn(INPUT, "w-56 shrink-0")} disabled={busy} autoFocus />
-          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={C.settings.domainDescriptionPlaceholder} className={INPUT} disabled={busy} />
-          <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
-          <Button type="submit" variant="primary" disabled={busy || !name.trim()}><Check size={13} /> {C.settings.save}</Button>
-        </form>
-      )}
-      {domains.length === 0 && <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyDomains}</div>}
-      {domains.map((d) => {
-        const n = capabilities.filter((k) => k.domainId === d.id).length;
-        const editing = editingId === d.id;
-        return (
-          <div key={d.id} className="flex items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
-            {editing ? (
-              <div className="flex min-w-0 flex-1 items-center gap-2"
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void saveEdit(d.id); } if (e.key === "Escape") setEditingId(null); }}>
-                <input value={editName} onChange={(e) => setEditName(e.target.value)} className={cn(INPUT, "w-56")} disabled={busy} autoFocus />
-                <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className={INPUT} disabled={busy} placeholder={C.settings.domainDescriptionPlaceholder} />
-                <button onClick={() => setEditingId(null)} className={ICON_BTN} aria-label={C.settings.cancel}><X size={14} /></button>
-                <button onClick={() => saveEdit(d.id)} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !editName.trim()}><Check size={14} /></button>
-              </div>
-            ) : (
-              <>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[14px] font-medium">{d.name} <span className="ml-1 font-mono text-[11px] font-normal text-fg-muted">{C.matrix.capabilitiesCount(n)}</span></div>
-                  {d.description && <div className="mt-0.5 text-[12.5px] text-fg-3">{d.description}</div>}
-                </div>
-                {canEdit && (
-                  <>
-                    <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
-                    <button onClick={() => void onRemove(d)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>
-                  </>
-                )}
-              </>
-            )}
+      <p className="mb-4 text-sm text-muted">{C.settings.domainsBlurb} {canEdit && C.settings.domainsDrag}</p>
+
+      {canEdit && adding && (
+        <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
+          {descriptionEditor(description, setDescription)}
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={() => setAdding(false)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
+            <button onClick={() => void add()} disabled={busy || !name.trim()} className={EDITOR_PRIMARY}>
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} {C.settings.addDomain}
+            </button>
           </div>
-        );
-      })}
+        </div>
+      )}
+
+      {domains.length === 0 && !adding && <div className="rounded-xl border border-border bg-white px-5 py-4 text-sm text-muted">{C.settings.emptyDomains}</div>}
+
+      <div className="flex flex-col gap-3">
+        {domains.map((d) => {
+          const n = capabilities.filter((k) => k.domainId === d.id).length;
+          const editing = editingId === d.id;
+          return (
+            <div
+              key={d.id}
+              onDragOver={(e) => { if (!dragId || dragId === d.id) return; e.preventDefault(); if (overId !== d.id) setOverId(d.id); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null) && overId === d.id) setOverId(null); }}
+              onDrop={(e) => { e.preventDefault(); void dropOn(d.id); }}
+              className={cn(
+                "relative rounded-xl border border-border bg-white px-5 py-4 transition-[box-shadow,opacity,border-color]",
+                dragId === d.id && "opacity-40",
+                dragId && overId === d.id && "border-primary shadow-[0_0_0_2px_var(--app-accent-soft)]",
+              )}
+            >
+              {editing ? (
+                <div className="flex flex-col gap-2" onKeyDown={editorKeys(() => void saveEdit(d.id), () => setEditingId(null))}>
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} className={INPUT} maxLength={80} disabled={busy} autoFocus />
+                  {descriptionEditor(editDescription, setEditDescription)}
+                  <div className="flex items-center justify-end gap-2">
+                    <button onClick={() => setEditingId(null)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
+                    <button onClick={() => void saveEdit(d.id)} disabled={busy || !editName.trim()} className={EDITOR_PRIMARY}>
+                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="-ml-1.5 flex min-w-0 items-center gap-1.5">
+                      <ColorSwatch color={d.color} fallback={PRODUCT_CHIP_DEFAULT} name={d.name} canEdit={canEdit && !busy} onPick={(color) => onSave(d.id, { color })} />
+                      <span className="font-title text-[14px] font-semibold">{d.name}</span>
+                      <span className="ml-1 font-mono text-[11px] text-fg-muted">{C.settings.domainCounts(n, competitorsAhead(d))}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {d.description && (
+                        <button onClick={() => setRaw((p) => ({ ...p, [d.id]: !p[d.id] }))} className="h-7 rounded-lg px-2 font-mono text-[10.5px] text-[#7a8aa3] hover:bg-background hover:text-foreground" title="How PMOS AI receives this text">
+                          {raw[d.id] ? C.settings.showRendered : C.settings.showRaw}
+                        </button>
+                      )}
+                      {canEdit && (
+                        <>
+                          <span draggable={!busy} onDragStart={(e) => { setDragId(d.id); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDragId(null); setOverId(null); }}
+                            title="Drag to reorder" className="flex h-7 w-7 cursor-grab items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground active:cursor-grabbing">
+                            <GripVertical size={14} />
+                          </span>
+                          <span className="mx-0.5 h-4 w-px bg-border" />
+                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
+                          <button onClick={() => void onRemove(d)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={13} /></button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  {d.description ? (
+                    raw[d.id] ? (
+                      <pre className="whitespace-pre-wrap rounded-lg bg-[var(--app-bg)] px-3 py-2 font-mono text-[12px] leading-relaxed text-fg-2">{d.description}</pre>
+                    ) : (
+                      <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
+                    )
+                  ) : (
+                    <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }
@@ -529,7 +589,10 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
         if (rows.length === 0) return null;
         return (
           <div key={d.id}>
-            <div className="border-b border-border bg-[rgba(36,87,245,.05)] px-5 py-1.5 font-mono text-[10.5px] font-medium tracking-[0.04em] text-fg-muted">{d.name}</div>
+            <div className="flex items-center gap-2 border-b border-border bg-[rgba(36,87,245,.05)] px-5 py-1.5 font-mono text-[10.5px] font-medium tracking-[0.04em] text-fg-muted">
+              <span className="h-2 w-2 rounded-[2px]" style={{ background: swatchColor(d.color, PRODUCT_CHIP_DEFAULT) }} />
+              {d.name}
+            </div>
             {rows.map((k) => {
               const editing = editingId === k.id;
               return (
@@ -547,6 +610,16 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[14px] font-medium">{k.name}</span>
                         {k.origin === "ai" && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
+                        <span className="ml-1 inline-flex items-center gap-1" title={C.settings.ourStatus}>
+                          {OWN_STATUS_VALUES.map((v) => (
+                            <button key={v} type="button" onClick={() => k.ourStatus !== v && void onSave(k.id, { ourStatus: v })} disabled={busy} aria-pressed={k.ourStatus === v}
+                              className={cn("rounded-full border px-2 py-px font-mono text-[10px] font-semibold", k.ourStatus === v
+                                ? v === "has" ? "border-transparent bg-[rgba(23,178,106,.16)] text-[#0f7a47]" : v === "partial" ? "border-transparent bg-[rgba(59,124,246,.15)] text-[#2a5fd0]" : "border-transparent bg-[#fff7e0] text-[#8a5a00]"
+                                : "border-border bg-white text-fg-faint hover:border-primary/55")}>
+                              {C.values[v]}
+                            </button>
+                          ))}
+                        </span>
                       </div>
                       {k.description && <div className="mt-0.5 text-[12.5px] text-fg-3">{k.description}</div>}
                       {productLines.length > 0 && (

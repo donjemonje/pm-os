@@ -14,7 +14,6 @@ export interface CompetitorRow {
   websiteUrl: string;
   host: string;
   logoUrl: string | null;
-  isSelf: boolean;
   position: number;
   source: {
     id: string;
@@ -40,6 +39,8 @@ export interface CapabilityRow {
   name: string;
   description: string;
   productLines: string[];
+  /** The org's own cell: has | partial | missing. */
+  ourStatus: StatusValue;
   position: number;
   origin: string;
   state: string;
@@ -96,7 +97,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
       where: { workspaceId },
-      orderBy: [{ isSelf: "desc" }, { position: "asc" }, { name: "asc" }],
+      orderBy: [{ position: "asc" }, { name: "asc" }],
       include: { sources: { where: { type: "website" }, take: 1 } },
     }),
     db.competitorDomain.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
@@ -138,7 +139,6 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       websiteUrl: c.websiteUrl,
       host: c.host,
       logoUrl: c.logoUrl,
-      isSelf: c.isSelf,
       position: c.position,
       source: c.sources[0]
         ? {
@@ -157,6 +157,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       name: k.name,
       description: k.description,
       productLines: asStringArray(k.productLines),
+      ourStatus: (k.ourStatus === "partial" || k.ourStatus === "missing" ? k.ourStatus : "has") as StatusValue,
       position: k.position,
       origin: k.origin,
       state: k.state,

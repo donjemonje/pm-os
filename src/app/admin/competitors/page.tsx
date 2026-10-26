@@ -1,8 +1,6 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { getAdminOrg } from "@/lib/admin-org";
 import {
-  CATALOG_SYSTEM_PROMPT,
-  CATALOG_TOOL,
   CLASSIFY_SYSTEM_PROMPT,
   CLASSIFY_TOOL,
   COMPETITORS_PROMPT_VERSION,
@@ -18,29 +16,24 @@ import { AdminScans } from "./AdminScans";
  * Admin → Competitors: the PMOS AI prompts of the competitors feature
  * (read-only, with the structured answer each call must return) and every
  * organization's scan runs. Daniel's rule: any new AI logic is visible here.
+ * The organization itself is never scanned (2026-10-26): its catalog, domain
+ * definitions and own statuses are entered by its PMs.
  */
 export default async function AdminCompetitorsPage() {
   const admin = await requireAdminPage("/admin/competitors");
   const org = await getAdminOrg(admin.organizationId);
   const prompts = [
     {
-      id: "catalog",
-      title: `Catalog proposal — the organization's own website (${COMPETITORS_PROMPT_VERSION})`,
-      note: "Runs once, when the own site is scanned and the catalog is empty: proposes domains and capabilities from the pages, each with a quote and URL. Rows arrive as suggestions for the customer admin to accept, rename, move or dismiss.",
-      text: CATALOG_SYSTEM_PROMPT,
-      tool: CATALOG_TOOL,
-    },
-    {
       id: "classify",
       title: `Capability statuses — one call per competitor scan (${COMPETITORS_PROMPT_VERSION})`,
-      note: "Gets the catalog (cached prefix), the previous statuses and the pages that changed since the last scan. Returns has / partial / missing / unknown per capability with confidence, quote and URL, plus up to 8 capabilities the catalog lacks (suggestions). An 'unknown' answer never downgrades a status earlier pages established.",
+      note: "Gets the catalog with each domain's definition text (cached prefix), the previous statuses and the pages that changed since the last scan. Returns has / partial / missing / unknown per capability with confidence, quote and URL, plus up to 8 capabilities the catalog lacks (suggestions). An 'unknown' answer never downgrades a status earlier pages established.",
       text: CLASSIFY_SYSTEM_PROMPT,
       tool: CLASSIFY_TOOL,
     },
     {
       id: "facts",
       title: `Profile facts — one call per competitor scan (${COMPETITORS_PROMPT_VERSION})`,
-      note: "Reads the changed pages and returns the lean profile: tagline, products, pricing tiers, integrations, certifications, named customers, verticals — each with its URL. Never runs for the organization's own site.",
+      note: "Reads the changed pages and returns the lean profile: tagline, products, pricing tiers, integrations, certifications, named customers, verticals — each with its URL.",
       text: FACTS_SYSTEM_PROMPT,
       tool: FACTS_TOOL,
     },
@@ -51,7 +44,7 @@ export default async function AdminCompetitorsPage() {
       user={admin}
       org={org}
       title="Competitors"
-      description="The competitors feature's PMOS AI — model, region and the three prompts — and the scanner's runs across every organization. Per-org setup (competitors, catalog, schedule) is in each organization's Settings → Competitors."
+      description="The competitors feature's PMOS AI — model, region and the two prompts — and the scanner's runs across every organization. Per-org setup (competitors, catalog, schedule) is in each organization's Settings → Competitors."
     >
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -71,7 +64,7 @@ export default async function AdminCompetitorsPage() {
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-sm font-bold">AI prompts</h2>
           <p className="mb-4 mt-0.5 text-xs text-slate-500">
-            The system prompt of each call and the structured answer it is forced to return (a tool schema — the model cannot answer in free text). Read-only; changing them is a code change and bumps the prompt version.
+            The system prompt of each of the two calls and the structured answer it is forced to return (a tool schema — the model cannot answer in free text). Read-only; changing them is a code change and bumps the prompt version.
           </p>
           <div className="space-y-2">
             {prompts.map((p) => (

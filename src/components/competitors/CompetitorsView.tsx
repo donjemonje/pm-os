@@ -8,9 +8,10 @@ import { Ring } from "@/components/ui/Ring";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { STATUS_VALUES, type StatusValue } from "@/lib/competitors/config";
+import { OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
+import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { cn } from "@/lib/utils";
 
 type Tab = "parity" | "feed" | "profiles" | "cards" | "roadmap";
@@ -167,8 +168,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
   }, [state.scanning, refresh]);
 
   // ——— Derived data ———
-  const self = state.competitors.find((c) => c.isSelf) ?? null;
-  const competitors = state.competitors.filter((c) => !c.isSelf);
+  const competitors = state.competitors;
   const activeCaps = useMemo(() => state.capabilities.filter((k) => k.state === "active"), [state.capabilities]);
   const cellMap = useMemo(() => {
     const m = new Map<string, CellRow>();
@@ -176,6 +176,8 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     return m;
   }, [state.cells]);
   const cellOf = (competitorId: string | null | undefined, capabilityId: string) => (competitorId ? cellMap.get(`${competitorId}|${capabilityId}`) : undefined);
+  /** The org's own cell is the capability's ourStatus — set by PMs, never scanned. */
+  const ownOf = (k: CapabilityRow): StatusValue => k.ourStatus;
   const lastScanOf = new Map(state.competitors.map((c) => [c.id, c.source?.lastScanAt ? new Date(c.source.lastScanAt).getTime() : null]));
   const isNewChange = (cell: CellRow | undefined) => {
     if (!cell?.changedAt) return false;
@@ -183,16 +185,15 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     if (!last) return false;
     return new Date(cell.changedAt).getTime() >= last - NEW_CHANGE_WINDOW_MS;
   };
-  /** Gap = own missing/unknown while any competitor has it; only-us = own has while no competitor has/partial. */
+  /** Gap = own missing while any competitor has it; only-us = own has while no competitor has/partial. */
   const rowKind = (k: CapabilityRow): "gap" | "partial" | "only" | "level" | "none" => {
-    const ownCell = cellOf(self?.id, k.id);
     const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "unknown");
     const anyHas = theirs.some((v) => v === "has");
     const anyHasOrPartial = theirs.some((v) => v === "has" || v === "partial");
-    const ownV = ownCell?.value ?? "unknown";
+    const ownV = ownOf(k);
     if (competitors.length === 0) return "none";
     if (ownV === "has" && !anyHasOrPartial) return "only";
-    if ((ownV === "missing" || ownV === "unknown") && anyHas) return "gap";
+    if (ownV === "missing" && anyHas) return "gap";
     if (ownV === "partial" && anyHas) return "partial";
     return "level";
   };
@@ -202,16 +203,16 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     let full = 0, partial = 0, gaps = 0, only = 0;
     for (const k of activeCaps) {
       const kind = rowKind(k);
-      const ownV = cellOf(self?.id, k.id)?.value ?? "unknown";
+      const ownV = ownOf(k);
       if (ownV === "has") full++;
       else if (ownV === "partial") partial++;
       if (kind === "gap") gaps++;
       if (kind === "only") only++;
     }
-    const measured = self != null && competitors.length > 0 && total > 0 && state.cells.length > 0;
+    const measured = competitors.length > 0 && total > 0 && state.cells.length > 0;
     return { total, full, partial, gaps, only, measured, parity: measured ? Math.round(((full + partial * 0.5) / total) * 100) : null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCaps, state.cells, self, competitors.length]);
+  }, [activeCaps, state.cells, competitors.length]);
 
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
@@ -225,7 +226,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
     if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
     if (gapsOnly && rowKind(k) !== "gap" && rowKind(k) !== "partial") return false;
-    if (newChanges && !shownCompetitors.some((c) => isNewChange(cellOf(c.id, k.id))) && !isNewChange(cellOf(self?.id, k.id))) return false;
+    if (newChanges && !shownCompetitors.some((c) => isNewChange(cellOf(c.id, k.id)))) return false;
     return matchesStatus(k);
   });
   const domainsWithRows = state.domains.filter((d) => visibleCaps.some((k) => k.domainId === d.id));
@@ -363,7 +364,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
                       </th>
                       <th scope="col" className="w-[104px] border-b border-t-[3px] border-b-border border-t-primary bg-[rgba(36,87,245,.08)] px-2 pb-2.5 text-center align-bottom">
                         <span className="flex flex-col items-center gap-1.5 pt-2.5">
-                          {self ? <Logo c={self} dark /> : <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(own)}</span>}
+                          <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(own)}</span>
                           <span className="max-w-[96px] truncate text-[12px] font-bold" title={own}>{own}</span>
                         </span>
                       </th>
@@ -394,14 +395,13 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
                       domainsWithRows.map((d) => {
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
-                        const covered = rows.filter((k) => cellOf(self?.id, k.id)?.value === "has").length;
-                        const partial = rows.filter((k) => cellOf(self?.id, k.id)?.value === "partial").length;
+                        const covered = rows.filter((k) => ownOf(k) === "has").length;
+                        const partial = rows.filter((k) => ownOf(k) === "partial").length;
                         const gaps = rows.filter((k) => rowKind(k) === "gap").length;
                         return (
                           <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} partial={partial} gaps={gaps} colSpan={3 + shownCompetitors.length}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
-                              const ownCell = cellOf(self?.id, k.id);
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
                               return (
                                 <tr key={k.id} className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
@@ -413,7 +413,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
                                     </span>
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
-                                    {self && <Cell cell={ownCell} competitorId={self.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={null} isNew={isNewChange(ownCell)} />}
+                                    <OwnCell capability={k} org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
                                   </td>
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
@@ -481,7 +481,6 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
         {tab === "profiles" && (
           <ProfilesTab
             competitors={competitors}
-            self={self}
             selectedId={selectedCompetitor}
             onSelect={(id) => openProfile(id, "tab")}
             domains={state.domains}
@@ -553,7 +552,7 @@ function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, chi
       <tr>
         <td colSpan={colSpan} className="p-0">
           <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left" style={{ background: "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
-            <span className="h-2.5 w-2.5 shrink-0 rounded-[3px] bg-primary shadow-[0_0_10px_rgba(36,87,245,.6)]" />
+            <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
             <span className="text-[14px] font-bold">{domain.name}</span>
             <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
             {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
@@ -707,11 +706,70 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
   );
 }
 
+// ————— The org's own cell: its status on a capability, set by PMs —————
+
+function OwnCell({ capability, org, open, setOpen, onPatch }: {
+  capability: CapabilityRow;
+  org: string;
+  open: { competitorId: string; capabilityId: string } | null;
+  setOpen: (v: { competitorId: string; capabilityId: string } | null) => void;
+  onPatch: (url: string, body: unknown) => Promise<boolean>;
+}) {
+  const isOpen = open?.competitorId === "own" && open.capabilityId === capability.id;
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, setOpen]);
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, confidence: null, lowConfidence: false, quote: null, sourceUrl: null, changedAt: null, override: null };
+  async function set(v: OwnStatus) {
+    if (v === capability.ourStatus) return;
+    setBusy(true);
+    const ok = await onPatch(`/api/competitors/capabilities/${capability.id}`, { ourStatus: v });
+    setBusy(false);
+    if (ok) setOpen(null);
+  }
+  return (
+    <span className="relative inline-flex items-center justify-center">
+      <button
+        onClick={() => setOpen(isOpen ? null : { competitorId: "own", capabilityId: capability.id })}
+        className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
+        aria-label={`${capability.name}: ${org} ${C.values[capability.ourStatus]}`}
+        aria-expanded={isOpen}
+      >
+        <CellValue cell={fake} />
+      </button>
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
+          <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[280px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
+            <div className="mb-1 flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-bold">{capability.name}</div>
+                <div className="mt-0.5 text-[11.5px] text-fg-muted">{C.matrix.ownCellTitle(org)} · {C.matrix.ownCellHint}</div>
+              </div>
+              <button onClick={() => setOpen(null)} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label="Close"><X size={14} /></button>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {OWN_STATUS_VALUES.map((v) => (
+                <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", capability.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 // ————— Profiles tab —————
 
-function ProfilesTab({ competitors, self, selectedId, onSelect, domains, capabilities, cellOf, facts, onPatchFact }: {
+function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities, cellOf, facts, onPatchFact }: {
   competitors: CompetitorRow[];
-  self: CompetitorRow | null;
   selectedId: string | null;
   onSelect: (id: string) => void;
   domains: DomainRow[];
@@ -733,8 +791,8 @@ function ProfilesTab({ competitors, self, selectedId, onSelect, domains, capabil
   if (!selected) return null;
   const myFacts = facts.filter((f) => f.competitorId === selected.id);
   const kinds = Object.keys(C.profile.kinds);
-  const ahead = capabilities.filter((k) => cellOf(selected.id, k.id)?.value === "has" && cellOf(self?.id, k.id)?.value !== "has").length;
-  const behind = capabilities.filter((k) => cellOf(self?.id, k.id)?.value === "has" && cellOf(selected.id, k.id)?.value !== "has").length;
+  const ahead = capabilities.filter((k) => cellOf(selected.id, k.id)?.value === "has" && k.ourStatus !== "has").length;
+  const behind = capabilities.filter((k) => k.ourStatus === "has" && cellOf(selected.id, k.id)?.value !== "has").length;
 
   return (
     <section aria-label={C.tabs.profiles} className="flex gap-4">
@@ -819,19 +877,22 @@ function ProfilesTab({ competitors, self, selectedId, onSelect, domains, capabil
             if (rows.length === 0) return null;
             return (
               <div key={d.id}>
-                <div className="border-b border-border bg-[rgba(36,87,245,.05)] px-4 py-1.5 font-mono text-[10.5px] font-medium tracking-[0.04em] text-fg-muted">{d.name}</div>
+                <div className="flex items-center gap-2 border-b border-border bg-[rgba(36,87,245,.05)] px-4 py-1.5 font-mono text-[10.5px] font-medium tracking-[0.04em] text-fg-muted">
+                  <span className="h-2 w-2 rounded-[2px]" style={{ background: swatchColor(d.color, PRODUCT_CHIP_DEFAULT) }} />
+                  {d.name}
+                </div>
                 {rows.map((k) => {
                   const cell = cellOf(selected.id, k.id);
-                  const ownCell = cellOf(self?.id, k.id);
+                  const ownV = k.ourStatus;
                   return (
                     <div key={k.id} className="flex items-start gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
                       <span className="w-6 shrink-0 pt-0.5 text-center"><CellValue cell={cell} size={18} /></span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2 text-[13.5px] font-semibold">
                           {k.name}
-                          {ownCell && cell && ownCell.value !== cell.value && (
-                            <span className={cn("rounded-full px-2 py-px font-mono text-[10px] font-semibold", cell.value === "has" && ownCell.value !== "has" ? "bg-[#fff7e0] text-[#8a5a00]" : "bg-[rgba(23,178,106,.14)] text-[#0f7a47]")}>
-                              you: {C.values[ownCell.value]}
+                          {cell && ownV !== cell.value && (
+                            <span className={cn("rounded-full px-2 py-px font-mono text-[10px] font-semibold", cell.value === "has" && ownV !== "has" ? "bg-[#fff7e0] text-[#8a5a00]" : "bg-[rgba(23,178,106,.14)] text-[#0f7a47]")}>
+                              you: {C.values[ownV]}
                             </span>
                           )}
                           {cell?.changedAt && <span className="font-mono text-[10px] font-normal text-fg-muted">{C.matrix.changed(shortDate(cell.changedAt))}</span>}

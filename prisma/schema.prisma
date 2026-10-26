@@ -598,14 +598,14 @@ model PasswordResetToken {
 
 // ————— Competitors (story 2: website data → parity matrix + profile) —————
 //
-// Every row belongs to a workspace. The org's own site is a Competitor row
-// with isSelf = true: it seeds the capability catalog and is the matrix's
-// first column. Design of record: the C2 "full-screen matrix" board; spec:
-// "PM-OS Competitor Analysis — Spec", tab "Story 2 — Website data".
+// Every row belongs to a workspace. The org's own column of the matrix is
+// Capability.ourStatus — the organization is never scanned (Daniel,
+// 2026-10-26): its catalog and statuses are entered by its PMs. Design of
+// record: the C2 "full-screen matrix" board; spec: "PM-OS Competitor
+// Analysis — Spec", tab "Story 2 — Website data".
 
-/// A tracked company: the org itself (isSelf) or a competitor. One website
-/// source each in story 2; competition level (direct/indirect) arrives with
-/// story 7.
+/// A tracked competitor. One website source each in story 2; competition
+/// level (direct/indirect) arrives with story 7.
 model Competitor {
   id          String    @id @default(uuid())
   workspaceId String
@@ -616,7 +616,6 @@ model Competitor {
   /// Registrable host used to keep the crawl inside the site (recordedfuture.com).
   host        String
   logoUrl     String?
-  isSelf      Boolean   @default(false)
   position    Int       @default(0)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -630,8 +629,10 @@ model Competitor {
 }
 
 /// An industry problem/solution area above product lines (Threat intelligence,
-/// Exposure & response). Groups the matrix rows; sent to PMOS AI with the
-/// product lines as classification context. Settings → Competitors.
+/// Exposure & response). Groups the matrix rows. `description` is the long
+/// definition PMOS AI classifies with (definition, what belongs here, what
+/// does not, typical site phrases) — like a product line's description.
+/// Settings → Competitors.
 model CompetitorDomain {
   id          String    @id @default(uuid())
   workspaceId String
@@ -651,8 +652,10 @@ model CompetitorDomain {
 }
 
 /// A matrix row: one domain, many of the org's product lines (names, matched
-/// against ProductLine.name). origin "ai" = proposed from the own site or a
-/// competitor scan; state "suggested" rows wait for a PM to accept/dismiss.
+/// against ProductLine.name). `ourStatus` is the org's own cell — "has" |
+/// "partial" | "missing" — set by PMs (default has; a competitor suggestion
+/// accepted into the catalog starts as missing = a gap). origin "ai" = a
+/// competitor scan suggested it; state "suggested" rows wait for a PM.
 model Capability {
   id             String           @id @default(uuid())
   workspaceId    String
@@ -664,12 +667,14 @@ model Capability {
   /// Product-line names of the org that serve this capability (story 2 decision:
   /// product lines are the org's only; competitor products live in ProfileFact).
   productLines   Json             @default("[]")
+  /// "has" | "partial" | "missing"
+  ourStatus      String           @default("has")
   position       Int              @default(0)
   /// "manual" | "ai"
   origin         String           @default("manual")
   /// "active" | "suggested" | "dismissed"
   state          String           @default("active")
-  /// Which competitor's scan suggested it (null for own-site/manual rows).
+  /// Which competitor's scan suggested it (null for manual rows).
   suggestedById  String?
   suggestedQuote String?
   createdAt      DateTime         @default(now())

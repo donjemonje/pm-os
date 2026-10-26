@@ -107,7 +107,6 @@ export function AdminScans() {
                       <td className="px-3 py-2 font-medium">{r.orgName}</td>
                       <td className="px-3 py-2">
                         {r.competitorName}
-                        {r.isSelf && <span className="ml-1.5 rounded-full border border-slate-200 px-1.5 py-px text-[10px] text-slate-500">own site</span>}
                       </td>
                       <td className="px-3 py-2">
                         <span className={`inline-flex rounded-full border px-2 py-px text-[11px] font-medium ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span>

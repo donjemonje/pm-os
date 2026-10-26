@@ -48,6 +48,16 @@ export function frequencyMs(f: ScanFrequency): number {
   }
 }
 
+/** A domain's PMOS AI definition text (definition, belongs here, not here, typical phrases). */
+export const MAX_DOMAIN_DESCRIPTION = 6000;
+
+/** The org's own cell on a capability — set by PMs, never scanned. */
+export const OWN_STATUS_VALUES = ["has", "partial", "missing"] as const;
+export type OwnStatus = (typeof OWN_STATUS_VALUES)[number];
+export function isOwnStatus(v: unknown): v is OwnStatus {
+  return typeof v === "string" && (OWN_STATUS_VALUES as readonly string[]).includes(v);
+}
+
 /** Matrix cell values. */
 export const STATUS_VALUES = ["has", "partial", "missing", "unknown"] as const;
 export type StatusValue = (typeof STATUS_VALUES)[number];

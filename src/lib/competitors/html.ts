@@ -43,6 +43,26 @@ export function titleOf(html: string): string {
   return m ? decodeEntities(m[1]).replace(/\s+/g, " ").trim().slice(0, 200) : "";
 }
 
+/**
+ * A competitor's display name from its home page: og:site_name, else the
+ * first segment of <title> ("Flashpoint | Threat Intelligence…" → "Flashpoint"),
+ * else the host without its suffix ("recordedfuture.com" → "Recordedfuture").
+ */
+export function siteNameOf(html: string, host: string): string {
+  const og = html.match(/<meta[^>]+property=["']og:site_name["'][^>]*content=["']([^"']+)["']/i)
+    ?? html.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:site_name["']/i);
+  const fromOg = og ? decodeEntities(og[1]).trim() : "";
+  if (fromOg && fromOg.length <= 60) return fromOg;
+  const title = titleOf(html);
+  if (title) {
+    const parts = title.split(/\s+[|\-–—:·»]\s+/).map((p) => p.trim()).filter(Boolean);
+    const short = parts.filter((p) => p.length <= 40).sort((a, b) => a.length - b.length)[0] ?? parts[0];
+    if (short && short.length <= 60) return short.replace(/^(home|welcome to)\s+/i, "");
+  }
+  const label = host.split(".")[0] || host;
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 export function metaDescription(html: string): string {
   const m = html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i)
     ?? html.match(/<meta[^>]+content=["']([^"']*)["'][^>]*name=["']description["']/i);

@@ -5,6 +5,7 @@ import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson,
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { nextPosition } from "@/lib/competitors/store";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { isOwnStatus } from "@/lib/competitors/config";
 
 /** Only names from the org's product-line catalog survive. */
 export async function cleanProductLines(workspaceId: string, v: unknown): Promise<string[]> {
@@ -43,6 +44,7 @@ export async function POST(req: Request) {
       name,
       description: cleanText(body.description, MAX_DESCRIPTION) ?? "",
       productLines: productLines as unknown as Prisma.InputJsonValue,
+      ourStatus: isOwnStatus(body.ourStatus) ? body.ourStatus : "has",
       position: await nextPosition("capability", ctx.workspaceId),
       origin: "manual",
       state: "active",

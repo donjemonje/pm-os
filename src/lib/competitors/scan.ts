@@ -3,7 +3,6 @@ import { db } from "../db";
 import {
   classifyCapabilities,
   extractFacts,
-  proposeCatalog,
   type CatalogForAi,
   type PageText,
   type PreviousStatus,
@@ -209,7 +208,7 @@ export async function runScan(scanId: string): Promise<void> {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
     } else {
       // ——— 3. PMOS AI ———
-      const r = await aiStep(workspaceId, competitor.id, competitor.isSelf, competitor.name, scanId, changedPages, firstScan, log);
+      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, changedPages, firstScan, log);
       aiCalls = r.aiCalls;
       statusesChanged = r.statusesChanged;
       factsChanged = r.factsChanged;
@@ -298,7 +297,7 @@ async function loadCatalog(workspaceId: string): Promise<{ forAi: CatalogForAi; 
     forAi: {
       domains: domains
         .filter((d) => d.capabilities.length > 0)
-        .map((d) => ({ name: d.name, capabilities: d.capabilities.map((k) => ({ name: k.name, description: k.description })) })),
+        .map((d) => ({ name: d.name, description: d.description, capabilities: d.capabilities.map((k) => ({ name: k.name, description: k.description })) })),
     },
     byName,
     domainIdByName,
@@ -308,7 +307,6 @@ async function loadCatalog(workspaceId: string): Promise<{ forAi: CatalogForAi; 
 async function aiStep(
   workspaceId: string,
   competitorId: string,
-  isSelf: boolean,
   competitorName: string,
   scanId: string,
   pages: PageText[],
@@ -317,50 +315,10 @@ async function aiStep(
 ): Promise<AiStepResult> {
   const res: AiStepResult = { aiCalls: 0, statusesChanged: 0, factsChanged: 0, suggestions: 0, failed: null };
   try {
-    let catalog = await loadCatalog(workspaceId);
-
-    // Own site with an empty catalog → propose it (rows arrive as suggestions for the admin to accept).
-    if (isSelf && catalog.byName.size === 0) {
-      const existingSuggested = await db.capability.count({ where: { workspaceId, state: "suggested" } });
-      if (existingSuggested === 0) {
-        const org = await db.workspace.findUnique({ where: { id: workspaceId }, select: { organization: { select: { name: true } } } });
-        const productLines = (await db.productLine.findMany({ where: { workspaceId }, select: { name: true } })).map((p) => p.name);
-        log.add("info", `Catalog is empty — asking PMOS AI to propose domains and capabilities from ${pages.length} pages`);
-        const proposal = await proposeCatalog(org?.organization.name ?? competitorName, productLines, pages);
-        res.aiCalls++;
-        let pos = 0;
-        for (const d of proposal.value.domains) {
-          await db.competitorDomain.upsert({
-            where: { workspaceId_name: { workspaceId, name: d.name } },
-            create: { workspaceId, name: d.name, description: d.description, position: pos++ },
-            update: {},
-          });
-        }
-        catalog = await loadCatalog(workspaceId);
-        let kpos = 0;
-        for (const c of proposal.value.capabilities) {
-          const domainId = catalog.domainIdByName.get(c.domain);
-          if (!domainId) continue;
-          const exists = await db.capability.findFirst({ where: { workspaceId, name: { equals: c.name, mode: "insensitive" } }, select: { id: true } });
-          if (exists) continue;
-          await db.capability.create({
-            data: {
-              workspaceId, domainId, name: c.name, description: c.description,
-              productLines: c.productLines as unknown as Prisma.InputJsonValue,
-              position: kpos++, origin: "ai", state: "suggested", suggestedById: competitorId, suggestedQuote: c.quote ? `${c.quote} — ${c.url}` : null,
-            },
-          });
-          res.suggestions++;
-        }
-        log.add("info", `Proposed ${proposal.value.domains.length} domains and ${res.suggestions} capabilities — review them in Settings → Competitors`);
-        return res;
-      }
-      log.add("info", "Catalog proposal is waiting for review in Settings → Competitors — no statuses written yet");
-      return res;
-    }
+    const catalog = await loadCatalog(workspaceId);
 
     if (catalog.byName.size === 0) {
-      log.add("warn", "The capability catalog is empty — scan the organization's own website first, or add capabilities in Settings → Competitors");
+      log.add("warn", "The capability catalog is empty — add domains and capabilities in Settings → Competitors; this scan only collects profile facts");
     } else {
       // Statuses
       const prevRows = await db.capabilityStatus.findMany({ where: { competitorId }, include: { capability: { select: { name: true } } } });
@@ -405,16 +363,17 @@ async function aiStep(
         if (!domainId) continue;
         const exists = await db.capability.findFirst({ where: { workspaceId, name: { equals: s.name, mode: "insensitive" } }, select: { id: true } });
         if (exists) continue;
+        // A capability a competitor has and the catalog lacks: if accepted it is a gap by default.
         await db.capability.create({
-          data: { workspaceId, domainId, name: s.name, position: 9999, origin: "ai", state: "suggested", suggestedById: competitorId, suggestedQuote: s.quote ? `${s.quote} — ${s.url}` : null },
+          data: { workspaceId, domainId, name: s.name, position: 9999, origin: "ai", state: "suggested", ourStatus: "missing", suggestedById: competitorId, suggestedQuote: s.quote ? `${s.quote} — ${s.url}` : null },
         });
         res.suggestions++;
         log.add("info", `Suggested new capability: ${s.name} (${s.domain})`, s.url || undefined);
       }
     }
 
-    // Facts (competitors only — the org knows its own facts)
-    if (!isSelf) {
+    // Facts
+    {
       const ext = await extractFacts(competitorName, pages);
       res.aiCalls++;
       const now = new Date();

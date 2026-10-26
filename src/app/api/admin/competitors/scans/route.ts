@@ -10,7 +10,6 @@ export interface AdminScanRow {
   id: string;
   orgName: string;
   competitorName: string;
-  isSelf: boolean;
   url: string;
   trigger: string;
   status: string;
@@ -38,14 +37,13 @@ export async function GET(req: Request) {
     orderBy: { startedAt: "desc" },
     take: limit,
     include: {
-      source: { include: { competitor: { select: { name: true, isSelf: true, workspace: { select: { organization: { select: { name: true } } } } } } } },
+      source: { include: { competitor: { select: { name: true, workspace: { select: { organization: { select: { name: true } } } } } } } },
     },
   });
   const rows: AdminScanRow[] = scans.map((s) => ({
     id: s.id,
     orgName: s.source.competitor.workspace.organization.name,
     competitorName: s.source.competitor.name,
-    isSelf: s.source.competitor.isSelf,
     url: s.source.url,
     trigger: s.trigger,
     status: s.status,

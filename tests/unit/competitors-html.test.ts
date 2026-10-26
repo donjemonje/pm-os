@@ -3,7 +3,7 @@
  * detection of the website scanner (src/lib/competitors/html.ts). Pure module.
  */
 import { describe, expect, it } from "vitest";
-import { contentHash, extractLinks, htmlToText, looksEmptyWithoutJs, looksLikeBotWall, metaDescription, titleOf } from "@/lib/competitors/html";
+import { contentHash, extractLinks, htmlToText, looksEmptyWithoutJs, looksLikeBotWall, metaDescription, siteNameOf, titleOf } from "@/lib/competitors/html";
 import { Frontier, isAllowed, orderCandidates } from "@/lib/competitors/crawl";
 
 const PAGE = `<!doctype html><html><head><title>Acme &amp; Co — Platform</title>
@@ -90,5 +90,15 @@ describe("Frontier", () => {
       { key: "a", url: "https://a.com/products/alpha", priority: 2, via: "link" },
     ]).map((c) => c.url);
     expect(sorted).toEqual(["https://a.com/products/alpha", "https://a.com/products/zeta", "https://a.com/products/one/two"]);
+  });
+});
+
+describe("siteNameOf", () => {
+  it("prefers og:site_name, then the shortest title segment, then the host", () => {
+
+    expect(siteNameOf('<head><meta property="og:site_name" content="Recorded Future"><title>Advanced Cyber Threat Intelligence | Recorded Future</title></head>', "recordedfuture.com")).toBe("Recorded Future");
+    expect(siteNameOf("<title>Flashpoint | Threat Intelligence With Industry-Best Data</title>", "flashpoint.io")).toBe("Flashpoint");
+    expect(siteNameOf("<title>Check Point Exposure Management | Formerly Cyberint</title>", "cyberint.com")).toBe("Formerly Cyberint");
+    expect(siteNameOf("<html></html>", "intel471.com")).toBe("Intel471");
   });
 });

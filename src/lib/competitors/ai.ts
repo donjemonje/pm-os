@@ -5,16 +5,16 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
  * PMOS AI for competitors: three structured calls on the Vertex client the
  * Ideas stages use (forced tool use → validated JSON, never free text).
  *
- * 1. proposeCatalog — the org's OWN site → domains + capabilities to seed the catalog.
- * 2. classifyCapabilities — a competitor's changed pages × the catalog → status per capability
+ * 1. classifyCapabilities — a competitor's changed pages × the catalog → status per capability
  *    with a quote + URL, plus capabilities the catalog lacks (suggestions).
- * 3. extractFacts — a competitor's pages → lean-profile facts (closed kinds), each with a URL.
+ * 2. extractFacts — a competitor's pages → lean-profile facts (closed kinds), each with a URL.
+ * The organization itself is never scanned: its catalog and own statuses are entered by its PMs.
  *
  * Pages are sent as text only. The shared prefix (instructions + catalog) is
  * cache-marked; the per-call tail is the page text.
  */
 
-export const COMPETITORS_PROMPT_VERSION = "competitors-v1";
+export const COMPETITORS_PROMPT_VERSION = "competitors-v2";
 
 export function getCompetitorsModel(): string {
   return process.env.COMPETITORS_MODEL?.trim() || process.env.IDEAS_CATALOG_MODEL?.trim() || "claude-opus-5";
@@ -66,93 +66,11 @@ const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const strs = (v: unknown, max = 120): string[] =>
   arr(v).map((x) => str(x, max)).filter(Boolean);
 
-// ————— 1. Catalog proposal from the org's own site —————
-
-export const CATALOG_SYSTEM_PROMPT = `You help a product team describe its own product as a capability catalog for competitive analysis.
-
-You read the text of the organization's own public website and return:
-- domains: 3–7 problem/solution areas of the industry this product serves (e.g. for cyber threat intelligence: "Threat intelligence", "Exposure & response", "AI", "Integrations & buying"). Short noun phrases, title case first word only. Each with a one-sentence description.
-- capabilities: 8–30 concrete things the product does, each in exactly one domain. A capability is something a buyer compares vendors on ("Dark web & closed-forum monitoring", "Takedown requests", "SIEM / SOAR integrations"), not a marketing claim ("industry-leading", "trusted by") and not a product name. Merge near-duplicates. Each with a one-line description and, when the site makes it clear, the product line(s) of the organization that deliver it, chosen ONLY from the product-line list provided (empty when unclear).
-- For each capability, a short quote from the site (≤ 200 characters) and the page URL it came from.
-
-Use only what the pages say. Never invent capabilities the site does not describe.`;
-
-export const CATALOG_TOOL = {
-  name: "propose_catalog",
-  description: "Propose the domains and capabilities that describe this product.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      domains: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: { name: { type: "string" }, description: { type: "string" } },
-          required: ["name", "description"],
-        },
-      },
-      capabilities: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            domain: { type: "string", description: "Exactly one of the proposed domain names." },
-            description: { type: "string" },
-            product_lines: { type: "array", items: { type: "string" } },
-            quote: { type: "string" },
-            url: { type: "string" },
-          },
-          required: ["name", "domain", "description", "product_lines", "quote", "url"],
-        },
-      },
-    },
-    required: ["domains", "capabilities"],
-  },
-};
-
-export interface ProposedDomain { name: string; description: string }
-export interface ProposedCapability {
-  name: string;
-  domain: string;
-  description: string;
-  productLines: string[];
-  quote: string;
-  url: string;
-}
-export interface CatalogProposal { domains: ProposedDomain[]; capabilities: ProposedCapability[] }
-
-export async function proposeCatalog(orgName: string, productLines: string[], pages: PageText[]): Promise<AiResult<CatalogProposal>> {
-  const shared = `ORGANIZATION: ${orgName}\nPRODUCT LINES (the only allowed values for product_lines): ${productLines.length ? productLines.join(" | ") : "(none defined)"}`;
-  const tail = `WEBSITE PAGES:\n\n${packPages(pages)}`;
-  const r = await callTool<Record<string, unknown>>(CATALOG_SYSTEM_PROMPT, shared, tail, CATALOG_TOOL, 6000);
-  const lines = new Set(productLines.map((p) => p.toLowerCase()));
-  const domains: ProposedDomain[] = arr(r.value.domains)
-    .map((d) => {
-      const o = (d ?? {}) as Record<string, unknown>;
-      return { name: str(o.name, 60), description: str(o.description, 300) };
-    })
-    .filter((d) => d.name);
-  const domainNames = new Set(domains.map((d) => d.name.toLowerCase()));
-  const capabilities: ProposedCapability[] = arr(r.value.capabilities)
-    .map((c) => {
-      const o = (c ?? {}) as Record<string, unknown>;
-      return {
-        name: str(o.name, 80),
-        domain: str(o.domain, 60),
-        description: str(o.description, 300),
-        productLines: strs(o.product_lines).filter((p) => lines.has(p.toLowerCase())).map((p) => productLines.find((x) => x.toLowerCase() === p.toLowerCase())!),
-        quote: str(o.quote, 240),
-        url: str(o.url, 500),
-      };
-    })
-    .filter((c) => c.name && c.domain && domainNames.has(c.domain.toLowerCase()));
-  return { value: { domains, capabilities }, usage: r.usage };
-}
-
-// ————— 2. Status per capability for a competitor —————
+// ————— 1. Status per capability for a competitor —————
 
 export const CLASSIFY_SYSTEM_PROMPT = `You compare a competitor's public website against a fixed capability catalog for a product team.
+
+The catalog is grouped by domain; each domain comes with the product team's own definition of it (what belongs there, what does not, typical phrases). Read those definitions first — they are the ground truth for what each capability means.
 
 For EVERY capability in the catalog, decide from the page text whether the competitor:
 - "has" it — the site clearly describes offering this capability;
@@ -204,7 +122,7 @@ export const CLASSIFY_TOOL = {
 };
 
 export interface CatalogForAi {
-  domains: { name: string; capabilities: { name: string; description: string }[] }[];
+  domains: { name: string; description: string; capabilities: { name: string; description: string }[] }[];
 }
 export interface PreviousStatus { capability: string; value: StatusValue; confidence: number | null }
 export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string }
@@ -213,7 +131,7 @@ export interface Classification { statuses: ClassifiedStatus[]; suggestions: Sug
 
 export function renderCatalog(c: CatalogForAi): string {
   return c.domains
-    .map((d) => `DOMAIN: ${d.name}\n${d.capabilities.map((k) => `- ${k.name}${k.description ? ` — ${k.description}` : ""}`).join("\n")}`)
+    .map((d) => `DOMAIN: ${d.name}${d.description ? `\n${d.description.trim()}` : ""}\nCAPABILITIES:\n${d.capabilities.map((k) => `- ${k.name}${k.description ? ` — ${k.description}` : ""}`).join("\n")}`)
     .join("\n\n");
 }
 
@@ -253,7 +171,7 @@ export async function classifyCapabilities(
   return { value: { statuses, suggestions }, usage: r.usage };
 }
 
-// ————— 3. Lean-profile facts —————
+// ————— 2. Lean-profile facts —————
 
 export const FACTS_SYSTEM_PROMPT = `You extract company facts from a competitor's public website for a product team's competitor profile.
 

@@ -3,21 +3,25 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { isOwnStatus } from "@/lib/competitors/config";
 import { cleanProductLines } from "../route";
 
 type Params = { params: Promise<{ id: string }> };
 
 /**
- * PATCH: rename, describe, move to another domain, set product lines, or
+ * PATCH: rename, describe, move to another domain, set product lines, set the
+ * org's own status (`ourStatus`: has / partial / missing — any member), or
  * decide a suggestion (`state`: "active" = accept, "dismissed" = dismiss).
  * DELETE: remove the row and every status on it.
  */
 export async function PATCH(req: Request, { params }: Params) {
-  const ctx = await competitorsGuard({ admin: true });
-  if (ctx instanceof NextResponse) return ctx;
   const { id } = await params;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
+  // The own status alone is a PM's call, like correcting a competitor's cell; everything else is admin.
+  const onlyOwnStatus = Object.keys(body).every((k) => k === "ourStatus");
+  const ctx = await competitorsGuard({ admin: !onlyOwnStatus });
+  if (ctx instanceof NextResponse) return ctx;
   const existing = await db.capability.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
   if (!existing) return bad("Not found", 404);
 
@@ -60,6 +64,12 @@ export async function PATCH(req: Request, { params }: Params) {
     field = "productLines";
   }
   if (typeof body.position === "number" && Number.isFinite(body.position)) data.position = Math.max(0, Math.round(body.position));
+  if (body.ourStatus !== undefined) {
+    if (!isOwnStatus(body.ourStatus)) return bad("Pick has, partial or missing.");
+    data.ourStatus = body.ourStatus;
+    action = "ourStatus";
+    field = "ourStatus";
+  }
 
   let decision: "accepted" | "dismissed" | null = null;
   if (body.state === "active" || body.state === "dismissed") {

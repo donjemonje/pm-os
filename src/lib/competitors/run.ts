@@ -60,8 +60,8 @@ export async function runDueScans(log: (msg: string) => void = console.log): Pro
         type: "website",
         OR: [{ lastScanAt: null }, { lastScanAt: { lt: dueBefore } }],
       },
-      include: { competitor: { select: { id: true, name: true, isSelf: true } } },
-      orderBy: [{ competitor: { isSelf: "desc" } }, { lastScanAt: "asc" }],
+      include: { competitor: { select: { id: true, name: true } } },
+      orderBy: [{ lastScanAt: "asc" }],
     });
     for (const s of sources) {
       const created = await createScan(w.id, s.competitor.id, "scheduled", null);
