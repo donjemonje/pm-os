@@ -1,9 +1,15 @@
+import { GoogleGenAI, Type, type Schema } from "@google/genai";
+import { getGeminiLocation, getVertexProjectId } from "../vertex-config";
 import { FACT_KINDS, STATUS_VALUES, type FactKind, type StatusValue } from "./config";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 
 /**
- * PMOS AI for competitors: three structured calls on the Vertex client the
- * Ideas stages use (forced tool use → validated JSON, never free text).
+ * PMOS AI for competitors: structured calls, never free text. The model is
+ * COMPETITORS_MODEL: a `gemini-*` id runs on Gemini (Vertex, structured
+ * output through a response schema — Daniel 2026-10-26: Gemini is covered by
+ * the GCP credits, so competitors is where it is tried first); anything else
+ * runs on Claude through the Vertex Anthropic client (forced tool use). Both
+ * paths validate the answer field by field.
  *
  * 1. classifyCapabilities — a competitor's changed pages × the catalog → status per capability
  *    with a quote + URL, plus capabilities the catalog lacks (suggestions).
@@ -17,7 +23,43 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 export const COMPETITORS_PROMPT_VERSION = "competitors-v2";
 
 export function getCompetitorsModel(): string {
-  return process.env.COMPETITORS_MODEL?.trim() || process.env.IDEAS_CATALOG_MODEL?.trim() || "claude-opus-5";
+  return process.env.COMPETITORS_MODEL?.trim() || process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+}
+
+export type CompetitorsProvider = "gemini" | "claude";
+export function getCompetitorsProvider(model = getCompetitorsModel()): CompetitorsProvider {
+  return /^gemini/i.test(model) ? "gemini" : "claude";
+}
+
+let gemini: GoogleGenAI | null = null;
+let geminiKey = "";
+function getGemini(): GoogleGenAI {
+  const project = getVertexProjectId();
+  const location = getGeminiLocation();
+  const key = `${project}|${location}`;
+  if (!gemini || geminiKey !== key) {
+    gemini = new GoogleGenAI({ vertexai: true, project, location });
+    geminiKey = key;
+  }
+  return gemini;
+}
+
+/** The tool's JSON schema, as Gemini's response schema (same shape, typed enums). */
+function toGeminiSchema(node: Record<string, unknown>): Schema {
+  const t = String(node.type ?? "object").toLowerCase();
+  const out: Schema = {
+    type: t === "string" ? Type.STRING : t === "number" ? Type.NUMBER : t === "integer" ? Type.INTEGER : t === "boolean" ? Type.BOOLEAN : t === "array" ? Type.ARRAY : Type.OBJECT,
+  };
+  if (typeof node.description === "string") out.description = node.description;
+  if (Array.isArray(node.enum)) out.enum = node.enum.map(String);
+  if (node.properties && typeof node.properties === "object") {
+    out.properties = Object.fromEntries(Object.entries(node.properties as Record<string, Record<string, unknown>>).map(([k, v]) => [k, toGeminiSchema(v)]));
+  }
+  if (Array.isArray(node.required)) out.required = node.required as string[];
+  if (node.items && typeof node.items === "object") out.items = toGeminiSchema(node.items as Record<string, unknown>);
+  if (typeof node.minimum === "number") out.minimum = node.minimum;
+  if (typeof node.maximum === "number") out.maximum = node.maximum;
+  return out;
 }
 
 /** Keep each call well inside the context window; marketing pages are wordy. */
@@ -48,6 +90,29 @@ export interface AiResult<T> {
 }
 
 async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number): Promise<AiResult<T>> {
+  const model = getCompetitorsModel();
+  if (getCompetitorsProvider(model) === "gemini") {
+    const response = await getGemini().models.generateContent({
+      model,
+      contents: `${shared}\n\n${tail}`,
+      config: {
+        systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
+        temperature: 0,
+        // Thinking is billed against maxOutputTokens: keep it bounded, leave room for the answer.
+        thinkingConfig: { thinkingBudget: 2048 },
+        maxOutputTokens: maxTokens + 2048,
+        responseMimeType: "application/json",
+        responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
+      },
+    });
+    const text = response.text ?? "";
+    try {
+      return { value: JSON.parse(text) as T, usage: response.usageMetadata };
+    } catch {
+      const finish = response.candidates?.[0]?.finishReason ?? "unknown";
+      throw new Error(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`);
+    }
+  }
   const message = await getCompetitorsClient().messages.create({
     model: getCompetitorsModel(),
     max_tokens: maxTokens,
