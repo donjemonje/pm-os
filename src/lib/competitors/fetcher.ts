@@ -15,11 +15,35 @@ const BROWSER_UA =
 
 export const FETCH_TIMEOUT_MS = 15_000;
 const BROWSER_TIMEOUT_MS = 30_000;
-/** Politeness pause between two pages of the same site. */
-export const PAGE_PAUSE_MS = 600;
 
 export type FetchMode = "plain" | "browser";
-export type FetchErrorKind = "timeout" | "http4xx" | "http5xx" | "botwall" | "other";
+export type FetchErrorKind = "timeout" | "http4xx" | "http5xx" | "botwall" | "login" | "notfound" | "noindex" | "other";
+
+/** Validators from the previous scan of the same URL — sent as conditional headers. */
+export interface Validators {
+  etag?: string | null;
+  lastModified?: string | null;
+}
+
+/** The user-facing category of a page that was not read (scanner rules, "what users see"). */
+export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" | "login" | "notfound" | "timeout" | "policy" {
+  switch (error) {
+    case "botwall":
+    case "http4xx":
+      return "denied";
+    case "login":
+      return "login";
+    case "notfound":
+      return "notfound";
+    case "noindex":
+      return "policy";
+    case "timeout":
+    case "http5xx":
+    case "other":
+    default:
+      return "timeout";
+  }
+}
 
 export interface FetchedPage {
   url: string;
@@ -32,6 +56,10 @@ export interface FetchedPage {
   ms: number;
   /** True when the site needs the browser: bot wall or no text without JS. */
   needsBrowser: boolean;
+  /** 304 Not Modified — the previous scan's text still stands. */
+  notModified?: boolean;
+  etag?: string | null;
+  lastModified?: string | null;
   error?: FetchErrorKind;
   errorDetail?: string;
 }
@@ -41,7 +69,7 @@ export function browserAvailable(): boolean {
   return v === "on" || v === "true" || v === "1";
 }
 
-export async function fetchPlain(url: string): Promise<FetchedPage> {
+export async function fetchPlain(url: string, validators: Validators = {}): Promise<FetchedPage> {
   const t0 = Date.now();
   try {
     const res = await fetch(url, {
@@ -49,10 +77,17 @@ export async function fetchPlain(url: string): Promise<FetchedPage> {
         "user-agent": USER_AGENT,
         accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "accept-language": "en-US,en;q=0.9",
+        ...(validators.etag ? { "if-none-match": validators.etag } : {}),
+        ...(validators.lastModified ? { "if-modified-since": validators.lastModified } : {}),
       },
       redirect: "follow",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
+    const etag = res.headers.get("etag");
+    const lastModified = res.headers.get("last-modified");
+    if (res.status === 304) {
+      return { url, finalUrl: res.url || url, status: 304, html: "", text: "", mode: "plain", ms: Date.now() - t0, needsBrowser: false, notModified: true, etag, lastModified };
+    }
     const html = await res.text();
     const text = htmlToText(html);
     const wall = looksLikeBotWall(res.status, html);
@@ -65,15 +100,28 @@ export async function fetchPlain(url: string): Promise<FetchedPage> {
       mode: "plain",
       ms: Date.now() - t0,
       needsBrowser: wall || (res.ok && looksEmptyWithoutJs(text, html)),
+      etag,
+      lastModified,
     };
+    const xRobots = (res.headers.get("x-robots-tag") ?? "").toLowerCase();
     if (wall) {
       page.error = "botwall";
+    } else if (res.status === 401 || res.status === 402 || res.status === 407) {
+      page.error = "login";
+      page.errorDetail = `HTTP ${res.status}`;
+    } else if (res.status === 404 || res.status === 410) {
+      page.error = "notfound";
+      page.errorDetail = `HTTP ${res.status}`;
     } else if (res.status >= 500) {
       page.error = "http5xx";
       page.errorDetail = `HTTP ${res.status}`;
     } else if (res.status >= 400) {
       page.error = "http4xx";
       page.errorDetail = `HTTP ${res.status}`;
+    } else if (/\b(noindex|none)\b/.test(xRobots)) {
+      // The site asked robots to leave this page out — honoured like robots.txt.
+      page.error = "noindex";
+      page.errorDetail = "X-Robots-Tag: noindex";
     }
     return page;
   } catch (e) {
@@ -161,6 +209,8 @@ export async function fetchWithBrowser(url: string): Promise<FetchedPage> {
       needsBrowser: true,
     };
     if (wall) out.error = "botwall";
+    else if (status === 401 || status === 402) { out.error = "login"; out.errorDetail = `HTTP ${status}`; }
+    else if (status === 404 || status === 410) { out.error = "notfound"; out.errorDetail = `HTTP ${status}`; }
     else if (status >= 500) { out.error = "http5xx"; out.errorDetail = `HTTP ${status}`; }
     else if (status >= 400) { out.error = "http4xx"; out.errorDetail = `HTTP ${status}`; }
     return out;
@@ -183,9 +233,9 @@ export async function fetchWithBrowser(url: string): Promise<FetchedPage> {
   }
 }
 
-/** Fetch in the given mode. */
-export function fetchPage(url: string, mode: FetchMode): Promise<FetchedPage> {
-  return mode === "browser" ? fetchWithBrowser(url) : fetchPlain(url);
+/** Fetch in the given mode (conditional headers only make sense in plain mode). */
+export function fetchPage(url: string, mode: FetchMode, validators: Validators = {}): Promise<FetchedPage> {
+  return mode === "browser" ? fetchWithBrowser(url) : fetchPlain(url, validators);
 }
 
 export function sleep(ms: number): Promise<void> {

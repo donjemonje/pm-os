@@ -21,14 +21,23 @@ interface ScanRow {
   aiCalls: number;
   errorKind: string | null;
   error: string | null;
-  pages: { url: string; status: number; outcome: string; chars: number; ms: number; via: string; error?: string }[];
+  badge: string | null;
+  outcomes: Record<string, number>;
+  robotsDisallowed: string[];
+  removedPages: string[];
+  piiHits: number;
+  pages: { url: string; status: number; outcome: string; category?: string; chars: number; ms: number; via: string; error?: string }[];
   log: { at: string; level: string; msg: string; url?: string }[];
 }
 
 const STATUS_CLASS: Record<string, string> = {
   ok: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
+  full: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
   partial: "bg-[#fff7e0] text-[#8a5a00]",
+  incomplete: "bg-[#fff7e0] text-[#8a5a00]",
   failed: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  blocked: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  unreachable: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
   running: "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]",
   queued: "bg-[#eef1f6] text-[#4a5b74]",
 };
@@ -106,8 +115,8 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-[rgba(255,255,255,.7)]"
                 >
                   {isOpen ? <ChevronDown size={14} className="text-fg-muted" /> : <ChevronRight size={14} className="text-fg-muted" />}
-                  <span className={cn("inline-flex rounded-full px-2 py-px text-[11px] font-semibold", STATUS_CLASS[s.status] ?? STATUS_CLASS.queued)}>
-                    {C.log.status[s.status] ?? s.status}
+                  <span className={cn("inline-flex rounded-full px-2 py-px text-[11px] font-semibold", STATUS_CLASS[s.badge ?? s.status] ?? STATUS_CLASS.queued)} title={s.badge ? C.settings.badgeHint[s.badge] : undefined}>
+                    {s.badge ? C.settings.badges[s.badge] : C.log.status[s.status] ?? s.status}
                   </span>
                   <span className="font-semibold">{shortDate(s.startedAt)}</span>
                   <span className="text-fg-muted" title={new Date(s.startedAt).toLocaleString()}>{timeAgo(s.startedAt)}</span>
@@ -122,8 +131,26 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                     <div className="mb-3 flex flex-wrap gap-4 font-mono text-[11px] text-fg-3">
                       {seconds != null && <span>{C.log.duration(seconds)}</span>}
                       <span>{C.log.aiCalls(s.aiCalls)}</span>
+                      {s.piiHits > 0 && <span className="text-[#8a5a00]">{C.log.piiHits(s.piiHits)}</span>}
                       {s.error && <span className="text-[#c23767]">{s.error}</span>}
                     </div>
+                    {(Object.keys(s.outcomes ?? {}).length > 0 || s.removedPages?.length > 0) && (
+                      <div className="mb-3 rounded-[8px] border border-border bg-white px-3 py-2 text-[12px] text-fg-2">
+                        {Object.keys(s.outcomes ?? {}).length > 0 && (
+                          <div>
+                            <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.log.outcomesHeading}: </span>
+                            {Object.entries(s.outcomes).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${C.settings.outcomeLabels[k] ?? k}`).join(" · ")}
+                            {s.robotsDisallowed?.length > 0 && <span className="text-fg-muted"> — {C.log.robotsPaths}: {s.robotsDisallowed.join(", ")}</span>}
+                          </div>
+                        )}
+                        {s.removedPages?.length > 0 && (
+                          <div className="mt-1">
+                            <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.log.removedHeading}: </span>
+                            {s.removedPages.map((u) => u.replace(/^https?:\/\/[^/]+/, "") || "/").join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="mb-1.5 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.log.pagesHeading} · {s.pages.length}</div>
                     <div className="mb-4 max-h-64 overflow-y-auto rounded-[8px] border border-border bg-white">
                       {s.pages.length === 0 && <div className="px-3 py-2 text-fg-faint">—</div>}
@@ -134,6 +161,7 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                             {p.url.replace(/^https?:\/\/[^/]+/, "") || "/"}
                           </a>
                           <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">{p.status || "—"} · {p.chars.toLocaleString()} ch · {p.ms} ms</span>
+                          {p.category && <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">{C.settings.outcomeLabels[p.category] ?? p.category}</span>}
                           {p.error && <span className="shrink-0 font-mono text-[10.5px] text-[#c23767]">{p.error}</span>}
                         </div>
                       ))}

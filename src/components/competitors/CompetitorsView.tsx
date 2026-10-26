@@ -8,7 +8,7 @@ import { Ring } from "@/components/ui/Ring";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -370,9 +370,12 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
                       </th>
                       {shownCompetitors.map((c) => (
                         <th key={c.id} scope="col" className="w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
-                          <button onClick={() => openProfile(c.id, "cell")} className="flex w-full flex-col items-center gap-1.5 pt-[13px] hover:opacity-80" title={c.name}>
+                          <button onClick={() => openProfile(c.id, "cell")} className="flex w-full flex-col items-center gap-1.5 pt-[13px] hover:opacity-80" title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
+                            {(c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable") && (
+                              <span className="rounded-full bg-[rgba(239,90,138,.15)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#c23767]">{C.settings.badges[c.lastScan.badge]}{c.lastGoodScanAt ? ` · ${shortDate(c.lastGoodScanAt)}` : ""}</span>
+                            )}
                           </button>
                         </th>
                       ))}
@@ -488,6 +491,14 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
             cellOf={cellOf}
             facts={state.facts}
             onPatchFact={(id, body) => patch(`/api/competitors/facts/${id}`, body)}
+            onAddFact={async (competitorId, kind, value) => {
+              setError(null);
+              const res = await fetch("/api/competitors/facts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ competitorId, kind, value }) });
+              const data = await res.json();
+              if (!res.ok) { setError(data.error ?? C.errors.generic); return false; }
+              if (data.state) setState(data.state);
+              return true;
+            }}
           />
         )}
 
@@ -768,7 +779,7 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
 
 // ————— Profiles tab —————
 
-function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities, cellOf, facts, onPatchFact }: {
+function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities, cellOf, facts, onPatchFact, onAddFact }: {
   competitors: CompetitorRow[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -777,10 +788,22 @@ function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities,
   cellOf: (competitorId: string | null | undefined, capabilityId: string) => CellRow | undefined;
   facts: FactRow[];
   onPatchFact: (id: string, body: unknown) => Promise<boolean>;
+  onAddFact: (competitorId: string, kind: string, value: string) => Promise<boolean>;
 }) {
   const selected = competitors.find((c) => c.id === selectedId) ?? competitors[0] ?? null;
   const [editingFact, setEditingFact] = useState<string | null>(null);
   const [factValue, setFactValue] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [newKind, setNewKind] = useState<string>("product");
+  const [newValue, setNewValue] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
+  async function submitFact() {
+    if (!selected || !newValue.trim()) return;
+    setAddBusy(true);
+    const ok = await onAddFact(selected.id, newKind, newValue.trim());
+    setAddBusy(false);
+    if (ok) { setNewValue(""); setAdding(false); }
+  }
 
   useEffect(() => {
     if (!selectedId && competitors[0]) onSelect(competitors[0].id);
@@ -814,8 +837,10 @@ function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities,
               <div className="font-title text-[20px] font-bold">{selected.name}</div>
               <a href={selected.websiteUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12.5px] text-primary hover:underline"><ExternalLink size={11} /> {selected.host}</a>
               <div className="mt-1 text-[11.5px] text-fg-muted">
-                {selected.source?.lastScanAt ? C.profile.lastScan(timeAgo(selected.source.lastScanAt), 0).replace(" · 0 pages", "") : C.profile.neverScanned}
-                {selected.source?.lastStatus === "failed" && selected.source.lastError && <span className="text-[#c23767]"> · {C.settings.failed(C.errors[selected.source.lastError] ?? selected.source.lastError)}</span>}
+                {selected.lastScan ? C.profile.lastScan(timeAgo(selected.lastScan.startedAt), selected.lastScan.pagesFetched) : C.profile.neverScanned}
+                {selected.lastScan?.badge && selected.lastScan.badge !== "full" && (
+                  <span className={selected.lastScan.badge === "incomplete" ? " text-[#8a5a00]" : " text-[#c23767]"}> · {C.settings.badges[selected.lastScan.badge]}{(selected.lastScan.badge === "blocked" || selected.lastScan.badge === "unreachable") && selected.lastGoodScanAt ? ` — ${C.settings.showingDataFrom(shortDate(selected.lastGoodScanAt))}` : ""}</span>
+                )}
               </div>
               {myFacts.find((f) => f.kind === "tagline") && <div className="mt-2 text-[13.5px] italic text-fg-2">“{myFacts.find((f) => f.kind === "tagline")!.value}”</div>}
             </div>
@@ -826,7 +851,22 @@ function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities,
               </div>
             )}
           </div>
-          <div className="mt-5 grid grid-cols-2 gap-x-8 gap-y-3 text-[13px] md:grid-cols-3">
+          <div className="mt-4 flex items-center gap-2">
+            {!adding ? (
+              <Button size="sm" onClick={() => setAdding(true)}><Pencil size={12} /> {C.profile.addFact}</Button>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2" onKeyDown={(e) => { if (e.key === "Escape") setAdding(false); if (e.key === "Enter") { e.preventDefault(); void submitFact(); } }}>
+                <select value={newKind} onChange={(e) => setNewKind(e.target.value)} className="h-8 rounded-control border border-border bg-white px-2 text-[12.5px]" aria-label={C.profile.addFactKind}>
+                  {FACT_KINDS.map((k) => <option key={k} value={k}>{C.profile.kinds[k] ?? k}</option>)}
+                </select>
+                <input autoFocus value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder={C.profile.addFactPlaceholder} maxLength={80} aria-label={C.profile.addFactValue}
+                  className="h-8 w-72 rounded-control border border-border bg-white px-3 text-[13px] outline-none focus:border-primary" />
+                <Button size="sm" onClick={() => setAdding(false)} disabled={addBusy}>{C.cell.cancel}</Button>
+                <Button size="sm" variant="primary" onClick={submitFact} disabled={addBusy || !newValue.trim()}>{C.profile.addFactSave}</Button>
+              </div>
+            )}
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-x-8 gap-y-3 text-[13px] md:grid-cols-3">
             {kinds.filter((k) => k !== "tagline").map((kind) => {
               const rows = myFacts.filter((f) => f.kind === kind);
               return (
@@ -847,8 +887,11 @@ function ProfilesTab({ competitors, selectedId, onSelect, domains, capabilities,
                               className="w-full rounded-[6px] border border-border px-1.5 py-0.5 text-[12.5px] outline-none focus:border-primary" />
                           ) : (
                             <>
-                              <span className={cn("min-w-0 truncate", f.override && "text-[#8a5a00]")} title={f.override ? C.matrix.editedBy(f.override.userName ?? "a PM", shortDate(f.override.at)) : f.value}>{f.value}</span>
+                              <span className={cn("min-w-0 truncate", f.override && "text-[#8a5a00]", (f.stale || f.unreachable) && "text-fg-muted")} title={f.override ? C.matrix.editedBy(f.override.userName ?? "a PM", shortDate(f.override.at)) : f.value}>{f.value}</span>
                               {f.sourceUrl && <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="shrink-0 text-fg-faint hover:text-primary" title={f.sourceUrl}><ExternalLink size={10} /></a>}
+                              {f.manual && <span className="shrink-0 rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[9px] text-fg-muted" title={C.profile.manual}>{C.profile.manual}</span>}
+                              {f.unreachable && <span className="shrink-0 rounded-full bg-[rgba(239,90,138,.12)] px-1.5 py-px font-mono text-[9px] text-[#c23767]" title={C.profile.unreachableTip}>{C.profile.unreachable}</span>}
+                              {f.stale && !f.unreachable && <span className="shrink-0 rounded-full bg-[#fff7e0] px-1.5 py-px font-mono text-[9px] text-[#8a5a00]" title={C.profile.staleTip}>{C.profile.stale}</span>}
                               <span className="ml-auto hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
                                 <button onClick={() => { setEditingFact(f.id); setFactValue(f.value); }} className="rounded p-0.5 text-fg-muted hover:text-foreground" aria-label={C.cell.correct}><Pencil size={10} /></button>
                                 {f.override && <button onClick={() => void onPatchFact(f.id, { reset: true })} className="rounded p-0.5 text-fg-muted hover:text-foreground" aria-label={C.cell.reset}><Undo2 size={10} /></button>}

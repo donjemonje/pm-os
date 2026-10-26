@@ -11,6 +11,7 @@ import { frequencyMs, MAX_DOMAIN_DESCRIPTION, MAX_MAX_PAGES, MIN_MAX_PAGES, OWN_
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
+import { scanSummaryLine } from "@/lib/competitors/summary";
 import { timeAgo, timeUntil } from "@/lib/competitors/time";
 import { track } from "@/lib/analytics/track";
 import { cn } from "@/lib/utils";
@@ -24,9 +25,10 @@ const SMALL_BTN =
 const ICON_BTN = "rounded-md p-1.5 text-fg-muted hover:bg-background hover:text-foreground disabled:opacity-40";
 
 const STATUS_PILL: Record<string, string> = {
-  ok: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
-  partial: "bg-[#fff7e0] text-[#8a5a00]",
-  failed: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  full: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
+  incomplete: "bg-[#fff7e0] text-[#8a5a00]",
+  blocked: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  unreachable: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
   running: "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]",
   never: "bg-[#eef1f6] text-[#4a5b74]",
 };
@@ -41,7 +43,7 @@ const POLL_MS = 3000;
  * need a customer admin (the API enforces the same). Scan now and the log are
  * for every member.
  */
-export function CompetitorsSettings({ initialState, canEdit }: { initialState: CompetitorsState; canEdit: boolean }) {
+export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false }: { initialState: CompetitorsState; canEdit: boolean; isPmosAdmin?: boolean }) {
   const { confirm } = useConfirm();
   const [state, setState] = useState(initialState);
   const [busy, setBusy] = useState(false);
@@ -138,7 +140,9 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
           <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCompetitors}</div>
         ) : (
           competitors.map((c) => (
-            <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)} onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
+            <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)}
+              rescanLimited={!isPmosAdmin && c.manualScansToday >= state.config.manualRescansPerDay}
+              onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
           ))
         )}
       </section>
@@ -202,12 +206,14 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
 
 // ————— Competitor row —————
 
-function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog, onRemove, onSave }: {
+function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited, onScan, onLog, onRemove, onSave }: {
   c: CompetitorRow;
   busy: boolean;
   scanning: boolean;
   canEdit: boolean;
   nextScanAt: string | null;
+  /** Today's manual scans reached the org's per-site limit (PM-OS admins never are). */
+  rescanLimited: boolean;
   onScan: (c: CompetitorRow) => Promise<void>;
   onLog: (c: CompetitorRow) => void;
   onRemove: (c: CompetitorRow) => Promise<void>;
@@ -217,8 +223,8 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
   const [name, setName] = useState(c.name);
   const [website, setWebsite] = useState(c.websiteUrl);
   const [starting, setStarting] = useState(false);
-  const status = c.activeScanId ? "running" : c.source?.lastStatus ?? "never";
-  const reason = c.source?.lastError ? C.errors[c.source.lastError] ?? c.source.lastError : null;
+  const status = c.activeScanId ? "running" : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
+  const summary = c.activeScanId ? "" : scanSummaryLine(c, nextScanAt);
 
   async function save() {
     if (await onSave(c.id, { name, website })) setEditing(false);
@@ -244,28 +250,28 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[14px] font-medium">{c.name}</span>
-            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)}>
-              {status === "running" ? C.settings.scanning : status === "never" ? C.settings.neverScanned : C.log.status[status] ?? status}
+            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status]}>
+              {status === "running" ? C.settings.scanning : status === "never" ? C.settings.neverScanned : C.settings.badges[status] ?? status}
             </span>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-fg-muted">
             <a href={c.websiteUrl} target="_blank" rel="noreferrer" className="hover:underline">{c.host}</a>
             {c.source?.lastScanAt && <span>· {C.settings.lastScan(timeAgo(c.source.lastScanAt))}</span>}
             {nextScanAt && status !== "running" && <span>· {C.settings.nextScan(timeUntil(nextScanAt))}</span>}
-            {reason && status !== "running" && <span className="text-[#c23767]">· {status === "partial" ? C.settings.partial(reason) : C.settings.failed(reason)}</span>}
           </div>
+          {summary && <div className={cn("mt-1 text-[12px]", status === "blocked" || status === "unreachable" ? "text-[#c23767]" : "text-fg-3")}>{summary}</div>}
         </div>
       )}
       {!editing && (
         <>
-          <span title={scanning ? C.settings.scanRunning : undefined}>
+          <span title={scanning ? C.settings.scanRunning : rescanLimited ? C.settings.rescanLimited : undefined}>
             <button
               onClick={async () => { setStarting(true); await onScan(c); setStarting(false); }}
-              disabled={scanning || starting || busy}
+              disabled={scanning || starting || busy || rescanLimited}
               className={SMALL_BTN}
             >
               {status === "running" || starting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-              {status === "running" ? C.settings.scanning : C.settings.scanNow}
+              {status === "running" ? C.settings.scanning : rescanLimited ? C.settings.rescanLimitedShort : C.settings.scanNow}
             </button>
           </span>
           <button onClick={() => onLog(c)} className={SMALL_BTN} title={C.settings.viewLog}>
@@ -727,6 +733,12 @@ function SchedulePanel({ config, canEdit, busy, onSave }: {
           <span className="mb-1 block text-[12px] font-medium text-fg-3">{C.settings.frequency}</span>
           <select value={config.scanFrequency} onChange={(e) => void onSave({ scanFrequency: e.target.value })} className={cn(SELECT, "w-44")} disabled={!canEdit || busy}>
             {SCAN_FREQUENCIES.map((f) => <option key={f} value={f}>{C.settings.frequencies[f]}</option>)}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[12px] font-medium text-fg-3">{C.settings.manualRescans}</span>
+          <select value={config.manualRescansPerDay} onChange={(e) => void onSave({ manualRescansPerDay: Number(e.target.value) })} className={cn(SELECT, "w-44")} disabled={!canEdit || busy} title={C.settings.manualRescansHint}>
+            {[1, 2, 3, 5, 10].map((n) => <option key={n} value={n}>{n} per day</option>)}
           </select>
         </label>
         <label className="block">

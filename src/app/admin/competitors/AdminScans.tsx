@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
-import type { AdminScanRow } from "@/app/api/admin/competitors/scans/route";
+import type { AdminScanMetrics, AdminScanRow } from "@/app/api/admin/competitors/scans/route";
 
 /**
  * Scanner health across every organization: one row per run, newest first,
@@ -35,6 +35,7 @@ type Line = { at: string; level: string; msg: string; url?: string };
 
 export function AdminScans() {
   const [rows, setRows] = useState<AdminScanRow[] | null>(null);
+  const [metrics, setMetrics] = useState<AdminScanMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,6 +48,7 @@ export function AdminScans() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Request failed");
       setRows(data.scans);
+      setMetrics(data.metrics ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {
@@ -59,6 +61,28 @@ export function AdminScans() {
   }, [load]);
 
   return (
+    <>
+    {metrics && (
+      <section className="rounded-xl border border-slate-200 bg-white p-5">
+        <h2 className="text-sm font-bold">Scanner health — last 30 days</h2>
+        <p className="mb-3 mt-0.5 text-xs text-slate-500">Internal only: block rate per domain, requests per day, PII check hits (should stay at zero) and whether the page-text cleanup ran.</p>
+        <div className="mb-4 grid grid-cols-3 gap-3 text-sm">
+          <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">PII hits</div><div className={`text-xl font-bold ${metrics.piiHitsTotal > 0 ? "text-amber-700" : ""}`}>{metrics.piiHitsTotal}</div></div>
+          <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">Page texts past retention</div><div className={`text-xl font-bold ${metrics.textsPastRetention > 0 ? "text-red-700" : ""}`}>{metrics.textsPastRetention}</div><div className="text-[11px] text-slate-500">{metrics.textsPastRetention === 0 ? "cleanup ran" : "cleanup did not run"}</div></div>
+          <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">Requests per day (14 d)</div><div className="mt-1 flex h-8 items-end gap-px">{metrics.requestsPerDay.map((d) => { const max = Math.max(1, ...metrics.requestsPerDay.map((x) => x.requests)); return <span key={d.day} title={`${d.day}: ${d.requests}`} className="flex-1 rounded-sm bg-slate-300" style={{ height: `${Math.max(6, (d.requests / max) * 100)}%` }} />; })}</div></div>
+        </div>
+        {metrics.domains.length > 0 && (
+          <div className="overflow-hidden rounded-lg border border-slate-200">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Domain</th><th className="px-3 py-2">Organization</th><th className="px-3 py-2 text-right">Scans</th><th className="px-3 py-2 text-right">Blocked / unreachable</th><th className="px-3 py-2 text-right">Pages requested</th><th className="px-3 py-2 text-right">PII hits</th><th className="px-3 py-2">Last</th></tr></thead>
+              <tbody>{metrics.domains.map((d) => (
+                <tr key={d.host} className="border-t border-slate-200"><td className="px-3 py-2 font-medium">{d.host}</td><td className="px-3 py-2">{d.orgName}</td><td className="px-3 py-2 text-right font-mono">{d.scans}</td><td className={`px-3 py-2 text-right font-mono ${d.blocked ? "text-red-700" : ""}`}>{d.blocked} ({Math.round((d.blocked / d.scans) * 100)}%)</td><td className="px-3 py-2 text-right font-mono">{d.pagesRequested}</td><td className={`px-3 py-2 text-right font-mono ${d.piiHits ? "text-amber-700" : ""}`}>{d.piiHits}</td><td className="px-3 py-2">{d.lastBadge ?? "–"} · {when(d.lastScanAt)}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    )}
     <section className="rounded-xl border border-slate-200 bg-white p-5">
       <div className="mb-3 flex items-start justify-between gap-4">
         <div>
@@ -83,6 +107,7 @@ export function AdminScans() {
                 <th className="px-3 py-2">Organization</th>
                 <th className="px-3 py-2">Competitor</th>
                 <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Badge</th>
                 <th className="px-3 py-2">Trigger</th>
                 <th className="px-3 py-2">Fetch</th>
                 <th className="px-3 py-2 text-right">Pages</th>
@@ -112,6 +137,7 @@ export function AdminScans() {
                         <span className={`inline-flex rounded-full border px-2 py-px text-[11px] font-medium ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span>
                         {r.error && <span className="ml-2 text-red-600" title={r.error}>{r.errorKind}</span>}
                       </td>
+                      <td className="px-3 py-2">{r.badge ?? "–"}{r.piiHits > 0 && <span className="ml-1 text-amber-700" title="PII hits dropped">·{r.piiHits}</span>}</td>
                       <td className="px-3 py-2">{r.trigger}</td>
                       <td className="px-3 py-2">{r.fetchMode ?? "–"}</td>
                       <td className="px-3 py-2 text-right font-mono">{r.pagesFetched}</td>
@@ -124,9 +150,12 @@ export function AdminScans() {
                     </tr>
                     {isOpen && (
                       <tr className="border-t border-slate-100 bg-slate-50/60">
-                        <td colSpan={14} className="px-4 py-3">
+                        <td colSpan={15} className="px-4 py-3">
                           <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{r.url}</div>
                           {r.error && <div className="mb-2 text-xs text-red-700">{r.error}</div>}
+                          {Object.keys(r.outcomes ?? {}).length > 0 && (
+                            <div className="mb-2 text-xs text-slate-600">Not read: {Object.entries(r.outcomes).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(" · ")}{r.robotsDisallowed.length > 0 && <span className="text-slate-400"> — robots: {r.robotsDisallowed.join(", ")}</span>}{r.removedPages.length > 0 && <span> · removed: {r.removedPages.length}</span>}</div>
+                          )}
                           <div className="grid gap-3 lg:grid-cols-2">
                             <div>
                               <div className="mb-1 text-[11px] font-medium text-slate-500">Pages · {pages.length}</div>
@@ -163,5 +192,6 @@ export function AdminScans() {
         </div>
       )}
     </section>
+    </>
   );
 }

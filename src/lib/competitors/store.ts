@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
-import { LOW_CONFIDENCE, mergeCompetitorsConfig, type CompetitorsConfig, type StatusValue } from "./config";
+import { LOW_CONFIDENCE, mergeCompetitorsConfig, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -21,6 +21,22 @@ export interface CompetitorRow {
     lastStatus: string;
     lastError: string | null;
   } | null;
+  /** The last finished scan, as users see it. */
+  lastScan: {
+    id: string;
+    badge: ScanBadge | null;
+    startedAt: string;
+    pagesFetched: number;
+    pagesSkipped: number;
+    outcomes: Record<string, number>;
+    robotsDisallowed: string[];
+    removedPages: number;
+    error: string | null;
+  } | null;
+  /** The last scan that ended "full" or "incomplete" — what the matrix shows when the latest is blocked. */
+  lastGoodScanAt: string | null;
+  /** Manual scans started today (the per-day limit applies to these). */
+  manualScansToday: number;
   /** Scan currently queued or running, if any. */
   activeScanId: string | null;
 }
@@ -70,6 +86,12 @@ export interface FactRow {
   value: string;
   sourceUrl: string | null;
   changedAt: string;
+  /** Typed by a PM — no page behind it. */
+  manual: boolean;
+  /** Not seen on the site for STALE_AFTER_SCANS scans. */
+  stale: boolean;
+  /** Its page vanished or was blocked in a later scan. */
+  unreachable: boolean;
   override: { value: string; userName: string | null; at: string } | null;
 }
 
@@ -92,7 +114,9 @@ function asStringArray(v: unknown): string[] {
 }
 
 export async function getCompetitorsState(workspaceId: string, orgName: string): Promise<CompetitorsState> {
-  const [workspace, productLines, competitors, domains, capabilities, statuses, facts, activeScans] = await Promise.all([
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const [workspace, productLines, competitors, domains, capabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
     db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
@@ -108,7 +132,20 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       where: { workspaceId, status: { in: ["queued", "running"] } },
       select: { id: true, sourceId: true },
     }),
+    // Finished scans, newest first — the badge, the staleness horizon and today's manual count come from here.
+    db.competitorScan.findMany({
+      where: { workspaceId, status: { in: ["ok", "partial", "failed"] } },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, pages: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
+    }),
   ]);
+  const scansBySource = new Map<string, typeof recentScans>();
+  for (const s of recentScans) {
+    const list = scansBySource.get(s.sourceId) ?? [];
+    list.push(s);
+    scansBySource.set(s.sourceId, list);
+  }
+  const asRecord = (v: unknown): Record<string, number> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, number>) : {});
 
   const userIds = new Set<string>();
   for (const s of statuses) if (s.overrideUserId) userIds.add(s.overrideUserId);
@@ -148,6 +185,24 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
             lastError: c.sources[0].lastError,
           }
         : null,
+      lastScan: (() => {
+        const s = c.sources[0] ? scansBySource.get(c.sources[0].id)?.[0] : undefined;
+        if (!s) return null;
+        const pages = Array.isArray(s.pages) ? (s.pages as { outcome?: string }[]) : [];
+        return {
+          id: s.id,
+          badge: (s.badge as ScanBadge | null) ?? null,
+          startedAt: s.startedAt.toISOString(),
+          pagesFetched: s.pagesFetched,
+          pagesSkipped: pages.filter((p) => p.outcome === "failed" || p.outcome === "skipped").length + Object.entries(asRecord(s.outcomes)).filter(([k]) => k === "robots" || k === "policy" || k === "cap").reduce((n, [, v]) => n + v, 0),
+          outcomes: asRecord(s.outcomes),
+          robotsDisallowed: asStringArray(s.robotsDisallowed),
+          removedPages: asStringArray(s.removedPages).length,
+          error: s.error,
+        };
+      })(),
+      lastGoodScanAt: c.sources[0] ? scansBySource.get(c.sources[0].id)?.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null : null,
+      manualScansToday: c.sources[0] ? (scansBySource.get(c.sources[0].id) ?? []).filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(c.sources[0].id) ? 1 : 0) : 0,
       activeScanId: c.sources[0] ? activeBySource.get(c.sources[0].id) ?? null : null,
     })),
     domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position })),
@@ -181,15 +236,24 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
       };
     }),
-    facts: facts.map((f) => ({
+    facts: facts.map((f) => {
+      // Stale = the site's last STALE_AFTER_SCANS finished scans all missed it.
+      const sourceId = competitors.find((c) => c.id === f.competitorId)?.sources[0]?.id;
+      const recent = sourceId ? (scansBySource.get(sourceId) ?? []).filter((s) => s.badge === "full" || s.badge === "incomplete").slice(0, STALE_AFTER_SCANS) : [];
+      const stale = !f.manual && recent.length >= STALE_AFTER_SCANS && !recent.some((s) => s.id === f.lastSeenScanId);
+      return {
       id: f.id,
       competitorId: f.competitorId,
       kind: f.kind,
       value: f.overrideValue ?? f.value,
       sourceUrl: f.sourceUrl,
       changedAt: f.changedAt.toISOString(),
+      manual: f.manual,
+      stale,
+      unreachable: f.unreachableAt != null,
       override: f.overrideValue && f.overrideAt ? { value: f.overrideValue, userName: userName(f.overrideUserId), at: f.overrideAt.toISOString() } : null,
-    })),
+      };
+    }),
     lastScanAt: lastScanAt?.toISOString() ?? null,
     scanning: activeScans.length > 0,
   };

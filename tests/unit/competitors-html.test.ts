@@ -60,7 +60,7 @@ describe("bot wall and JS-only detection", () => {
 });
 
 describe("Frontier", () => {
-  const rules = { disallow: ["/wp-admin/", "/thank-you", "/*.pdf$", "https://acme.com/private/"], sitemaps: [] };
+  const rules = { disallow: ["/wp-admin/", "/thank-you", "/*.pdf$", "https://acme.com/private/"], sitemaps: [], crawlDelaySec: null };
   it("honours robots.txt rules with wildcards and absolute URLs", () => {
     expect(isAllowed(new URL("https://acme.com/platform"), rules)).toBe(true);
     expect(isAllowed(new URL("https://acme.com/wp-admin/x"), rules)).toBe(false);
@@ -78,6 +78,10 @@ describe("Frontier", () => {
     expect(f.add(new URL("https://acme.com/feed"), "link")).toBe(false);
     expect(f.add(new URL("https://acme.com/logo.png"), "link")).toBe(false);
     expect(f.add(new URL("https://other.com/"), "link")).toBe(false);
+    expect(f.add(new URL("https://acme.com/private/x"), "link")).toBe(false); // robots → recorded
+    expect(f.add(new URL("https://acme.com/team/jane"), "link")).toBe(false); // people page → policy
+    expect(f.robotsSkipped).toEqual(["/private/x"]);
+    expect(f.policySkipped).toEqual(["/team/jane"]);
     expect(f.next()?.url).toBe("https://acme.com/");
     expect(f.next()?.url).toBe("https://acme.com/pricing");
     expect(f.next()?.url).toBe("https://acme.com/blog/post-1");

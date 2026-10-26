@@ -11,10 +11,19 @@ import { isInsideSite, looksLikePage, pageKey, pagePriority } from "./url";
 export interface RobotsRules {
   disallow: string[];
   sitemaps: string[];
+  /** Crawl-delay for our user-agent group (or *), seconds; null when absent. */
+  crawlDelaySec: number | null;
+}
+
+/** Pages about people — skipped by policy (scanner rule 6), never fetched. */
+const PEOPLE_PATH = /\/(team|our-team|leadership|management|people|staff|board|founders|executives|careers|jobs|join-us|about-us\/team|about\/team|company\/team|authors?)(\/|$)/i;
+
+export function isPeoplePage(u: URL): boolean {
+  return PEOPLE_PATH.test(u.pathname);
 }
 
 export async function readRobots(origin: string): Promise<RobotsRules> {
-  const rules: RobotsRules = { disallow: [], sitemaps: [] };
+  const rules: RobotsRules = { disallow: [], sitemaps: [], crawlDelaySec: null };
   const res = await fetchPlain(new URL("/robots.txt", origin).href);
   if (!res.html || res.status >= 400) return rules;
   let applies = false;
@@ -29,6 +38,9 @@ export async function readRobots(origin: string): Promise<RobotsRules> {
       applies = value === "*" || /pm-os/i.test(value);
     } else if (key === "disallow" && applies && value) {
       rules.disallow.push(value);
+    } else if (key === "crawl-delay" && applies) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) rules.crawlDelaySec = n;
     } else if (key === "sitemap" && value) {
       rules.sitemaps.push(value);
     }
@@ -96,6 +108,9 @@ export interface PageCandidate {
   via: string;
 }
 
+/** Why the frontier kept a URL out — reported to users as counts (and paths for robots). */
+export type SkipReason = "robots" | "policy";
+
 /** Order: priority, then shorter paths (hub pages before leaves), then alphabetical. */
 export function orderCandidates(list: PageCandidate[]): PageCandidate[] {
   return [...list].sort((a, b) => {
@@ -117,14 +132,32 @@ export class Frontier {
   private pending: PageCandidate[] = [];
   private readonly host: string;
   private readonly rules: RobotsRules;
+  /** Distinct paths robots.txt kept out, first 50 — shown in the scan log. */
+  readonly robotsSkipped: string[] = [];
+  /** People pages kept out by policy, first 50. */
+  readonly policySkipped: string[] = [];
 
   constructor(host: string, rules: RobotsRules) {
     this.host = host;
     this.rules = rules;
   }
 
+  private noteSkip(reason: SkipReason, u: URL) {
+    const list = reason === "robots" ? this.robotsSkipped : this.policySkipped;
+    const path = u.pathname || "/";
+    if (list.length < 50 && !list.includes(path)) list.push(path);
+  }
+
   add(u: URL, via: string): boolean {
-    if (!isInsideSite(u, this.host) || !looksLikePage(u) || !isAllowed(u, this.rules)) return false;
+    if (!isInsideSite(u, this.host) || !looksLikePage(u)) return false;
+    if (!isAllowed(u, this.rules)) {
+      this.noteSkip("robots", u);
+      return false;
+    }
+    if (isPeoplePage(u)) {
+      this.noteSkip("policy", u);
+      return false;
+    }
     // Skip localized duplicates and obvious non-content paths.
     if (/^\/(?:[a-z]{2}(?:-[a-z]{2})?)\//i.test(u.pathname) && !/^\/en\b/i.test(u.pathname)) return false;
     if (/\/(wp-json|wp-admin|wp-content|feed|tag|author|page\/\d+|cdn-cgi)\b/i.test(u.pathname)) return false;

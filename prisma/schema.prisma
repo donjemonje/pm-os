@@ -106,7 +106,8 @@ model Workspace {
   jiraAlertedAt    DateTime?
   jiraAlertedSince DateTime?
   /// Competitors settings: { scanFrequency: "daily"|"weekly"|"monthly",
-  /// maxPagesPerScan: number }. Shape + defaults: lib/competitors/config.ts.
+  /// maxPagesPerScan: number, manualRescansPerDay: number }. Shape + defaults:
+  /// lib/competitors/config.ts.
   competitorsConfig Json       @default("{}")
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -750,6 +751,12 @@ model ProfileFact {
   overrideAt     DateTime?
   /// A PM removed this fact; scans never re-add the same value.
   dismissedAt  DateTime?
+  /// Typed by a PM (no source page); never stale, never unreachable.
+  manual       Boolean    @default(false)
+  /// The last scan that found this fact on the site; stale when 3 scans passed without it.
+  lastSeenScanId String?
+  /// The fact's page vanished or was blocked in a later scan (cleared when seen again).
+  unreachableAt DateTime?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -808,6 +815,16 @@ model CompetitorScan {
   /// "none" | "timeout" | "http4xx" | "http5xx" | "botwall" | "ai" | "limit" | "other"
   errorKind     String?
   error         String?
+  /// What the user sees: "full" | "incomplete" | "blocked" | "unreachable" (null while running).
+  badge         String?
+  /// Failed/skipped page counts by category: {robots, denied, login, notfound, timeout, cap, policy}.
+  outcomes      Json             @default("{}")
+  /// robots.txt paths that kept pages out of this scan (first 50).
+  robotsDisallowed Json          @default("[]")
+  /// URLs present in the previous scan and gone in this one.
+  removedPages  Json             @default("[]")
+  /// Snippets or facts dropped by the PII check (expected 0).
+  piiHits       Int              @default(0)
   pages         Json             @default("[]")
   log           Json             @default("[]")
 
@@ -828,6 +845,9 @@ model ScanPage {
   contentHash String
   text        String?
   chars       Int            @default(0)
+  /// Validators for the next scan's conditional request (If-None-Match / If-Modified-Since).
+  etag        String?
+  lastModified String?
   fetchedAt   DateTime       @default(now())
 
   @@index([sourceId, url])
