@@ -27,6 +27,17 @@ export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
 };
 
 // ————— Scanner rules (story 2, 2026-10-26) —————
+/**
+ * The manual-rescan limit is a production rule; local dev scans a site as
+ * often as needed. Enforced when NODE_ENV is production, or whenever
+ * COMPETITORS_RESCAN_LIMIT=on (to test the limit locally).
+ */
+export function rescanLimitEnforced(): boolean {
+  const v = process.env.COMPETITORS_RESCAN_LIMIT?.trim().toLowerCase();
+  if (v === "on" || v === "true" || v === "1") return true;
+  if (v === "off" || v === "false" || v === "0") return false;
+  return process.env.NODE_ENV === "production";
+}
 /** Pause between two requests to the same site. */
 export const SCAN_PAUSE_MS = 2000;
 /** robots.txt Crawl-delay is honoured up to this. */

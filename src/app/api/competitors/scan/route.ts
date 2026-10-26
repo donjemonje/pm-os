@@ -5,6 +5,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { launchScan } from "@/lib/competitors/run";
 import { createScan, manualScansToday } from "@/lib/competitors/scan";
 import { getCompetitorsConfig } from "@/lib/competitors/store";
+import { rescanLimitEnforced } from "@/lib/competitors/config";
 import { isPmosAdmin } from "@/lib/admin-auth";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
   const competitorId = typeof body.competitorId === "string" ? body.competitorId : "";
   const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId }, select: { id: true, sources: { where: { type: "website" }, select: { id: true } } } });
   if (!competitor) return bad("Not found", 404);
-  if (!isPmosAdmin(ctx.user) && competitor.sources[0]) {
+  if (rescanLimitEnforced() && !isPmosAdmin(ctx.user) && competitor.sources[0]) {
     const config = await getCompetitorsConfig(ctx.workspaceId);
     const today = await manualScansToday(competitor.sources[0].id);
     if (today >= config.manualRescansPerDay) {

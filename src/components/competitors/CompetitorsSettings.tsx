@@ -141,7 +141,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
         ) : (
           competitors.map((c) => (
             <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)}
-              rescanLimited={!isPmosAdmin && c.manualScansToday >= state.config.manualRescansPerDay}
+              rescanLimited={state.rescanLimitEnforced && !isPmosAdmin && c.manualScansToday >= state.config.manualRescansPerDay}
               onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
           ))
         )}

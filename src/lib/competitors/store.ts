@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
-import { LOW_CONFIDENCE, mergeCompetitorsConfig, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
+import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -107,6 +107,8 @@ export interface CompetitorsState {
   /** Most recent finished scan across the workspace (header "scanned X ago"). */
   lastScanAt: string | null;
   scanning: boolean;
+  /** False in local dev: Scan now is never limited there. */
+  rescanLimitEnforced: boolean;
 }
 
 function asStringArray(v: unknown): string[] {
@@ -256,6 +258,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     }),
     lastScanAt: lastScanAt?.toISOString() ?? null,
     scanning: activeScans.length > 0,
+    rescanLimitEnforced: rescanLimitEnforced(),
   };
 }
 
