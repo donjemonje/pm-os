@@ -196,8 +196,6 @@ export const COMPETITORS_COPY = {
       "Definition for PMOS AI. Markdown is fine. Suggested sections: Definition — what this area is about. Belongs here — the capabilities and offers that count. Not here — what belongs to another domain. Typical site phrases — the words competitors use for it.",
     domainCounts: (capabilities: number, competitorsAhead: number) =>
       `${capabilities} capabilit${capabilities === 1 ? "y" : "ies"} · ${competitorsAhead} competitor${competitorsAhead === 1 ? "" : "s"} ahead somewhere`,
-    showRaw: "Raw text",
-    showRendered: "Rendered",
     emptyDomains: "No domains yet. Add the first one with the button above.",
     removeDomainTitle: (name: string) => `Remove ${name}?`,
     removeDomainBody: (n: number) =>

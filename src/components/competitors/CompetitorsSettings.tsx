@@ -385,7 +385,6 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
-  const [raw, setRaw] = useState<Record<string, boolean>>({});
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -501,11 +500,6 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                       <span className="ml-1 font-mono text-[11px] text-fg-muted">{C.settings.domainCounts(n, competitorsAhead(d))}</span>
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
-                      {d.description && (
-                        <button onClick={() => setRaw((p) => ({ ...p, [d.id]: !p[d.id] }))} className="h-7 rounded-lg px-2 font-mono text-[10.5px] text-[#7a8aa3] hover:bg-background hover:text-foreground" title="How PMOS AI receives this text">
-                          {raw[d.id] ? C.settings.showRendered : C.settings.showRaw}
-                        </button>
-                      )}
                       {canEdit && (
                         <>
                           <span draggable={!busy} onDragStart={(e) => { setDragId(d.id); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDragId(null); setOverId(null); }}
@@ -520,11 +514,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                     </span>
                   </div>
                   {d.description ? (
-                    raw[d.id] ? (
-                      <pre className="whitespace-pre-wrap rounded-lg bg-[var(--app-bg)] px-3 py-2 font-mono text-[12px] leading-relaxed text-fg-2">{d.description}</pre>
-                    ) : (
-                      <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
-                    )
+                    <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
                   ) : (
                     <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
                   )}
