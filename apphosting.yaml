@@ -66,7 +66,7 @@ env:
   # PMOS AI model for competitors (Gemini — covered by the GCP credits). A
   # gemini-* id runs on Gemini with a response schema; anything else on Claude.
   - variable: COMPETITORS_MODEL
-    value: "gemini-2.5-flash"
+    value: "gemini-4-argon"
     availability:
       - RUNTIME
 

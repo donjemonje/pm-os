@@ -173,6 +173,8 @@ export async function runScan(scanId: string): Promise<void> {
     // ——— 2. Fetch loop ———
     const fetched: FetchedPage[] = [];
     const changedPages: PageText[] = [];
+    /** Every page read this scan (changed or not) — re-classified when the catalog grew. */
+    const allPages: PageText[] = [];
     const seenUrls = new Set<string>();
     let homeFailed = false;
     let capReached = false;
@@ -215,6 +217,7 @@ export async function runScan(scanId: string): Promise<void> {
         const p = prev.get(cand.url);
         count++;
         seenUrls.add(cand.url);
+        if (p?.text) allPages.push({ url: cand.url, title: "", text: p.text });
         log.pages.push({ url: cand.url, status: 304, outcome: "unchanged", chars: p?.text?.length ?? 0, ms: page.ms, via: cand.via });
         await db.scanPage.create({
           data: { scanId, sourceId: source.id, url: cand.url, contentHash: p?.hash ?? "", text: p?.text ?? null, chars: p?.text?.length ?? 0, etag: page.etag ?? p?.etag ?? null, lastModified: page.lastModified ?? p?.lastModified ?? null },
@@ -246,7 +249,9 @@ export async function runScan(scanId: string): Promise<void> {
       await db.scanPage.create({
         data: { scanId, sourceId: source.id, url: cand.url, contentHash: hash, text: page.text, chars: page.text.length, etag: page.etag ?? null, lastModified: page.lastModified ?? null },
       });
-      if (outcome !== "unchanged") changedPages.push({ url: cand.url, title: titleOf(page.html), text: page.text });
+      const pt: PageText = { url: cand.url, title: titleOf(page.html), text: page.text };
+      allPages.push(pt);
+      if (outcome !== "unchanged") changedPages.push(pt);
       frontier.addLinksFrom(page.html, page.finalUrl);
       if (count % HEARTBEAT_EVERY === 0) await log.flush({ fetchMode: mode });
     }
@@ -285,12 +290,16 @@ export async function runScan(scanId: string): Promise<void> {
       finalStatus = "failed";
       errorKind = "other";
       error = "no page could be read";
-    } else if (changedPages.length === 0) {
+    } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
     } else {
       // ——— 3. PMOS AI ———
-      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, changedPages, firstScan, log);
+      // Nothing changed on the site but the catalog grew: classify the new
+      // capabilities from the stored pages (that is what the text retention is for).
+      const catalogGrew = changedPages.length === 0;
+      if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${allPages.length} stored pages`);
+      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, catalogGrew ? allPages : changedPages, firstScan, log, { facts: !catalogGrew });
       aiCalls = r.aiCalls;
       statusesChanged = r.statusesChanged;
       factsChanged = r.factsChanged;
@@ -403,6 +412,8 @@ async function markFactsSeen(competitorId: string, scanId: string, seenUrls: Set
 
 interface AiStepResult {
   aiCalls: number;
+  /** Cells that got their first value this scan (no previous value to compare with). */
+  statusesSet: number;
   statusesChanged: number;
   factsChanged: number;
   suggestions: number;
@@ -433,6 +444,11 @@ async function loadCatalog(workspaceId: string): Promise<{ forAi: CatalogForAi; 
   };
 }
 
+/** Active capabilities with no status row yet for this competitor (added since its last classification). */
+async function unclassifiedCapabilities(workspaceId: string, competitorId: string): Promise<number> {
+  return db.capability.count({ where: { workspaceId, state: "active", statuses: { none: { competitorId } } } });
+}
+
 async function aiStep(
   workspaceId: string,
   competitorId: string,
@@ -441,8 +457,9 @@ async function aiStep(
   pages: PageText[],
   firstScan: boolean,
   log: ScanLog,
+  opts: { facts: boolean } = { facts: true },
 ): Promise<AiStepResult> {
-  const res: AiStepResult = { aiCalls: 0, statusesChanged: 0, factsChanged: 0, suggestions: 0, piiHits: 0, failed: null };
+  const res: AiStepResult = { aiCalls: 0, statusesSet: 0, statusesChanged: 0, factsChanged: 0, suggestions: 0, piiHits: 0, failed: null };
   /** Rule 6: a snippet that names a person is dropped, never stored. */
   const clean = (text: string | null | undefined, what: string, url?: string): string | null => {
     const r = checkPii(text);
@@ -481,10 +498,11 @@ async function aiStep(
           sourceUrl = prev.sourceUrl;
         }
         if (!prev) {
+          // First status for this cell: nothing to compare with, so it is not a "change".
           await db.capabilityStatus.create({
-            data: { workspaceId, competitorId, capabilityId: cap.id, value, confidence, quote, sourceUrl, scanId, changedAt: firstScan ? null : now },
+            data: { workspaceId, competitorId, capabilityId: cap.id, value, confidence, quote, sourceUrl, scanId, changedAt: null },
           });
-          if (!firstScan && value !== "unknown") res.statusesChanged++;
+          res.statusesSet++;
         } else if (prev.value !== value) {
           await db.statusHistory.create({ data: { statusId: prev.id, value: prev.value, quote: prev.quote, sourceUrl: prev.sourceUrl, scanId: prev.scanId } });
           await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, scanId, changedAt: now } });
@@ -510,8 +528,8 @@ async function aiStep(
       }
     }
 
-    // Facts
-    {
+    // Facts (only from changed pages — a catalog-only re-run reads nothing new about the company)
+    if (opts.facts) {
       const ext = await extractFacts(competitorName, pages);
       res.aiCalls++;
       const now = new Date();

@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, type Schema } from "@google/genai";
-import { getGeminiLocation, getVertexProjectId } from "../vertex-config";
+import { getVertexProjectId } from "../vertex-config";
 import { FACT_KINDS, STATUS_VALUES, type FactKind, type StatusValue } from "./config";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 
@@ -23,7 +23,7 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 export const COMPETITORS_PROMPT_VERSION = "competitors-v2";
 
 export function getCompetitorsModel(): string {
-  return process.env.COMPETITORS_MODEL?.trim() || process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  return process.env.COMPETITORS_MODEL?.trim() || "gemini-4-argon";
 }
 
 export type CompetitorsProvider = "gemini" | "claude";
@@ -31,11 +31,21 @@ export function getCompetitorsProvider(model = getCompetitorsModel()): Competito
   return /^gemini/i.test(model) ? "gemini" : "claude";
 }
 
+/**
+ * Gemini region for competitors. The newest Gemini models (gemini-4-argon,
+ * 2026-10-26) are served on the "global" endpoint only — not in
+ * europe-west1 — so "global" is the default here; COMPETITORS_GEMINI_LOCATION
+ * overrides (e.g. the app's GEMINI_LOCATION for older models).
+ */
+export function getCompetitorsGeminiLocation(): string {
+  return process.env.COMPETITORS_GEMINI_LOCATION?.trim() || "global";
+}
+
 let gemini: GoogleGenAI | null = null;
 let geminiKey = "";
 function getGemini(): GoogleGenAI {
   const project = getVertexProjectId();
-  const location = getGeminiLocation();
+  const location = getCompetitorsGeminiLocation();
   const key = `${project}|${location}`;
   if (!gemini || geminiKey !== key) {
     gemini = new GoogleGenAI({ vertexai: true, project, location });
@@ -98,9 +108,9 @@ async function callTool<T>(system: string, shared: string, tail: string, tool: R
       config: {
         systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
         temperature: 0,
-        // Thinking is billed against maxOutputTokens: keep it bounded, leave room for the answer.
-        thinkingConfig: { thinkingBudget: 2048 },
-        maxOutputTokens: maxTokens + 2048,
+        // Gemini 4 takes a thinking *level*, not a token budget (a budget is
+        // rejected); thinking is billed against maxOutputTokens, so leave room.
+        maxOutputTokens: maxTokens + 8000,
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
       },
