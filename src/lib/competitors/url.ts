@@ -95,13 +95,20 @@ export function looksLikePage(u: URL): boolean {
 export function pagePriority(u: URL): number {
   const p = u.pathname.toLowerCase();
   if (p === "/" || p === "") return 0;
-  if (/pricing|plans/.test(p)) return 1;
-  if (/product|platform|solution|feature|capabilit|module|service|use-case|usecase/.test(p)) return 2;
-  if (/integration|partner|marketplace|api|developer|docs|documentation|help|support/.test(p)) return 3;
-  if (/trust|security|compliance|certification|privacy/.test(p)) return 4;
-  if (/customer|case-stud|success|testimonial|industr|vertical/.test(p)) return 5;
-  if (/about|company|why/.test(p)) return 6;
-  if (/release|changelog|what-?s-new|updates/.test(p)) return 7;
-  if (/blog|news|press|event|webinar|resource|career|job|legal|terms|cookie|login|signin|sign-in|signup|register|thank/.test(p)) return 9;
+  // The first segment decides the kind of page: a blog post about "product
+  // updates" is still a blog post, and legal pages are never product pages.
+  const first = p.split("/").filter(Boolean)[0] ?? "";
+  if (/^(blog|news|press|newsroom|events?|webinars?|resources?|careers?|jobs|legal|terms|privacy|cookies?|login|signin|sign-in|signup|register|thank-you|tags?|authors?|category|wp-content|search)$/.test(first)) return 9;
+  if (/terms|legal|privacy|policy|cookie|gdpr|disclaimer/.test(first)) return 9;
+  if (/^(release-notes|changelog|whats-new|what-s-new|updates)$/.test(first)) return 7;
+  // Only the first two segments say what a page is; words deeper in a slug
+  // ("/research/…-use-cases-ai") do not make it a product page.
+  const head = p.split("/").filter(Boolean).slice(0, 2).join("/");
+  if (/pricing|plans/.test(head)) return 1;
+  if (/^(products?|platform|solutions?|features?|capabilit|modules?|services?|use-cases?|usecases?|offerings?)(\/|$)/.test(first)) return 2;
+  if (/integration|partner|marketplace|api|developer|docs|documentation|help|support/.test(head)) return 3;
+  if (/trust|security|compliance|certification/.test(head)) return 4;
+  if (/customer|case-stud|success|testimonial|industr|vertical/.test(head)) return 5;
+  if (/about|company|why/.test(head)) return 6;
   return 8;
 }

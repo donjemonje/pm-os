@@ -70,4 +70,17 @@ describe("pageKey / looksLikePage / pagePriority", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(pagePriority(new URL("https://e.com/blog/x"))).toBeGreaterThan(pagePriority(new URL("https://e.com/products/x")));
   });
+  it("a blog post about product updates is still a blog post; legal pages are not product pages; case studies beat both", () => {
+    const blog = pagePriority(new URL("https://e.com/blog/product-updates-platform-solutions"));
+    const legal = pagePriority(new URL("https://e.com/product-terms"));
+    const caseStudy = pagePriority(new URL("https://e.com/case-study/financial-services-company"));
+    const product = pagePriority(new URL("https://e.com/platform/ai"));
+    expect(blog).toBe(9);
+    expect(legal).toBe(9);
+    expect(caseStudy).toBeLessThan(blog);
+    expect(product).toBeLessThan(caseStudy);
+    // a research post whose slug mentions use cases is not a use-case page
+    expect(pagePriority(new URL("https://e.com/research/red-teaming-malicious-use-cases-ai"))).toBe(8);
+    expect(pagePriority(new URL("https://e.com/use-case/ransomware"))).toBe(2);
+  });
 });
