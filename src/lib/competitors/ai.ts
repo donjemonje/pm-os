@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, type Schema } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel, Type, type Schema } from "@google/genai";
 import { getVertexProjectId } from "../vertex-config";
 import { FACT_KINDS, STATUS_VALUES, type FactKind, type StatusValue } from "./config";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
@@ -109,8 +109,11 @@ async function callTool<T>(system: string, shared: string, tail: string, tool: R
         systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
         temperature: 0,
         // Gemini 4 takes a thinking *level*, not a token budget (a budget is
-        // rejected); thinking is billed against maxOutputTokens, so leave room.
-        maxOutputTokens: maxTokens + 8000,
+        // rejected). HIGH (Daniel, 2026-10-26): the status call weighs 26
+        // capabilities against 50 pages and runs once a week per competitor,
+        // so accuracy beats speed. Thinking is billed against maxOutputTokens.
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+        maxOutputTokens: maxTokens + 16000,
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
       },
