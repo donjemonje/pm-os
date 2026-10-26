@@ -40,3 +40,20 @@ describe("time helpers", () => {
     expect(timeUntil("2026-10-28T12:00:00Z", now)).toBe("in 3 days");
   });
 });
+
+describe("domain name mentions (rename cascade)", () => {
+  it("matches whole names only, including ones with parentheses and ampersands, and rewrites them", async () => {
+    const { mentionsName, renameMentions } = await import("@/lib/competitors/mentions");
+    const text = "Not here: exposed credentials belong to Exposure & response; see also Cyber Threat Intelligence (CTI) and CTI feeds.";
+    expect(mentionsName(text, "Exposure & response")).toBe(true);
+    expect(mentionsName(text, "Cyber Threat Intelligence (CTI)")).toBe(true);
+    expect(mentionsName(text, "Exposure")).toBe(true);
+    expect(mentionsName(text, "response; see")).toBe(true);
+    expect(mentionsName(text, "Threat Intelligence (CT")).toBe(false); // partial word
+    expect(mentionsName(text, "Response")).toBe(false); // case-sensitive proper noun
+    expect(renameMentions(text, "Cyber Threat Intelligence (CTI)", "Threat Intelligence")).toBe(
+      "Not here: exposed credentials belong to Exposure & response; see also Threat Intelligence and CTI feeds.",
+    );
+    expect(renameMentions("", "a", "b")).toBe("");
+  });
+});

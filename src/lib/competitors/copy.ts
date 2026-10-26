@@ -197,6 +197,14 @@ export const COMPETITORS_COPY = {
     domainCounts: (capabilities: number, competitorsAhead: number) =>
       `${capabilities} capabilit${capabilities === 1 ? "y" : "ies"} · ${competitorsAhead} competitor${competitorsAhead === 1 ? "" : "s"} ahead somewhere`,
     emptyDomains: "No domains yet. Add the first one with the button above.",
+    renameDomainTitle: (from: string, to: string) => `Rename "${from}" to "${to}"?`,
+    renameDomainBody: (n: number) =>
+      n === 0
+        ? "No other description mentions this name. Only the domain is renamed."
+        : `${n} other description${n === 1 ? "" : "s"} mention${n === 1 ? "s" : ""} this name and will be updated to the new one.`,
+    renameDomainConfirm: "Rename and update",
+    renamingDomain: "Renaming and updating references…",
+    renamedDomain: (n: number) => (n === 0 ? "Renamed." : `Renamed · ${n} reference${n === 1 ? "" : "s"} updated.`),
     removeDomainTitle: (name: string) => `Remove ${name}?`,
     removeDomainBody: (n: number) =>
       n === 0

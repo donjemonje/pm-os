@@ -10,6 +10,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { frequencyMs, MAX_DOMAIN_DESCRIPTION, MAX_MAX_PAGES, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
+import { mentionsName } from "@/lib/competitors/mentions";
 import { timeAgo, timeUntil } from "@/lib/competitors/time";
 import { track } from "@/lib/analytics/track";
 import { cn } from "@/lib/utils";
@@ -54,6 +55,9 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
     if (res.ok) setState(data.state);
   }, []);
 
+  const [note, setNote] = useState<string | null>(null);
+  const lastResponse = useRef<Record<string, unknown> | null>(null);
+
   async function call(method: "POST" | "PATCH" | "PUT" | "DELETE", url: string, body?: unknown): Promise<boolean> {
     setBusy(true);
     setError(null);
@@ -65,6 +69,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? C.errors.generic);
+      lastResponse.current = data;
       if (data.state) setState(data.state);
       return true;
     } catch (e) {
@@ -119,6 +124,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   return (
     <div className="space-y-8">
       {error && <div className="rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">{error}</div>}
+      {note && <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#0f7a47]"><Check size={12} strokeWidth={2.5} />{note}</div>}
       {!canEdit && <div className="text-[12.5px] text-fg-muted">{C.settings.viewOnly}</div>}
 
       {/* Competitors */}
@@ -153,6 +159,21 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       <DomainsPanel domains={state.domains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
         onAdd={(body) => call("POST", "/api/competitors/domains", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/domains/${id}`, body)}
+        onRename={async (d, body) => {
+          // Domain names cross-reference each other in the definition texts: say what the rename touches.
+          const newName = String((body as { name?: string }).name ?? "").trim();
+          const mentions = state.domains.filter((o) => o.id !== d.id && mentionsName(o.description, d.name)).length
+            + state.capabilities.filter((k) => mentionsName(k.description, d.name)).length;
+          if (!(await confirm({ title: C.settings.renameDomainTitle(d.name, newName), message: C.settings.renameDomainBody(mentions), confirmLabel: C.settings.renameDomainConfirm }))) return false;
+          setNote(null);
+          const ok = await call("PATCH", `/api/competitors/domains/${d.id}`, body);
+          if (ok) {
+            const n = Number(lastResponse.current?.renamedReferences ?? 0);
+            setNote(C.settings.renamedDomain(n));
+            setTimeout(() => setNote(null), 4000);
+          }
+          return ok;
+        }}
         onReorder={(order) => call("PUT", "/api/competitors/domains", { order })}
         onRemove={async (d) => {
           const n = active.filter((k) => k.domainId === d.id).length;
@@ -367,7 +388,7 @@ const FIELD_LABEL = "mb-1 block text-[12px] font-medium text-fg-3";
 const EDITOR_BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary";
 const EDITOR_PRIMARY = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50";
 
-function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, onAdd, onSave, onReorder, onRemove }: {
+function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, onAdd, onSave, onRename, onReorder, onRemove }: {
   domains: DomainRow[];
   capabilities: CapabilityRow[];
   cells: CellRow[];
@@ -376,6 +397,8 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
   busy: boolean;
   onAdd: (body: unknown) => Promise<boolean>;
   onSave: (id: string, body: unknown) => Promise<boolean>;
+  /** A save that changes the name: confirms, then cascades into the descriptions. */
+  onRename: (d: DomainRow, body: unknown) => Promise<boolean>;
   onReorder: (order: string[]) => Promise<boolean>;
   onRemove: (d: DomainRow) => Promise<void>;
 }) {
@@ -401,7 +424,10 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
     if (await onAdd({ name, description })) { setName(""); setDescription(""); setAdding(false); }
   }
   async function saveEdit(id: string) {
-    if (await onSave(id, { name: editName, description: editDescription })) setEditingId(null);
+    const d = domains.find((x) => x.id === id);
+    const body = { name: editName, description: editDescription };
+    const renamed = d && editName.trim() !== d.name;
+    if (await (renamed ? onRename(d, body) : onSave(id, body))) setEditingId(null);
   }
   async function dropOn(targetId: string) {
     const from = domains.findIndex((d) => d.id === dragId);
@@ -487,7 +513,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                   <div className="flex items-center justify-end gap-2">
                     <button onClick={() => setEditingId(null)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
                     <button onClick={() => void saveEdit(d.id)} disabled={busy || !editName.trim()} className={EDITOR_PRIMARY}>
-                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
+                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {busy && editName.trim() !== d.name ? C.settings.renamingDomain : C.settings.save}
                     </button>
                   </div>
                 </div>
