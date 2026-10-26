@@ -186,10 +186,12 @@ export const COMPETITORS_COPY = {
     nameRequired: "A name is required.",
     domainsTitle: "Domains",
     domainsBlurb:
-      "Problem areas of the industry, above product lines — e.g. Threat intelligence, Exposure & response. They group the matrix rows, and their definition text is exactly what PMOS AI reads when it judges a competitor's pages. The order here is the matrix order.",
+      "Problem areas of the industry, they group the Parity-Matrix rows, and their definition text is also used by PMOS AI to evaluate competitors data. The order here is the matrix order.",
     domainsDrag: "Drag a row by its handle to reorder.",
     addDomain: "Add domain",
-    domainPlaceholder: "e.g. Cyber Threat Intelligence (CTI)",
+    domainName: "Name",
+    domainDescription: "Description",
+    domainPlaceholder: "The domain name",
     domainDescriptionPlaceholder:
       "Definition for PMOS AI. Markdown is fine. Suggested sections: Definition — what this area is about. Belongs here — the capabilities and offers that count. Not here — what belongs to another domain. Typical site phrases — the words competitors use for it.",
     domainCounts: (capabilities: number, competitorsAhead: number) =>
@@ -207,7 +209,7 @@ export const COMPETITORS_COPY = {
       "The matrix rows. Each belongs to one domain, to the product lines of yours that serve it, and carries your own status (has / partial / missing — your column of the matrix). Competitor scans map onto this list and only suggest additions.",
     ourStatus: "Your status",
     addCapability: "Add capability",
-    capabilityPlaceholder: "e.g. Dark web monitoring",
+    capabilityPlaceholder: "The capability name",
     capabilityDescriptionPlaceholder: "One line on what it covers (optional)",
     domainRequired: "Pick a domain.",
     productLines: "Product lines",

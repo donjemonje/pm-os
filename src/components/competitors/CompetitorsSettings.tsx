@@ -363,6 +363,7 @@ function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, onDe
 
 // ————— Domains (the product-lines pattern: color, name, counts, definition text, drag order) —————
 
+const FIELD_LABEL = "mb-1 block text-[12px] font-medium text-fg-3";
 const EDITOR_BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary";
 const EDITOR_PRIMARY = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50";
 
@@ -439,8 +440,14 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
       {canEdit && adding && (
         <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
-          {descriptionEditor(description, setDescription)}
+          <label className="block">
+            <span className={FIELD_LABEL}>{C.settings.domainName}</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
+          </label>
+          <label className="block">
+            <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
+            {descriptionEditor(description, setDescription)}
+          </label>
           <div className="flex items-center justify-end gap-2">
             <button onClick={() => setAdding(false)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
             <button onClick={() => void add()} disabled={busy || !name.trim()} className={EDITOR_PRIMARY}>
@@ -470,8 +477,14 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
             >
               {editing ? (
                 <div className="flex flex-col gap-2" onKeyDown={editorKeys(() => void saveEdit(d.id), () => setEditingId(null))}>
-                  <input value={editName} onChange={(e) => setEditName(e.target.value)} className={INPUT} maxLength={80} disabled={busy} autoFocus />
-                  {descriptionEditor(editDescription, setEditDescription)}
+                  <label className="block">
+                    <span className={FIELD_LABEL}>{C.settings.domainName}</span>
+                    <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder={C.settings.domainPlaceholder} className={INPUT} maxLength={80} disabled={busy} autoFocus />
+                  </label>
+                  <label className="block">
+                    <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
+                    {descriptionEditor(editDescription, setEditDescription)}
+                  </label>
                   <div className="flex items-center justify-end gap-2">
                     <button onClick={() => setEditingId(null)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
                     <button onClick={() => void saveEdit(d.id)} disabled={busy || !editName.trim()} className={EDITOR_PRIMARY}>
