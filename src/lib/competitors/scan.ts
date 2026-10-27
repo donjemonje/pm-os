@@ -350,6 +350,7 @@ export async function runScan(scanId: string): Promise<void> {
   let mode: FetchMode | "bundle" = isWebsite ? "plain" : "bundle";
   let aiCalls = 0;
   let statusesChanged = 0;
+  let statusesSet = 0;
   let factsChanged = 0;
   let suggestions = 0;
   let piiHits = 0;
@@ -406,6 +407,7 @@ export async function runScan(scanId: string): Promise<void> {
       const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, catalogGrew ? allPages : changedPages, firstScan, log, { facts: !catalogGrew });
       aiCalls = r.aiCalls;
       statusesChanged = r.statusesChanged;
+      statusesSet = r.statusesSet;
       factsChanged = r.factsChanged;
       suggestions = r.suggestions;
       piiHits = r.piiHits;
@@ -454,7 +456,7 @@ export async function runScan(scanId: string): Promise<void> {
   }
 
   const durationMs = Date.now() - t0;
-  log.add("info", `Scan ${finalStatus} (${badge}) in ${Math.round(durationMs / 1000)} s · ${aiCalls} AI call${aiCalls === 1 ? "" : "s"} · ${statusesChanged} status change${statusesChanged === 1 ? "" : "s"} · ${factsChanged} fact change${factsChanged === 1 ? "" : "s"} · ${suggestions} suggestion${suggestions === 1 ? "" : "s"}${piiHits ? ` · ${piiHits} PII hit${piiHits === 1 ? "" : "s"} dropped` : ""}`);
+  log.add("info", `Scan ${finalStatus} (${badge}) in ${Math.round(durationMs / 1000)} s · ${aiCalls} AI call${aiCalls === 1 ? "" : "s"} · ${statusesChanged} status change${statusesChanged === 1 ? "" : "s"}${statusesSet ? ` · ${statusesSet} cell${statusesSet === 1 ? "" : "s"} with first evidence` : ""} · ${factsChanged} fact change${factsChanged === 1 ? "" : "s"} · ${suggestions} suggestion${suggestions === 1 ? "" : "s"}${piiHits ? ` · ${piiHits} PII hit${piiHits === 1 ? "" : "s"} dropped` : ""}`);
   await log.flush({
     status: finalStatus,
     badge,
@@ -597,7 +599,8 @@ async function aiStep(
       const thisSourceId = (await db.competitorScan.findUnique({ where: { id: scanId }, select: { sourceId: true } }))?.sourceId ?? null;
       const RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
       log.add("info", `Classifying ${catalog.byName.size} capabilities from ${pages.length} ${firstScan ? "" : "changed "}pages`);
-      const cls = await classifyCapabilities(competitorName, catalog.forAi, previous, pages, (d, t) => void progress("Classification")(d, t));
+      const pendingSuggestions = (await db.capability.findMany({ where: { workspaceId, origin: "ai", state: "suggested" }, select: { name: true } })).map((c) => c.name);
+      const cls = await classifyCapabilities(competitorName, catalog.forAi, previous, pendingSuggestions, pages, (d, t) => void progress("Classification")(d, t));
       res.aiCalls += cls.calls;
       const now = new Date();
       const prevByCap = new Map(prevRows.map((p) => [p.capabilityId, p]));
@@ -636,7 +639,8 @@ async function aiStep(
           await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product: product ?? prev.product, scanId, changedAt: now } });
           res.statusesChanged++;
           log.add("info", `${name}: ${prev.value} → ${value}`, sourceUrl ?? undefined);
-        } else if (quote && quote !== prev.quote) {
+        } else if (quote && quote !== prev.quote && (!prev.quote || (confidence ?? 0) > (prev.confidence ?? 0))) {
+          // Same value: the evidence moves to a later source only when it is more confident.
           await db.capabilityStatus.update({ where: { id: prev.id }, data: { confidence, quote, sourceUrl, product: product ?? prev.product, scanId } });
         } else if (product && !prev.product) {
           await db.capabilityStatus.update({ where: { id: prev.id }, data: { product } });
@@ -660,7 +664,8 @@ async function aiStep(
 
     // Facts (only from changed pages — a catalog-only re-run reads nothing new about the company)
     if (opts.facts) {
-      const ext = await extractFacts(competitorName, pages, (d, t) => void progress("Facts")(d, t));
+      const knownFacts = await db.profileFact.findMany({ where: { competitorId, dismissedAt: null }, select: { kind: true, value: true }, orderBy: { createdAt: "asc" } });
+      const ext = await extractFacts(competitorName, knownFacts, pages, (d, t) => void progress("Facts")(d, t));
       res.aiCalls += ext.calls;
       const now = new Date();
       for (const f of ext.value) {

@@ -4,7 +4,7 @@
  * and the page key that keeps a video id.
  */
 import { describe, expect, it } from "vitest";
-import { chunkPages, factDateOf, mergeStatus, packPages, type ClassifiedStatus, type PageText } from "@/lib/competitors/ai";
+import { chunkPages, factDateOf, mergeStatus, packPages, tidy, type ClassifiedStatus, type PageText } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
 
 const page = (i: number, chars: number, extra: Partial<PageText> = {}): PageText => ({ url: `https://e.com/p${i}`, title: `P${i}`, text: "x".repeat(chars), ...extra });
@@ -60,6 +60,20 @@ describe("factDateOf", () => {
   });
   it("rejects anything else, including far-off years", () => {
     for (const v of ["", null, undefined, "Dec 2024", "20/12/2024", "1899", "2100-01-01", "2024-13"]) expect(factDateOf(v)).toBeNull();
+  });
+});
+
+describe("tidy", () => {
+  it("cuts a leaked next-field fragment and a dangling quote-comma", () => {
+    expect(tidy("Automated detection rule generation (Auto YARA)','domain':'Cyber Threat")).toBe("Automated detection rule generation (Auto YARA)");
+    expect(tidy("IBM Security SOAR (IBM Resilient)','")).toBe("IBM Security SOAR (IBM Resilient)");
+    expect(tidy("Payment Fraud Intelligence (PFI)\",")).toBe("Payment Fraud Intelligence (PFI)");
+  });
+  it("leaves ordinary values and balanced quotes alone", () => {
+    expect(tidy("Know what matters. Act first.")).toBe("Know what matters. Act first.");
+    expect(tidy('supports "Splunk", "QRadar" and more')).toBe('supports "Splunk", "QRadar" and more');
+    expect(tidy("Splunk, QRadar")).toBe("Splunk, QRadar");
+    expect(tidy("  Boston, MA ")).toBe("Boston, MA");
   });
 });
 

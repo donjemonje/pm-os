@@ -174,7 +174,18 @@ async function callTool<T>(system: string, shared: string, tail: string, tool: R
   return { value: toolUse.input as T, usage: message.usage, calls: 1 };
 }
 
-const str = (v: unknown, max = 500): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
+/**
+ * An AI string as stored: a leaked `','key':'…` fragment is cut off, a dangling
+ * `','` or unbalanced closing quote dropped. Models occasionally splice a piece
+ * of the next field into a string even under a response schema.
+ */
+export function tidy(s: string): string {
+  let t = s.replace(/['"]\s*,\s*['"]\w+['"]\s*:[\s\S]*$/, "").replace(/['"]\s*,\s*['"]?\s*$/, "").trim();
+  t = t.replace(/[\s,;]+$/, "");
+  for (const q of ["'", '"']) if (t.endsWith(q) && (t.split(q).length - 1) % 2 === 1) t = t.slice(0, -1).trimEnd();
+  return t;
+}
+const str = (v: unknown, max = 500): string => (typeof v === "string" ? tidy(v).slice(0, max) : "");
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const strs = (v: unknown, max = 120): string[] =>
   arr(v).map((x) => str(x, max)).filter(Boolean);
@@ -188,11 +199,11 @@ The catalog is grouped by domain; each domain comes with the product team's own 
 For EVERY capability in the catalog, decide from the page text whether the competitor:
 - "has" it — the site clearly describes offering this capability;
 - "partial" — the site describes a limited, beta, add-on, services-only or narrower version of it;
-- "missing" — the site describes the surrounding area but this capability is absent, or the site contradicts it;
+- "missing" — the site describes the surrounding area but this capability is absent, or the site contradicts it; when the pages cover the competitor's whole product catalog or pricing matrix and the capability appears nowhere in it, answer missing, not unknown;
 - "unknown" — the pages give no evidence either way.
 Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty. When the pages name the competitor's product, module or plan that provides the capability, give it in "product" (their exact name; empty when not stated).
 
-Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. At most 8; skip marketing claims and product names; skip anything that is a synonym of a catalog capability.
+Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. At most 8, one per distinct capability — never several wordings of the same thing; skip marketing claims and product names; skip anything that is a synonym of a catalog capability or of an already-suggested one (listed when there are any).
 
 Judge only from the pages provided. The previous statuses are given for context: keep them when the new pages say nothing new about a capability (answer the previous value with its previous confidence), change them only on evidence.`;
 
@@ -272,6 +283,8 @@ export async function classifyCapabilities(
   competitorName: string,
   catalog: CatalogForAi,
   previous: PreviousStatus[],
+  /** Suggestions already waiting for the team's review: not to be suggested again, in any wording. */
+  alreadySuggested: string[],
   pages: PageText[],
   onChunk?: (done: number, total: number) => void,
 ): Promise<AiResult<Classification>> {
@@ -291,7 +304,12 @@ export async function classifyCapabilities(
     const prev = known.length
       ? `PREVIOUS STATUSES (from the last scan and earlier pages of this one):\n${known.map((p) => `- ${p.capability}: ${p.value}${p.confidence != null ? ` (${p.confidence.toFixed(2)})` : ""}`).join("\n")}\n\n`
       : "";
-    const tail = `COMPETITOR: ${competitorName}\n\n${prev}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
+    const pending = [...alreadySuggested, ...[...suggestions.values()].map((s) => s.name)];
+    const pendingKeys = new Set(pending.map((n) => n.toLowerCase()));
+    const sug = pending.length
+      ? `ALREADY SUGGESTED (awaiting the team's review — do not suggest these again, nor rewordings, narrower or broader versions of them):\n${pending.map((n) => `- ${n}`).join("\n")}\n\n`
+      : "";
+    const tail = `COMPETITOR: ${competitorName}\n\n${prev}${sug}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
     const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000);
     calls += r.calls;
     usage = r.usage;
@@ -310,8 +328,8 @@ export async function classifyCapabilities(
     for (const s of arr(r.value.suggestions)) {
       const o = (s ?? {}) as Record<string, unknown>;
       const sug = { name: str(o.name, 80), domain: domainNames.get(str(o.domain, 60).toLowerCase()) ?? "", quote: str(o.quote, 240), url: str(o.url, 500) };
-      if (!sug.name || !sug.domain || names.has(sug.name.toLowerCase())) continue;
       const key = sug.name.toLowerCase();
+      if (!sug.name || !sug.domain || names.has(key) || pendingKeys.has(key)) continue;
       if (!suggestions.has(key) && suggestions.size < MAX_SUGGESTIONS) suggestions.set(key, sug);
     }
     onChunk?.(i + 1, chunks.length);
@@ -338,7 +356,7 @@ Return facts of these kinds only:
 - hq: the headquarters city and country, as stated.
 - founded: the founding year, as stated.
 - milestone: a dated company event the pages state — founding, acquisition, launch, rename, new office (one short line each).
-Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate.`;
+Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate: one fact per thing. When the profile already holds a fact (KNOWN FACTS) and a page restates it, return it with exactly the known wording so it is recognised — never a reworded copy; add its date when the page states one.`;
 
 export const FACTS_TOOL = {
   name: "extract_facts",
@@ -379,15 +397,20 @@ export function factDateOf(v: string | null | undefined): Date | null {
   return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? d : null;
 }
 
-export async function extractFacts(competitorName: string, pages: PageText[], onChunk?: (done: number, total: number) => void): Promise<AiResult<ExtractedFact[]>> {
+export interface KnownFact { kind: string; value: string }
+/** Known facts shown to the model so restatements keep their wording (and merge on upsert). */
+export const MAX_KNOWN_FACTS = 1500;
+
+export async function extractFacts(competitorName: string, known: KnownFact[], pages: PageText[], onChunk?: (done: number, total: number) => void): Promise<AiResult<ExtractedFact[]>> {
   const shared = `Extract facts for the competitor profile.`;
+  const knownBlock = known.length ? `KNOWN FACTS (already on the profile):\n${known.slice(0, MAX_KNOWN_FACTS).map((f) => `- ${f.kind}: ${f.value}`).join("\n")}\n\n` : "";
   const seen = new Set<string>();
   const facts: ExtractedFact[] = [];
   const chunks = chunkPages(pages);
   let calls = 0;
   let usage: unknown = null;
   for (const [i, chunk] of chunks.entries()) {
-    const tail = `COMPETITOR: ${competitorName}\n\nPAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
+    const tail = `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
     const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 6000);
     calls += r.calls;
     usage = r.usage;
