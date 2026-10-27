@@ -612,7 +612,7 @@ function WhatChanged({ c, capabilities, cellOf, facts }: { c: CompetitorRow; cap
     if (cell?.changedAt && new Date(cell.changedAt).getTime() > since) items.push({ title: `${k.name}: now ${C.values[cell.value].toLowerCase()}`, source: C.profile.website, date: shortDate(cell.changedAt), impact: cell.value === "has" && k.ourStatus !== "has" ? "high" : "medium", at: new Date(cell.changedAt).getTime() });
   }
   for (const f of facts) {
-    if (new Date(f.changedAt).getTime() > since && !f.manual) items.push({ title: `${C.profile.kinds[f.kind] ?? f.kind}: ${f.value}`, source: f.sourceLabel ?? C.profile.website, date: shortDate(f.changedAt), impact: "low", at: new Date(f.changedAt).getTime() });
+    if (f.changedAt && new Date(f.changedAt).getTime() > since && !f.manual) items.push({ title: `${C.profile.kinds[f.kind] ?? f.kind}: ${f.value}`, source: f.sourceLabel ?? C.profile.website, date: shortDate(f.changedAt), impact: "low", at: new Date(f.changedAt).getTime() });
   }
   items.sort((a, b) => b.at - a.at);
   const shown = items.slice(0, 8);

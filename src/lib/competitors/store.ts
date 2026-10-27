@@ -115,7 +115,8 @@ export interface FactRow {
   tone: string | null;
   /** The date the source states for the fact (timeline); null when undated. */
   factDate: string | null;
-  changedAt: string;
+  /** Null = found by the source's first scan (baseline, not a change). */
+  changedAt: string | null;
   /** Typed by a PM — no page behind it. */
   manual: boolean;
   /** Not seen on the site for STALE_AFTER_SCANS scans. */
@@ -299,7 +300,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
         sourceLabel: f.sourceLabel,
         tone: f.tone,
         factDate: f.factDate?.toISOString() ?? null,
-        changedAt: f.changedAt.toISOString(),
+        changedAt: f.changedAt?.toISOString() ?? null,
         manual: f.manual,
         stale,
         unreachable: f.unreachableAt != null,

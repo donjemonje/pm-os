@@ -755,7 +755,9 @@ model ProfileFact {
   /// acquisition) — the timeline is built from dated facts. Null = undated.
   factDate     DateTime?
   scanId       String?
-  changedAt    DateTime   @default(now())
+  /// When the fact appeared or changed — null for facts a source's FIRST scan
+  /// found (the baseline is not news; a later scan's new fact is).
+  changedAt    DateTime?
   /// A PM's correction; wins over later scans until cleared.
   overrideValue  String?
   overrideUserId String?

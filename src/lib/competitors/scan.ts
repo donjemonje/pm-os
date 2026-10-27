@@ -674,7 +674,8 @@ async function aiStep(
           });
           continue;
         }
-        await db.profileFact.create({ data: { workspaceId, competitorId, kind: f.kind, value: f.value, sourceUrl: f.url || null, sourceLabel, factDate, scanId, lastSeenScanId: scanId, changedAt: now } });
+        // A source's first scan sets the baseline; only later finds are "changes".
+        await db.profileFact.create({ data: { workspaceId, competitorId, kind: f.kind, value: f.value, sourceUrl: f.url || null, sourceLabel, factDate, scanId, lastSeenScanId: scanId, changedAt: firstScan ? null : now } });
         res.factsChanged++;
       }
       log.add("info", `Facts: ${ext.value.length} found, ${res.factsChanged} new`);
