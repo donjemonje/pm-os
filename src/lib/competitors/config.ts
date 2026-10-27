@@ -112,6 +112,9 @@ export const FACT_KINDS = [
   "certification",
   "customer",
   "vertical",
+  "funding",
+  "headcount",
+  "hiring",
 ] as const;
 export type FactKind = (typeof FACT_KINDS)[number];
 export function isFactKind(v: unknown): v is FactKind {

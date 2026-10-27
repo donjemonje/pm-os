@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
-import { readMockProfile, type MockProfile } from "./mock";
+
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -40,8 +40,52 @@ export interface CompetitorRow {
   manualScansToday: number;
   /** Scan currently queued or running, if any. */
   activeScanId: string | null;
-  /** Dev-only demo data from COMPETITORS_MOCK_DIR (null in production / when absent). */
-  mock: MockProfile | null;
+  profile: ProfileRow | null;
+  events: EventRow[];
+  products: ProductRow[];
+  people: PeopleRow | null;
+  media: MediaRow[];
+  /** What changed in the last 30 days (the news feed's rows, story 3). */
+  signals: SignalRow[];
+}
+
+export interface ProfileRow {
+  ownership: string | null;
+  hq: string | null;
+  foundedYear: number | null;
+  headcount: string | null;
+  tags: { label: string; kind: "int" | "pos" | "gtm" }[];
+  risk: { score: number; level: "high" | "medium" | "low"; note: string | null } | null;
+  sourcesSummary: { label: string; n: number | string }[];
+  lastFullScanAt: string | null;
+}
+export interface EventRow {
+  id: string;
+  date: string;
+  title: string;
+  type: "company" | "funding" | "domain" | "capability" | "hr" | "website";
+  projected: boolean;
+  confidence: number | null;
+  sourceUrl: string | null;
+}
+export interface ProductRow { id: string; code: string; name: string; since: string | null; tier: string | null; position: number }
+export interface PeopleRow { windowLabel: string; hires: { team: string; n: number }[]; leftCount: number | null; leftNote: string | null; leadership: string | null }
+export interface MediaRow { id: string; label: string; kind: string | null; mediaPath: string; sourceLabel: string | null; capturedAt: string | null }
+export interface SignalRow { id: string; kind: string; title: string; source: string; sourceUrl: string | null; impact: "high" | "medium" | "low"; at: string }
+export interface InsightRow {
+  summary: string | null;
+  summarySource: string | null;
+  sources: { label: string; tone?: "int" | "pos" | "gtm" }[];
+  scope: string | null;
+  packaging: string | null;
+  confidenceNote: string | null;
+  media: { label: string; kind: string; caption: string; mediaPath?: string }[];
+  evidence: { kind: string; kindTone?: "int" | "pos" | "gtm"; text: string; date: string }[];
+  riskLevel: "high" | "medium" | "low" | null;
+  riskText: string | null;
+  differentiation: string | null;
+  ideaTitle: string | null;
+  evidenceCount: number | null;
 }
 
 export interface DomainRow {
@@ -80,6 +124,9 @@ export interface CellRow {
   sourceUrl: string | null;
   changedAt: string | null;
   override: { value: StatusValue; note: string | null; userName: string | null; at: string } | null;
+  /** The competitor's product this capability ships in (profile grouping). */
+  productId: string | null;
+  insight: InsightRow | null;
 }
 
 export interface FactRow {
@@ -88,6 +135,8 @@ export interface FactRow {
   kind: string;
   value: string;
   sourceUrl: string | null;
+  sourceLabel: string | null;
+  tone: string | null;
   changedAt: string;
   /** Typed by a PM — no page behind it. */
   manual: boolean;
@@ -118,6 +167,10 @@ function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 export async function getCompetitorsState(workspaceId: string, orgName: string): Promise<CompetitorsState> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
@@ -127,11 +180,19 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     db.competitor.findMany({
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      include: { sources: { where: { type: "website" }, take: 1 } },
+      include: {
+        sources: { where: { type: "website" }, take: 1 },
+        profile: true,
+        events: { orderBy: { date: "asc" } },
+        products: { orderBy: [{ position: "asc" }, { name: "asc" }] },
+        people: true,
+        media: { orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
+        signals: { where: { at: { gte: new Date(Date.now() - 30 * 86_400_000) } }, orderBy: { at: "desc" }, take: 20 },
+      },
     }),
     db.competitorDomain.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
     db.capability.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
-    db.capabilityStatus.findMany({ where: { workspaceId } }),
+    db.capabilityStatus.findMany({ where: { workspaceId }, include: { insight: true } }),
     db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
     db.competitorScan.findMany({
       where: { workspaceId, status: { in: ["queued", "running"] } },
@@ -209,7 +270,25 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       lastGoodScanAt: c.sources[0] ? scansBySource.get(c.sources[0].id)?.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null : null,
       manualScansToday: c.sources[0] ? (scansBySource.get(c.sources[0].id) ?? []).filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(c.sources[0].id) ? 1 : 0) : 0,
       activeScanId: c.sources[0] ? activeBySource.get(c.sources[0].id) ?? null : null,
-      mock: readMockProfile(c.host),
+      profile: c.profile
+        ? {
+            ownership: c.profile.ownership,
+            hq: c.profile.hq,
+            foundedYear: c.profile.foundedYear,
+            headcount: c.profile.headcount,
+            tags: asArray<{ label: string; kind: "int" | "pos" | "gtm" }>(c.profile.tags),
+            risk: c.profile.riskScore != null && (c.profile.riskLevel === "high" || c.profile.riskLevel === "medium" || c.profile.riskLevel === "low")
+              ? { score: c.profile.riskScore, level: c.profile.riskLevel, note: c.profile.riskNote }
+              : null,
+            sourcesSummary: asArray<{ label: string; n: number | string }>(c.profile.sourcesSummary),
+            lastFullScanAt: c.profile.lastFullScanAt?.toISOString() ?? null,
+          }
+        : null,
+      events: c.events.map((e) => ({ id: e.id, date: e.date.toISOString(), title: e.title, type: e.type as EventRow["type"], projected: e.projected, confidence: e.confidence, sourceUrl: e.sourceUrl })),
+      products: c.products.map((p) => ({ id: p.id, code: p.code, name: p.name, since: p.since, tier: p.tier, position: p.position })),
+      people: c.people ? { windowLabel: c.people.windowLabel, hires: asArray<{ team: string; n: number }>(c.people.hires), leftCount: c.people.leftCount, leftNote: c.people.leftNote, leadership: c.people.leadership } : null,
+      media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
+      signals: c.signals.map((g) => ({ id: g.id, kind: g.kind, title: g.title, source: g.source, sourceUrl: g.sourceUrl, impact: (g.impact === "high" || g.impact === "low" ? g.impact : "medium") as SignalRow["impact"], at: g.at.toISOString() })),
     })),
     domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position })),
     capabilities: capabilities.map((k) => ({
@@ -240,6 +319,24 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
         sourceUrl: s.sourceUrl,
         changedAt: s.changedAt?.toISOString() ?? null,
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
+        productId: s.productId,
+        insight: s.insight
+          ? {
+              summary: s.insight.summary,
+              summarySource: s.insight.summarySource,
+              sources: asArray<InsightRow["sources"][number]>(s.insight.sources),
+              scope: s.insight.scope,
+              packaging: s.insight.packaging,
+              confidenceNote: s.insight.confidenceNote,
+              media: asArray<InsightRow["media"][number]>(s.insight.media),
+              evidence: asArray<InsightRow["evidence"][number]>(s.insight.evidence),
+              riskLevel: (s.insight.riskLevel === "high" || s.insight.riskLevel === "medium" || s.insight.riskLevel === "low" ? s.insight.riskLevel : null),
+              riskText: s.insight.riskText,
+              differentiation: s.insight.differentiation,
+              ideaTitle: s.insight.ideaTitle,
+              evidenceCount: s.insight.evidenceCount,
+            }
+          : null,
       };
     }),
     facts: facts.map((f) => {
@@ -253,6 +350,8 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       kind: f.kind,
       value: f.overrideValue ?? f.value,
       sourceUrl: f.sourceUrl,
+      sourceLabel: f.sourceLabel,
+      tone: f.tone,
       changedAt: f.changedAt.toISOString(),
       manual: f.manual,
       stale,

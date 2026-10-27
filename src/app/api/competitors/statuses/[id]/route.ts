@@ -8,8 +8,9 @@ type Params = { params: Promise<{ id: string }> };
 
 /**
  * PATCH a matrix cell — any member of the org:
- *   {value, note?}  set a correction that wins over later scans
- *   {reset: true}   drop the correction, show what the scan found
+ *   {value, note?, surface?}  set a correction that wins over later scans
+ *   {reset: true}             drop the correction, show what the scan found
+ * `surface` ("matrix" | "profile") only tags the usage event.
  */
 export async function PATCH(req: Request, { params }: Params) {
   const ctx = await competitorsGuard();
@@ -20,6 +21,7 @@ export async function PATCH(req: Request, { params }: Params) {
   const cell = await db.capabilityStatus.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
   if (!cell) return bad("Not found", 404);
   const from = cell.overrideValue ?? cell.value;
+  const surface = body.surface === "profile" ? "profile" : "matrix";
 
   if (body.reset === true) {
     await db.capabilityStatus.update({
@@ -27,7 +29,7 @@ export async function PATCH(req: Request, { params }: Params) {
       data: { overrideValue: null, overrideNote: null, overrideUserId: null, overrideAt: null },
     });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_status_overridden", {
-      competitorId: cell.competitorId, capabilityId: cell.capabilityId, from, to: cell.value, hasNote: false, reset: true,
+      competitorId: cell.competitorId, capabilityId: cell.capabilityId, from, to: cell.value, hasNote: false, reset: true, surface,
     });
     return stateResponse(ctx);
   }
@@ -39,7 +41,7 @@ export async function PATCH(req: Request, { params }: Params) {
     data: { overrideValue: body.value, overrideNote: note, overrideUserId: ctx.user.id, overrideAt: new Date() },
   });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_status_overridden", {
-    competitorId: cell.competitorId, capabilityId: cell.capabilityId, from, to: body.value, hasNote: note != null, reset: false,
+    competitorId: cell.competitorId, capabilityId: cell.capabilityId, from, to: body.value, hasNote: note != null, reset: false, surface,
   });
   return stateResponse(ctx);
 }
