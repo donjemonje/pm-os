@@ -740,7 +740,7 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, confidence: null, lowConfidence: false, quote: null, sourceUrl: null, changedAt: null, override: null, productId: null, insight: null };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, confidence: null, lowConfidence: false, quote: null, sourceUrl: null, changedAt: null, override: null, product: null, history: [] };
   async function set(v: OwnStatus) {
     if (v === capability.ourStatus) return;
     setBusy(true);

@@ -624,12 +624,7 @@ model Competitor {
   statuses CapabilityStatus[]
   facts    ProfileFact[]
   sources  CompetitorSource[]
-  profile  CompetitorProfile?
-  events   CompetitorEvent[]
-  products CompetitorProduct[]
-  people   CompetitorPeople?
   media    CompetitorMedia[]
-  signals  CompetitorSignal[]
 
   @@unique([workspaceId, host])
   @@index([workspaceId])
@@ -715,14 +710,13 @@ model CapabilityStatus {
   overrideNote   String?
   overrideUserId String?
   overrideAt     DateTime?
-  /// The competitor's product this capability ships in (profile grouping).
-  productId    String?
-  product      CompetitorProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  /// The competitor's product or module that ships this capability, as PMOS AI
+  /// read it off the pages (groups the profile's capabilities). Null = not stated.
+  product      String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
   history StatusHistory[]
-  insight CapabilityInsight?
 
   @@unique([competitorId, capabilityId])
   @@index([workspaceId])
@@ -757,6 +751,9 @@ model ProfileFact {
   sourceLabel  String?
   /// "warn" paints the source line amber (a change worth noticing).
   tone         String?
+  /// The date the source states for the fact (a funding round, a launch, an
+  /// acquisition) — the timeline is built from dated facts. Null = undated.
+  factDate     DateTime?
   scanId       String?
   changedAt    DateTime   @default(now())
   /// A PM's correction; wins over later scans until cleared.
@@ -786,7 +783,12 @@ model CompetitorSource {
   workspaceId  String
   competitorId String
   competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
-  /// "website"
+  /// One of SOURCE_TYPES (lib/competitors/config.ts): website | documents |
+  /// helpcenter | video | archive | apidocs | changelog | code | social |
+  /// reviews | marketplaces | press | jobs | events | other. The website is
+  /// crawled by the scanner; every other type receives its pages from a
+  /// collector (an upload, an import, a later connector) and runs the same
+  /// pipeline from there.
   type         String     @default("website")
   url          String
   lastScanAt   DateTime?
@@ -810,12 +812,12 @@ model CompetitorScan {
   workspaceId   String
   sourceId      String
   source        CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  /// "manual" | "scheduled"
+  /// "manual" | "scheduled" | "import" (pages handed to the pipeline by a collector)
   trigger       String
   startedById   String?
   /// "queued" | "running" | "ok" | "partial" | "failed"
   status        String           @default("queued")
-  /// "plain" | "browser" — how the pages were fetched (browser after a bot wall).
+  /// "plain" | "browser" (browser after a bot wall) | "bundle" (pages were handed in, nothing fetched).
   fetchMode     String?
   startedAt     DateTime         @default(now())
   finishedAt    DateTime?
@@ -856,9 +858,17 @@ model ScanPage {
   scan        CompetitorScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
   sourceId    String
   url         String
+  /// What the text is: page | document | article | transcript | capture | quotes
+  /// (quotes = the evidence lines a collector kept when it did not keep the page text).
+  kind        String         @default("page")
+  title       String?
   contentHash String
   text        String?
   chars       Int            @default(0)
+  /// When the content was published or captured, when the source says so
+  /// (an article's updated_at, a video's publish date, an archive capture's
+  /// timestamp). Null = only the fetch time is known.
+  observedAt  DateTime?
   /// Validators for the next scan's conditional request (If-None-Match / If-Modified-Since).
   etag        String?
   lastModified String?
@@ -866,132 +876,6 @@ model ScanPage {
 
   @@index([sourceId, url])
   @@index([scanId])
-}
-
-/// Company-level profile facts that no single page gives: ownership, HQ,
-/// founding, size, positioning tags, the risk score and the source summary.
-/// Written by the source stories (press, LinkedIn, trust pages) as they land;
-/// until then by the seed that mirrors Daniel's manual research.
-model CompetitorProfile {
-  id             String     @id @default(uuid())
-  competitorId   String     @unique
-  competitor     Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
-  ownership      String?
-  hq             String?
-  foundedYear    Int?
-  headcount      String?
-  /// [{label, kind: "int"|"pos"|"gtm"}]
-  tags           Json       @default("[]")
-  riskScore      Int?
-  /// "high" | "medium" | "low"
-  riskLevel      String?
-  riskNote       String?
-  /// [{label, n}] — source types and counts shown in the profile's Sources card.
-  sourcesSummary Json       @default("[]")
-  lastFullScanAt DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-}
-
-/// A dated event on the competitor's timeline. type: company | funding |
-/// domain | capability | hr | website. Projected events are PMOS forecasts
-/// with a confidence (hollow dots on the timeline).
-model CompetitorEvent {
-  id           String     @id @default(uuid())
-  workspaceId  String
-  competitorId String
-  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
-  date         DateTime
-  title        String
-  type         String
-  projected    Boolean    @default(false)
-  confidence   Float?
-  sourceUrl    String?
-  sourceLabel  String?
-  createdAt    DateTime   @default(now())
-
-  @@index([competitorId, date])
-}
-
-/// A product of the competitor, grouping its capability statuses in the profile.
-model CompetitorProduct {
-  id           String     @id @default(uuid())
-  workspaceId  String
-  competitorId String
-  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
-  code         String
-  name         String
-  since        String?
-  tier         String?
-  position     Int        @default(0)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
-
-  statuses CapabilityStatus[]
-
-  @@unique([competitorId, name])
-}
-
-/// The deep dive behind one matrix cell: what the capability does at this
-/// competitor, scope, packaging, confidence, media, evidence and the
-/// risk/differentiation text vs the org.
-model CapabilityInsight {
-  id             String           @id @default(uuid())
-  statusId       String           @unique
-  status         CapabilityStatus @relation(fields: [statusId], references: [id], onDelete: Cascade)
-  summary        String?
-  summarySource  String?
-  /// [{label, tone?}]
-  sources        Json             @default("[]")
-  scope          String?
-  packaging      String?
-  confidenceNote String?
-  /// [{label, kind, caption, mediaPath?}]
-  media          Json             @default("[]")
-  /// [{kind, kindTone?, text, date}]
-  evidence       Json             @default("[]")
-  /// "high" | "medium" | "low"
-  riskLevel      String?
-  riskText       String?
-  differentiation String?
-  ideaTitle      String?
-  evidenceCount  Int?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-}
-
-/// Something that changed at a competitor — the news feed's row (story 3
-/// grows this). kind: status | page | fact | hiring | funding | website | other.
-model CompetitorSignal {
-  id           String     @id @default(uuid())
-  workspaceId  String
-  competitorId String
-  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
-  kind         String
-  title        String
-  source       String
-  sourceUrl    String?
-  /// "high" | "medium" | "low"
-  impact       String     @default("medium")
-  at           DateTime
-  createdAt    DateTime   @default(now())
-
-  @@index([workspaceId, at])
-  @@index([competitorId, at])
-}
-
-/// Hiring and leadership movements over a window (LinkedIn, later).
-model CompetitorPeople {
-  id           String     @id @default(uuid())
-  competitorId String     @unique
-  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
-  windowLabel  String
-  /// [{team, n}]
-  hires        Json       @default("[]")
-  leftCount    Int?
-  leftNote     String?
-  leadership   String?
-  updatedAt    DateTime   @updatedAt
 }
 
 /// A UI capture, image or clip of the competitor's product, stored in the

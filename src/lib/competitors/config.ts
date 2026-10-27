@@ -103,7 +103,11 @@ export function isStatusValue(v: unknown): v is StatusValue {
   return typeof v === "string" && (STATUS_VALUES as readonly string[]).includes(v);
 }
 
-/** Lean-profile fact kinds — a closed list for story 2. */
+/**
+ * Profile fact kinds — a closed list. The first block is read off product
+ * pages (story 2); the second is company facts from about/press/jobs pages,
+ * each with the date the source states when it states one (the timeline).
+ */
 export const FACT_KINDS = [
   "tagline",
   "product",
@@ -115,6 +119,10 @@ export const FACT_KINDS = [
   "funding",
   "headcount",
   "hiring",
+  "ownership",
+  "hq",
+  "founded",
+  "milestone",
 ] as const;
 export type FactKind = (typeof FACT_KINDS)[number];
 export function isFactKind(v: unknown): v is FactKind {
@@ -123,3 +131,38 @@ export function isFactKind(v: unknown): v is FactKind {
 
 /** Below this confidence a scanned "has"/"partial" is shown as "partial?" to confirm. */
 export const LOW_CONFIDENCE = 0.6;
+
+/**
+ * Where a competitor's pages come from. The website is crawled by the
+ * scanner; every other type gets its pages from a collector (an import, an
+ * upload, a later connector) and runs the same pipeline. One source row per
+ * type per competitor.
+ */
+export const SOURCE_TYPES = [
+  "website",
+  "documents",
+  "helpcenter",
+  "video",
+  "archive",
+  "apidocs",
+  "changelog",
+  "code",
+  "social",
+  "reviews",
+  "marketplaces",
+  "press",
+  "jobs",
+  "events",
+  "other",
+] as const;
+export type SourceType = (typeof SOURCE_TYPES)[number];
+export function isSourceType(v: unknown): v is SourceType {
+  return typeof v === "string" && (SOURCE_TYPES as readonly string[]).includes(v);
+}
+
+/** What a stored page text is. */
+export const PAGE_KINDS = ["page", "document", "article", "transcript", "capture", "quotes"] as const;
+export type PageKind = (typeof PAGE_KINDS)[number];
+export function isPageKind(v: unknown): v is PageKind {
+  return typeof v === "string" && (PAGE_KINDS as readonly string[]).includes(v);
+}

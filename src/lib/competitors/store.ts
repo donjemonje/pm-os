@@ -2,12 +2,25 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
 
-
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
  * client renders — plus the small helpers the API routes share. Every query
- * is scoped by workspaceId.
+ * is scoped by workspaceId. Everything here comes out of the scan pipeline
+ * (sources → scans → pages → statuses, history, facts) or a PM's own edits;
+ * there is no other way in.
  */
+
+export interface SourceRow {
+  id: string;
+  type: string;
+  url: string;
+  lastScanAt: string | null;
+  lastStatus: string;
+  lastError: string | null;
+  /** Pages the last finished scan of this source read. */
+  pages: number;
+  badge: ScanBadge | null;
+}
 
 export interface CompetitorRow {
   id: string;
@@ -16,13 +29,16 @@ export interface CompetitorRow {
   host: string;
   logoUrl: string | null;
   position: number;
+  /** The website source (the one the scanner crawls). */
   source: {
     id: string;
     lastScanAt: string | null;
     lastStatus: string;
     lastError: string | null;
   } | null;
-  /** The last finished scan, as users see it. */
+  /** Every source of the competitor, website first. */
+  sources: SourceRow[];
+  /** The last finished website scan, as users see it. */
   lastScan: {
     id: string;
     badge: ScanBadge | null;
@@ -34,59 +50,18 @@ export interface CompetitorRow {
     removedPages: number;
     error: string | null;
   } | null;
-  /** The last scan that ended "full" or "incomplete" — what the matrix shows when the latest is blocked. */
+  /** The last website scan that ended "full" or "incomplete" — what the matrix shows when the latest is blocked. */
   lastGoodScanAt: string | null;
+  /** Most recent finished scan of any source. */
+  lastAnyScanAt: string | null;
   /** Manual scans started today (the per-day limit applies to these). */
   manualScansToday: number;
   /** Scan currently queued or running, if any. */
   activeScanId: string | null;
-  profile: ProfileRow | null;
-  events: EventRow[];
-  products: ProductRow[];
-  people: PeopleRow | null;
   media: MediaRow[];
-  /** What changed in the last 30 days (the news feed's rows, story 3). */
-  signals: SignalRow[];
 }
 
-export interface ProfileRow {
-  ownership: string | null;
-  hq: string | null;
-  foundedYear: number | null;
-  headcount: string | null;
-  tags: { label: string; kind: "int" | "pos" | "gtm" }[];
-  risk: { score: number; level: "high" | "medium" | "low"; note: string | null } | null;
-  sourcesSummary: { label: string; n: number | string }[];
-  lastFullScanAt: string | null;
-}
-export interface EventRow {
-  id: string;
-  date: string;
-  title: string;
-  type: "company" | "funding" | "domain" | "capability" | "hr" | "website";
-  projected: boolean;
-  confidence: number | null;
-  sourceUrl: string | null;
-}
-export interface ProductRow { id: string; code: string; name: string; since: string | null; tier: string | null; position: number }
-export interface PeopleRow { windowLabel: string; hires: { team: string; n: number }[]; leftCount: number | null; leftNote: string | null; leadership: string | null }
 export interface MediaRow { id: string; label: string; kind: string | null; mediaPath: string; sourceLabel: string | null; capturedAt: string | null }
-export interface SignalRow { id: string; kind: string; title: string; source: string; sourceUrl: string | null; impact: "high" | "medium" | "low"; at: string }
-export interface InsightRow {
-  summary: string | null;
-  summarySource: string | null;
-  sources: { label: string; tone?: "int" | "pos" | "gtm" }[];
-  scope: string | null;
-  packaging: string | null;
-  confidenceNote: string | null;
-  media: { label: string; kind: string; caption: string; mediaPath?: string }[];
-  evidence: { kind: string; kindTone?: "int" | "pos" | "gtm"; text: string; date: string }[];
-  riskLevel: "high" | "medium" | "low" | null;
-  riskText: string | null;
-  differentiation: string | null;
-  ideaTitle: string | null;
-  evidenceCount: number | null;
-}
 
 export interface DomainRow {
   id: string;
@@ -124,9 +99,10 @@ export interface CellRow {
   sourceUrl: string | null;
   changedAt: string | null;
   override: { value: StatusValue; note: string | null; userName: string | null; at: string } | null;
-  /** The competitor's product this capability ships in (profile grouping). */
-  productId: string | null;
-  insight: InsightRow | null;
+  /** The competitor's product/module that ships this capability, as the pages name it. */
+  product: string | null;
+  /** Earlier values of the cell, newest first. */
+  history: { value: StatusValue; quote: string | null; sourceUrl: string | null; at: string }[];
 }
 
 export interface FactRow {
@@ -137,6 +113,8 @@ export interface FactRow {
   sourceUrl: string | null;
   sourceLabel: string | null;
   tone: string | null;
+  /** The date the source states for the fact (timeline); null when undated. */
+  factDate: string | null;
   changedAt: string;
   /** Typed by a PM — no page behind it. */
   manual: boolean;
@@ -167,10 +145,6 @@ function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-function asArray<T>(v: unknown): T[] {
-  return Array.isArray(v) ? (v as T[]) : [];
-}
-
 export async function getCompetitorsState(workspaceId: string, orgName: string): Promise<CompetitorsState> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
@@ -181,18 +155,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
       include: {
-        sources: { where: { type: "website" }, take: 1 },
-        profile: true,
-        events: { orderBy: { date: "asc" } },
-        products: { orderBy: [{ position: "asc" }, { name: "asc" }] },
-        people: true,
+        sources: { orderBy: { createdAt: "asc" } },
         media: { orderBy: [{ position: "asc" }, { createdAt: "asc" }] },
-        signals: { where: { at: { gte: new Date(Date.now() - 30 * 86_400_000) } }, orderBy: { at: "desc" }, take: 20 },
       },
     }),
     db.competitorDomain.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
     db.capability.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
-    db.capabilityStatus.findMany({ where: { workspaceId }, include: { insight: true } }),
+    db.capabilityStatus.findMany({ where: { workspaceId }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
     db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
     db.competitorScan.findMany({
       where: { workspaceId, status: { in: ["queued", "running"] } },
@@ -206,10 +175,12 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     }),
   ]);
   const scansBySource = new Map<string, typeof recentScans>();
+  const sourceOfScan = new Map<string, string>();
   for (const s of recentScans) {
     const list = scansBySource.get(s.sourceId) ?? [];
     list.push(s);
     scansBySource.set(s.sourceId, list);
+    sourceOfScan.set(s.id, s.sourceId);
   }
   const asRecord = (v: unknown): Record<string, number> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, number>) : {});
 
@@ -228,68 +199,59 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
 
   let lastScanAt: Date | null = null;
   for (const c of competitors) {
-    const at = c.sources[0]?.lastScanAt ?? null;
-    if (at && (!lastScanAt || at > lastScanAt)) lastScanAt = at;
+    for (const s of c.sources) {
+      if (s.lastScanAt && (!lastScanAt || s.lastScanAt > lastScanAt)) lastScanAt = s.lastScanAt;
+    }
   }
 
   return {
     orgName,
     config: mergeCompetitorsConfig(workspace?.competitorsConfig),
     productLines: productLines.map((p) => p.name),
-    competitors: competitors.map((c) => ({
-      id: c.id,
-      name: c.name,
-      websiteUrl: c.websiteUrl,
-      host: c.host,
-      logoUrl: c.logoUrl,
-      position: c.position,
-      source: c.sources[0]
-        ? {
-            id: c.sources[0].id,
-            lastScanAt: c.sources[0].lastScanAt?.toISOString() ?? null,
-            lastStatus: c.sources[0].lastStatus,
-            lastError: c.sources[0].lastError,
-          }
-        : null,
-      lastScan: (() => {
-        const s = c.sources[0] ? scansBySource.get(c.sources[0].id)?.[0] : undefined;
-        if (!s) return null;
-        const pages = Array.isArray(s.pages) ? (s.pages as { outcome?: string }[]) : [];
-        return {
-          id: s.id,
-          badge: (s.badge as ScanBadge | null) ?? null,
-          startedAt: s.startedAt.toISOString(),
-          pagesFetched: s.pagesFetched,
-          pagesSkipped: pages.filter((p) => p.outcome === "failed" || p.outcome === "skipped").length + Object.entries(asRecord(s.outcomes)).filter(([k]) => k === "robots" || k === "policy" || k === "cap").reduce((n, [, v]) => n + v, 0),
-          outcomes: asRecord(s.outcomes),
-          robotsDisallowed: asStringArray(s.robotsDisallowed),
-          removedPages: asStringArray(s.removedPages).length,
-          error: s.error,
-        };
-      })(),
-      lastGoodScanAt: c.sources[0] ? scansBySource.get(c.sources[0].id)?.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null : null,
-      manualScansToday: c.sources[0] ? (scansBySource.get(c.sources[0].id) ?? []).filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(c.sources[0].id) ? 1 : 0) : 0,
-      activeScanId: c.sources[0] ? activeBySource.get(c.sources[0].id) ?? null : null,
-      profile: c.profile
-        ? {
-            ownership: c.profile.ownership,
-            hq: c.profile.hq,
-            foundedYear: c.profile.foundedYear,
-            headcount: c.profile.headcount,
-            tags: asArray<{ label: string; kind: "int" | "pos" | "gtm" }>(c.profile.tags),
-            risk: c.profile.riskScore != null && (c.profile.riskLevel === "high" || c.profile.riskLevel === "medium" || c.profile.riskLevel === "low")
-              ? { score: c.profile.riskScore, level: c.profile.riskLevel, note: c.profile.riskNote }
-              : null,
-            sourcesSummary: asArray<{ label: string; n: number | string }>(c.profile.sourcesSummary),
-            lastFullScanAt: c.profile.lastFullScanAt?.toISOString() ?? null,
-          }
-        : null,
-      events: c.events.map((e) => ({ id: e.id, date: e.date.toISOString(), title: e.title, type: e.type as EventRow["type"], projected: e.projected, confidence: e.confidence, sourceUrl: e.sourceUrl })),
-      products: c.products.map((p) => ({ id: p.id, code: p.code, name: p.name, since: p.since, tier: p.tier, position: p.position })),
-      people: c.people ? { windowLabel: c.people.windowLabel, hires: asArray<{ team: string; n: number }>(c.people.hires), leftCount: c.people.leftCount, leftNote: c.people.leftNote, leadership: c.people.leadership } : null,
-      media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
-      signals: c.signals.map((g) => ({ id: g.id, kind: g.kind, title: g.title, source: g.source, sourceUrl: g.sourceUrl, impact: (g.impact === "high" || g.impact === "low" ? g.impact : "medium") as SignalRow["impact"], at: g.at.toISOString() })),
-    })),
+    competitors: competitors.map((c) => {
+      const website = c.sources.find((s) => s.type === "website") ?? null;
+      const websiteScans = website ? scansBySource.get(website.id) ?? [] : [];
+      const last = websiteScans[0];
+      const lastAny = c.sources.map((s) => s.lastScanAt).filter((d): d is Date => d != null).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+      return {
+        id: c.id,
+        name: c.name,
+        websiteUrl: c.websiteUrl,
+        host: c.host,
+        logoUrl: c.logoUrl,
+        position: c.position,
+        source: website
+          ? { id: website.id, lastScanAt: website.lastScanAt?.toISOString() ?? null, lastStatus: website.lastStatus, lastError: website.lastError }
+          : null,
+        sources: [...c.sources]
+          .sort((a, b) => (a.type === "website" ? -1 : b.type === "website" ? 1 : 0))
+          .map((s) => {
+            const sl = scansBySource.get(s.id)?.[0];
+            return { id: s.id, type: s.type, url: s.url, lastScanAt: s.lastScanAt?.toISOString() ?? null, lastStatus: s.lastStatus, lastError: s.lastError, pages: sl?.pagesFetched ?? 0, badge: (sl?.badge as ScanBadge | null) ?? null };
+          }),
+        lastScan: last
+          ? (() => {
+              const pages = Array.isArray(last.pages) ? (last.pages as { outcome?: string }[]) : [];
+              return {
+                id: last.id,
+                badge: (last.badge as ScanBadge | null) ?? null,
+                startedAt: last.startedAt.toISOString(),
+                pagesFetched: last.pagesFetched,
+                pagesSkipped: pages.filter((p) => p.outcome === "failed" || p.outcome === "skipped").length + Object.entries(asRecord(last.outcomes)).filter(([k]) => k === "robots" || k === "policy" || k === "cap").reduce((n, [, v]) => n + v, 0),
+                outcomes: asRecord(last.outcomes),
+                robotsDisallowed: asStringArray(last.robotsDisallowed),
+                removedPages: asStringArray(last.removedPages).length,
+                error: last.error,
+              };
+            })()
+          : null,
+        lastGoodScanAt: websiteScans.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null,
+        lastAnyScanAt: lastAny?.toISOString() ?? null,
+        manualScansToday: website ? websiteScans.filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(website.id) ? 1 : 0) : 0,
+        activeScanId: website ? activeBySource.get(website.id) ?? null : null,
+        media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
+      };
+    }),
     domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position })),
     capabilities: capabilities.map((k) => ({
       id: k.id,
@@ -319,44 +281,29 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
         sourceUrl: s.sourceUrl,
         changedAt: s.changedAt?.toISOString() ?? null,
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
-        productId: s.productId,
-        insight: s.insight
-          ? {
-              summary: s.insight.summary,
-              summarySource: s.insight.summarySource,
-              sources: asArray<InsightRow["sources"][number]>(s.insight.sources),
-              scope: s.insight.scope,
-              packaging: s.insight.packaging,
-              confidenceNote: s.insight.confidenceNote,
-              media: asArray<InsightRow["media"][number]>(s.insight.media),
-              evidence: asArray<InsightRow["evidence"][number]>(s.insight.evidence),
-              riskLevel: (s.insight.riskLevel === "high" || s.insight.riskLevel === "medium" || s.insight.riskLevel === "low" ? s.insight.riskLevel : null),
-              riskText: s.insight.riskText,
-              differentiation: s.insight.differentiation,
-              ideaTitle: s.insight.ideaTitle,
-              evidenceCount: s.insight.evidenceCount,
-            }
-          : null,
+        product: s.product,
+        history: s.history.map((h) => ({ value: h.value as StatusValue, quote: h.quote, sourceUrl: h.sourceUrl, at: h.at.toISOString() })),
       };
     }),
     facts: facts.map((f) => {
-      // Stale = the site's last STALE_AFTER_SCANS finished scans all missed it.
-      const sourceId = competitors.find((c) => c.id === f.competitorId)?.sources[0]?.id;
+      // Stale = the last STALE_AFTER_SCANS finished scans of the fact's own source all missed it.
+      const sourceId = f.scanId ? sourceOfScan.get(f.scanId) : undefined;
       const recent = sourceId ? (scansBySource.get(sourceId) ?? []).filter((s) => s.badge === "full" || s.badge === "incomplete").slice(0, STALE_AFTER_SCANS) : [];
       const stale = !f.manual && recent.length >= STALE_AFTER_SCANS && !recent.some((s) => s.id === f.lastSeenScanId);
       return {
-      id: f.id,
-      competitorId: f.competitorId,
-      kind: f.kind,
-      value: f.overrideValue ?? f.value,
-      sourceUrl: f.sourceUrl,
-      sourceLabel: f.sourceLabel,
-      tone: f.tone,
-      changedAt: f.changedAt.toISOString(),
-      manual: f.manual,
-      stale,
-      unreachable: f.unreachableAt != null,
-      override: f.overrideValue && f.overrideAt ? { value: f.overrideValue, userName: userName(f.overrideUserId), at: f.overrideAt.toISOString() } : null,
+        id: f.id,
+        competitorId: f.competitorId,
+        kind: f.kind,
+        value: f.overrideValue ?? f.value,
+        sourceUrl: f.sourceUrl,
+        sourceLabel: f.sourceLabel,
+        tone: f.tone,
+        factDate: f.factDate?.toISOString() ?? null,
+        changedAt: f.changedAt.toISOString(),
+        manual: f.manual,
+        stale,
+        unreachable: f.unreachableAt != null,
+        override: f.overrideValue && f.overrideAt ? { value: f.overrideValue, userName: userName(f.overrideUserId), at: f.overrideAt.toISOString() } : null,
       };
     }),
     lastScanAt: lastScanAt?.toISOString() ?? null,

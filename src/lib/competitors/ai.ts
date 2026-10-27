@@ -74,29 +74,64 @@ function toGeminiSchema(node: Record<string, unknown>): Schema {
 
 /** Keep each call well inside the context window; marketing pages are wordy. */
 const MAX_PAGE_CHARS = 6000;
-const MAX_TOTAL_CHARS = 90_000;
+/** Page text per call. Gemini's window is large; Claude's calls stay smaller. */
+export function maxTotalChars(provider = getCompetitorsProvider()): number {
+  return provider === "gemini" ? 300_000 : 90_000;
+}
 
 export interface PageText {
   url: string;
   title: string;
   text: string;
+  /** What the text is (page | document | article | transcript | capture | quotes) — shown to the model. */
+  kind?: string;
+  /** Source type label ("Help center", "Datasheets & documents") — shown to the model. */
+  sourceLabel?: string;
+  /** Publish/capture date the source states, ISO — shown to the model. */
+  observedAt?: string | null;
+}
+
+function pageBody(p: PageText): string {
+  return p.text.length > MAX_PAGE_CHARS ? p.text.slice(0, MAX_PAGE_CHARS) + "\n[…]" : p.text;
+}
+
+/**
+ * Split pages into calls: each chunk fits maxTotalChars after per-page
+ * truncation. A website scan of 50 pages is one chunk; an import of a
+ * thousand documents is many, run in order.
+ */
+export function chunkPages(pages: PageText[], limit = maxTotalChars()): PageText[][] {
+  const chunks: PageText[][] = [];
+  let cur: PageText[] = [];
+  let total = 0;
+  for (const p of pages) {
+    const len = pageBody(p).length + p.url.length + 40;
+    if (cur.length && total + len > limit) {
+      chunks.push(cur);
+      cur = [];
+      total = 0;
+    }
+    cur.push(p);
+    total += len;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks;
 }
 
 export function packPages(pages: PageText[]): string {
-  let total = 0;
-  const parts: string[] = [];
-  for (const p of pages) {
-    const body = p.text.length > MAX_PAGE_CHARS ? p.text.slice(0, MAX_PAGE_CHARS) + "\n[…]" : p.text;
-    if (total + body.length > MAX_TOTAL_CHARS) break;
-    total += body.length;
-    parts.push(`### PAGE ${p.url}\nTitle: ${p.title}\n${body}`);
-  }
-  return parts.join("\n\n");
+  return pages
+    .map((p) => {
+      const meta = [p.kind && p.kind !== "page" ? p.kind : null, p.sourceLabel ?? null, p.observedAt ? `dated ${p.observedAt.slice(0, 10)}` : null].filter(Boolean).join(" · ");
+      return `### PAGE ${p.url}\nTitle: ${p.title}${meta ? `\nSource: ${meta}` : ""}\n${pageBody(p)}`;
+    })
+    .join("\n\n");
 }
 
 export interface AiResult<T> {
   value: T;
   usage: unknown;
+  /** Model calls made (one per chunk of pages). */
+  calls: number;
 }
 
 async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number): Promise<AiResult<T>> {
@@ -120,7 +155,7 @@ async function callTool<T>(system: string, shared: string, tail: string, tool: R
     });
     const text = response.text ?? "";
     try {
-      return { value: JSON.parse(text) as T, usage: response.usageMetadata };
+      return { value: JSON.parse(text) as T, usage: response.usageMetadata, calls: 1 };
     } catch {
       const finish = response.candidates?.[0]?.finishReason ?? "unknown";
       throw new Error(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`);
@@ -136,7 +171,7 @@ async function callTool<T>(system: string, shared: string, tail: string, tool: R
   });
   const toolUse = message.content.find((b) => b.type === "tool_use");
   if (!toolUse || toolUse.type !== "tool_use") throw new Error("PMOS AI returned no structured answer");
-  return { value: toolUse.input as T, usage: message.usage };
+  return { value: toolUse.input as T, usage: message.usage, calls: 1 };
 }
 
 const str = (v: unknown, max = 500): string => (typeof v === "string" ? v.trim().slice(0, max) : "");
@@ -146,7 +181,7 @@ const strs = (v: unknown, max = 120): string[] =>
 
 // ————— 1. Status per capability for a competitor —————
 
-export const CLASSIFY_SYSTEM_PROMPT = `You compare a competitor's public website against a fixed capability catalog for a product team.
+export const CLASSIFY_SYSTEM_PROMPT = `You compare a competitor's public sources (its website, datasheets, help center, videos, docs, press — each page says which) against a fixed capability catalog for a product team.
 
 The catalog is grouped by domain; each domain comes with the product team's own definition of it (what belongs there, what does not, typical phrases). Read those definitions first — they are the ground truth for what each capability means.
 
@@ -155,7 +190,7 @@ For EVERY capability in the catalog, decide from the page text whether the compe
 - "partial" — the site describes a limited, beta, add-on, services-only or narrower version of it;
 - "missing" — the site describes the surrounding area but this capability is absent, or the site contradicts it;
 - "unknown" — the pages give no evidence either way.
-Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty.
+Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty. When the pages name the competitor's product, module or plan that provides the capability, give it in "product" (their exact name; empty when not stated).
 
 Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. At most 8; skip marketing claims and product names; skip anything that is a synonym of a catalog capability.
 
@@ -177,8 +212,9 @@ export const CLASSIFY_TOOL = {
             confidence: { type: "number", minimum: 0, maximum: 1 },
             quote: { type: "string" },
             url: { type: "string" },
+            product: { type: "string", description: "The competitor's product/module that provides it, or empty." },
           },
-          required: ["capability", "value", "confidence", "quote", "url"],
+          required: ["capability", "value", "confidence", "quote", "url", "product"],
         },
       },
       suggestions: {
@@ -203,7 +239,7 @@ export interface CatalogForAi {
   domains: { name: string; description: string; capabilities: { name: string; description: string }[] }[];
 }
 export interface PreviousStatus { capability: string; value: StatusValue; confidence: number | null }
-export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string }
+export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string; product: string }
 export interface Suggestion { name: string; domain: string; quote: string; url: string }
 export interface Classification { statuses: ClassifiedStatus[]; suggestions: Suggestion[] }
 
@@ -213,45 +249,79 @@ export function renderCatalog(c: CatalogForAi): string {
     .join("\n\n");
 }
 
+/** Presence evidence outranks absence evidence; "unknown" never wins over a value. */
+const STATUS_RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
+
+/**
+ * Merge two answers about one capability from different chunks of pages:
+ * the higher-ranked value wins; on a tie the more confident one. A page that
+ * does not mention a capability says nothing about it, so a "missing" from
+ * one chunk does not undo a "has" quoted from another.
+ */
+export function mergeStatus(a: ClassifiedStatus, b: ClassifiedStatus): ClassifiedStatus {
+  const ra = STATUS_RANK[a.value];
+  const rb = STATUS_RANK[b.value];
+  const win = rb > ra || (rb === ra && b.confidence > a.confidence) ? b : a;
+  const other = win === a ? b : a;
+  return { ...win, product: win.product || other.product };
+}
+
+export const MAX_SUGGESTIONS = 20;
+
 export async function classifyCapabilities(
   competitorName: string,
   catalog: CatalogForAi,
   previous: PreviousStatus[],
   pages: PageText[],
+  onChunk?: (done: number, total: number) => void,
 ): Promise<AiResult<Classification>> {
   const shared = `CAPABILITY CATALOG:\n\n${renderCatalog(catalog)}`;
-  const prev = previous.length
-    ? `PREVIOUS STATUSES (from the last scan):\n${previous.map((p) => `- ${p.capability}: ${p.value}${p.confidence != null ? ` (${p.confidence.toFixed(2)})` : ""}`).join("\n")}\n\n`
-    : "";
-  const tail = `COMPETITOR: ${competitorName}\n\n${prev}WEBSITE PAGES:\n\n${packPages(pages)}`;
-  const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000);
   const names = new Map<string, string>();
   for (const d of catalog.domains) for (const k of d.capabilities) names.set(k.name.toLowerCase(), k.name);
   const domainNames = new Map(catalog.domains.map((d) => [d.name.toLowerCase(), d.name]));
-  const statuses: ClassifiedStatus[] = [];
-  const seen = new Set<string>();
-  for (const s of arr(r.value.statuses)) {
-    const o = (s ?? {}) as Record<string, unknown>;
-    const name = names.get(str(o.capability, 120).toLowerCase());
-    const value = str(o.value, 20) as StatusValue;
-    if (!name || seen.has(name) || !(STATUS_VALUES as readonly string[]).includes(value)) continue;
-    seen.add(name);
-    const conf = typeof o.confidence === "number" && Number.isFinite(o.confidence) ? Math.max(0, Math.min(1, o.confidence)) : 0.5;
-    statuses.push({ capability: name, value, confidence: conf, quote: value === "unknown" ? "" : str(o.quote, 240), url: value === "unknown" ? "" : str(o.url, 500) });
-  }
-  const suggestions: Suggestion[] = arr(r.value.suggestions)
-    .map((s) => {
+  const merged = new Map<string, ClassifiedStatus>();
+  const suggestions = new Map<string, Suggestion>();
+  const chunks = chunkPages(pages);
+  let calls = 0;
+  let usage: unknown = null;
+  for (const [i, chunk] of chunks.entries()) {
+    // Later chunks see what earlier chunks (and the last scan) established.
+    const known: PreviousStatus[] = previous.map((p) => merged.get(p.capability) ?? p);
+    for (const s of merged.values()) if (!known.some((k) => k.capability === s.capability)) known.push(s);
+    const prev = known.length
+      ? `PREVIOUS STATUSES (from the last scan and earlier pages of this one):\n${known.map((p) => `- ${p.capability}: ${p.value}${p.confidence != null ? ` (${p.confidence.toFixed(2)})` : ""}`).join("\n")}\n\n`
+      : "";
+    const tail = `COMPETITOR: ${competitorName}\n\n${prev}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
+    const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000);
+    calls += r.calls;
+    usage = r.usage;
+    const seen = new Set<string>();
+    for (const s of arr(r.value.statuses)) {
       const o = (s ?? {}) as Record<string, unknown>;
-      return { name: str(o.name, 80), domain: domainNames.get(str(o.domain, 60).toLowerCase()) ?? "", quote: str(o.quote, 240), url: str(o.url, 500) };
-    })
-    .filter((s) => s.name && s.domain && !names.has(s.name.toLowerCase()))
-    .slice(0, 8);
-  return { value: { statuses, suggestions }, usage: r.usage };
+      const name = names.get(str(o.capability, 120).toLowerCase());
+      const value = str(o.value, 20) as StatusValue;
+      if (!name || seen.has(name) || !(STATUS_VALUES as readonly string[]).includes(value)) continue;
+      seen.add(name);
+      const conf = typeof o.confidence === "number" && Number.isFinite(o.confidence) ? Math.max(0, Math.min(1, o.confidence)) : 0.5;
+      const cur: ClassifiedStatus = { capability: name, value, confidence: conf, quote: value === "unknown" ? "" : str(o.quote, 240), url: value === "unknown" ? "" : str(o.url, 500), product: value === "unknown" ? "" : str(o.product, 80) };
+      const before = merged.get(name);
+      merged.set(name, before ? mergeStatus(before, cur) : cur);
+    }
+    for (const s of arr(r.value.suggestions)) {
+      const o = (s ?? {}) as Record<string, unknown>;
+      const sug = { name: str(o.name, 80), domain: domainNames.get(str(o.domain, 60).toLowerCase()) ?? "", quote: str(o.quote, 240), url: str(o.url, 500) };
+      if (!sug.name || !sug.domain || names.has(sug.name.toLowerCase())) continue;
+      const key = sug.name.toLowerCase();
+      if (!suggestions.has(key) && suggestions.size < MAX_SUGGESTIONS) suggestions.set(key, sug);
+    }
+    onChunk?.(i + 1, chunks.length);
+  }
+  return { value: { statuses: [...merged.values()], suggestions: [...suggestions.values()] }, usage, calls };
 }
 
 // ————— 2. Lean-profile facts —————
 
-export const FACTS_SYSTEM_PROMPT = `You extract company facts from a competitor's public website for a product team's competitor profile.
+export const FACTS_SYSTEM_PROMPT = `You extract company facts from a competitor's public sources (website, documents, help center, press, jobs — each page says which) for a product team's competitor profile.
 
 Return facts of these kinds only:
 - tagline: the one-line positioning statement (at most one).
@@ -261,7 +331,14 @@ Return facts of these kinds only:
 - certification: each named certification or compliance standard (SOC 2, ISO 27001, FedRAMP…).
 - customer: each named customer company shown as a customer, logo or case study.
 - vertical: each industry it says it serves.
-Each fact is a short value (≤ 80 characters) and the URL of the page it came from. Only what the pages state; nothing inferred, no counts, no adjectives. Deduplicate.`;
+- funding: a funding round or acquisition amount as stated ("Series C $40M", "acquired by Mastercard for $2.65B").
+- headcount: the company size as stated ("1,000+ employees").
+- hiring: an open-roles statement as stated ("49 open positions").
+- ownership: public / private / subsidiary of X, as stated.
+- hq: the headquarters city and country, as stated.
+- founded: the founding year, as stated.
+- milestone: a dated company event the pages state — founding, acquisition, launch, rename, new office (one short line each).
+Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate.`;
 
 export const FACTS_TOOL = {
   name: "extract_facts",
@@ -277,8 +354,9 @@ export const FACTS_TOOL = {
             kind: { type: "string", enum: [...FACT_KINDS] },
             value: { type: "string" },
             url: { type: "string" },
+            date: { type: "string", description: "Date the page states for the fact: YYYY-MM-DD, YYYY-MM or YYYY; empty when none." },
           },
-          required: ["kind", "value", "url"],
+          required: ["kind", "value", "url", "date"],
         },
       },
     },
@@ -286,23 +364,45 @@ export const FACTS_TOOL = {
   },
 };
 
-export interface ExtractedFact { kind: FactKind; value: string; url: string }
+export interface ExtractedFact { kind: FactKind; value: string; url: string; /** "YYYY", "YYYY-MM" or "YYYY-MM-DD"; null when the page states none. */ date: string | null }
 
-export async function extractFacts(competitorName: string, pages: PageText[]): Promise<AiResult<ExtractedFact[]>> {
+/** A stated date → a Date at the start of its period, or null. */
+export function factDateOf(v: string | null | undefined): Date | null {
+  const m = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/.exec((v ?? "").trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const month = m[2] ? Number(m[2]) : 1;
+  const day = m[3] ? Number(m[3]) : 1;
+  if (y < 1900 || y > new Date().getUTCFullYear() + 1 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(Date.UTC(y, month - 1, day));
+  // A day past the month's end rolls over — refuse it rather than invent a date.
+  return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? d : null;
+}
+
+export async function extractFacts(competitorName: string, pages: PageText[], onChunk?: (done: number, total: number) => void): Promise<AiResult<ExtractedFact[]>> {
   const shared = `Extract facts for the competitor profile.`;
-  const tail = `COMPETITOR: ${competitorName}\n\nWEBSITE PAGES:\n\n${packPages(pages)}`;
-  const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 4000);
   const seen = new Set<string>();
   const facts: ExtractedFact[] = [];
-  for (const f of arr(r.value.facts)) {
-    const o = (f ?? {}) as Record<string, unknown>;
-    const kind = str(o.kind, 20);
-    const value = str(o.value, 80);
-    if (!(FACT_KINDS as readonly string[]).includes(kind) || !value) continue;
-    const key = `${kind}|${value.toLowerCase()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    facts.push({ kind: kind as FactKind, value, url: str(o.url, 500) });
+  const chunks = chunkPages(pages);
+  let calls = 0;
+  let usage: unknown = null;
+  for (const [i, chunk] of chunks.entries()) {
+    const tail = `COMPETITOR: ${competitorName}\n\nPAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
+    const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 6000);
+    calls += r.calls;
+    usage = r.usage;
+    for (const f of arr(r.value.facts)) {
+      const o = (f ?? {}) as Record<string, unknown>;
+      const kind = str(o.kind, 20);
+      const value = str(o.value, 80);
+      if (!(FACT_KINDS as readonly string[]).includes(kind) || !value) continue;
+      const key = `${kind}|${value.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const date = str(o.date, 10);
+      facts.push({ kind: kind as FactKind, value, url: str(o.url, 500), date: factDateOf(date) ? date : null });
+    }
+    onChunk?.(i + 1, chunks.length);
   }
-  return { value: facts, usage: r.usage };
+  return { value: facts, usage, calls };
 }

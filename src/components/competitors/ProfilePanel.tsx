@@ -7,18 +7,19 @@ import { initialsOf } from "@/components/ui/Avatar";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, STATUS_VALUES, type StatusValue } from "@/lib/competitors/config";
 import { track } from "@/lib/analytics/track";
-import type { CapabilityRow, CellRow, CompetitorRow, DomainRow, EventRow, FactRow, InsightRow, ProductRow } from "@/lib/competitors/store";
+import type { CapabilityRow, CellRow, CompetitorRow, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { cn } from "@/lib/utils";
 
 /**
- * Competitor profile — the C2 design: competitor chips, header with facts and
- * risk, timeline, capabilities by domain and product with a deep dive per
- * capability, and the side column (what changed, people, UI gallery, sources).
- * Everything is read from the competitor's rows (profile, events, products,
- * insights, people, media, signals, facts, statuses); a section whose rows
- * are empty shows its empty state.
+ * Competitor profile — the C2 design on the pipeline's rows only: competitor
+ * chips, header (identity facts, the parity-based risk ring, fact grid),
+ * timeline from dated facts, capabilities by domain and product with a deep
+ * dive per capability (quote, source, confidence, history), and the side
+ * column (what changed, UI gallery from the media store, sources). A section
+ * whose rows are empty shows its empty state; nothing is shown that no scan
+ * or PM produced.
  */
 
 const EB = "font-mono text-[10px] font-semibold tracking-[0.06em] text-fg-muted";
@@ -33,22 +34,17 @@ const PILL: Record<string, string> = {
   medium: "border-[rgba(240,180,60,.6)] bg-[#fff7e0] text-[#8a5a00]",
   low: "border-[rgba(23,178,106,.4)] bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
 };
-const TL_COLOR: Record<EventRow["type"], string> = {
-  company: "#5b6c85",
-  funding: "#5b6c85",
-  domain: "#e67700",
-  capability: "#2457f5",
-  hr: "#189179",
-  website: "#7f5be0",
-};
-const TL_LABEL: Record<EventRow["type"], string> = {
-  company: "Company",
-  funding: "Funding",
-  domain: "Domain entrance",
-  capability: "Capabilities",
-  hr: "HR",
-  website: "Website",
-};
+
+/** Timeline event types, derived from the kind of a dated fact. */
+type EventType = "company" | "funding" | "product" | "hr";
+const TL_COLOR: Record<EventType, string> = { company: "#5b6c85", funding: "#e67700", product: "#2457f5", hr: "#189179" };
+const TL_LABEL: Record<EventType, string> = { company: "Company", funding: "Funding", product: "Products", hr: "Hiring" };
+function eventTypeOf(kind: string): EventType {
+  if (kind === "funding") return "funding";
+  if (kind === "hiring" || kind === "headcount") return "hr";
+  if (kind === "product" || kind === "pricingTier") return "product";
+  return "company";
+}
 
 function Kind({ tone = "int", children, className }: { tone?: string; children: React.ReactNode; className?: string }) {
   return <span className={cn("inline-flex items-center whitespace-nowrap rounded-[6px] px-2 py-px text-[11px] font-semibold", KIND[tone] ?? KIND.int, className)}>{children}</span>;
@@ -111,6 +107,25 @@ const STANCE_LABEL: Record<Stance, { text: (org: string) => string; cls: string 
   none: { text: () => "No signal", cls: "text-fg-faint" },
 };
 
+/**
+ * Risk vs the org, from the matrix alone: the share of capabilities with a
+ * signal where the competitor is ahead (has/partial while the org is missing,
+ * or has while the org is partial). Deterministic; no opinion involved.
+ */
+export function riskOf(capabilities: CapabilityRow[], cellOf: (capabilityId: string) => CellRow | undefined): { score: number; level: "high" | "medium" | "low"; behind: number; total: number } | null {
+  let behind = 0;
+  let total = 0;
+  for (const k of capabilities) {
+    const s = stanceOf(cellOf(k.id)?.value, k.ourStatus);
+    if (s === "none") continue;
+    total++;
+    if (s === "missing" || s === "partial") behind++;
+  }
+  if (total === 0) return null;
+  const score = Math.round((behind / total) * 100);
+  return { score, level: score >= 50 ? "high" : score >= 25 ? "medium" : "low", behind, total };
+}
+
 /** Media store URL for a stored path (lib/competitors/media.ts serves it). */
 const mediaUrl = (rel: string) => `/api/competitors/media?p=${encodeURIComponent(rel)}`;
 
@@ -142,11 +157,10 @@ export function ProfilePanel({ org, competitors, selectedId, onSelect, domains, 
     );
   }
   if (!selected) return null;
-  const profile = selected.profile;
   const myFacts = facts.filter((f) => f.competitorId === selected.id);
-  const sourcesCount = profile?.sourcesSummary.length || (selected.source ? 1 : 0);
+  const sourcesCount = selected.sources.filter((s) => s.lastScanAt).length;
   const captures = selected.media.length;
-  const scanAgo = profile?.lastFullScanAt ? timeAgo(profile.lastFullScanAt) : selected.lastScan ? timeAgo(selected.lastScan.startedAt) : null;
+  const scanAgo = selected.lastAnyScanAt ? timeAgo(selected.lastAnyScanAt) : null;
 
   return (
     <section aria-label={C.tabs.profiles} className="flex flex-col gap-3.5">
@@ -163,18 +177,17 @@ export function ProfilePanel({ org, competitors, selectedId, onSelect, domains, 
           );
         })}
         <span className="ml-auto inline-flex items-center gap-2 text-[11px] text-fg-faint">
-          {scanAgo ? `Full scan ${scanAgo}` : C.profile.neverScanned} · {sourcesCount} source{sourcesCount === 1 ? "" : "s"} · {captures} UI capture{captures === 1 ? "" : "s"}
+          {scanAgo ? `Last scan ${scanAgo}` : C.profile.neverScanned} · {sourcesCount} source{sourcesCount === 1 ? "" : "s"} · {captures} UI capture{captures === 1 ? "" : "s"}
         </span>
       </div>
 
-      <Header c={selected} org={org} facts={myFacts} onPatchFact={onPatchFact} onAddFact={onAddFact} />
-      <Timeline c={selected} />
+      <Header c={selected} org={org} facts={myFacts} capabilities={capabilities} cellOf={cellOf} onPatchFact={onPatchFact} onAddFact={onAddFact} />
+      <Timeline c={selected} facts={myFacts} />
 
       <div className="flex flex-wrap items-start gap-3.5">
         <Capabilities c={selected} org={org} domains={domains} capabilities={capabilities} cellOf={cellOf} onPatchStatus={onPatchStatus} />
         <aside aria-label="Profile details" className="flex min-w-0 flex-[1_1_300px] flex-col gap-3.5">
           <WhatChanged c={selected} capabilities={capabilities} cellOf={cellOf} facts={myFacts} />
-          <People c={selected} />
           <Gallery c={selected} />
           <Sources c={selected} />
         </aside>
@@ -183,10 +196,11 @@ export function ProfilePanel({ org, competitors, selectedId, onSelect, domains, 
   );
 }
 
-// ————— Header: identity, risk, fact grid, website facts (editable) —————
+// ————— Header: identity facts, risk vs the org, fact grid, every fact (editable) —————
 
-function Header({ c, org, facts, onPatchFact, onAddFact }: {
-  c: CompetitorRow; org: string; facts: FactRow[];
+function Header({ c, org, facts, capabilities, cellOf, onPatchFact, onAddFact }: {
+  c: CompetitorRow; org: string; facts: FactRow[]; capabilities: CapabilityRow[];
+  cellOf: (competitorId: string | null | undefined, capabilityId: string) => CellRow | undefined;
   onPatchFact: (id: string, body: unknown) => Promise<boolean>;
   onAddFact: (competitorId: string, kind: string, value: string) => Promise<boolean>;
 }) {
@@ -197,23 +211,25 @@ function Header({ c, org, facts, onPatchFact, onAddFact }: {
   const [newKind, setNewKind] = useState("product");
   const [newValue, setNewValue] = useState("");
   const [busy, setBusy] = useState(false);
-  const profile = c.profile;
   const tagline = facts.find((f) => f.kind === "tagline");
   const ofKind = (k: string) => facts.filter((f) => f.kind === k);
   const join = (vals: string[], max = 5) => (vals.length ? `${vals.slice(0, max).join(" · ")}${vals.length > max ? ` · +${vals.length - max}` : ""}` : "—");
   // Fact grid: one card per kind, the values joined, the source line from the
-  // facts' own source label (a scan says "Website"; later sources say theirs).
+  // facts' own source label (the scan names its source type).
   const card = (label: string, kind: string) => {
     const rows = ofKind(kind);
     const first = rows[0];
-    return { label, value: join(rows.map((f) => f.value)), source: first?.sourceLabel ?? (first ? "Website" : "—"), tone: rows.find((f) => f.tone)?.tone ?? null };
+    return { label, value: join(rows.map((f) => f.value)), source: first?.sourceLabel ?? (first ? C.profile.website : "—"), tone: rows.find((f) => f.tone)?.tone ?? null };
   };
   const grid = [
-    card("Funding", "funding"), card("Headcount", "headcount"), card("Hiring · 30 days", "hiring"), card("Verticals", "vertical"),
-    card("Certifications", "certification"), card("Integrations", "integration"), card("Customers", "customer"), card("Pricing", "pricingTier"),
+    card(C.profile.kinds.funding, "funding"), card(C.profile.kinds.headcount, "headcount"), card(C.profile.kinds.hiring, "hiring"), card(C.profile.kinds.vertical, "vertical"),
+    card(C.profile.kinds.certification, "certification"), card(C.profile.kinds.integration, "integration"), card(C.profile.kinds.customer, "customer"), card(C.profile.kinds.pricingTier, "pricingTier"),
   ].filter((g, i) => g.value !== "—" || i >= 3);
-  const about = profile ? [profile.ownership, profile.hq, profile.foundedYear ? `founded ${profile.foundedYear}` : null, profile.headcount ? `${profile.headcount} people` : null].filter(Boolean).join(" · ") : null;
-  const risk = profile?.risk ?? null;
+  // Identity line from the company facts (ownership, HQ, founded, headcount) when the pages stated them.
+  const one = (k: string) => ofKind(k)[0]?.value ?? null;
+  const founded = one("founded");
+  const about = [one("ownership"), one("hq"), founded ? `founded ${founded}` : null, one("headcount")].filter(Boolean).join(" · ");
+  const risk = riskOf(capabilities, (id) => cellOf(c.id, id));
   const riskColor = risk?.level === "high" ? "#c23767" : risk?.level === "medium" ? "#f0b43c" : "#17b26a";
 
   async function submitFact() {
@@ -234,16 +250,14 @@ function Header({ c, org, facts, onPatchFact, onAddFact }: {
             <a href={c.websiteUrl} target="_blank" rel="noreferrer" className="text-[12px] text-primary hover:underline">{c.host}</a>
           </span>
           {about ? <span className="text-[12.5px] text-fg-3">{about}</span> : tagline ? <span className="text-[12.5px] italic text-fg-3">“{tagline.value}”</span> : <span className="text-[12.5px] text-fg-faint">—</span>}
-          {profile && profile.tags.length > 0 && (
-            <span className="flex flex-wrap gap-1.5">{profile.tags.map((t) => <Kind key={t.label} tone={t.kind}>{t.label}</Kind>)}</span>
-          )}
+          {about && tagline && <span className="text-[12.5px] italic text-fg-3">“{tagline.value}”</span>}
         </div>
         {risk && (
-          <div className="flex items-center gap-3 rounded-[12px] border border-border bg-[rgba(255,255,255,.72)] py-2 pl-2 pr-3.5">
+          <div className="flex items-center gap-3 rounded-[12px] border border-border bg-[rgba(255,255,255,.72)] py-2 pl-2 pr-3.5" title={`${risk.behind} of ${risk.total} capabilities with a signal where ${org} is behind`}>
             <Ring value={risk.score} color={riskColor} />
             <span className="flex flex-col gap-0.5">
               <span className={cn("inline-flex self-start rounded-full border px-2.5 py-px text-[12px] font-semibold", PILL[risk.level])}>{risk.level === "high" ? "High risk" : risk.level === "medium" ? "Medium" : "Low"}</span>
-              {risk.note && <span className="text-[10.5px] text-fg-muted">{risk.note}</span>}
+              <span className="text-[10.5px] text-fg-muted">Ahead of {org} on {risk.behind} of {risk.total} capabilities</span>
             </span>
           </div>
         )}
@@ -257,7 +271,7 @@ function Header({ c, org, facts, onPatchFact, onAddFact }: {
           </div>
         ))}
       </div>
-      {/* The facts the scan actually found — editable, as in story 2 */}
+      {/* Every fact the scans found — editable, as in story 2 */}
       <div className="border-t border-border pt-3">
         <button onClick={() => setShowFacts((v) => !v)} className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-fg-3 hover:text-foreground">
           {showFacts ? <ChevronDown size={13} /> : <ChevronRight size={13} />} {C.profile.facts} · {facts.length}
@@ -295,6 +309,7 @@ function Header({ c, org, facts, onPatchFact, onAddFact }: {
                             ) : (
                               <>
                                 <span className={cn("min-w-0 truncate", f.override && "text-[#8a5a00]", (f.stale || f.unreachable) && "text-fg-muted")} title={f.value}>{f.value}</span>
+                                {f.factDate && <span className="shrink-0 text-[11px] text-fg-muted">{f.factDate.slice(0, 4)}</span>}
                                 {f.sourceUrl && <a href={f.sourceUrl} target="_blank" rel="noreferrer" className="shrink-0 text-fg-faint hover:text-primary" title={f.sourceUrl}><ExternalLink size={10} /></a>}
                                 {f.manual && <Kind className="!text-[9px]">{C.profile.manual}</Kind>}
                                 {f.unreachable && <span className="shrink-0 rounded-full bg-[rgba(239,90,138,.12)] px-1.5 py-px font-mono text-[9px] text-[#c23767]" title={C.profile.unreachableTip}>{C.profile.unreachable}</span>}
@@ -321,12 +336,20 @@ function Header({ c, org, facts, onPatchFact, onAddFact }: {
   );
 }
 
-// ————— Timeline —————
+// ————— Timeline: the dated facts —————
 
-function Timeline({ c }: { c: CompetitorRow }) {
-  const events = useMemo(() => c.events.slice().sort((a, b) => a.date.localeCompare(b.date)), [c.events]);
-  const [filter, setFilterState] = useState<EventRow["type"] | "all">("all");
-  const setFilter = (f: EventRow["type"] | "all") => {
+interface TimelineEvent { key: string; date: string; title: string; type: EventType; sourceUrl: string | null }
+
+function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
+  const events = useMemo<TimelineEvent[]>(
+    () => facts
+      .filter((f) => f.factDate)
+      .map((f) => ({ key: f.id, date: f.factDate as string, title: f.kind === "founded" ? "Founded" : f.value, type: eventTypeOf(f.kind), sourceUrl: f.sourceUrl }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    [facts],
+  );
+  const [filter, setFilterState] = useState<EventType | "all">("all");
+  const setFilter = (f: EventType | "all") => {
     setFilterState(f);
     track("cmp_profile_timeline_filtered", { competitorId: c.id, type: f });
   };
@@ -334,20 +357,20 @@ function Timeline({ c }: { c: CompetitorRow }) {
     return (
       <section className="glass flex flex-col gap-2 rounded-card px-[18px] py-4" aria-label="Company timeline">
         <span className="text-[14px] font-bold">Timeline</span>
-        <span className="text-[12.5px] text-fg-3">No dated events yet — funding, hiring, domain entrances and website changes arrive with their sources (LinkedIn, press, Wayback).</span>
+        <span className="text-[12.5px] text-fg-3">No dated facts yet — funding rounds, acquisitions and launches appear here once a source states their dates.</span>
       </section>
     );
   }
   const first = new Date(events[0].date).getFullYear();
-  const last = Math.max(new Date(events[events.length - 1].date).getFullYear(), new Date().getFullYear() + 1);
+  const last = Math.max(new Date(events[events.length - 1].date).getFullYear(), new Date().getFullYear());
   const span = Math.max(1, last - first + 1);
   const x = (iso: string) => {
     const d = new Date(iso);
     return 2 + ((d.getFullYear() + d.getMonth() / 12 - first) / span) * 94;
   };
-  const todayX = x(new Date().toISOString());
+  const todayX = Math.min(96, x(new Date().toISOString()));
   const shown = events.filter((e) => filter === "all" || e.type === filter);
-  const types = (Object.keys(TL_LABEL) as EventRow["type"][]).filter((t) => events.some((e) => e.type === t));
+  const types = (Object.keys(TL_LABEL) as EventType[]).filter((t) => events.some((e) => e.type === t));
   const years: number[] = [];
   const step = span > 12 ? 3 : span > 6 ? 2 : 1;
   for (let y = first; y <= last; y += step) years.push(y);
@@ -356,7 +379,7 @@ function Timeline({ c }: { c: CompetitorRow }) {
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-2.5 flex flex-col gap-0.5">
           <span className="text-[14px] font-bold">Timeline</span>
-          <span className="text-[11px] text-fg-muted">Founded {first} → today → {last} projection · not to scale · hollow dots are projected by PMOS</span>
+          <span className="text-[11px] text-fg-muted">{first} → today · not to scale · dated facts from the competitor's sources</span>
         </span>
         <TlChip on={filter === "all"} onClick={() => setFilter("all")}>All · {events.length}</TlChip>
         {types.map((t) => (
@@ -369,7 +392,6 @@ function Timeline({ c }: { c: CompetitorRow }) {
       <div className="overflow-x-auto pb-1">
         <div className="relative mx-14 h-[222px] min-w-[760px]">
           <span className="absolute left-0 top-[96px] h-[2px] bg-[#c8d4e8]" style={{ width: `${todayX}%` }} />
-          <span className="absolute right-0 top-[96px] border-t-2 border-dashed border-[#c8d4e8]" style={{ left: `${todayX}%` }} />
           <span className="absolute top-[72px] h-[50px] w-[2px] -translate-x-1/2 bg-primary" style={{ left: `${todayX}%` }} />
           <span className="absolute top-[56px] -translate-x-1/2 rounded-full bg-primary px-[7px] py-px text-[10px] font-semibold text-white" style={{ left: `${todayX}%` }}>Today</span>
           {years.map((y) => (
@@ -378,20 +400,19 @@ function Timeline({ c }: { c: CompetitorRow }) {
           {shown.map((e, i) => {
             const above = i % 2 === 0;
             const color = TL_COLOR[e.type];
-            const dot = (
-              <span className="h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: e.projected ? "#fff" : color, boxShadow: `0 0 0 ${e.projected ? 2 : 1}px ${color}` }} />
-            );
+            const dot = <span className="h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }} />;
+            const when = e.date.length > 7 ? `${new Date(e.date).getUTCFullYear()} ${new Date(e.date).toLocaleString("en-US", { month: "short", timeZone: "UTC" })}` : e.date.slice(0, 4);
             const card = (
               <span className="rounded-[8px] border border-border bg-[rgba(255,255,255,.92)] px-2 py-1 text-center text-[11px] leading-[1.3] text-[#1f2f47]">
                 <b className="block font-semibold">{e.title}</b>
-                {new Date(e.date).getFullYear()}{e.date.length > 7 && new Date(e.date) > new Date("2025-01-01") ? ` ${new Date(e.date).toLocaleString("en-US", { month: "short" })}` : ""} · {e.projected ? `projected ${Math.round((e.confidence ?? 0.5) * 100)}%` : TL_LABEL[e.type].toLowerCase()}
+                {when} · {TL_LABEL[e.type].toLowerCase()}
               </span>
             );
-            return (
-              <div key={`${e.date}-${e.title}`} className={cn("absolute flex w-[120px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]")} style={{ left: `${x(e.date)}%` }}>
-                {above ? <>{card}<span className="h-3.5 w-px bg-[#c8d4e8]" />{dot}</> : <>{dot}<span className="h-3.5 w-px bg-[#c8d4e8]" />{card}</>}
-              </div>
-            );
+            const body = above ? <>{card}<span className="h-3.5 w-px bg-[#c8d4e8]" />{dot}</> : <>{dot}<span className="h-3.5 w-px bg-[#c8d4e8]" />{card}</>;
+            const cls = cn("absolute flex w-[120px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]");
+            return e.sourceUrl
+              ? <a key={e.key} href={e.sourceUrl} target="_blank" rel="noreferrer" className={cn(cls, "hover:opacity-80")} style={{ left: `${x(e.date)}%` }} title={e.sourceUrl}>{body}</a>
+              : <div key={e.key} className={cls} style={{ left: `${x(e.date)}%` }}>{body}</div>;
           })}
         </div>
       </div>
@@ -424,29 +445,24 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
     else if (s === "level") counts.level++;
     else if (s === "ahead") counts.behind++;
   }
-  const products: ProductRow[] = c.products;
-  const productOf = (k: CapabilityRow): ProductRow | undefined => {
-    const pid = cellOf(c.id, k.id)?.productId;
-    return pid ? products.find((p) => p.id === pid) : undefined;
-  };
-  const productCount = new Set(capabilities.map((k) => productOf(k)?.id).filter(Boolean)).size;
-  const inProduct = (p: ProductRow, k: CapabilityRow) => productOf(k)?.id === p.id;
+  // The competitor's products are the names the pages gave for its capabilities.
+  const productOf = (k: CapabilityRow): string | null => cellOf(c.id, k.id)?.product ?? null;
+  const products = [...new Set(capabilities.map(productOf).filter((p): p is string => Boolean(p)))].sort();
 
   const row = (k: CapabilityRow, indent: number) => {
     const cell = cellOf(c.id, k.id);
     const s = stance(k);
     const isOpen = open === k.id;
-    const dive = cell?.insight ?? undefined;
     return (
       <div key={k.id} className={cn(isOpen && "bg-[rgba(36,87,245,.05)] shadow-[inset_3px_0_0_#2457f5]")}>
-        <button onClick={() => { setOpen(isOpen ? null : k.id); if (!isOpen) track("cmp_capability_dive_opened", { competitorId: c.id, capabilityId: k.id, value: cell?.value ?? "unknown", hasInsight: Boolean(dive) }); }} className="flex h-11 w-full items-center gap-3 border-b border-border pr-4 text-left hover:bg-white/70" style={{ paddingLeft: indent }}>
+        <button onClick={() => { setOpen(isOpen ? null : k.id); if (!isOpen) track("cmp_capability_dive_opened", { competitorId: c.id, capabilityId: k.id, value: cell?.value ?? "unknown", hasHistory: (cell?.history.length ?? 0) > 0 }); }} className="flex h-11 w-full items-center gap-3 border-b border-border pr-4 text-left hover:bg-white/70" style={{ paddingLeft: indent }}>
           <span className={cn("min-w-0 flex-1 text-[13px]", isOpen ? "font-semibold" : "font-medium text-[#1f2f47]")}>{k.name}</span>
           <CellMark value={cell?.value} />
           <span className={cn("w-[120px] text-[11.5px]", STANCE_LABEL[s].cls)}>{STANCE_LABEL[s].text(org)}</span>
           <span className="w-[110px] text-[11px] text-fg-muted">{cell?.changedAt ? `Changed ${shortDate(cell.changedAt)}` : cell ? "No change" : "No signal"}</span>
           {isOpen ? <ChevronDown size={14} className="text-fg-muted" /> : <ChevronRight size={14} className="text-fg-muted" />}
         </button>
-        {isOpen && <DeepDive org={org} k={k} cell={cell} dive={dive} onPatchStatus={onPatchStatus} indent={indent} />}
+        {isOpen && <DeepDive org={org} k={k} cell={cell} onPatchStatus={onPatchStatus} indent={indent} />}
       </div>
     );
   };
@@ -456,7 +472,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
       <div className="flex items-center gap-3 border-b border-border px-4 py-2.5" style={{ background: "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
         <span className="h-2.5 w-2.5 rounded-[3px] bg-primary shadow-[0_0_10px_rgba(36,87,245,.6)]" />
         <span className="text-[14px] font-bold">Capabilities</span>
-        <span className="text-[11px] text-fg-muted">{domains.length} domains · {productCount} product{productCount === 1 ? "" : "s"} · {capabilities.length} capabilities</span>
+        <span className="text-[11px] text-fg-muted">{domains.length} domains · {products.length} product{products.length === 1 ? "" : "s"} · {capabilities.length} capabilities</span>
         <span className="ml-auto text-[12px] text-fg-3">vs {org}: <b className="font-semibold text-[#c23767]">ahead on {counts.ahead}</b> · level on {counts.level} · <b className="font-semibold text-[#0f7a47]">behind on {counts.behind}</b></span>
       </div>
       {capabilities.length === 0 && <div className="px-4 py-8 text-center text-[13px] text-fg-3">{C.matrix.noCatalogTitle}</div>}
@@ -468,7 +484,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
         const partial = rows.filter((k) => stance(k) === "partial").length;
         const ahead = rows.filter((k) => stance(k) === "ahead").length;
         const level = rows.filter((k) => stance(k) === "level").length;
-        const prods = products.filter((p) => rows.some((k) => inProduct(p, k)));
+        const prods = products.filter((p) => rows.some((k) => productOf(k) === p));
         const orphan = rows.filter((k) => !productOf(k));
         const isCollapsed = collapsed[d.id];
         return (
@@ -476,7 +492,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
             <button onClick={() => setCollapsed((p) => ({ ...p, [d.id]: !p[d.id] }))} className="flex w-full items-center gap-3 border-b border-border px-4 py-2 text-left" style={{ background: `linear-gradient(90deg, ${color}24, rgba(255,255,255,0) 60%)` }}>
               <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: color, boxShadow: `0 0 10px ${color}99` }} />
               <span className="text-[13px] font-bold">{d.name}</span>
-              <span className="text-[11px] text-fg-muted">domain · {prods.length} product{prods.length === 1 ? "" : "s"} · {rows.length} capabilit{rows.length === 1 ? "y" : "ies"}{prods.length ? ` · ${prods.map((p) => p.name).join(", ")}` : ""}</span>
+              <span className="text-[11px] text-fg-muted">domain · {prods.length} product{prods.length === 1 ? "" : "s"} · {rows.length} capabilit{rows.length === 1 ? "y" : "ies"}{prods.length ? ` · ${prods.join(", ")}` : ""}</span>
               <span className="ml-auto flex items-center gap-[18px] text-[12px]">
                 {behind > 0 && <span className="font-semibold text-[#c23767]">{org} behind on {behind}</span>}
                 {partial > 0 && <span className="font-semibold text-[#2a5fd0]">partial on {partial}</span>}
@@ -487,25 +503,27 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
             </button>
             {!isCollapsed && (
               <>
-                {prods.map((p) => (
-                  <div key={p.name}>
-                    <div className="flex items-center gap-2.5 border-b border-border bg-[rgba(255,255,255,.55)] py-[7px] pl-7 pr-4">
-                      <span className="flex h-[22px] w-[22px] items-center justify-center rounded-[6px] bg-[rgba(217,72,15,.14)] text-[9px] font-bold text-[#a63a07]">{p.code}</span>
-                      <span className="text-[13px] font-semibold">{p.name}</span>
-                      <span className="text-[11px] text-fg-muted">product{p.since ? ` · since ${p.since}` : ""} · {rows.filter((k) => inProduct(p, k)).length} capabilit{rows.filter((k) => inProduct(p, k)).length === 1 ? "y" : "ies"}</span>
-                      {p.tier && <span className="ml-auto text-[11px] text-fg-muted">{p.tier}</span>}
+                {prods.map((p) => {
+                  const inProduct = rows.filter((k) => productOf(k) === p);
+                  return (
+                    <div key={p}>
+                      <div className="flex items-center gap-2.5 border-b border-border bg-[rgba(255,255,255,.55)] py-[7px] pl-7 pr-4">
+                        <span className="flex h-[22px] min-w-[22px] items-center justify-center rounded-[6px] bg-[rgba(217,72,15,.14)] px-1 text-[9px] font-bold text-[#a63a07]">{initialsOf(p)}</span>
+                        <span className="text-[13px] font-semibold">{p}</span>
+                        <span className="text-[11px] text-fg-muted">product · {inProduct.length} capabilit{inProduct.length === 1 ? "y" : "ies"}</span>
+                      </div>
+                      {inProduct.map((k) => row(k, 44))}
                     </div>
-                    {rows.filter((k) => inProduct(p, k)).map((k) => row(k, 44))}
-                  </div>
-                ))}
-                {orphan.length > 0 && products.length > 0 && (
+                  );
+                })}
+                {orphan.length > 0 && prods.length > 0 && (
                   <div className="flex items-center gap-2.5 border-b border-border bg-[rgba(255,255,255,.55)] py-[7px] pl-7 pr-4">
                     <span className="h-[22px] w-[22px] rounded-[6px] border border-dashed border-[#9aa8be]" />
-                    <span className="text-[13px] font-semibold text-fg-3">No product</span>
-                    <span className="text-[11px] text-fg-muted">capabilities {org} tracks that {c.name} has no offer for</span>
+                    <span className="text-[13px] font-semibold text-fg-3">No product named</span>
+                    <span className="text-[11px] text-fg-muted">the pages do not say which product provides these</span>
                   </div>
                 )}
-                {orphan.map((k) => row(k, products.length > 0 ? 44 : 28))}
+                {orphan.map((k) => row(k, prods.length > 0 ? 44 : 28))}
               </>
             )}
           </div>
@@ -515,8 +533,8 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
   );
 }
 
-function DeepDive({ org, k, cell, dive, onPatchStatus, indent }: {
-  org: string; k: CapabilityRow; cell: CellRow | undefined; dive: InsightRow | undefined;
+function DeepDive({ org, k, cell, onPatchStatus, indent }: {
+  org: string; k: CapabilityRow; cell: CellRow | undefined;
   onPatchStatus: (cellId: string, body: unknown) => Promise<boolean>; indent: number;
 }) {
   const [flagging, setFlagging] = useState(false);
@@ -529,94 +547,56 @@ function DeepDive({ org, k, cell, dive, onPatchStatus, indent }: {
     setFlagging(false);
   }
   const standing = k.ourStatus === "has" ? "has" : k.ourStatus === "partial" ? "partial" : "missing";
+  const host = (u: string) => u.replace(/^https?:\/\//, "").slice(0, 70);
   return (
     <div className="flex flex-col gap-3.5 border-b border-border pb-4 pr-4 pt-0.5" style={{ paddingLeft: indent }}>
-      {/* What it does */}
+      {/* Evidence: the quote the scan kept, and where it is */}
       <div className="flex flex-col gap-1.5">
-        <span className="flex items-baseline gap-2"><span className={EB}>What it does</span><span className="text-[10.5px] text-fg-faint">{dive?.summary ? dive.summarySource ?? "summary by PMOS" : "from the competitor's website"}</span></span>
-        {dive?.summary ? (
-          <>
-            <p className="m-0 text-[13px] leading-[1.55] text-[#1f2f47]">{dive.summary}</p>
-            <span className="flex flex-wrap gap-1.5">{dive.sources.map((s) => <Kind key={s.label} tone={s.tone}>{s.label}</Kind>)}</span>
-          </>
-        ) : cell?.quote ? (
+        <span className="flex items-baseline gap-2"><span className={EB}>Evidence</span><span className="text-[10.5px] text-fg-faint">{cell?.sourceUrl ? "quoted from the competitor's pages" : ""}</span></span>
+        {cell?.quote ? (
           <>
             <blockquote className="m-0 border-l-2 border-border pl-2.5 text-[13px] italic leading-[1.55] text-[#1f2f47]">“{cell.quote}”</blockquote>
-            {cell.sourceUrl && <a href={cell.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] text-primary hover:underline"><ExternalLink size={11} /> {cell.sourceUrl.replace(/^https?:\/\//, "").slice(0, 70)}</a>}
+            {cell.sourceUrl && <a href={cell.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] text-primary hover:underline"><ExternalLink size={11} /> {host(cell.sourceUrl)}</a>}
           </>
         ) : (
           <span className="text-[12.5px] text-fg-faint">{C.cell.noEvidence}</span>
         )}
       </div>
-      {dive && (dive.scope || dive.packaging || dive.confidenceNote) && (
+      {cell && (cell.confidence != null || cell.product || cell.override) && (
         <div className="flex flex-wrap gap-2.5">
-          {dive.scope && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Scope</span><span className="text-[12.5px] font-semibold">{dive.scope}</span></span>}
-          {dive.packaging && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Packaging</span><span className="text-[12.5px] font-semibold">{dive.packaging}</span></span>}
-          {dive.confidenceNote && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Confidence</span><span className="text-[12.5px] font-semibold text-[#0f7a47]">{dive.confidenceNote}</span></span>}
-        </div>
-      )}
-      {!dive && cell?.confidence != null && (
-        <div className="flex flex-wrap gap-2.5">
-          <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Confidence</span><span className="text-[12.5px] font-semibold">{Math.round(cell.confidence * 100)}%</span></span>
+          {cell.product && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Product</span><span className="text-[12.5px] font-semibold">{cell.product}</span></span>}
+          {cell.confidence != null && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Confidence</span><span className="text-[12.5px] font-semibold">{Math.round(cell.confidence * 100)}%</span></span>}
           {cell.override && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Corrected</span><span className="text-[12.5px] font-semibold text-[#8a5a00]">{C.matrix.editedBy(cell.override.userName ?? "a PM", shortDate(cell.override.at))} · scan said {C.values[cell.scannedValue]}</span></span>}
         </div>
       )}
-      {dive && dive.media.length > 0 && (
+      {cell && cell.history.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          <span className="flex items-baseline gap-2"><span className={EB}>UI & media · {dive.media.length}</span><span className="text-[10.5px] text-fg-faint">from trials, public demos and their help center</span></span>
-          <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
-            {dive.media.map((m) => (
-              <span key={m.label} className="flex flex-col gap-1.5">
-                {m.mediaPath ? (
-                  <a href={mediaUrl(m.mediaPath)} target="_blank" rel="noreferrer" onClick={() => track("cmp_media_opened", { competitorId: cell?.competitorId ?? null, capabilityId: k.id, kind: m.kind })} className="block h-24 overflow-hidden rounded-[9px] border border-border bg-white"><img src={mediaUrl(m.mediaPath)} alt={m.label} className="h-full w-full object-cover object-top" /></a>
-                ) : (
-                  <span className="flex h-24 items-center justify-center rounded-[9px] border border-dashed border-[#9aa8be] bg-[rgba(12,25,41,.04)] px-2 text-center text-[11.5px] text-fg-3">[{m.kind} · {m.label}]</span>
-                )}
-                <Kind tone={m.kind === "Video" ? "pos" : m.kind === "Tutorial" ? "gtm" : "int"} className="self-start">{m.caption}</Kind>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-      {dive && dive.evidence.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <span className={EB}>Evidence · {dive.evidence.length}</span>
-          {dive.evidence.map((e, i) => (
+          <span className={EB}>History · {cell.history.length}</span>
+          {cell.history.map((h, i) => (
             <span key={i} className="flex items-center gap-2.5 rounded-[9px] border border-border bg-[rgba(255,255,255,.72)] px-2.5 py-2">
-              <Kind tone={e.kindTone}>{e.kind}</Kind>
-              <span className="min-w-0 flex-1 truncate text-[12.5px]">{e.text}</span>
-              <span className="text-[11px] text-fg-muted">{e.date}</span>
+              <Kind>{C.values[h.value]}</Kind>
+              <span className="min-w-0 flex-1 truncate text-[12.5px]">{h.quote ? `“${h.quote}”` : "—"}</span>
+              {h.sourceUrl && <a href={h.sourceUrl} target="_blank" rel="noreferrer" className="shrink-0 text-fg-faint hover:text-primary" title={h.sourceUrl}><ExternalLink size={10} /></a>}
+              <span className="text-[11px] text-fg-muted">until {shortDate(h.at)}</span>
             </span>
           ))}
         </div>
       )}
-      <div className="flex flex-col gap-2.5 rounded-[10px] border border-border bg-[rgba(255,255,255,.72)] px-3.5 py-3">
-        <span className="flex items-baseline gap-2"><span className="text-[13px] font-bold">Differentiation / risk vs {org}</span><span className="text-[11px] text-fg-muted">{dive?.riskText ? "written by PMOS, editable" : "arrives with the battle-cards story"}</span></span>
-        {dive?.riskText ? (
-          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
-            <div className="flex flex-col gap-1 rounded-[9px] bg-[rgba(239,90,138,.08)] px-3 py-2.5"><span className={cn(EB, "!text-[#c23767]")}>Risk to {org}{dive.riskLevel ? ` · ${dive.riskLevel}` : ""}</span><span className="text-[12.5px] leading-[1.5] text-[#1f2f47]">{dive.riskText}</span></div>
-            <div className="flex flex-col gap-1 rounded-[9px] bg-[rgba(23,178,106,.1)] px-3 py-2.5"><span className={cn(EB, "!text-[#0f7a47]")}>{org}'s differentiation</span><span className="text-[12.5px] leading-[1.5] text-[#1f2f47]">{dive.differentiation}</span></div>
-          </div>
-        ) : (
-          <span className="text-[12.5px] text-fg-faint">—</span>
-        )}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-2.5">
-          <span className="text-[12px] text-fg-3">
-            Where {org} stands: <b className={cn("font-semibold", standing === "missing" ? "text-[#8a5a00]" : standing === "partial" ? "text-[#2a5fd0]" : "text-[#0f7a47]")}>{standing}</b>
-            {dive?.ideaTitle && <> · idea “{dive.ideaTitle}”{dive.evidenceCount ? ` · ${dive.evidenceCount} pieces of evidence` : ""}</>}
-          </span>
-          <span className="ml-auto flex items-center gap-2">
-            <span title="Roadmap integration arrives with its own story"><Button size="sm" disabled><Lightbulb size={12} /> Attach to idea</Button></span>
-            {cell && !flagging && <Button size="sm" variant="ghost" onClick={() => setFlagging(true)}><Flag size={12} /> Flag as wrong</Button>}
-            {cell && flagging && (
-              <span className="inline-flex items-center gap-1">
-                <span className="text-[11.5px] text-fg-muted">Set to</span>
-                {STATUS_VALUES.map((v) => <button key={v} disabled={busy} onClick={() => void setValue(v)} className={cn("rounded-full border px-2 py-0.5 text-[11.5px] font-semibold", cell.value === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>)}
-                <button onClick={() => setFlagging(false)} className="rounded p-1 text-fg-muted hover:text-foreground" aria-label="Cancel"><X size={12} /></button>
-              </span>
-            )}
-          </span>
-        </div>
+      <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-border bg-[rgba(255,255,255,.72)] px-3.5 py-2.5">
+        <span className="text-[12px] text-fg-3">
+          Where {org} stands: <b className={cn("font-semibold", standing === "missing" ? "text-[#8a5a00]" : standing === "partial" ? "text-[#2a5fd0]" : "text-[#0f7a47]")}>{standing}</b>
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <span title="Roadmap integration arrives with its own story"><Button size="sm" disabled><Lightbulb size={12} /> Attach to idea</Button></span>
+          {cell && !flagging && <Button size="sm" variant="ghost" onClick={() => setFlagging(true)}><Flag size={12} /> Flag as wrong</Button>}
+          {cell && flagging && (
+            <span className="inline-flex items-center gap-1">
+              <span className="text-[11.5px] text-fg-muted">Set to</span>
+              {STATUS_VALUES.map((v) => <button key={v} disabled={busy} onClick={() => void setValue(v)} className={cn("rounded-full border px-2 py-0.5 text-[11.5px] font-semibold", cell.value === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>)}
+              <button onClick={() => setFlagging(false)} className="rounded p-1 text-fg-muted hover:text-foreground" aria-label="Cancel"><X size={12} /></button>
+            </span>
+          )}
+        </span>
       </div>
     </div>
   );
@@ -626,26 +606,25 @@ function DeepDive({ org, k, cell, dive, onPatchStatus, indent }: {
 
 function WhatChanged({ c, capabilities, cellOf, facts }: { c: CompetitorRow; capabilities: CapabilityRow[]; cellOf: (competitorId: string | null | undefined, capabilityId: string) => CellRow | undefined; facts: FactRow[] }) {
   const since = Date.now() - 30 * 86_400_000;
-  const real: { title: string; source: string; date: string; impact: "high" | "medium" | "low" }[] = [];
+  const items: { title: string; source: string; date: string; impact: "high" | "medium" | "low"; at: number }[] = [];
   for (const k of capabilities) {
     const cell = cellOf(c.id, k.id);
-    if (cell?.changedAt && new Date(cell.changedAt).getTime() > since) real.push({ title: `${k.name}: now ${C.values[cell.value].toLowerCase()}`, source: "Website scan", date: shortDate(cell.changedAt), impact: cell.value === "has" && k.ourStatus !== "has" ? "high" : "medium" });
+    if (cell?.changedAt && new Date(cell.changedAt).getTime() > since) items.push({ title: `${k.name}: now ${C.values[cell.value].toLowerCase()}`, source: C.profile.website, date: shortDate(cell.changedAt), impact: cell.value === "has" && k.ourStatus !== "has" ? "high" : "medium", at: new Date(cell.changedAt).getTime() });
   }
-  for (const f of facts.slice(0, 50)) {
-    if (new Date(f.changedAt).getTime() > since && !f.manual) real.push({ title: `${C.profile.kinds[f.kind] ?? f.kind}: ${f.value}`, source: "Website scan", date: shortDate(f.changedAt), impact: "low" });
+  for (const f of facts) {
+    if (new Date(f.changedAt).getTime() > since && !f.manual) items.push({ title: `${C.profile.kinds[f.kind] ?? f.kind}: ${f.value}`, source: f.sourceLabel ?? C.profile.website, date: shortDate(f.changedAt), impact: "low", at: new Date(f.changedAt).getTime() });
   }
-  // Signals (story 3's rows) when the competitor has them; else what the scans changed.
-  const items = c.signals.length ? c.signals.map((g) => ({ title: g.title, source: g.source, date: shortDate(g.at), impact: g.impact })) : real.slice(0, 8);
-  const count = c.signals.length || real.length;
+  items.sort((a, b) => b.at - a.at);
+  const shown = items.slice(0, 8);
   return (
     <section className="glass overflow-hidden rounded-card">
       <div className="flex items-center gap-3 border-b border-border px-4 py-2.5" style={{ background: "linear-gradient(90deg, rgba(91,108,133,.14), rgba(255,255,255,0) 60%)" }}>
         <span className="h-2.5 w-2.5 rounded-[3px] bg-[#5b6c85]" />
         <span className="text-[14px] font-bold">What changed · 30 days</span>
-        <span className="text-[11px] text-fg-muted">{count} signal{count === 1 ? "" : "s"}</span>
+        <span className="text-[11px] text-fg-muted">{items.length} signal{items.length === 1 ? "" : "s"}</span>
       </div>
-      {items.length === 0 && <div className="px-4 py-6 text-center text-[12.5px] text-fg-3">Nothing changed in the last 30 days.</div>}
-      {items.map((s, i) => (
+      {shown.length === 0 && <div className="px-4 py-6 text-center text-[12.5px] text-fg-3">Nothing changed in the last 30 days.</div>}
+      {shown.map((s, i) => (
         <div key={i} className="flex h-12 items-center gap-3.5 border-b border-border px-4 last:border-b-0 hover:bg-white/70">
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-[12.5px] font-semibold">{s.title}</span>
@@ -658,66 +637,38 @@ function WhatChanged({ c, capabilities, cellOf, facts }: { c: CompetitorRow; cap
   );
 }
 
-function People({ c }: { c: CompetitorRow }) {
-  const p = c.people;
-  const max = p ? Math.max(1, ...p.hires.map((h) => h.n), p.leftCount ?? 0) : 1;
-  return (
-    <section className="glass flex flex-col gap-2.5 rounded-card px-4 py-3.5">
-      <span className="flex items-baseline gap-2"><span className="text-[14px] font-bold">People</span><span className="text-[11px] text-fg-muted">{p?.windowLabel ?? "LinkedIn · arrives with its story"}</span></span>
-      {p ? (
-        <>
-          <span className="flex flex-col gap-[5px] text-[12px]">
-            {p.hires.map((h) => (
-              <span key={h.team} className="flex items-center gap-2"><span className="w-[72px] text-fg-3">{h.team}</span><span className="inline-flex h-1 w-[90px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]"><span className="block h-full bg-primary" style={{ width: `${(h.n / max) * 100}%` }} /></span><span className="font-semibold">+{h.n}</span></span>
-            ))}
-            {p.leftCount != null && <span className="flex items-center gap-2"><span className="w-[72px] text-fg-3">Left</span><span className="inline-flex h-1 w-[90px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]"><span className="block h-full bg-[#c23767]" style={{ width: `${(p.leftCount / max) * 100}%` }} /></span><span className="font-semibold text-[#c23767]">{p.leftNote ?? `−${p.leftCount}`}</span></span>}
-          </span>
-          {p.leadership && <span className="text-[12px] text-fg-3"><b className="font-semibold text-[#1f2f47]">Leadership:</b> {p.leadership}</span>}
-        </>
-      ) : (
-        <span className="text-[12.5px] text-fg-faint">—</span>
-      )}
-    </section>
-  );
-}
-
 function Gallery({ c }: { c: CompetitorRow }) {
   const [all, setAll] = useState(false);
   const items = c.media;
+  if (items.length === 0) return null;
   const shown = all ? items : items.slice(0, 4);
   return (
     <section className="glass flex flex-col gap-2.5 rounded-card px-4 py-3.5">
       <span className="flex items-baseline gap-2">
         <span className="text-[14px] font-bold">UI gallery</span>
-        <span className="text-[11px] text-fg-muted">{items.length ? `${items.length} capture${items.length === 1 ? "" : "s"}` : "arrives with the product-UI story"}</span>
+        <span className="text-[11px] text-fg-muted">{items.length} capture{items.length === 1 ? "" : "s"}</span>
         {items.length > 4 && <button onClick={() => setAll((v) => !v)} className="ml-auto text-[12px] font-semibold text-primary hover:underline">{all ? "Fewer" : "All"}</button>}
       </span>
-      {items.length === 0 ? (
-        <span className="text-[12.5px] text-fg-faint">—</span>
-      ) : (
-        <div className="grid grid-cols-2 gap-2">
-          {shown.map((g) => (
-            <a key={g.id} href={mediaUrl(g.mediaPath)} target="_blank" rel="noreferrer" onClick={() => track("cmp_media_opened", { competitorId: c.id, capabilityId: null, kind: g.kind })} className="group flex flex-col gap-1">
-              <span className="block h-[84px] overflow-hidden rounded-[9px] border border-border bg-white"><img src={mediaUrl(g.mediaPath)} alt={g.label} className="h-full w-full object-cover object-top transition group-hover:scale-[1.02]" /></span>
-              <span className="truncate text-[11px] text-fg-muted">{g.label}{g.sourceLabel ? ` · ${g.sourceLabel}` : ""}</span>
-            </a>
-          ))}
-        </div>
-      )}
+      <div className="grid grid-cols-2 gap-2">
+        {shown.map((g) => (
+          <a key={g.id} href={mediaUrl(g.mediaPath)} target="_blank" rel="noreferrer" onClick={() => track("cmp_media_opened", { competitorId: c.id, capabilityId: null, kind: g.kind })} className="group flex flex-col gap-1">
+            <span className="block h-[84px] overflow-hidden rounded-[9px] border border-border bg-white"><img src={mediaUrl(g.mediaPath)} alt={g.label} className="h-full w-full object-cover object-top transition group-hover:scale-[1.02]" /></span>
+            <span className="truncate text-[11px] text-fg-muted">{g.label}{g.sourceLabel ? ` · ${g.sourceLabel}` : ""}</span>
+          </a>
+        ))}
+      </div>
     </section>
   );
 }
 
 function Sources({ c }: { c: CompetitorRow }) {
-  const summary = c.profile?.sourcesSummary ?? [];
-  const items = summary.length ? summary : c.lastScan ? [{ label: "Website", n: `${c.lastScan.pagesFetched} pages` }] : [];
-  const total = items.length;
-  const last = c.profile?.lastFullScanAt ?? c.lastScan?.startedAt ?? null;
+  const items = c.sources.filter((s) => s.lastScanAt);
+  const last = c.lastAnyScanAt;
   return (
     <section className="glass flex flex-col gap-2.5 rounded-card px-4 py-3.5">
-      <span className="flex items-baseline gap-2"><span className="text-[14px] font-bold">Sources</span><span className="text-[11px] text-fg-muted">{total ? `${total} · last full scan ${last ? timeAgo(last) : ""}` : "no scan yet"}</span></span>
+      <span className="flex items-baseline gap-2"><span className="text-[14px] font-bold">Sources</span><span className="text-[11px] text-fg-muted">{items.length ? `${items.length} · last scan ${last ? timeAgo(last) : ""}` : "no scan yet"}</span></span>
       {items.length === 0 ? <span className="text-[12.5px] text-fg-faint">—</span> : (
-        <span className="flex flex-wrap gap-1.5">{items.map((s) => <Kind key={s.label}>{s.label} · {s.n}</Kind>)}</span>
+        <span className="flex flex-wrap gap-1.5">{items.map((s) => <Kind key={s.id}><span title={s.url}>{C.profile.sourceTypes[s.type] ?? s.type} · {s.pages} page{s.pages === 1 ? "" : "s"}</span></Kind>)}</span>
       )}
     </section>
   );

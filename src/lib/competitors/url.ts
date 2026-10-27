@@ -76,10 +76,15 @@ export function isInsideSite(candidate: URL, host: string): boolean {
   return registrableHost(candidate.hostname) === host;
 }
 
-/** Canonical page key: origin + path without trailing slash, no query/hash. */
+/**
+ * Canonical page key: origin + path without trailing slash, no query/hash —
+ * except a video id (youtube.com/watch?v=…), where the query is the page.
+ */
 export function pageKey(u: URL): string {
   const path = u.pathname.replace(/\/+$/, "") || "/";
-  return `${u.protocol}//${u.hostname.toLowerCase()}${path}`;
+  const host = u.hostname.toLowerCase();
+  const video = /(^|\.)youtube\.com$/.test(host) && path === "/watch" ? u.searchParams.get("v") : null;
+  return `${u.protocol}//${host}${path}${video ? `?v=${video}` : ""}`;
 }
 
 const NON_PAGE_EXT = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|pdf|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
