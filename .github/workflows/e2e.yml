@@ -57,6 +57,8 @@ jobs:
       DOCS_ENABLED: "true"
       CHAT_ENABLED: "true"
       DASHBOARD_ENABLED: "true"
+      # competitors-profile.spec.ts P-06 serves files it writes into this dir.
+      COMPETITORS_MEDIA_DIR: /tmp/pmos-competitors-media
       # 2FA secret-encryption key; production-mode boot refuses to start
       # without it. Synthetic — the test DB holds only synthetic accounts.
       TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"

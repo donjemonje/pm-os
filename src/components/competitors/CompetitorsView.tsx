@@ -268,7 +268,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     setTab("profiles");
     setOpenCell(null);
     const facts = state.facts.filter((f) => f.competitorId === competitorId);
-    track("cmp_profile_viewed", { competitorId, factsShown: facts.length, factsMissing: 7 - new Set(facts.map((f) => f.kind)).size, from });
+    track("cmp_profile_viewed", { competitorId, factsShown: facts.length, factsMissing: FACT_KINDS.length - new Set(facts.map((f) => f.kind)).size, from });
   }
 
   const sourcesCount = state.competitors.filter((c) => c.source).length;

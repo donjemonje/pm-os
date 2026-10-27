@@ -62,6 +62,13 @@ env:
       - BUILD
       - RUNTIME
 
+  # Competitors media store for competitors-profile.spec.ts P-06 (the spec
+  # creates the files it serves). Any writable directory; unset = P-06 skips.
+  - variable: COMPETITORS_MEDIA_DIR
+    value: "/tmp/pmos-competitors-media"
+    availability:
+      - RUNTIME
+
   # --- 2FA (mandatory) ---
   # Fixed synthetic key for encrypting the seeded test TOTP secret. Keep this
   # EXACT value: it must match the CI job env (.github/workflows/e2e.yml) and

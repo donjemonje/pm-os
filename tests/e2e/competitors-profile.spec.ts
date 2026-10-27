@@ -531,13 +531,10 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     // spelling: leading `..`, `..` after a real folder, backslashes, an
     // absolute path to it. Then: an in-store file with an unknown extension,
     // a missing file, and an empty path.
-    // Observed (2026-10-27, not asserted): mediaFilePath strips LEADING `..`
-    // segments instead of refusing them, so `../qa-cmp/alerts.png` answers
-    // 200 with the in-store file — no escape, but a `..` path is accepted.
-    // Reported to Dana as a defect candidate; the invariant held here is
-    // "nothing outside the store is ever served".
+    // A leading `..` that would land back inside the store is refused too
+    // (fixed 2026-10-27: mediaFilePath rejects any `..` outright).
     for (const bad of [
-      `../${OUTSIDE_PNG}`, `../../${OUTSIDE_PNG}`, `${MEDIA_SUBDIR}/../../${OUTSIDE_PNG}`, `${MEDIA_SUBDIR}/..\\..\\${OUTSIDE_PNG}`,
+      `../${MEDIA_SUBDIR}/alerts.png`, `../${OUTSIDE_PNG}`, `../../${OUTSIDE_PNG}`, `${MEDIA_SUBDIR}/../../${OUTSIDE_PNG}`, `${MEDIA_SUBDIR}/..\\..\\${OUTSIDE_PNG}`,
       join(MEDIA_DIR!, "..", OUTSIDE_PNG), "/etc/hosts", join(MEDIA_DIR!, MEDIA_SUBDIR, "alerts.png"),
       `${MEDIA_SUBDIR}/notes.txt`, `${MEDIA_SUBDIR}/missing.png`, "",
     ]) {

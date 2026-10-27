@@ -18,7 +18,10 @@ export function mediaDir(): string | null {
 export function mediaFilePath(rel: string): string | null {
   const dir = mediaDir();
   if (!dir) return null;
-  const clean = normalize(rel).replace(/^(\.\.(\/|\\|$))+/, "");
+  // Any `..` segment, backslash or absolute path is refused outright — never
+  // normalised into something inside the store.
+  if (!rel || rel.includes("..") || rel.includes("\\") || rel.startsWith("/")) return null;
+  const clean = normalize(rel);
   if (clean.includes("..") || clean.startsWith("/")) return null;
   const full = join(dir, clean);
   if (!full.startsWith(dir) || !existsSync(full)) return null;
