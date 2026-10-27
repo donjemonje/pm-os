@@ -69,6 +69,11 @@ env:
     value: "gemini-4-argon"
     availability:
       - RUNTIME
+  # Competitor profile media (UI captures, deep-dive images) referenced by path
+  # from CompetitorMedia / CapabilityInsight.media and served by
+  # /api/competitors/media. Unset = every capture shows its labelled placeholder.
+  # - variable: COMPETITORS_MEDIA_DIR
+  #   value: "/mnt/competitors-media"
 
   - variable: NEXT_PUBLIC_APP_URL
     value: "https://app.pm-os.io"
