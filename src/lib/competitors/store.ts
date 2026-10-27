@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
+import { readMockProfile, type MockProfile } from "./mock";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -39,6 +40,8 @@ export interface CompetitorRow {
   manualScansToday: number;
   /** Scan currently queued or running, if any. */
   activeScanId: string | null;
+  /** Dev-only demo data from COMPETITORS_MOCK_DIR (null in production / when absent). */
+  mock: MockProfile | null;
 }
 
 export interface DomainRow {
@@ -206,6 +209,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       lastGoodScanAt: c.sources[0] ? scansBySource.get(c.sources[0].id)?.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null : null,
       manualScansToday: c.sources[0] ? (scansBySource.get(c.sources[0].id) ?? []).filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(c.sources[0].id) ? 1 : 0) : 0,
       activeScanId: c.sources[0] ? activeBySource.get(c.sources[0].id) ?? null : null,
+      mock: readMockProfile(c.host),
     })),
     domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position })),
     capabilities: capabilities.map((k) => ({
