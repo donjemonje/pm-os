@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { fetchPlain } from "@/lib/competitors/fetcher";
-import { siteNameOf } from "@/lib/competitors/html";
+import { siteLogoOf, siteNameOf } from "@/lib/competitors/html";
 import { nextPosition } from "@/lib/competitors/store";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
@@ -57,6 +57,7 @@ export async function POST(req: Request) {
       name,
       websiteUrl: probe.finalUrl && probe.finalUrl.startsWith("http") ? new URL(probe.finalUrl).origin : site.url,
       host: site.host,
+      logoUrl: probe.html ? siteLogoOf(probe.html, probe.finalUrl && probe.finalUrl.startsWith("http") ? new URL(probe.finalUrl).origin : site.url) : null,
       position: await nextPosition("competitor", ctx.workspaceId),
       sources: { create: { workspaceId: ctx.workspaceId, type: "website", url: site.url } },
     },

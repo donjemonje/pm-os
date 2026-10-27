@@ -223,6 +223,7 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
   const [name, setName] = useState(c.name);
   const [website, setWebsite] = useState(c.websiteUrl);
   const [starting, setStarting] = useState(false);
+  const [logoBroken, setLogoBroken] = useState(false);
   const status = c.activeScanId ? "running" : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
   const summary = c.activeScanId ? "" : scanSummaryLine(c, nextScanAt);
 
@@ -232,8 +233,8 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
 
   return (
     <div className="flex items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-white text-fg-muted">
-        <Globe size={14} />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-border bg-white text-fg-muted">
+        {c.logoUrl && !logoBroken ? <img src={c.logoUrl} alt="" onError={() => setLogoBroken(true)} className="h-[70%] w-[70%] object-contain" /> : <Globe size={14} />}
       </span>
       {editing ? (
         <div className="flex min-w-0 flex-1 items-center gap-2"

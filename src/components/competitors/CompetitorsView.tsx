@@ -91,13 +91,14 @@ function OkMark({ size = 22, solid }: { size?: number; solid?: boolean }) {
 }
 
 function Logo({ c, size = 28, dark }: { c: CompetitorRow; size?: number; dark?: boolean }) {
+  const [broken, setBroken] = useState(false);
   return (
     <span
       className={cn("flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] border text-[11px] font-bold", dark ? "border-[#0b1430] bg-[#0b1430] text-[#f3f1fb]" : "border-border bg-white text-fg-2")}
       style={{ width: size, height: size }}
       title={c.name}
     >
-      {c.logoUrl ? <img src={c.logoUrl} alt="" className="h-[70%] w-[70%] object-contain" /> : initialsOf(c.name)}
+      {c.logoUrl && !broken ? <img src={c.logoUrl} alt="" onError={() => setBroken(true)} className="h-[70%] w-[70%] object-contain" /> : initialsOf(c.name)}
     </span>
   );
 }

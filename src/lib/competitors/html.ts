@@ -63,6 +63,39 @@ export function siteNameOf(html: string, host: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+/**
+ * The competitor's logo as the site declares it: the largest apple-touch-icon,
+ * else the largest sizeable <link rel="icon">, else Google's favicon service
+ * for the host. Absolute URL — nothing is copied or stored on our side.
+ */
+export function siteLogoOf(html: string, origin: string): string {
+  const links = [...html.matchAll(/<link\b[^>]*>/gi)].map((m) => m[0]);
+  const attr = (tag: string, name: string) => tag.match(new RegExp(`${name}=["']([^"']+)["']`, "i"))?.[1] ?? "";
+  const sized = (tag: string) => Number((attr(tag, "sizes").match(/(\d+)x/)?.[1]) ?? 0);
+  const pick = (test: (rel: string) => boolean) =>
+    links
+      .filter((t) => test(attr(t, "rel").toLowerCase()) && attr(t, "href"))
+      .sort((a, b) => sized(b) - sized(a))[0];
+  const touch = pick((rel) => rel.includes("apple-touch-icon"));
+  const icon = pick((rel) => (rel.split(/\s+/).includes("icon") || rel === "shortcut icon") && !/\.ico(\?|$)/i.test(attr(tag_of(rel), "href")));
+  // A 16-px .ico looks poor at 48 px; when the site declares no sizeable icon,
+  // Google's favicon service returns the best icon it knows at 128 px.
+  const host = new URL(origin).hostname.replace(/^www\./, "");
+  const fallback = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`;
+  const chosen = touch ?? icon;
+  if (!chosen) return fallback;
+  if (chosen === icon && sized(icon) > 0 && sized(icon) < 64) return fallback;
+  try {
+    const u = new URL(decodeEntities(attr(chosen, "href")), origin);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : fallback;
+  } catch {
+    return fallback;
+  }
+  function tag_of(rel: string): string {
+    return links.find((t) => attr(t, "rel").toLowerCase() === rel) ?? "";
+  }
+}
+
 export function metaDescription(html: string): string {
   const m = html.match(/<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i)
     ?? html.match(/<meta[^>]+content=["']([^"']*)["'][^>]*name=["']description["']/i);

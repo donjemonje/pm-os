@@ -55,9 +55,10 @@ function Kind({ tone = "int", children, className }: { tone?: string; children: 
 }
 
 function Logo({ c, size = 28, className }: { c: CompetitorRow; size?: number; className?: string }) {
+  const [broken, setBroken] = useState(false);
   return (
     <span className={cn("flex shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-border bg-white text-[11px] font-bold text-fg-2", className)} style={{ width: size, height: size, borderRadius: size >= 40 ? 12 : 8 }} title={c.name}>
-      {c.logoUrl ? <img src={c.logoUrl} alt="" style={{ width: size * 0.72, height: size * 0.72 }} className="object-contain" /> : initialsOf(c.name)}
+      {c.logoUrl && !broken ? <img src={c.logoUrl} alt="" onError={() => setBroken(true)} style={{ width: size * 0.72, height: size * 0.72 }} className="object-contain" /> : initialsOf(c.name)}
     </span>
   );
 }
