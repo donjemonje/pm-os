@@ -185,7 +185,14 @@ export function tidy(s: string): string {
   for (const q of ["'", '"']) if (t.endsWith(q) && (t.split(q).length - 1) % 2 === 1) t = t.slice(0, -1).trimEnd();
   return t;
 }
-const str = (v: unknown, max = 500): string => (typeof v === "string" ? tidy(v).slice(0, max) : "");
+/** Cut at a word boundary (a name cut mid-word reads as a bug: "policy enforcemen"). */
+function cut(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const head = s.slice(0, max);
+  const space = head.lastIndexOf(" ");
+  return (space > max * 0.6 ? head.slice(0, space) : head).replace(/[\s,;:\-–—(]+$/, "");
+}
+const str = (v: unknown, max = 500): string => (typeof v === "string" ? cut(tidy(v), max) : "");
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const strs = (v: unknown, max = 120): string[] =>
   arr(v).map((x) => str(x, max)).filter(Boolean);

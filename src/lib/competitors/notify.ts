@@ -192,7 +192,12 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
       }
     }
   }
-  for (const f of facts) byCompetitor.get(f.competitorId)?.facts.push({ kind: f.kind, value: f.value, sourceUrl: f.sourceUrl, factDate: f.factDate?.toISOString() ?? null });
+  // A launch milestone that names the product says it all: the bare product fact is not repeated.
+  const milestones = facts.filter((f) => f.kind === "milestone");
+  for (const f of facts) {
+    if (f.kind === "product" && milestones.some((m) => m.competitorId === f.competitorId && m.value.toLowerCase().includes(f.value.toLowerCase()))) continue;
+    byCompetitor.get(f.competitorId)?.facts.push({ kind: f.kind, value: f.value, sourceUrl: f.sourceUrl, factDate: f.factDate?.toISOString() ?? null });
+  }
   for (const s of suggestions) if (s.suggestedById) byCompetitor.get(s.suggestedById)?.suggestions.push({ name: s.name, domain: s.domain.name });
 
   const ordered = [...byCompetitor.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
