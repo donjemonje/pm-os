@@ -7,10 +7,11 @@ import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults (weekly, 50 pages) and clamps the page limit", () => {
-    expect(mergeCompetitorsConfig(null)).toEqual({ scanFrequency: "weekly", maxPagesPerScan: DEFAULT_MAX_PAGES, manualRescansPerDay: 1 });
-    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ scanFrequency: "daily", maxPagesPerScan: 5, manualRescansPerDay: 1 });
-    expect(mergeCompetitorsConfig({ scanFrequency: "hourly", maxPagesPerScan: 10_000 })).toEqual({ scanFrequency: "weekly", maxPagesPerScan: 500, manualRescansPerDay: 1 });
-    expect(mergeCompetitorsConfig("junk")).toEqual({ scanFrequency: "weekly", maxPagesPerScan: DEFAULT_MAX_PAGES, manualRescansPerDay: 1 });
+    expect(mergeCompetitorsConfig(null)).toEqual({ scanFrequency: "weekly", maxPagesPerScan: DEFAULT_MAX_PAGES, manualRescansPerDay: 1, notifyUserIds: [] });
+    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ scanFrequency: "daily", maxPagesPerScan: 5, manualRescansPerDay: 1, notifyUserIds: [] });
+    expect(mergeCompetitorsConfig({ scanFrequency: "hourly", maxPagesPerScan: 10_000 })).toEqual({ scanFrequency: "weekly", maxPagesPerScan: 500, manualRescansPerDay: 1, notifyUserIds: [] });
+    expect(mergeCompetitorsConfig("junk")).toEqual({ scanFrequency: "weekly", maxPagesPerScan: DEFAULT_MAX_PAGES, manualRescansPerDay: 1, notifyUserIds: [] });
+    expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] }).notifyUserIds).toEqual(["u1", "u2"]);
   });
   it("turns a frequency into its interval", () => {
     expect(frequencyMs("daily")).toBe(86_400_000);

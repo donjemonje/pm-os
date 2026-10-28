@@ -384,7 +384,8 @@ export async function runScan(scanId: string): Promise<void> {
     const { count, changedPages, allPages, seenUrls, homeFailed, capReached, budgetReached } = col;
 
     // Pages the last scan read that this one did not see — a removed pricing page is a signal.
-    if (!homeFailed && lastScanUrls.size) {
+    // Only a crawl can assert removal: a collector's hand-in brings what it found, not the whole site.
+    if (!homeFailed && lastScanUrls.size && mode !== "bundle") {
       const failedNow = new Set(log.pages.filter((p) => p.outcome === "failed").map((p) => p.url));
       removedPages = [...lastScanUrls].filter((u) => !seenUrls.has(u) && (failedNow.has(u) || !capReached && !budgetReached)).slice(0, 100);
       if (removedPages.length) log.add("info", `Removed since the last scan: ${removedPages.length} page${removedPages.length === 1 ? "" : "s"} (${removedPages.slice(0, 3).map((u) => u.replace(/^https?:\/\/[^/]+/, "")).join(", ")}${removedPages.length > 3 ? ", …" : ""})`);
