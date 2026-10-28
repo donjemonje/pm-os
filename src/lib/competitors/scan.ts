@@ -366,8 +366,10 @@ export async function runScan(scanId: string): Promise<void> {
   try {
     // Previous pages of this source: hashes (changed vs unchanged), validators
     // (conditional requests) and the URL set (removed pages).
+    // Only scans that finished (ok or partial) established anything: pages a failed or abandoned scan
+    // stored never count as "seen", or the next scan would skip PMOS AI over pages it never processed.
     const previousPages = await db.scanPage.findMany({
-      where: { sourceId: source.id, scanId: { not: scanId } },
+      where: { sourceId: source.id, scanId: { not: scanId }, scan: { status: { in: ["ok", "partial"] } } },
       orderBy: { fetchedAt: "desc" },
       select: { url: true, contentHash: true, etag: true, lastModified: true, text: true, scanId: true },
     });
