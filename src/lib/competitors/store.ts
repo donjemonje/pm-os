@@ -69,6 +69,11 @@ export interface DomainRow {
   description: string;
   color: string | null;
   position: number;
+  /** "manual" | "ai" */
+  origin: string;
+  /** "active" | "suggested" | "dismissed" */
+  state: string;
+  suggestedById: string | null;
 }
 
 export interface CapabilityRow {
@@ -266,7 +271,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
     }),
-    domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position })),
+    domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position, origin: d.origin, state: d.state, suggestedById: d.suggestedById })),
     capabilities: capabilities.map((k) => ({
       id: k.id,
       domainId: k.domainId,

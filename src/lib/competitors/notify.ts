@@ -53,6 +53,7 @@ export interface FactItem {
 }
 export interface SuggestionItem {
   name: string;
+  /** The domain name, with the "new domain" mark when the scan proposed the domain too. */
   domain: string;
 }
 export interface CompetitorChanges {
@@ -153,7 +154,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
     db.capability.findMany({
       where: { workspaceId: run.workspaceId, origin: "ai", state: "suggested", suggestedById: { in: competitorIds }, createdAt: { gte: run.startedAt } },
       orderBy: { createdAt: "asc" },
-      select: { name: true, suggestedById: true, domain: { select: { name: true } } },
+      select: { name: true, suggestedById: true, domain: { select: { name: true, state: true } } },
     }),
   ]);
 
@@ -198,7 +199,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
     if (f.kind === "product" && milestones.some((m) => m.competitorId === f.competitorId && m.value.toLowerCase().includes(f.value.toLowerCase()))) continue;
     byCompetitor.get(f.competitorId)?.facts.push({ kind: f.kind, value: f.value, sourceUrl: f.sourceUrl, factDate: f.factDate?.toISOString() ?? null });
   }
-  for (const s of suggestions) if (s.suggestedById) byCompetitor.get(s.suggestedById)?.suggestions.push({ name: s.name, domain: s.domain.name });
+  for (const s of suggestions) if (s.suggestedById) byCompetitor.get(s.suggestedById)?.suggestions.push({ name: s.name, domain: s.domain.state === "suggested" ? s.domain.name + " · " + C.notify.email.newDomain : s.domain.name });
 
   const ordered = [...byCompetitor.values()].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
   return {

@@ -22,10 +22,25 @@ export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
-  const existing = await db.competitorDomain.findFirst({ where: { id, workspaceId: ctx.workspaceId }, select: { id: true, name: true } });
+  const existing = await db.competitorDomain.findFirst({ where: { id, workspaceId: ctx.workspaceId }, select: { id: true, name: true, state: true, suggestedById: true } });
   if (!existing) return bad("Not found", 404);
-  const data: { name?: string; description?: string; color?: string } = {};
+  const data: { name?: string; description?: string; color?: string; state?: string; position?: number } = {};
   let field: string | null = null;
+  // Decide a suggested domain: accept (its suggested capabilities stay for their own decision) or dismiss
+  // (its suggested capabilities go with it; the name is never proposed again).
+  if (body.state === "active" || body.state === "dismissed") {
+    if (existing.state !== "suggested") return bad("Only a suggested domain can be accepted or dismissed.");
+    data.state = body.state;
+    if (body.state === "active") {
+      const agg = await db.competitorDomain.aggregate({ where: { workspaceId: ctx.workspaceId, state: "active" }, _max: { position: true } });
+      data.position = (agg._max.position ?? -1) + 1;
+    } else {
+      await db.capability.updateMany({ where: { workspaceId: ctx.workspaceId, domainId: id, state: "suggested" }, data: { state: "dismissed" } });
+    }
+    await db.competitorDomain.update({ where: { id }, data });
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_domain_suggestion", { domainId: id, competitorId: existing.suggestedById, decision: body.state === "active" ? "accepted" : "dismissed" });
+    return stateResponse(ctx);
+  }
   if (body.name !== undefined) {
     const name = cleanName(body.name);
     if (!name) return bad("A name is required.");

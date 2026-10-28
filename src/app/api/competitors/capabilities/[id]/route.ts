@@ -76,7 +76,16 @@ export async function PATCH(req: Request, { params }: Params) {
     if (existing.state === "suggested") {
       decision = body.state === "active" ? "accepted" : "dismissed";
       data.state = body.state;
-      if (body.state === "active") data.position = await nextActivePosition(ctx.workspaceId);
+      if (body.state === "active") {
+        data.position = await nextActivePosition(ctx.workspaceId);
+        // Accepting a capability inside a suggested domain accepts the domain with it.
+        const domain = await db.competitorDomain.findUnique({ where: { id: (data.domainId as string | undefined) ?? existing.domainId }, select: { id: true, state: true } });
+        if (domain?.state === "suggested") {
+          const agg = await db.competitorDomain.aggregate({ where: { workspaceId: ctx.workspaceId, state: "active" }, _max: { position: true } });
+          await db.competitorDomain.update({ where: { id: domain.id }, data: { state: "active", position: (agg._max.position ?? -1) + 1 } });
+          await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_domain_suggestion", { domainId: domain.id, competitorId: existing.suggestedById, decision: "accepted", via: "capability" });
+        }
+      }
     } else if (body.state === "active" && existing.state === "dismissed") {
       data.state = "active";
       decision = "accepted";

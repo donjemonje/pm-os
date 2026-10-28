@@ -210,7 +210,7 @@ For EVERY capability in the catalog, decide from the page text whether the compe
 - "unknown" — the pages give no evidence either way.
 Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty. When the pages name the competitor's product, module or plan that provides the capability, give it in "product" (their exact name; empty when not stated).
 
-Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. At most 8, one per distinct capability — never several wordings of the same thing; skip marketing claims and product names; skip anything that is a synonym of a catalog capability or of an already-suggested one (listed when there are any).
+Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. When no catalog domain fits, name a NEW domain instead (short, title case, the kind of name the catalog uses) and give its one-sentence definition in newDomainDescription; otherwise leave newDomainDescription empty. At most 8, one per distinct capability — never several wordings of the same thing; skip marketing claims and product names; skip anything that is a synonym of a catalog capability or of an already-suggested one (listed when there are any).
 
 Judge only from the pages provided. The previous statuses are given for context: keep them when the new pages say nothing new about a capability (answer the previous value with its previous confidence), change them only on evidence.`;
 
@@ -241,11 +241,12 @@ export const CLASSIFY_TOOL = {
           type: "object",
           properties: {
             name: { type: "string" },
-            domain: { type: "string" },
+            domain: { type: "string", description: "A catalog domain name, or a new domain name when none fits." },
+            newDomainDescription: { type: "string", description: "One sentence defining the new domain; empty when domain is a catalog domain." },
             quote: { type: "string" },
             url: { type: "string" },
           },
-          required: ["name", "domain", "quote", "url"],
+          required: ["name", "domain", "newDomainDescription", "quote", "url"],
         },
       },
     },
@@ -258,7 +259,8 @@ export interface CatalogForAi {
 }
 export interface PreviousStatus { capability: string; value: StatusValue; confidence: number | null }
 export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string; product: string }
-export interface Suggestion { name: string; domain: string; quote: string; url: string }
+/** `newDomain` is set when the domain is not in the catalog: the AI proposes it with a one-sentence definition. */
+export interface Suggestion { name: string; domain: string; quote: string; url: string; newDomain: { description: string } | null }
 export interface Classification { statuses: ClassifiedStatus[]; suggestions: Suggestion[] }
 
 export function renderCatalog(c: CatalogForAi): string {
@@ -334,7 +336,9 @@ export async function classifyCapabilities(
     }
     for (const s of arr(r.value.suggestions)) {
       const o = (s ?? {}) as Record<string, unknown>;
-      const sug = { name: str(o.name, 80), domain: domainNames.get(str(o.domain, 60).toLowerCase()) ?? "", quote: str(o.quote, 240), url: str(o.url, 500) };
+      const rawDomain = str(o.domain, 60);
+      const known = domainNames.get(rawDomain.toLowerCase());
+      const sug: Suggestion = { name: str(o.name, 80), domain: known ?? rawDomain, quote: str(o.quote, 240), url: str(o.url, 500), newDomain: known || !rawDomain ? null : { description: str(o.newDomainDescription, 300) } };
       const key = sug.name.toLowerCase();
       if (!sug.name || !sug.domain || names.has(key) || pendingKeys.has(key)) continue;
       if (!suggestions.has(key) && suggestions.size < MAX_SUGGESTIONS) suggestions.set(key, sug);

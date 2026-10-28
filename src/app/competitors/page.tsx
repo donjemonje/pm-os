@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { CompetitorsView } from "@/components/competitors/CompetitorsView";
+import { canManageOrgSettings } from "@/lib/admin-auth";
 import { PageView } from "@/lib/analytics/PageView";
 import { getCompetitorsState } from "@/lib/competitors/store";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
@@ -25,7 +26,7 @@ export default async function CompetitorsPage() {
   return (
     <AppShell>
       <PageView name="competitors" />
-      <CompetitorsView initialState={state} />
+      <CompetitorsView initialState={state} canEdit={canManageOrgSettings(user)} />
     </AppShell>
   );
 }

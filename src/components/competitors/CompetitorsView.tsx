@@ -125,7 +125,7 @@ function CellValue({ cell, size = 22 }: { cell: CellRow | undefined; size?: numb
  * a summary strip, filters, cell evidence with a correction, lean profiles.
  * Feed and battle cards stay empty until their stories.
  */
-export function CompetitorsView({ initialState }: { initialState: CompetitorsState }) {
+export function CompetitorsView({ initialState, canEdit = false }: { initialState: CompetitorsState; canEdit?: boolean }) {
   const [state, setState] = useState(initialState);
   const own = state.orgName.trim() || "Your organization";
   const [tab, setTab] = useState<Tab>("parity");
@@ -202,6 +202,12 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
   // ——— Derived data ———
   const competitors = state.competitors;
   const activeCaps = useMemo(() => state.capabilities.filter((k) => k.state === "active"), [state.capabilities]);
+  // Scan suggestions wait in the matrix itself (dashed rows / a dashed domain group) for a PM's ✓ or ×.
+  const suggestedCaps = useMemo(() => state.capabilities.filter((k) => k.state === "suggested"), [state.capabilities]);
+  const activeDomains = state.domains.filter((d) => d.state === "active");
+  const [suggestionsOnly, setSuggestionsOnly] = useState(false);
+  const decideCapability = (id: string, decision: "active" | "dismissed") => patch(`/api/competitors/capabilities/${id}`, { state: decision });
+  const decideDomain = (id: string, decision: "active" | "dismissed") => patch(`/api/competitors/domains/${id}`, { state: decision });
   const cellMap = useMemo(() => {
     const m = new Map<string, CellRow>();
     for (const c of state.cells) m.set(`${c.competitorId}|${c.capabilityId}`, c);
@@ -253,7 +259,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     const wanted = STATUS_VALUES[STATUS_OPTIONS.indexOf(statusFilter[0])];
     return shownCompetitors.some((c) => (cellOf(c.id, k.id)?.value ?? "unknown") === wanted);
   };
-  const visibleCaps = activeCaps.filter((k) => {
+  const visibleCaps = suggestionsOnly ? [] : activeCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q) && !k.description.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
     if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
@@ -261,7 +267,15 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     if (newChanges && !shownCompetitors.some((c) => isNewChange(cellOf(c.id, k.id)))) return false;
     return matchesStatus(k);
   });
-  const domainsWithRows = state.domains.filter((d) => visibleCaps.some((k) => k.domainId === d.id));
+  // Suggested rows follow the search, domain and competitor filters; status/gap/product-line filters do not apply to them.
+  const visibleSuggested = gapsOnly || newChanges || productFilter.length || statusFilter.length ? [] : suggestedCaps.filter((k) => {
+    if (q && !k.name.toLowerCase().includes(q)) return false;
+    if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
+    if (competitorFilter.length && !shownCompetitors.some((c) => c.id === k.suggestedById)) return false;
+    return true;
+  });
+  const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && (visibleCaps.some((k) => k.domainId === d.id) || visibleSuggested.some((k) => k.domainId === d.id)));
+  const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
 
   useEffect(() => {
     if (tab !== "parity") return;
@@ -382,7 +396,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
                   <div className="mt-0.5 text-[12.5px] text-fg-3">
                     {summary.parity == null ? C.strip.parityNone : C.strip.paritySub(summary.full, summary.partial, summary.total)}
                   </div>
-                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(state.domains.length, activeCaps.length, competitors.length)}</div>
+                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(activeDomains.length, activeCaps.length, competitors.length)}{suggestedCaps.length > 0 && ` · ${C.matrix.suggestedN(suggestedCaps.length)}`}</div>
                 </div>
               </div>
               <StatCard label={C.strip.gaps} tone="#f0b43c" toneFg="#8a5a00" value={summary.measured ? summary.gaps : null} sub={summary.measured ? C.strip.gapsSub(summary.gaps) : C.strip.gapsNone} />
@@ -404,6 +418,12 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
               <button aria-pressed={newChanges} onClick={() => setNewChanges((v) => !v)} className={chipClass(newChanges)}>
                 {C.filters.newChanges}{newChanges && <Check size={12} strokeWidth={3} />}
               </button>
+              {suggestedCaps.length > 0 && (
+                <button aria-pressed={suggestionsOnly} onClick={() => setSuggestionsOnly((v) => !v)} className={cn(chipClass(suggestionsOnly), !suggestionsOnly && "border-dashed")} data-testid="cmp-suggestions-chip">
+                  {C.matrix.suggestionsOnly}
+                  <span className={cn("inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px] font-semibold", suggestionsOnly ? "bg-white/25 text-white" : "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]")}>{suggestedCaps.length}</span>
+                </button>
+              )}
             </div>
 
             {/* Matrix */}
@@ -436,26 +456,31 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
                     </tr>
                   </thead>
                   <tbody>
-                    {activeCaps.length === 0 || competitors.length === 0 ? (
+                    {(activeCaps.length === 0 && suggestedCaps.length === 0) || competitors.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-14 text-center">
                           <div className="font-title mb-1 text-[15px] font-bold">{activeCaps.length === 0 ? C.matrix.noCatalogTitle : C.matrix.emptyTitle}</div>
                           <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{activeCaps.length === 0 ? C.matrix.noCatalogBody : C.matrix.emptyBody(own)}</div>
                         </td>
                       </tr>
-                    ) : visibleCaps.length === 0 ? (
+                    ) : visibleCaps.length === 0 && visibleSuggested.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-10 text-center text-[13px] text-fg-3">No capability matches these filters.</td>
                       </tr>
                     ) : (
                       domainsWithRows.map((d) => {
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
+                        const sugRows = visibleSuggested.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
                         const covered = rows.filter((k) => ownOf(k) === "has").length;
                         const partial = rows.filter((k) => ownOf(k) === "partial").length;
                         const gaps = rows.filter((k) => rowKind(k) === "gap").length;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} partial={partial} gaps={gaps} colSpan={3 + shownCompetitors.length}>
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} partial={partial} gaps={gaps} colSpan={3 + shownCompetitors.length}
+                            suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} suggestedCount={sugRows.length} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}
+                            suggestedRows={sugRows.map((k) => (
+                              <SuggestedRow key={k.id} capability={k} org={own} seenAt={competitorName(k.suggestedById)} competitors={shownCompetitors} canEdit={canEdit} onDecide={(decision) => void decideCapability(k.id, decision)} />
+                            ))}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
@@ -508,6 +533,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
               </span>
               <span className="inline-flex items-center gap-1.5"><span className="font-semibold text-[#5b6c85]">—</span>{C.matrix.legendMissing}</span>
               <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" />{C.matrix.legendUnknown}</span>
+              {suggestedCaps.length > 0 && <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-[3px] border border-dashed border-[rgba(36,87,245,.6)] bg-[rgba(36,87,245,.06)]" />{C.matrix.legendSuggested}</span>}
               <span className="ml-auto text-fg-muted">{C.matrix.legendHint}</span>
             </div>
           </section>
@@ -540,7 +566,7 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
             competitors={competitors}
             selectedId={selectedCompetitor}
             onSelect={(id) => openProfile(id, "tab")}
-            domains={state.domains}
+            domains={activeDomains}
             capabilities={activeCaps}
             cellOf={cellOf}
             facts={state.facts}
@@ -609,30 +635,88 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, children }: {
+function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, children, suggestedBy, suggestedCount = 0, suggestedRows, canEdit = false, onDecide }: {
   domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; partial: number; gaps: number; colSpan: number; children: React.ReactNode;
+  /** Set when the domain itself is a scan suggestion (dashed group): the competitor it was seen at. */
+  suggestedBy?: string | null;
+  suggestedCount?: number;
+  suggestedRows?: React.ReactNode;
+  canEdit?: boolean;
+  onDecide?: (decision: "active" | "dismissed") => void;
 }) {
   const [open, setOpen] = useState(true);
+  const isSuggested = suggestedBy != null;
   return (
     <>
-      <tr>
+      <tr data-testid={isSuggested ? "cmp-suggested-domain" : undefined}>
         <td colSpan={colSpan} className="p-0">
-          <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left" style={{ background: "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
-            <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
-            <span className="text-[14px] font-bold">{domain.name}</span>
-            <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
-            {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
-            <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
-              <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
-              {partial > 0 && <span className="font-semibold text-[#2a5fd0]">{C.matrix.partialN(partial)}</span>}
-              {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
-              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </span>
-          </button>
+          <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
+            <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
+              <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
+              <span className="text-[14px] font-bold">{domain.name}</span>
+              {isSuggested ? (
+                <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-2 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedDomain} · {C.settings.suggestedBy(suggestedBy)}</span>
+              ) : (
+                <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
+              )}
+              {suggestedCount > 0 && !isSuggested && <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedN(suggestedCount)}</span>}
+              {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
+              <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
+                {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
+                {partial > 0 && <span className="font-semibold text-[#2a5fd0]">{C.matrix.partialN(partial)}</span>}
+                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+                {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </span>
+            </button>
+            {isSuggested && canEdit && onDecide && <DecideButtons accept={C.matrix.acceptDomain} dismiss={C.matrix.dismissDomain} onDecide={onDecide} />}
+          </div>
         </td>
       </tr>
       {open && children}
+      {open && suggestedRows}
     </>
+  );
+}
+
+/** ✓ / × for a suggestion, same pair on a row and on a suggested domain's header. */
+function DecideButtons({ accept, dismiss, onDecide }: { accept: string; dismiss: string; onDecide: (decision: "active" | "dismissed") => void }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+      <button type="button" onClick={() => onDecide("active")} title={accept} aria-label={accept} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
+      <button type="button" onClick={() => onDecide("dismissed")} title={dismiss} aria-label={dismiss} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
+    </span>
+  );
+}
+
+/** A capability a scan proposed: dashed row at the end of its domain, the evidence in the proposing competitor's cell, ✓ / × to decide. */
+function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide }: {
+  capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
+}) {
+  const quote = capability.suggestedQuote?.replace(/\s+—\s+https?:\/\/\S+$/, "") ?? "";
+  return (
+    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
+      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]" title={C.matrix.suggestedRowHint(seenAt)}>
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {capability.name}
+          <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested} · {C.settings.suggestedBy(seenAt)}</span>
+        </span>
+      </td>
+      <td className="bg-[rgba(36,87,245,.06)] text-center" title={C.matrix.ownCellTitle(org)}>
+        <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px font-mono text-[10px] font-semibold text-[#8a5a00]">{C.matrix.ownSuggested}</span>
+      </td>
+      {competitors.map((c) => (
+        <td key={c.id} className="text-center">
+          {c.id === capability.suggestedById ? (
+            <span className="inline-flex items-center justify-center" title={quote || undefined}><OkMark size={16} /></span>
+          ) : (
+            <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" aria-label={C.values.unknown} />
+          )}
+        </td>
+      ))}
+      <td className="px-4">
+        {canEdit ? <DecideButtons accept={C.matrix.accept} dismiss={C.matrix.dismiss} onDecide={onDecide} /> : <span className="text-[11px] text-fg-faint">{C.matrix.suggested}</span>}
+      </td>
+    </tr>
   );
 }
 

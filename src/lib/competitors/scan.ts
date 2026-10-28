@@ -536,8 +536,9 @@ interface AiStepResult {
 }
 
 async function loadCatalog(workspaceId: string): Promise<{ forAi: CatalogForAi; byName: Map<string, { id: string; domainId: string }>; domainIdByName: Map<string, string> }> {
+  // Only the catalog the team accepted: suggested or dismissed domains are not classified against.
   const domains = await db.competitorDomain.findMany({
-    where: { workspaceId },
+    where: { workspaceId, state: "active" },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     include: { capabilities: { where: { state: "active" }, orderBy: [{ position: "asc" }, { name: "asc" }] } },
   });
@@ -655,8 +656,31 @@ async function aiStep(
       }
       // Suggestions
       for (const s of cls.value.suggestions) {
-        const domainId = catalog.domainIdByName.get(s.domain);
-        if (!domainId) continue;
+        let domainId = catalog.domainIdByName.get(s.domain);
+        let newDomain = false;
+        if (!domainId) {
+          // No catalog domain fits: the domain itself is suggested (a dashed group in the matrix).
+          // A domain the team dismissed is never proposed again; one awaiting review is reused.
+          const sameName = await db.competitorDomain.findFirst({ where: { workspaceId, name: { equals: s.domain, mode: "insensitive" } }, select: { id: true, state: true } });
+          if (sameName?.state === "dismissed") {
+            log.add("info", `Suggestion skipped: ${s.name} — its domain "${s.domain}" was dismissed earlier`, s.url || undefined);
+            continue;
+          }
+          if (sameName) {
+            domainId = sameName.id;
+          } else if (s.domain) {
+            const created = await db.competitorDomain.create({
+              data: { workspaceId, name: s.domain, description: clean(s.newDomain?.description, "domain definition", s.url) ?? "", position: 9999, origin: "ai", state: "suggested", suggestedById: competitorId },
+              select: { id: true },
+            });
+            domainId = created.id;
+            newDomain = true;
+            catalog.domainIdByName.set(s.domain, created.id);
+            log.add("info", `Suggested new domain: ${s.domain}`, s.url || undefined);
+          } else {
+            continue;
+          }
+        }
         const exists = await db.capability.findFirst({ where: { workspaceId, name: { equals: s.name, mode: "insensitive" } }, select: { id: true } });
         if (exists) continue;
         const quote = clean(s.quote, "suggestion quote", s.url);
@@ -665,7 +689,7 @@ async function aiStep(
           data: { workspaceId, domainId, name: s.name, position: 9999, origin: "ai", state: "suggested", ourStatus: "missing", suggestedById: competitorId, suggestedQuote: quote ? `${quote} — ${s.url}` : null },
         });
         res.suggestions++;
-        log.add("info", `Suggested new capability: ${s.name} (${s.domain})`, s.url || undefined);
+        log.add("info", `Suggested new capability: ${s.name} (${s.domain}${newDomain ? ", new domain" : ""})`, s.url || undefined);
       }
     }
 

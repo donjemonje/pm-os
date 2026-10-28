@@ -644,6 +644,12 @@ model CompetitorDomain {
   /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
   color       String?
   position    Int       @default(0)
+  /// "manual" | "ai" (a competitor scan proposed it when no catalog domain fit)
+  origin      String    @default("manual")
+  /// "active" | "suggested" (dashed group in the matrix, waits for a PM) | "dismissed" (never suggested again)
+  state       String    @default("active")
+  /// Which competitor's scan suggested it (null for manual domains).
+  suggestedById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

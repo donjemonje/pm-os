@@ -120,6 +120,8 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
   const competitors = state.competitors;
   const suggested = state.capabilities.filter((k) => k.state === "suggested");
   const active = state.capabilities.filter((k) => k.state === "active");
+  // Suggested domains are decided in the matrix (dashed group); the catalog panels show accepted ones.
+  const activeDomains = state.domains.filter((d) => d.state === "active");
   const nextScanAt = (c: CompetitorRow) =>
     c.source?.lastScanAt ? new Date(new Date(c.source.lastScanAt).getTime() + frequencyMs(state.config.scanFrequency)).toISOString() : null;
 
@@ -151,7 +153,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
       {suggested.length > 0 && (
         <SuggestionsPanel
           suggested={suggested}
-          domains={state.domains}
+          domains={state.domains.filter((d) => d.state !== "dismissed")}
           competitors={state.competitors}
           canEdit={canEdit}
           busy={busy}
@@ -160,7 +162,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
       )}
 
       {/* Domains */}
-      <DomainsPanel domains={state.domains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
+      <DomainsPanel domains={activeDomains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
         onAdd={(body) => call("POST", "/api/competitors/domains", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/domains/${id}`, body)}
         onRename={async (d, body) => {
@@ -187,7 +189,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
       />
 
       {/* Capabilities */}
-      <CapabilitiesPanel capabilities={active} domains={state.domains} productLines={state.productLines} canEdit={canEdit} busy={busy}
+      <CapabilitiesPanel capabilities={active} domains={activeDomains} productLines={state.productLines} canEdit={canEdit} busy={busy}
         onAdd={(body) => call("POST", "/api/competitors/capabilities", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
         onRemove={async (k) => {
