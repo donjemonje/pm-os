@@ -106,16 +106,20 @@ export async function createScan(
   trigger: "manual" | "scheduled",
   startedById: string | null,
   sourceType: SourceType = "website",
+  /** A Scan run queues several scans at once: it checks for an active scan itself and passes its id here. */
+  run: { runId: string } | null = null,
 ): Promise<{ scanId: string } | { error: "running" | "no_source" }> {
-  const active = await db.competitorScan.findFirst({
-    where: { workspaceId, status: { in: ["queued", "running"] } },
-    select: { id: true },
-  });
-  if (active) return { error: "running" };
+  if (!run) {
+    const active = await db.competitorScan.findFirst({
+      where: { workspaceId, status: { in: ["queued", "running"] } },
+      select: { id: true },
+    });
+    if (active) return { error: "running" };
+  }
   const source = await db.competitorSource.findFirst({ where: { workspaceId, competitorId, type: sourceType } });
   if (!source) return { error: "no_source" };
   const scan = await db.competitorScan.create({
-    data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued" },
+    data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", runId: run?.runId ?? null },
     select: { id: true },
   });
   await db.competitorSource.update({ where: { id: source.id }, data: { lastStatus: "running" } });

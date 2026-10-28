@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Pencil, Search, Undo2, X } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Loader2, Pencil, RefreshCw, Search, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
@@ -169,6 +169,36 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
     };
   }, [state.scanning, refresh]);
 
+  // ——— Scan (every competitor, one notification) ———
+  const [runNote, setRunNote] = useState<string | null>(null);
+  const watchedRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (state.activeRun) {
+      watchedRun.current = state.activeRun.id;
+      return;
+    }
+    if (watchedRun.current && state.lastRun?.id === watchedRun.current) {
+      watchedRun.current = null;
+      const s = state.lastRun.summary;
+      const changed = typeof s.competitors === "number" ? s.competitors : 0;
+      const recipients = typeof s.recipients === "number" ? s.recipients : 0;
+      setRunNote(`${C.run.finished(changed)}${changed > 0 ? ` ${recipients > 0 ? C.run.notified(recipients) : C.run.noRecipients}` : ""}`);
+    }
+  }, [state.activeRun, state.lastRun]);
+
+  async function scanAll() {
+    setError(null);
+    setRunNote(null);
+    const res = await fetch("/api/competitors/scan/run", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? C.run.failedToStart);
+      return;
+    }
+    if (data.state) setState(data.state);
+    track("cmp_run_clicked", { competitors: state.competitors.length });
+  }
+
   // ——— Derived data ———
   const competitors = state.competitors;
   const activeCaps = useMemo(() => state.capabilities.filter((k) => k.state === "active"), [state.capabilities]);
@@ -283,6 +313,27 @@ export function CompetitorsView({ initialState }: { initialState: CompetitorsSta
             <h1 className="font-title m-0 text-[26px] font-bold leading-none tracking-[-0.02em]">{C.pageTitle}</h1>
             <span className="ml-1.5 text-[11px] text-fg-faint">
               {C.header.counts(competitors.length, sourcesCount)} · {headerScan}
+            </span>
+            <span className="ml-auto flex items-center gap-3">
+              {runNote && <span className="text-[12px] font-medium text-fg-3" data-testid="cmp-run-note">{runNote}</span>}
+              {state.activeRun ? (
+                <span className="inline-flex h-8 items-center gap-2 rounded-control border border-border bg-[var(--app-glass)] px-3 text-[12.5px] font-semibold text-fg-3" data-testid="cmp-run-progress">
+                  <Loader2 size={14} className="animate-spin" />
+                  {C.run.running(state.activeRun.done, state.activeRun.total, state.activeRun.current)}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void scanAll()}
+                  disabled={state.scanning || competitors.length === 0}
+                  title={C.run.buttonTitle}
+                  data-testid="cmp-run-button"
+                  className="font-title inline-flex h-8 items-center gap-1.5 rounded-control border border-transparent bg-primary px-3.5 text-[13px] font-semibold text-white shadow-[0_6px_18px_-6px_rgba(36,87,245,.8)] hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RefreshCw size={14} />
+                  {C.run.button}
+                </button>
+              )}
             </span>
           </div>
           <div role="tablist" aria-label="Competitor views" className="flex flex-wrap gap-1.5 border-b border-border pb-3">

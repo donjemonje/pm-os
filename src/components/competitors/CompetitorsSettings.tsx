@@ -199,6 +199,9 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
       {/* Schedule */}
       <SchedulePanel config={state.config} canEdit={canEdit} busy={busy} onSave={(body) => call("PATCH", "/api/competitors/settings", body)} />
 
+      {/* Notifications */}
+      <NotificationsPanel members={state.members} selected={state.config.notifyUserIds} canEdit={canEdit} busy={busy} onSave={(ids) => call("PATCH", "/api/competitors/settings", { notifyUserIds: ids })} />
+
       {logFor && <ScanLogDrawer competitorId={logFor.id} competitorName={logFor.name} onClose={() => setLogFor(null)} />}
     </div>
   );
@@ -754,6 +757,49 @@ function SchedulePanel({ config, canEdit, busy, onSave }: {
         </label>
         <p className="basis-full text-[12px] text-fg-muted">{C.settings.maxPagesHint}</p>
       </div>
+    </section>
+  );
+}
+
+// ————— Notifications —————
+
+/** Who receives the scan notification email: every active user of the organization, ticked or not. */
+function NotificationsPanel({ members, selected, canEdit, busy, onSave }: {
+  members: CompetitorsState["members"];
+  selected: string[];
+  canEdit: boolean;
+  busy: boolean;
+  onSave: (ids: string[]) => Promise<boolean>;
+}) {
+  const picked = new Set(selected);
+  async function toggle(id: string) {
+    const next = picked.has(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    await onSave(next);
+  }
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-notifications">
+      <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+        <div>
+          <div className="font-medium text-foreground">{C.notify.title}</div>
+          <p className="mt-1 text-sm text-muted">{C.notify.blurb}</p>
+        </div>
+        <span className="shrink-0 text-[12px] text-fg-muted">{C.notify.selected(selected.filter((id) => members.some((m) => m.id === id)).length)}</span>
+      </div>
+      {members.length === 0 ? (
+        <div className="px-5 py-4 text-sm text-muted">{C.notify.empty}</div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {members.map((m) => (
+            <li key={m.id}>
+              <label className={cn("flex items-center gap-3 px-5 py-2.5 text-sm", canEdit ? "cursor-pointer hover:bg-background" : "cursor-default")}>
+                <input type="checkbox" checked={picked.has(m.id)} onChange={() => void toggle(m.id)} disabled={!canEdit || busy} className="h-4 w-4 accent-[var(--app-accent)]" />
+                <span className="font-medium text-foreground">{m.name || m.email}</span>
+                {m.name && <span className="text-[12.5px] text-fg-muted">{m.email}</span>}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

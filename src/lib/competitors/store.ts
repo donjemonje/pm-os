@@ -140,6 +140,12 @@ export interface CompetitorsState {
   scanning: boolean;
   /** False in local dev: Scan now is never limited there. */
   rescanLimitEnforced: boolean;
+  /** Active users of the organization — the notification recipients list. */
+  members: { id: string; name: string; email: string }[];
+  /** The Scan run in progress (header progress), if any. */
+  activeRun: { id: string; total: number; done: number; current: string | null; mode: string } | null;
+  /** The last finished run and what its notification said. */
+  lastRun: { id: string; finishedAt: string | null; status: string; summary: Record<string, unknown> } | null;
 }
 
 function asStringArray(v: unknown): string[] {
@@ -150,7 +156,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const [workspace, productLines, competitors, domains, capabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
-    db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true } }),
+    db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
       where: { workspaceId },
@@ -197,6 +203,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     return u ? u.name || u.email : null;
   };
   const activeBySource = new Map(activeScans.map((s) => [s.sourceId, s.id]));
+  const [members, activeRun, lastRun] = await Promise.all([
+    workspace
+      ? db.user.findMany({ where: { organizationId: workspace.organizationId, deactivatedAt: null }, orderBy: [{ name: "asc" }, { email: "asc" }], select: { id: true, name: true, email: true } })
+      : [],
+    db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, orderBy: { startedAt: "desc" }, select: { id: true, total: true, done: true, current: true, mode: true } }),
+    db.competitorScanRun.findFirst({ where: { workspaceId, status: { in: ["ok", "failed"] } }, orderBy: { startedAt: "desc" }, select: { id: true, finishedAt: true, status: true, summary: true } }),
+  ]);
 
   let lastScanAt: Date | null = null;
   for (const c of competitors) {
@@ -308,8 +321,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
       };
     }),
     lastScanAt: lastScanAt?.toISOString() ?? null,
-    scanning: activeScans.length > 0,
+    scanning: activeScans.length > 0 || activeRun != null,
     rescanLimitEnforced: rescanLimitEnforced(),
+    members,
+    activeRun,
+    lastRun: lastRun
+      ? { id: lastRun.id, finishedAt: lastRun.finishedAt?.toISOString() ?? null, status: lastRun.status, summary: lastRun.summary && typeof lastRun.summary === "object" && !Array.isArray(lastRun.summary) ? (lastRun.summary as Record<string, unknown>) : {} }
+      : null,
   };
 }
 

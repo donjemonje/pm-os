@@ -28,6 +28,18 @@ export async function launchScan(scanId: string): Promise<void> {
   });
 }
 
+/** Same runner choice for a Scan run (lib/competitors/runs.ts): the job gets `--run <id>`, local dev runs it in-process. */
+export async function launchRun(runId: string): Promise<void> {
+  if (runnerMode() === "cloudrun") {
+    await triggerCloudRunJob(["--run", runId]);
+    return;
+  }
+  const { executeRun } = await import("./runs");
+  void executeRun(runId).catch((e) => {
+    console.error("[competitors] run failed", runId, e);
+  });
+}
+
 async function triggerCloudRunJob(args: string[]): Promise<void> {
   const job = process.env.COMPETITORS_JOB?.trim();
   if (!job) throw new Error("COMPETITORS_JOB is not set");

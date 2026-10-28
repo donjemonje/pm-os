@@ -817,6 +817,9 @@ model CompetitorScan {
   /// "manual" | "scheduled" | "import" (pages handed to the pipeline by a collector)
   trigger       String
   startedById   String?
+  /// The Scan press (or scheduled round) this scan belongs to; null for a single Scan now / import.
+  runId         String?
+  run           CompetitorScanRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
   /// "queued" | "running" | "ok" | "partial" | "failed"
   status        String           @default("queued")
   /// "plain" | "browser" (browser after a bot wall) | "bundle" (pages were handed in, nothing fetched).
@@ -850,6 +853,35 @@ model CompetitorScan {
 
   @@index([workspaceId, startedAt])
   @@index([sourceId, startedAt])
+  @@index([runId])
+}
+
+/// One press of Scan on the Competitors page (or one scheduled round): the
+/// competitors scanned one after another, and the one notification email sent
+/// when the last of them finishes. `summary` is what that email said.
+model CompetitorScanRun {
+  id          String    @id @default(uuid())
+  workspaceId String
+  /// "manual" | "scheduled"
+  trigger     String
+  startedById String?
+  /// "live" (the scanner crawls each website) | "bundle" (pages handed in by a collector)
+  mode        String    @default("live")
+  /// "running" | "ok" | "failed"
+  status      String    @default("running")
+  total       Int       @default(0)
+  done        Int       @default(0)
+  /// The competitor being scanned right now (header progress).
+  current     String?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  /// {competitors, gaps, raised, lowered, facts, suggestions, recipients, skipped?}
+  summary     Json      @default("{}")
+  notifiedAt  DateTime?
+
+  scans CompetitorScan[]
+
+  @@index([workspaceId, startedAt])
 }
 
 /// Text of a fetched page, kept for the last 2 scans of a source (older rows

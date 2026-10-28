@@ -18,12 +18,15 @@ export interface CompetitorsConfig {
   maxPagesPerScan: number;
   /** "Scan now" presses allowed per site per day (PM-OS admins are exempt). */
   manualRescansPerDay: number;
+  /** Users (ids, same organization) who receive the scan notification email. */
+  notifyUserIds: string[];
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
   scanFrequency: "weekly",
   maxPagesPerScan: DEFAULT_MAX_PAGES,
   manualRescansPerDay: DEFAULT_MANUAL_RESCANS_PER_DAY,
+  notifyUserIds: [],
 };
 
 // ————— Scanner rules (story 2, 2026-10-26) —————
@@ -71,6 +74,7 @@ export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
     scanFrequency: isScanFrequency(r.scanFrequency) ? r.scanFrequency : DEFAULT_COMPETITORS_CONFIG.scanFrequency,
     maxPagesPerScan: pages,
     manualRescansPerDay: rescans,
+    notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
   };
 }
 

@@ -73,6 +73,11 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         label: "Competitors",
         description: "Competitors page: parity matrix, news feed, profiles, battle cards and roadmap.",
       },
+      {
+        key: "competitorsDemoNews",
+        label: "Scan reads demo news",
+        description: "The Scan button on the Competitors page reads prepared pages from the collector bundle folder instead of crawling the websites. Showcase setting; off = live crawl.",
+      },
     ],
   },
   {
