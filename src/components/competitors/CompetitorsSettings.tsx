@@ -371,7 +371,7 @@ function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, onDe
               {k.description && <div className="mt-1 text-[12.5px] text-fg-3">{k.description}</div>}
               {quote[0] && (
                 <div className="mt-1 text-[12px] italic text-fg-muted">
-                  “{quote[0]}”{quote[1] && <> — <a href={`https${quote[1]}`} target="_blank" rel="noreferrer" className="not-italic hover:underline">source</a></>}
+                  “{quote[0]}”{quote[1] && <> — <a href={`https${quote[1]}`} target="_blank" rel="noreferrer" className="not-italic text-primary hover:underline">{C.matrix.learnMore} ↗</a></>}
                 </div>
               )}
             </div>

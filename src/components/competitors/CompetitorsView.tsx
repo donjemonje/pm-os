@@ -693,13 +693,24 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide 
   capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
 }) {
   const quote = capability.suggestedQuote?.replace(/\s+—\s+https?:\/\/\S+$/, "") ?? "";
+  const url = capability.suggestedQuote?.match(/\s—\s(https?:\/\/\S+)$/)?.[1] ?? null;
   return (
-    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
-      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]" title={C.matrix.suggestedRowHint(seenAt)}>
+    <tr className="group border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
+      <td className="px-4 py-2 pl-[30px] font-medium text-[#1f2f47]" title={C.matrix.suggestedRowHint(seenAt)}>
         <span className="inline-flex flex-wrap items-center gap-2">
           {capability.name}
           <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested} · {C.settings.suggestedBy(seenAt)}</span>
         </span>
+        {(quote || url) && (
+          <div className="mt-0.5 flex items-baseline gap-2 text-[11.5px] font-normal text-fg-muted">
+            {quote && <span className="line-clamp-1 italic" title={quote}>“{quote}”</span>}
+            {url && (
+              <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex shrink-0 items-center gap-0.5 not-italic text-primary hover:underline" data-testid="cmp-suggestion-link">
+                {C.matrix.learnMore}<ExternalLink size={11} />
+              </a>
+            )}
+          </div>
+        )}
       </td>
       <td className="bg-[rgba(36,87,245,.06)] text-center" title={C.matrix.ownCellTitle(org)}>
         <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px font-mono text-[10px] font-semibold text-[#8a5a00]">{C.matrix.ownSuggested}</span>

@@ -95,6 +95,7 @@ export const COMPETITORS_COPY = {
     suggestionsOnly: "Suggestions",
     ownSuggested: "missing?",
     legendSuggested: "suggested by a scan — accept or dismiss",
+    learnMore: "Learn more",
     capabilitiesCount: (n: number) => `${n} capabilit${n === 1 ? "y" : "ies"}`,
     covered: "covered",
     partialN: (n: number) => `${n} partial`,
