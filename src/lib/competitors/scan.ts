@@ -341,9 +341,11 @@ export async function runScan(scanId: string): Promise<void> {
   const t0 = Date.now();
   const config = await getCompetitorsConfig(workspaceId);
   const isWebsite = source.type === "website";
+  // Pages handed in by a collector (importPages) are read back, whatever the source type; only a plain website scan crawls.
+  const handedIn = scan.fetchMode === "bundle";
   const sourceLabel = C.profile.sourceTypes[source.type] ?? source.type;
   await db.competitorScan.update({ where: { id: scanId }, data: { status: "running", startedAt: new Date() } });
-  log.add("info", isWebsite
+  log.add("info", !handedIn
     ? `Scan started (${scan.trigger}) for ${competitor.name} — ${source.url}, limit ${config.maxPagesPerScan} pages, budget ${Math.round(SCAN_TIME_BUDGET_MS / 60000)} min`
     : `Scan started (${scan.trigger}) for ${competitor.name} — ${sourceLabel} pages handed in by a collector`);
 
@@ -351,7 +353,7 @@ export async function runScan(scanId: string): Promise<void> {
   let badge: ScanBadge = "full";
   let errorKind: string | null = null;
   let error: string | null = null;
-  let mode: FetchMode | "bundle" = isWebsite ? "plain" : "bundle";
+  let mode: FetchMode | "bundle" = handedIn ? "bundle" : "plain";
   let aiCalls = 0;
   let statusesChanged = 0;
   let statusesSet = 0;
@@ -376,7 +378,7 @@ export async function runScan(scanId: string): Promise<void> {
     const firstScan = prev.size === 0;
 
     const ctx: CollectContext = { scanId, source, competitor, sourceLabel, prev, log, t0, maxPages: config.maxPagesPerScan };
-    const col = isWebsite ? await collectWebsite(ctx) : await collectBundle(ctx);
+    const col = handedIn ? await collectBundle(ctx) : await collectWebsite(ctx);
     mode = col.mode;
     errorKind = col.errorKind;
     error = col.error;
@@ -390,7 +392,7 @@ export async function runScan(scanId: string): Promise<void> {
       removedPages = [...lastScanUrls].filter((u) => !seenUrls.has(u) && (failedNow.has(u) || !capReached && !budgetReached)).slice(0, 100);
       if (removedPages.length) log.add("info", `Removed since the last scan: ${removedPages.length} page${removedPages.length === 1 ? "" : "s"} (${removedPages.slice(0, 3).map((u) => u.replace(/^https?:\/\/[^/]+/, "")).join(", ")}${removedPages.length > 3 ? ", …" : ""})`);
     }
-    log.add("info", `${isWebsite ? "Fetched" : "Read"} ${count} pages${isWebsite ? ` via ${mode}` : ""}: ${changedPages.length} new or changed, ${count - changedPages.length} unchanged, ${log.pages.filter((p) => p.outcome === "failed").length} failed`);
+    log.add("info", `${handedIn ? "Read" : "Fetched"} ${count} pages${!handedIn ? ` via ${mode}` : ""}: ${changedPages.length} new or changed, ${count - changedPages.length} unchanged, ${log.pages.filter((p) => p.outcome === "failed").length} failed`);
     await log.flush({ fetchMode: mode, robotsDisallowed: robotsDisallowed as unknown as Prisma.InputJsonValue, removedPages: removedPages as unknown as Prisma.InputJsonValue });
 
     if (homeFailed) {
