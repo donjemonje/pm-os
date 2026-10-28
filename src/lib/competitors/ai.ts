@@ -186,7 +186,7 @@ export function tidy(s: string): string {
   return t;
 }
 /** Cut at a word boundary (a name cut mid-word reads as a bug: "policy enforcemen"). */
-function cut(s: string, max: number): string {
+export function cut(s: string, max: number): string {
   if (s.length <= max) return s;
   const head = s.slice(0, max);
   const space = head.lastIndexOf(" ");

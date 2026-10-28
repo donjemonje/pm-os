@@ -4,7 +4,7 @@
  * and the page key that keeps a video id.
  */
 import { describe, expect, it } from "vitest";
-import { chunkPages, factDateOf, mergeStatus, packPages, tidy, type ClassifiedStatus, type PageText } from "@/lib/competitors/ai";
+import { chunkPages, cut, factDateOf, mergeStatus, packPages, tidy, type ClassifiedStatus, type PageText } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
 
 const page = (i: number, chars: number, extra: Partial<PageText> = {}): PageText => ({ url: `https://e.com/p${i}`, title: `P${i}`, text: "x".repeat(chars), ...extra });
@@ -82,5 +82,15 @@ describe("pageKey keeps a video id", () => {
     expect(pageKey(new URL("https://www.youtube.com/watch?v=abc123&t=10s"))).toBe("https://www.youtube.com/watch?v=abc123");
     expect(pageKey(new URL("https://youtube.com/watch?list=1"))).toBe("https://youtube.com/watch");
     expect(pageKey(new URL("https://e.com/watch?v=abc"))).toBe("https://e.com/watch");
+  });
+});
+
+describe("cut", () => {
+  it("keeps short strings and cuts long ones at a word boundary", () => {
+    expect(cut("short name", 80)).toBe("short name");
+    expect(cut("AI service network indicator feeds for shadow AI discovery and policy enforcement", 80)).toBe("AI service network indicator feeds for shadow AI discovery and policy");
+  });
+  it("falls back to a hard cut when there is no usable space", () => {
+    expect(cut("x".repeat(100), 80)).toBe("x".repeat(80));
   });
 });
