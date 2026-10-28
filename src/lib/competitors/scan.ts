@@ -645,10 +645,14 @@ async function aiStep(
           res.statusesSet++;
           log.add("info", `${name}: first evidence — ${value}`, sourceUrl ?? undefined);
         } else if (prev.value !== value) {
+          // A source's FIRST scan that differs from what another source set is discovery, not news:
+          // the site did not change, two sources described it differently. Only a rescan of the same
+          // source marks a change (the "New Changes" dot, the notification).
           await db.statusHistory.create({ data: { statusId: prev.id, value: prev.value, quote: prev.quote, sourceUrl: prev.sourceUrl, scanId: prev.scanId } });
-          await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product: product ?? prev.product, scanId, changedAt: now } });
-          res.statusesChanged++;
-          log.add("info", `${name}: ${prev.value} → ${value}`, sourceUrl ?? undefined);
+          await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product: product ?? prev.product, scanId, changedAt: firstScan ? null : now } });
+          if (firstScan) res.statusesSet++;
+          else res.statusesChanged++;
+          log.add("info", `${name}: ${prev.value} → ${value}${firstScan ? " (first evidence from this source — not a change)" : ""}`, sourceUrl ?? undefined);
         } else if (quote && quote !== prev.quote && (!prev.quote || (confidence ?? 0) > (prev.confidence ?? 0))) {
           // Same value: the evidence moves to a later source only when it is more confident.
           await db.capabilityStatus.update({ where: { id: prev.id }, data: { confidence, quote, sourceUrl, product: product ?? prev.product, scanId } });
