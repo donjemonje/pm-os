@@ -345,23 +345,11 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
     s.facts || s.suggestions ? chip([s.facts && e.chipFacts(s.facts), s.suggestions && e.chipSuggestions(s.suggestions)].filter(Boolean).join(" · "), INK3, "#eef1f8") : "",
   ].join("");
 
-  const glance = single ? "" : `<tr><td style="padding:18px 20px 0;">${eyebrow(e.glance, INK3)}
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid ${BORDER};border-radius:10px;border-collapse:separate;overflow:hidden;">
-    ${n.competitors.map((c, i) => {
-      const cs = summarize({ ...n, competitors: [c] }, 0);
-      const chips = [cs.gaps ? chip(e.chipGap(cs.gaps), "#c23767", "rgba(239,90,138,0.15)", 11) : "", cs.raised ? chip(e.chipRaised(cs.raised), "#2a5fd0", "rgba(59,124,246,0.15)", 11) : "", cs.lowered ? chip(e.chipLowered(cs.lowered), "#8a5a00", "#fff7e0", 11) : "", cs.domains ? chip(e.chipDomain(cs.domains), "#0f7a47", "rgba(23,178,106,0.14)", 11) : "", cs.facts ? chip(e.chipFacts(cs.facts), INK3, "#eef1f8", 11) : "", cs.suggestions ? chip(e.chipSuggestions(cs.suggestions), INK3, "#eef1f8", 11) : ""].join("");
-      return `<tr><td style="padding:10px 14px 6px;${i === n.competitors.length - 1 ? "" : `border-bottom:1px solid rgba(200,212,232,0.5);`}">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-          <td style="width:26px;vertical-align:top;"><span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;border-radius:7px;background:${BARS[i % BARS.length]};color:#fff;font-family:${TITLE};font-weight:700;font-size:11px;">${esc(initials(c.name))}</span></td>
-          <td style="padding-left:10px;font-family:${TITLE};font-weight:600;font-size:14px;color:${INK};">${esc(c.name)} <span style="font-family:${BODY};font-weight:400;font-size:12px;color:${MUTED};">${esc(e.pages(c.pagesRead, c.pagesChanged))}</span><div style="margin-top:5px;">${chips}</div></td>
-        </tr></table></td></tr>`;
-    }).join("")}
-    </table>
-  </td></tr>`;
+  // The "At a glance" table was dropped on 2026-10-29 (Daniel: crowded on phones); the summary chips above carry the counts.
 
   const allSuggestions = n.competitors.flatMap((c) => c.suggestions.map((sg) => ({ ...sg, competitor: c.name })));
   const suggestions = allSuggestions.length
-    ? `<tr><td style="padding:18px 20px 0;${single ? "" : `border-top:1px solid rgba(200,212,232,0.5);`}">
+    ? `<tr><td style="padding:18px 20px 0;border-top:1px solid rgba(200,212,232,0.5);">
         ${eyebrow(`${e.suggestions} · ${allSuggestions.length}`, INK3)}<div style="font-family:${BODY};font-size:12px;color:${MUTED};margin:-4px 0 8px;">${esc(e.suggestionsHint)}</div>
         ${allSuggestions.map((sg) => `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px dashed rgba(59,124,246,0.55);border-radius:10px;padding:9px 14px;">
           <div style="font-family:${BODY};font-size:14px;line-height:1.4;color:${INK};"><span style="font-weight:500;">${esc(sg.name)}</span> <span style="color:${MUTED};">· ${esc(sg.domain)}${single ? "" : ` · ${esc(sg.competitor)}`}</span> <span style="font-family:${TITLE};font-weight:600;font-size:12px;padding-left:4px;">${link(`${n.appUrl}/settings/competitors`, e.review)}</span></div></td></tr></table>`).join("")}
@@ -383,7 +371,6 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
     <div style="font-family:${BODY};font-size:12px;line-height:1.5;color:#aaa3c4;">${esc(headChips.join(" · "))}</div>
   </td></tr>
   <tr><td style="padding:18px 20px 0;">${summaryChips}</td></tr>
-  ${glance}
   ${n.competitors.map((c, i) => competitorBlock(c, i, n, single)).join("")}
   ${suggestions}
   <tr><td style="padding:18px 20px 0;">

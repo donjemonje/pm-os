@@ -75,14 +75,14 @@ describe("renderRunEmail", () => {
     expect(mail.text).toContain("Autonomous hunting: Missing → Has it (Org missing)");
     expect(mail.text).toContain("Shadow AI feeds · AI Security");
   });
-  it("several competitors: one email, a glance row each, unchanged ones not mentioned, suggestions tagged", () => {
+  it("several competitors: one email, no glance table, unchanged ones not mentioned, suggestions tagged", () => {
     const mail = renderRunEmail(run([
       base({ changes: [gap] }),
       base({ competitorId: "c2", name: "Beta Corp", changes: [{ ...gap, kind: "raised", own: "partial", from: "partial" }] }),
       base({ competitorId: "c3", name: "Gamma", suggestions: [{ name: "Takedowns", domain: "Brand" }] }),
     ], ["Delta"]))!;
     expect(mail.subject).toBe("3 competitors changed — competitor scan");
-    expect(mail.html).toContain("At a glance");
+    expect(mail.html).not.toContain("At a glance");
     expect(mail.html).not.toContain("Delta");
     expect(mail.html).toContain("Takedowns");
     expect(mail.html).toContain("· Gamma");
