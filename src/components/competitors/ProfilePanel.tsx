@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Flag, Lightbulb, Pencil, Plus, Undo2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ExternalLink, Flag, Lightbulb, Pencil, Plus, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { initialsOf } from "@/components/ui/Avatar";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
@@ -341,36 +341,17 @@ function Header({ c, org, facts, capabilities, cellOf, onPatchFact, onAddFact }:
 
 interface TimelineEvent { key: string; date: string; title: string; type: EventType; sourceUrl: string | null }
 
-/** Two markers closer than this (px) share one box; a box is 150 px wide. */
-const TL_GROUP_PX = 160;
 const TL_PAD = 24;
-
-interface TimelineGroup { key: string; x: number; items: (TimelineEvent & { x: number })[] }
-
-/** Greedy left-to-right grouping of markers that would overlap on the axis. */
-function groupEvents(events: { e: TimelineEvent; x: number }[]): TimelineGroup[] {
-  const out: TimelineGroup[] = [];
-  for (const { e, x } of events) {
-    const cur = out[out.length - 1];
-    if (cur && x - cur.items[cur.items.length - 1].x < TL_GROUP_PX) {
-      cur.items.push({ ...e, x });
-    } else {
-      out.push({ key: e.key, x, items: [{ ...e, x }] });
-    }
-  }
-  // A group sits at the middle of its members.
-  for (const g of out) g.x = (g.items[0].x + g.items[g.items.length - 1].x) / 2;
-  return out;
-}
+/** The axis is this many times the visible width: room between markers, scrolled sideways. */
+const TL_ZOOM = 3;
 
 function tlWhen(date: string): string {
   return date.length > 7 ? `${new Date(date).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${new Date(date).getUTCFullYear()}` : date.slice(0, 4);
 }
 
 /**
- * Dated facts on one axis. Facts that would overlap share ONE box: it shows
- * one fact at a time with ‹ › to page through them and a "2 of 7" counter;
- * the dot under the box carries the count. The axis itself never changes.
+ * Dated facts on one axis three times as wide as the card, scrolled sideways;
+ * it opens at the right end (today) so the newest facts are in view first.
  */
 function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   const events = useMemo<TimelineEvent[]>(
@@ -381,7 +362,6 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
     [facts],
   );
   const [filter, setFilterState] = useState<EventType | "all">("all");
-  const [page, setPage] = useState<Record<string, number>>({});
   const [containerWidth, setContainerWidth] = useState(880);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -393,6 +373,11 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // Start at the right end (today); again when the competitor changes.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [c.id, containerWidth, events.length]);
   const setFilter = (f: EventType | "all") => {
     setFilterState(f);
     track("cmp_profile_timeline_filtered", { competitorId: c.id, type: f });
@@ -408,7 +393,7 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   const first = new Date(events[0].date).getFullYear();
   const last = Math.max(new Date(events[events.length - 1].date).getFullYear(), new Date().getFullYear());
   const span = Math.max(1, last - first + 1);
-  const width = containerWidth;
+  const width = containerWidth * TL_ZOOM;
   const axis = width - 2 * TL_PAD;
   /** Axis position of a date in px (year + month + day). */
   const xOf = (iso: string) => {
@@ -418,18 +403,11 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   };
   const todayX = Math.min(width - TL_PAD, xOf(new Date().toISOString()));
   const shown = events.filter((e) => filter === "all" || e.type === filter);
-  const groups = groupEvents(shown.map((e) => ({ e, x: xOf(e.date) })));
   const types = (Object.keys(TL_LABEL) as EventType[]).filter((t) => events.some((e) => e.type === t));
   const years: number[] = [];
   const perYear = axis / span;
   const step = perYear >= 90 ? 1 : perYear >= 45 ? 2 : perYear >= 30 ? 3 : 5;
   for (let y = first; y <= last; y += step) years.push(y);
-  const turn = (g: TimelineGroup, delta: number) => {
-    const n = g.items.length;
-    const next = (((page[g.key] ?? 0) + delta) % n + n) % n;
-    setPage((p) => ({ ...p, [g.key]: next }));
-    track("cmp_profile_timeline_group_paged", { competitorId: c.id, size: n, index: next });
-  };
 
   return (
     <section className="glass flex flex-col gap-2.5 rounded-card px-[18px] py-4" aria-label="Company timeline">
@@ -454,55 +432,23 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
           {years.map((y) => (
             <span key={y} className="absolute top-[204px] -translate-x-1/2 text-[10px] text-fg-faint" style={{ left: TL_PAD + ((y - first) / span) * axis }}>{y}</span>
           ))}
-          {groups.map((g, i) => {
+          {shown.map((e, i) => {
             const above = i % 2 === 0;
-            const stem = <span className="h-3.5 w-px bg-[#c8d4e8]" />;
-            if (g.items.length === 1) {
-              const e = g.items[0];
-              const color = TL_COLOR[e.type];
-              const cls = cn("absolute flex w-[120px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]");
-              const dot = <span className="h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }} />;
-              const card = (
-                <span className="rounded-[8px] border border-border bg-[rgba(255,255,255,.92)] px-2 py-1 text-center text-[11px] leading-[1.3] text-[#1f2f47]">
-                  <b className="block font-semibold">{e.title}</b>
-                  {tlWhen(e.date)} · {TL_LABEL[e.type].toLowerCase()}
-                </span>
-              );
-              const body = above ? <>{card}{stem}{dot}</> : <>{dot}{stem}{card}</>;
-              return e.sourceUrl
-                ? <a key={g.key} href={e.sourceUrl} target="_blank" rel="noreferrer" className={cn(cls, "hover:opacity-80")} style={{ left: g.x }} title={e.sourceUrl}>{body}</a>
-                : <div key={g.key} className={cls} style={{ left: g.x }}>{body}</div>;
-            }
-            // Several facts in one box: ‹ › page through them; the dot carries the count.
-            const idx = Math.min(page[g.key] ?? 0, g.items.length - 1);
-            const e = g.items[idx];
+            const x = xOf(e.date);
             const color = TL_COLOR[e.type];
-            const cls = cn("absolute flex w-[150px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]");
-            const dot = (
-              <span className="flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white px-1 font-mono text-[10px] font-bold text-white" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }}>
-                {g.items.length}
-              </span>
-            );
-            const arrow = (delta: number, label: string) => (
-              <button type="button" onClick={() => turn(g, delta)} aria-label={label} title={label} className="flex h-full w-5 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-[rgba(36,87,245,.08)] hover:text-primary">
-                {delta < 0 ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
-              </button>
-            );
+            const cls = cn("absolute flex w-[120px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]");
+            const dot = <span className="h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }} />;
+            const stem = <span className="h-3.5 w-px bg-[#c8d4e8]" />;
             const card = (
-              <span className="flex w-full items-stretch rounded-[8px] border border-border bg-[rgba(255,255,255,.95)] text-[11px] leading-[1.3] text-[#1f2f47]" data-testid="cmp-timeline-group">
-                {arrow(-1, C.timeline.prev)}
-                <span className="flex min-w-0 flex-1 flex-col items-center py-1 text-center">
-                  {e.sourceUrl
-                    ? <a href={e.sourceUrl} target="_blank" rel="noreferrer" className="line-clamp-2 w-full font-semibold hover:text-primary" title={e.sourceUrl}>{e.title}</a>
-                    : <b className="line-clamp-2 w-full font-semibold">{e.title}</b>}
-                  <span>{tlWhen(e.date)} · {TL_LABEL[e.type].toLowerCase()}</span>
-                  <span className="font-mono text-[9.5px] text-fg-muted">{C.timeline.ofN(idx + 1, g.items.length)}</span>
-                </span>
-                {arrow(1, C.timeline.next)}
+              <span className="rounded-[8px] border border-border bg-[rgba(255,255,255,.92)] px-2 py-1 text-center text-[11px] leading-[1.3] text-[#1f2f47]">
+                <b className="block font-semibold">{e.title}</b>
+                {tlWhen(e.date)} · {TL_LABEL[e.type].toLowerCase()}
               </span>
             );
             const body = above ? <>{card}{stem}{dot}</> : <>{dot}{stem}{card}</>;
-            return <div key={g.key} className={cls} style={{ left: g.x }}>{body}</div>;
+            return e.sourceUrl
+              ? <a key={e.key} href={e.sourceUrl} target="_blank" rel="noreferrer" className={cn(cls, "hover:opacity-80")} style={{ left: x }} title={e.sourceUrl}>{body}</a>
+              : <div key={e.key} className={cls} style={{ left: x }}>{body}</div>;
           })}
         </div>
       </div>

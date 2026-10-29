@@ -133,12 +133,9 @@ export const COMPETITORS_COPY = {
   } as Record<string, string>,
   timeline: {
     title: "Timeline",
-    note: (first: number) => `${first} → today · dated facts from the competitor's sources · overlapping facts share one box, page with ‹ ›`,
+    note: (first: number) => `${first} → today · dated facts from the competitor's sources · scroll sideways for earlier years`,
     empty: "No dated facts yet — funding rounds, acquisitions and launches appear here once a source states their dates.",
     all: "All",
-    ofN: (k: number, n: number) => `${k} of ${n}`,
-    prev: "Previous fact",
-    next: "Next fact",
   },
   profile: {
     emptyTitle: "No competitor profiles yet",
