@@ -10,7 +10,6 @@ import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
-import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { FeedItem } from "@/lib/competitors/feed";
 import { rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
@@ -608,11 +607,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
                                       <OwnCell capability={k} org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
-                                      {k.ownProduct && (
-                                        <span className="inline-block max-w-[52px] truncate rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[9.5px] font-semibold leading-[15px] text-[#2a5fd0]" title={C.matrix.ownProductTip(own, k.ownProduct)} data-testid="cmp-own-product">
-                                          {ownProductLabel(k.ownProduct)}
-                                        </span>
-                                      )}
                                     </span>
                                   </td>
                                   {shownCompetitors.map((c) => {
