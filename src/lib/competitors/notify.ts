@@ -277,11 +277,9 @@ function changeCard(x: StatusChangeItem, org: string): string {
   // One line per change: the digest's bottom line, else the quote; the full text lives in the app.
   const line = bottomLine(x.summary) ?? (x.quote ? `“${x.quote}”` : null);
   const move = `${C.values[x.from]} → ${C.values[x.to]} · ${C.notify.email.ownStatus(org, C.values[x.own].toLowerCase())}`;
-  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px solid ${t.border};background:${t.bg};border-radius:10px;padding:12px 16px;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-      <td style="font-family:${TITLE};font-weight:600;font-size:15px;color:${INK};">${esc(x.capability)}</td>
-      <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;color:${t.fg};white-space:nowrap;padding-left:12px;">${esc(move)}</td>
-    </tr></table>
+  return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px solid ${t.border};background:${t.bg};border-radius:10px;padding:10px 14px;">
+    <div style="font-family:${TITLE};font-weight:600;font-size:15px;line-height:1.3;color:${INK};">${esc(x.capability)}</div>
+    <div style="font-family:${TITLE};font-weight:600;font-size:12px;color:${t.fg};margin-top:2px;">${esc(move)}</div>
     ${line ? `<div style="font-family:${BODY};font-size:13.5px;line-height:1.5;color:${INK};margin-top:6px;">${esc(line)}</div>` : ""}
     <div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:5px;">${x.product ? `${esc(x.product)} · ` : ""}${x.sourceUrl ? link(x.sourceUrl, C.notify.email.source) : esc(x.domain)}</div>
   </td></tr></table>`;
@@ -304,8 +302,7 @@ function competitorBlock(c: CompetitorChanges, i: number, n: RunNotification, si
   if (!single) {
     html += `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 14px;"><tr>
       <td style="width:30px;"><span id="c-${esc(c.competitorId)}" style="display:inline-block;width:30px;height:30px;line-height:30px;text-align:center;border-radius:8px;background:${bar};color:#fff;font-family:${TITLE};font-weight:700;font-size:12px;">${esc(initials(c.name))}</span></td>
-      <td style="padding-left:10px;font-family:${TITLE};font-weight:700;font-size:19px;letter-spacing:-.01em;color:${INK};">${esc(c.name)}</td>
-      <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;white-space:nowrap;">${link(`${n.appUrl}/competitors`, C.notify.email.openProfile)}</td>
+      <td style="padding-left:10px;font-family:${TITLE};font-weight:700;font-size:17px;letter-spacing:-.01em;color:${INK};">${esc(c.name)} <span style="font-family:${TITLE};font-weight:600;font-size:12px;letter-spacing:0;padding-left:6px;">${link(`${n.appUrl}/competitors`, C.notify.email.openProfile)}</span></td>
     </tr></table>`;
   }
   for (const g of groups) {
@@ -321,7 +318,7 @@ function competitorBlock(c: CompetitorChanges, i: number, n: RunNotification, si
     html += `<div style="margin:0 0 14px;">${eyebrow(C.notify.email.alsoNew, INK3)}
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid ${BORDER};border-radius:10px;border-collapse:separate;overflow:hidden;">${c.facts.map((f, k) => factRow(f, k === c.facts.length - 1)).join("")}</table></div>`;
   }
-  return `<tr><td style="padding:${single ? "18px" : "14px"} 32px 6px;${single ? "" : `border-top:4px solid ${bar};`}">${html}</td></tr>`;
+  return `<tr><td style="padding:${single ? "14px" : "12px"} 20px 4px;${single ? "" : `border-top:4px solid ${bar};`}">${html}</td></tr>`;
 }
 
 /** The email, or null when the run changed nothing. */
@@ -348,16 +345,15 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
     s.facts || s.suggestions ? chip([s.facts && e.chipFacts(s.facts), s.suggestions && e.chipSuggestions(s.suggestions)].filter(Boolean).join(" · "), INK3, "#eef1f8") : "",
   ].join("");
 
-  const glance = single ? "" : `<tr><td class="pad" style="padding:18px 32px 0;">${eyebrow(e.glance, INK3)}
+  const glance = single ? "" : `<tr><td style="padding:18px 20px 0;">${eyebrow(e.glance, INK3)}
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid ${BORDER};border-radius:10px;border-collapse:separate;overflow:hidden;">
     ${n.competitors.map((c, i) => {
       const cs = summarize({ ...n, competitors: [c] }, 0);
       const chips = [cs.gaps ? chip(e.chipGap(cs.gaps), "#c23767", "rgba(239,90,138,0.15)", 11) : "", cs.raised ? chip(e.chipRaised(cs.raised), "#2a5fd0", "rgba(59,124,246,0.15)", 11) : "", cs.lowered ? chip(e.chipLowered(cs.lowered), "#8a5a00", "#fff7e0", 11) : "", cs.domains ? chip(e.chipDomain(cs.domains), "#0f7a47", "rgba(23,178,106,0.14)", 11) : "", cs.facts ? chip(e.chipFacts(cs.facts), INK3, "#eef1f8", 11) : "", cs.suggestions ? chip(e.chipSuggestions(cs.suggestions), INK3, "#eef1f8", 11) : ""].join("");
-      return `<tr><td style="padding:10px 16px;${i === n.competitors.length - 1 ? "" : `border-bottom:1px solid rgba(200,212,232,0.5);`}">
+      return `<tr><td style="padding:10px 14px 6px;${i === n.competitors.length - 1 ? "" : `border-bottom:1px solid rgba(200,212,232,0.5);`}">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-          <td style="width:26px;"><span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;border-radius:7px;background:${BARS[i % BARS.length]};color:#fff;font-family:${TITLE};font-weight:700;font-size:11px;">${esc(initials(c.name))}</span></td>
-          <td style="padding-left:10px;font-family:${TITLE};font-weight:600;font-size:14px;color:${INK};">${esc(c.name)} <span style="font-family:${BODY};font-weight:400;font-size:12px;color:${MUTED};">${esc(e.pages(c.pagesRead, c.pagesChanged))}</span></td>
-          <td class="r" align="right" style="white-space:nowrap;">${chips}</td>
+          <td style="width:26px;vertical-align:top;"><span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;border-radius:7px;background:${BARS[i % BARS.length]};color:#fff;font-family:${TITLE};font-weight:700;font-size:11px;">${esc(initials(c.name))}</span></td>
+          <td style="padding-left:10px;font-family:${TITLE};font-weight:600;font-size:14px;color:${INK};">${esc(c.name)} <span style="font-family:${BODY};font-weight:400;font-size:12px;color:${MUTED};">${esc(e.pages(c.pagesRead, c.pagesChanged))}</span><div style="margin-top:5px;">${chips}</div></td>
         </tr></table></td></tr>`;
     }).join("")}
     </table>
@@ -365,45 +361,39 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
 
   const allSuggestions = n.competitors.flatMap((c) => c.suggestions.map((sg) => ({ ...sg, competitor: c.name })));
   const suggestions = allSuggestions.length
-    ? `<tr><td class="pad" style="padding:18px 32px 0;${single ? "" : `border-top:1px solid rgba(200,212,232,0.5);`}">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td>${eyebrow(`${e.suggestions} · ${allSuggestions.length}`, INK3)}</td><td class="r" align="right" style="font-family:${BODY};font-size:12px;color:${MUTED};padding-bottom:8px;">${esc(e.suggestionsHint)}</td></tr></table>
+    ? `<tr><td style="padding:18px 20px 0;${single ? "" : `border-top:1px solid rgba(200,212,232,0.5);`}">
+        ${eyebrow(`${e.suggestions} · ${allSuggestions.length}`, INK3)}<div style="font-family:${BODY};font-size:12px;color:${MUTED};margin:-4px 0 8px;">${esc(e.suggestionsHint)}</div>
         ${allSuggestions.map((sg) => `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px dashed rgba(59,124,246,0.55);border-radius:10px;padding:9px 14px;">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-            <td style="font-family:${BODY};font-size:14px;color:${INK};"><span style="font-weight:500;">${esc(sg.name)}</span> <span style="color:${MUTED};">· ${esc(sg.domain)}${single ? "" : ` · ${esc(sg.competitor)}`}</span></td>
-            <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;white-space:nowrap;">${link(`${n.appUrl}/settings/competitors`, e.review)}</td>
-          </tr></table></td></tr></table>`).join("")}
+          <div style="font-family:${BODY};font-size:14px;line-height:1.4;color:${INK};"><span style="font-weight:500;">${esc(sg.name)}</span> <span style="color:${MUTED};">· ${esc(sg.domain)}${single ? "" : ` · ${esc(sg.competitor)}`}</span> <span style="font-family:${TITLE};font-weight:600;font-size:12px;padding-left:4px;">${link(`${n.appUrl}/settings/competitors`, e.review)}</span></div></td></tr></table>`).join("")}
       </td></tr>`
     : "";
 
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subject)}</title>
-<style>@media only screen and (max-width:520px){.pad{padding-left:18px!important;padding-right:18px!important}h1{font-size:22px!important}td.r{display:block!important;width:100%!important;text-align:left!important;padding:6px 0 0!important;white-space:normal!important}.btn td{display:block!important;padding:0 0 10px!important}.btn a{display:block!important;text-align:center!important}}</style></head>
+<style>@media only screen and (max-width:400px){.btn td{display:block!important;padding:0 0 8px!important}.btn a{display:block!important;text-align:center!important}}</style></head>
 <body style="margin:0;padding:0;background:#eef1f8;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${esc(preheader)}</div>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#eef1f8;"><tr><td align="center" style="padding:24px 16px 40px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#eef1f8;"><tr><td align="center" style="padding:8px 0 24px;">
 <table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="max-width:640px;width:100%;background:#ffffff;border:1px solid ${BORDER};border-radius:12px;border-collapse:separate;overflow:hidden;">
-  <tr><td style="background:#0b1430;padding:24px 32px 22px;">
+  <tr><td style="background:#0b1430;padding:16px 20px 14px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
-      <td style="font-family:${TITLE};font-weight:700;font-size:17px;letter-spacing:-.01em;"><span style="color:#f3f1fb;">PM</span><span style="color:#7aa7ff;">-OS</span></td>
-      <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#aaa3c4;">${esc(e.eyebrow)}</td>
+      <td style="font-family:${TITLE};font-weight:700;font-size:14px;letter-spacing:-.01em;"><span style="color:#f3f1fb;">PM</span><span style="color:#7aa7ff;">-OS</span></td>
+      <td align="right" style="font-family:${TITLE};font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:#aaa3c4;">${esc(e.eyebrow)}</td>
     </tr></table>
-    <h1 style="margin:12px 0 12px;font-family:${TITLE};font-weight:700;font-size:26px;line-height:1.2;letter-spacing:-.02em;color:#ffffff;">${esc(heading)}</h1>
-    <div>${headChips.map((t) => chip(t, "#f3f1fb", "rgba(255,255,255,0.1)")).join("")}</div>
+    <h1 style="margin:10px 0 6px;font-family:${TITLE};font-weight:700;font-size:19px;line-height:1.25;letter-spacing:-.01em;color:#ffffff;">${esc(heading)}</h1>
+    <div style="font-family:${BODY};font-size:12px;line-height:1.5;color:#aaa3c4;">${esc(headChips.join(" · "))}</div>
   </td></tr>
-  <tr><td class="pad" style="padding:18px 32px 0;">${summaryChips}</td></tr>
+  <tr><td style="padding:18px 20px 0;">${summaryChips}</td></tr>
   ${glance}
   ${n.competitors.map((c, i) => competitorBlock(c, i, n, single)).join("")}
   ${suggestions}
-  <tr><td class="pad" style="padding:18px 32px 0;">
+  <tr><td style="padding:18px 20px 0;">
     <table role="presentation" class="btn" cellspacing="0" cellpadding="0" border="0"><tr>
       <td style="border-radius:8px;background:${ACCENT};"><a href="${esc(n.appUrl)}/competitors" style="display:inline-block;padding:10px 16px;font-family:${TITLE};font-weight:600;font-size:14px;color:#ffffff;text-decoration:none;">${esc(e.openMatrix)}</a></td>
       <td style="padding-left:10px;"><a href="${esc(n.appUrl)}/settings/competitors" style="display:inline-block;padding:9px 16px;border:1px solid ${BORDER};border-radius:8px;font-family:${TITLE};font-weight:600;font-size:14px;color:${ACCENT};text-decoration:none;">${esc(e.openLog)}</a></td>
     </tr></table>
   </td></tr>
-  <tr><td class="pad" style="padding:24px 32px 18px;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:1px solid rgba(200,212,232,0.5);"><tr>
-      <td style="padding-top:14px;font-family:${BODY};font-size:12px;color:${MUTED};">${link(`${n.appUrl}/settings/competitors`, e.settings, MUTED)}</td>
-      <td class="r" align="right" style="padding-top:14px;font-family:${BODY};font-size:12px;color:${MUTED};">${esc(single ? e.footer : e.footerMany)}</td>
-    </tr></table>
+  <tr><td style="padding:18px 20px 14px;">
+    <div style="border-top:1px solid rgba(200,212,232,0.5);padding-top:12px;font-family:${BODY};font-size:12px;line-height:1.6;color:${MUTED};">${esc(single ? e.footer : e.footerMany)}<br>${link(`${n.appUrl}/settings/competitors`, e.settings, MUTED)}</div>
   </td></tr>
 </table>
 <div style="font-family:${BODY};font-size:11px;color:#9aa8be;text-align:center;padding-top:14px;">${esc(e.fine)}</div>
