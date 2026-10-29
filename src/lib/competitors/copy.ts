@@ -210,7 +210,7 @@ export const COMPETITORS_COPY = {
     noMatch: "No signal matches these filters.",
     groups: { today: "Today", yesterday: "Yesterday", week: "This week", earlier: "Earlier" } as Record<string, string>,
     kinds: { gap: "Gap opened", raised: "Status raised", lowered: "Status lowered", fact: "New on the site", suggestion: "Suggested capability" } as Record<string, string>,
-    since: (date: string) => `News since ${date} — what the set-up imports found before that is in the profiles, not here.`,
+    since: (date: string) => `News since ${date}`,
     unreadCount: (n: number) => `${n} unread`,
     markRead: "Mark read",
     openCell: "Open in matrix",
