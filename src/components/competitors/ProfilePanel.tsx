@@ -343,7 +343,7 @@ interface TimelineEvent { key: string; date: string; title: string; type: EventT
 
 const TL_PAD = 24;
 /** The axis is this many times the visible width: room between markers, scrolled sideways. */
-const TL_ZOOM = 3;
+const TL_ZOOM = 9;
 
 function tlWhen(date: string): string {
   return date.length > 7 ? `${new Date(date).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${new Date(date).getUTCFullYear()}` : date.slice(0, 4);
