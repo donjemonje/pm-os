@@ -854,7 +854,8 @@ function feedSourceLabel(item: FeedItem): string {
 }
 
 function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; open: boolean; onOpen: () => void }) {
-  const when = new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // A fact shows the date the page states for it (a launch, a deal); a status change or suggestion has only the scan time.
+  const when = item.factDate ? shortDate(item.factDate) : new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const tag = feedTag(item);
   const title = item.headline
     ? item.headline
