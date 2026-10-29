@@ -261,17 +261,29 @@ function link(url: string, text: string, color = ACCENT): string {
   return `<a href="${esc(url)}" style="color:${color};text-decoration:none;">${esc(text)}</a>`;
 }
 
+/** The one-line bottom line of a digest: its first sentence, cut at a word under `max` characters. */
+export function bottomLine(text: string | null | undefined, max = 150): string | null {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  const m = t.match(/^(.+?[.!?])(\s|$)/);
+  const first = m ? m[1] : t;
+  if (first.length <= max) return first;
+  const cutAt = first.lastIndexOf(" ", max - 1);
+  return `${first.slice(0, cutAt > 40 ? cutAt : max).trim()}…`;
+}
+
 function changeCard(x: StatusChangeItem, org: string): string {
   const t = TONE[x.kind];
+  // One line per change: the digest's bottom line, else the quote; the full text lives in the app.
+  const line = bottomLine(x.summary) ?? (x.quote ? `“${x.quote}”` : null);
   const move = `${C.values[x.from]} → ${C.values[x.to]} · ${C.notify.email.ownStatus(org, C.values[x.own].toLowerCase())}`;
   return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px solid ${t.border};background:${t.bg};border-radius:10px;padding:12px 16px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
       <td style="font-family:${TITLE};font-weight:600;font-size:15px;color:${INK};">${esc(x.capability)}</td>
       <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;color:${t.fg};white-space:nowrap;padding-left:12px;">${esc(move)}</td>
     </tr></table>
-    ${x.summary ? `<div style="font-family:${BODY};font-size:13.5px;line-height:1.5;color:${INK};margin-top:6px;">${esc(x.summary)}</div>` : ""}
-    ${x.quote ? `<div style="font-family:${BODY};font-size:13px;line-height:1.5;color:#1f2f47;font-style:italic;margin-top:5px;">“${esc(x.quote)}”</div>` : ""}
-    <div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:5px;word-break:break-word;">${x.product ? `${esc(x.product)} · ` : ""}${x.sourceUrl ? link(x.sourceUrl, short(x.sourceUrl)) : esc(x.domain)}</div>
+    ${line ? `<div style="font-family:${BODY};font-size:13.5px;line-height:1.5;color:${INK};margin-top:6px;">${esc(line)}</div>` : ""}
+    <div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:5px;">${x.product ? `${esc(x.product)} · ` : ""}${x.sourceUrl ? link(x.sourceUrl, C.notify.email.source) : esc(x.domain)}</div>
   </td></tr></table>`;
 }
 
@@ -281,7 +293,6 @@ function factRow(f: FactItem, last: boolean): string {
   const title = f.headline ?? f.value;
   return `<tr><td style="padding:10px 16px;${last ? "" : `border-bottom:1px solid rgba(200,212,232,0.5);`}">
     ${chip(label, INK3, "#eef1f8", 11)}<span style="font-family:${BODY};font-size:14px;line-height:1.45;color:${INK};font-weight:500;">${f.sourceUrl ? link(f.sourceUrl, title, INK) : esc(title)}</span>${when ? `<span style="font-family:${BODY};font-size:13px;color:${MUTED};"> · ${esc(when)}</span>` : ""}
-    ${f.summary ? `<div style="font-family:${BODY};font-size:13px;line-height:1.5;color:#1f2f47;margin-top:4px;">${esc(f.summary)}</div>` : ""}
   </td></tr>`;
 }
 
@@ -406,7 +417,10 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
       const items = c.changes.filter((x) => x.kind === g);
       if (!items.length) continue;
       lines.push(g === "gap" ? e.gapOpened : g === "raised" ? e.raised : e.lowered);
-      for (const x of items) lines.push(`- ${x.capability}: ${C.values[x.from]} → ${C.values[x.to]} (${e.ownStatus(n.orgName, C.values[x.own].toLowerCase())})${x.quote ? ` — “${x.quote}”` : ""}${x.sourceUrl ? ` ${x.sourceUrl}` : ""}`);
+      for (const x of items) {
+        const line = bottomLine(x.summary) ?? (x.quote ? `“${x.quote}”` : null);
+        lines.push(`- ${x.capability}: ${C.values[x.from]} → ${C.values[x.to]} (${e.ownStatus(n.orgName, C.values[x.own].toLowerCase())})${line ? ` — ${line}` : ""}${x.sourceUrl ? ` ${x.sourceUrl}` : ""}`);
+      }
     }
     for (const d of c.domainEntrances) lines.push(`${e.domainEntrance(d.domain)}: ${d.capabilities.join(", ")}`);
     if (c.facts.length) {

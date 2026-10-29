@@ -4,7 +4,7 @@
  * (one competitor / several / nothing to send).
  */
 import { describe, expect, it } from "vitest";
-import { classifyChange, isDomainEntrance, renderRunEmail, summarize, type CompetitorChanges, type RunNotification } from "@/lib/competitors/notify";
+import { bottomLine, classifyChange, isDomainEntrance, renderRunEmail, summarize, type CompetitorChanges, type RunNotification } from "@/lib/competitors/notify";
 
 const base = (over: Partial<CompetitorChanges> = {}): CompetitorChanges => ({
   competitorId: "c1",
@@ -104,5 +104,13 @@ describe("summarize", () => {
       base({ competitorId: "c2", name: "B", changes: [{ ...gap, kind: "lowered" }], suggestions: [{ name: "S", domain: "D" }] }),
     ]), 2);
     expect(s).toEqual({ competitors: 2, gaps: 1, raised: 1, lowered: 1, domains: 1, facts: 1, suggestions: 1, recipients: 2 });
+  });
+});
+
+describe("bottomLine", () => {
+  it("keeps the first sentence and cuts long ones at a word", () => {
+    expect(bottomLine("Payment Fraud monitors card shops. Teams search by BIN.")).toBe("Payment Fraud monitors card shops.");
+    expect(bottomLine("x".repeat(10) + " word ".repeat(40), 60)!.endsWith("…")).toBe(true);
+    expect(bottomLine("  ")).toBeNull();
   });
 });

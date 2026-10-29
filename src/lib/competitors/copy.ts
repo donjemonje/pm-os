@@ -422,6 +422,7 @@ export const COMPETITORS_COPY = {
       suggestionsHint: "Capabilities they sell that your catalog does not list yet",
       newDomain: "new domain",
       review: "Review",
+      source: "Source",
       openProfile: "Open profile →",
       openMatrix: "Open the competitor matrix",
       openLog: "See the scan log",
