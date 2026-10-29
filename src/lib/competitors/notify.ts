@@ -35,6 +35,9 @@ export function isDomainEntrance(before: StatusValue[], after: StatusValue[]): b
 }
 
 export interface StatusChangeItem {
+  /** PMOS AI's one-sentence digest of the move, when it wrote one. */
+  summary: string | null;
+  imageUrl: string | null;
   capability: string;
   domain: string;
   from: StatusValue;
@@ -46,6 +49,9 @@ export interface StatusChangeItem {
   product: string | null;
 }
 export interface FactItem {
+  headline: string | null;
+  summary: string | null;
+  imageUrl: string | null;
   kind: string;
   value: string;
   sourceUrl: string | null;
@@ -149,7 +155,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
     db.profileFact.findMany({
       where: { scanId: { in: scanIds }, changedAt: { not: null }, dismissedAt: null },
       orderBy: [{ factDate: "desc" }, { createdAt: "asc" }],
-      select: { competitorId: true, kind: true, value: true, sourceUrl: true, factDate: true },
+      select: { competitorId: true, kind: true, value: true, sourceUrl: true, factDate: true, headline: true, summary: true, imageUrl: true },
     }),
     db.capability.findMany({
       where: { workspaceId: run.workspaceId, origin: "ai", state: "suggested", suggestedById: { in: competitorIds }, createdAt: { gte: run.startedAt } },
@@ -165,7 +171,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
     const own = (m.capability.ourStatus === "partial" || m.capability.ourStatus === "missing" ? m.capability.ourStatus : "has") as OwnStatus;
     const kind = classifyChange(before.value as StatusValue, m.value as StatusValue, own);
     if (!kind) continue;
-    row.changes.push({ capability: m.capability.name, domain: m.capability.domain.name, from: before.value as StatusValue, to: m.value as StatusValue, own, kind, quote: m.quote, sourceUrl: m.sourceUrl, product: m.product });
+    row.changes.push({ summary: m.summary, imageUrl: m.imageUrl, capability: m.capability.name, domain: m.capability.domain.name, from: before.value as StatusValue, to: m.value as StatusValue, own, kind, quote: m.quote, sourceUrl: m.sourceUrl, product: m.product });
   }
   // Domain entrances: per competitor and domain touched by a change, compare the domain's cells before and after the run.
   const touched = new Map<string, Set<string>>();
@@ -197,7 +203,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
   const milestones = facts.filter((f) => f.kind === "milestone");
   for (const f of facts) {
     if (f.kind === "product" && milestones.some((m) => m.competitorId === f.competitorId && m.value.toLowerCase().includes(f.value.toLowerCase()))) continue;
-    byCompetitor.get(f.competitorId)?.facts.push({ kind: f.kind, value: f.value, sourceUrl: f.sourceUrl, factDate: f.factDate?.toISOString() ?? null });
+    byCompetitor.get(f.competitorId)?.facts.push({ headline: f.headline, summary: f.summary, imageUrl: f.imageUrl, kind: f.kind, value: f.value, sourceUrl: f.sourceUrl, factDate: f.factDate?.toISOString() ?? null });
   }
   for (const s of suggestions) if (s.suggestedById) byCompetitor.get(s.suggestedById)?.suggestions.push({ name: s.name, domain: s.domain.state === "suggested" ? s.domain.name + " · " + C.notify.email.newDomain : s.domain.name });
 
@@ -263,6 +269,7 @@ function changeCard(x: StatusChangeItem, org: string): string {
       <td style="font-family:${TITLE};font-weight:600;font-size:15px;color:${INK};">${esc(x.capability)}</td>
       <td align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;color:${t.fg};white-space:nowrap;padding-left:12px;">${esc(move)}</td>
     </tr></table>
+    ${x.summary ? `<div style="font-family:${BODY};font-size:13.5px;line-height:1.5;color:${INK};margin-top:6px;">${esc(x.summary)}</div>` : ""}
     ${x.quote ? `<div style="font-family:${BODY};font-size:13px;line-height:1.5;color:#1f2f47;font-style:italic;margin-top:5px;">“${esc(x.quote)}”</div>` : ""}
     <div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:5px;">${x.product ? `${esc(x.product)} · ` : ""}${x.sourceUrl ? link(x.sourceUrl, short(x.sourceUrl)) : esc(x.domain)}</div>
   </td></tr></table>`;
@@ -271,8 +278,10 @@ function changeCard(x: StatusChangeItem, org: string): string {
 function factRow(f: FactItem, last: boolean): string {
   const label = C.notify.email.factKinds[f.kind] ?? f.kind;
   const when = dateLabel(f.factDate);
+  const title = f.headline ?? f.value;
   return `<tr><td style="padding:10px 16px;${last ? "" : `border-bottom:1px solid rgba(200,212,232,0.5);`}">
-    ${chip(label, INK3, "#eef1f8", 11)}<span style="font-family:${BODY};font-size:14px;line-height:1.45;color:${INK};font-weight:500;">${f.sourceUrl ? link(f.sourceUrl, f.value, INK) : esc(f.value)}</span>${when ? `<span style="font-family:${BODY};font-size:13px;color:${MUTED};"> · ${esc(when)}</span>` : ""}
+    ${chip(label, INK3, "#eef1f8", 11)}<span style="font-family:${BODY};font-size:14px;line-height:1.45;color:${INK};font-weight:500;">${f.sourceUrl ? link(f.sourceUrl, title, INK) : esc(title)}</span>${when ? `<span style="font-family:${BODY};font-size:13px;color:${MUTED};"> · ${esc(when)}</span>` : ""}
+    ${f.summary ? `<div style="font-family:${BODY};font-size:13px;line-height:1.5;color:#1f2f47;margin-top:4px;">${esc(f.summary)}</div>` : ""}
   </td></tr>`;
 }
 

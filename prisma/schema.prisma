@@ -719,6 +719,9 @@ model CapabilityStatus {
   /// The competitor's product or module that ships this capability, as PMOS AI
   /// read it off the pages (groups the profile's capabilities). Null = not stated.
   product      String?
+  /// PMOS AI's one-sentence digest of the last change of this cell (what they now offer), and the page's preview image.
+  summary      String?
+  imageUrl     String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
@@ -760,6 +763,11 @@ model ProfileFact {
   /// The date the source states for the fact (a funding round, a launch, an
   /// acquisition) — the timeline is built from dated facts. Null = undated.
   factDate     DateTime?
+  /// PMOS AI's one-line headline and two-sentence digest of the news (what happened, what it is) — the feed and the email show these.
+  headline     String?
+  summary      String?
+  /// The source page's preview image (og:image), fetched when the fact was found.
+  imageUrl     String?
   scanId       String?
   /// When the fact appeared or changed — null for facts a source's FIRST scan
   /// found (the baseline is not news; a later scan's new fact is).

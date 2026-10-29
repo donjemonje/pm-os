@@ -35,6 +35,11 @@ export interface FeedItem {
   sourceUrl: string | null;
   /** The source type the finding came from (website, press, …), when known. */
   sourceType: string | null;
+  /** PMOS AI's news digest: one line + two sentences (facts), one sentence (status moves); null when the row has none. */
+  headline: string | null;
+  summary: string | null;
+  /** The source page's preview image, when it had one. */
+  imageUrl: string | null;
   /** For suggestions: suggested | active (accepted) | dismissed. */
   suggestionState: string | null;
   /** The suggestion's domain was itself proposed by the scan. */
@@ -108,7 +113,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       title: s.capability.name, domain: s.capability.domain.name, capabilityId: s.capabilityId,
       from: before.value as StatusValue, to: s.value as StatusValue, own,
       factKind: null, factDate: null, product: s.product, quote: s.quote, sourceUrl: s.sourceUrl,
-      sourceType: s.scanId ? sourceTypeOf.get(s.scanId) ?? null : null, suggestionState: null, newDomain: false,
+      sourceType: s.scanId ? sourceTypeOf.get(s.scanId) ?? null : null, headline: null, summary: s.summary, imageUrl: s.imageUrl, suggestionState: null, newDomain: false,
       read: readKeys.has(key),
     });
   }
@@ -120,7 +125,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       competitorId: f.competitorId, competitorName: nameOf.get(f.competitorId) ?? "",
       title: f.overrideValue ?? f.value, domain: null, capabilityId: null, from: null, to: null, own: null,
       factKind: f.kind, factDate: f.factDate?.toISOString() ?? null, product: null, quote: null, sourceUrl: f.sourceUrl,
-      sourceType: f.scanId ? sourceTypeOf.get(f.scanId) ?? null : null, suggestionState: null, newDomain: false,
+      sourceType: f.scanId ? sourceTypeOf.get(f.scanId) ?? null : null, headline: f.headline, summary: f.summary, imageUrl: f.imageUrl, suggestionState: null, newDomain: false,
       read: readKeys.has(key),
     });
   }
@@ -132,7 +137,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       competitorId: k.suggestedById!, competitorName: nameOf.get(k.suggestedById!) ?? "",
       title: k.name, domain: k.domain.name, capabilityId: k.id, from: null, to: null, own: null,
       factKind: null, factDate: null, product: null, quote: m ? m[1] : k.suggestedQuote, sourceUrl: m ? m[2] : null,
-      sourceType: null, suggestionState: k.state, newDomain: k.domain.state === "suggested",
+      sourceType: null, headline: null, summary: null, imageUrl: null, suggestionState: k.state, newDomain: k.domain.state === "suggested",
       read: readKeys.has(key),
     });
   }

@@ -798,11 +798,14 @@ function feedSourceLabel(item: FeedItem): string {
 function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; open: boolean; onOpen: () => void }) {
   const when = new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const tag = feedTag(item);
-  const title = item.kind === "fact" || item.kind === "suggestion"
-    ? `${item.competitorName}: ${item.title}`
-    : `${item.competitorName} ${C.values[item.from ?? "unknown"].toLowerCase()} → ${C.values[item.to ?? "unknown"].toLowerCase()} on ${item.title}`;
+  const title = item.headline
+    ? item.headline
+    : item.kind === "fact" || item.kind === "suggestion"
+      ? `${item.competitorName}: ${item.title}`
+      : `${item.competitorName} ${C.values[item.from ?? "unknown"].toLowerCase()} → ${C.values[item.to ?? "unknown"].toLowerCase()} on ${item.title}`;
   return (
     <button type="button" onClick={onOpen} aria-expanded={open} className={cn("flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left hover:bg-[rgba(255,255,255,.7)]", !open && "[.group-last>&]:border-b-0")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
+      {item.imageUrl && <img src={item.imageUrl} alt="" className="h-10 w-14 shrink-0 rounded-md object-cover" loading="lazy" />}
       {competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}
       <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <span className={cn("truncate text-[13.5px]", item.read ? "font-medium text-[#1f2f47]" : "font-semibold text-foreground")}>{title}</span>
@@ -832,6 +835,12 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
   return (
     <div className="border-b border-[rgba(200,212,232,.5)] px-4 pb-4 pl-[62px] pt-1" data-testid="cmp-feed-detail">
       <div className="rounded-inner border border-border bg-white px-4 py-1">
+          {(item.summary || item.imageUrl) && (
+            <div className="my-2 flex gap-4">
+              {item.imageUrl && <a href={item.sourceUrl ?? item.imageUrl} target="_blank" rel="noreferrer" className="shrink-0"><img src={item.imageUrl} alt="" className="h-[120px] w-[200px] rounded-inner border border-border object-cover" /></a>}
+              {item.summary && <p className="m-0 self-center text-[14px] leading-relaxed text-foreground">{item.summary}</p>}
+            </div>
+          )}
           <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</div>
           {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
             <>

@@ -56,8 +56,8 @@ describe("isDomainEntrance", () => {
 });
 
 describe("renderRunEmail", () => {
-  const gap = { capability: "Autonomous hunting", domain: "Operations", from: "missing" as const, to: "has" as const, own: "missing" as const, kind: "gap" as const, quote: "Hunt across your stack", sourceUrl: "https://acme.example/products/hunt", product: "Acme Hunt" };
-  const fact = { kind: "product", value: "Acme MCP generally available", sourceUrl: "https://acme.example/blog/mcp", factDate: "2026-09-28T00:00:00.000Z" };
+  const gap = { capability: "Autonomous hunting", domain: "Operations", from: "missing" as const, to: "has" as const, own: "missing" as const, kind: "gap" as const, quote: "Hunt across your stack", sourceUrl: "https://acme.example/products/hunt", product: "Acme Hunt", summary: null, imageUrl: null };
+  const fact = { kind: "product", value: "Acme MCP generally available", sourceUrl: "https://acme.example/blog/mcp", factDate: "2026-09-28T00:00:00.000Z", headline: null, summary: null, imageUrl: null };
 
   it("sends nothing when no competitor changed", () => {
     expect(renderRunEmail(run([], ["Acme Intel"]))).toBeNull();
@@ -98,9 +98,9 @@ describe("renderRunEmail", () => {
 
 describe("summarize", () => {
   it("counts by kind across competitors", () => {
-    const gap = { capability: "A", domain: "D", from: "missing" as const, to: "has" as const, own: "missing" as const, kind: "gap" as const, quote: null, sourceUrl: null, product: null };
+    const gap = { capability: "A", domain: "D", from: "missing" as const, to: "has" as const, own: "missing" as const, kind: "gap" as const, quote: null, sourceUrl: null, product: null, summary: null, imageUrl: null };
     const s = summarize(run([
-      base({ changes: [gap, { ...gap, kind: "raised" }], domainEntrances: [{ domain: "D", capabilities: ["A"] }], facts: [{ kind: "customer", value: "X", sourceUrl: null, factDate: null }] }),
+      base({ changes: [gap, { ...gap, kind: "raised" }], domainEntrances: [{ domain: "D", capabilities: ["A"] }], facts: [{ kind: "customer", value: "X", sourceUrl: null, factDate: null, headline: null, summary: null, imageUrl: null }] }),
       base({ competitorId: "c2", name: "B", changes: [{ ...gap, kind: "lowered" }], suggestions: [{ name: "S", domain: "D" }] }),
     ]), 2);
     expect(s).toEqual({ competitors: 2, gaps: 1, raised: 1, lowered: 1, domains: 1, facts: 1, suggestions: 1, recipients: 2 });

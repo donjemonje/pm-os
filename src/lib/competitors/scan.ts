@@ -22,8 +22,8 @@ import {
 import { COMPETITORS_COPY as C } from "./copy";
 import { getCompetitorsConfig } from "./store";
 import { Frontier, readRobots, readSitemap } from "./crawl";
-import { browserAvailable, closeBrowser, fetchPage, outcomeCategoryOf, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
-import { contentHash, titleOf } from "./html";
+import { browserAvailable, closeBrowser, fetchPage, fetchPlain, outcomeCategoryOf, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
+import { contentHash, ogImageOf, titleOf } from "./html";
 import { checkPii } from "./pii";
 
 /**
@@ -595,8 +595,28 @@ async function aiStep(
       await log.flush();
     }
   };
+  // The page's preview image for a finding — one fetch per page, only for what changed.
+  const images = new Map<string, Promise<string | null>>();
+  const previewImage = (url: string | null | undefined): Promise<string | null> => {
+    if (!url) return Promise.resolve(null);
+    let p = images.get(url);
+    if (!p) {
+      p = fetchPlain(url).then((r) => (r.html ? ogImageOf(r.html, r.finalUrl || url) || null : null)).catch(() => null);
+      images.set(url, p);
+    }
+    return p;
+  };
   try {
     const catalog = await loadCatalog(workspaceId);
+    // Facts and statuses are independent reads of the same pages: start the facts call now so both run at once.
+    const extPromise = opts.facts
+      ? (async () => {
+          const knownFacts = await db.profileFact.findMany({ where: { competitorId, dismissedAt: null }, select: { kind: true, value: true }, orderBy: { createdAt: "asc" } });
+          return extractFacts(competitorName, knownFacts, pages, (d, t) => void progress("Facts")(d, t));
+        })()
+      : null;
+    // A rejection must not surface before it is awaited below.
+    extPromise?.catch(() => undefined);
 
     if (catalog.byName.size === 0) {
       log.add("warn", "The capability catalog is empty — add domains and capabilities in Settings → Competitors; this scan only collects profile facts");
@@ -652,7 +672,9 @@ async function aiStep(
           // the site did not change, two sources described it differently. Only a rescan of the same
           // source marks a change (the "New Changes" dot, the notification).
           await db.statusHistory.create({ data: { statusId: prev.id, value: prev.value, quote: prev.quote, sourceUrl: prev.sourceUrl, scanId: prev.scanId } });
-          await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product: product ?? prev.product, scanId, changedAt: firstScan ? null : now } });
+          const summary = clean(ans?.summary, "status summary", sourceUrl ?? undefined);
+          const imageUrl = !firstScan ? await previewImage(sourceUrl) : null;
+          await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product: product ?? prev.product, scanId, changedAt: firstScan ? null : now, summary, imageUrl } });
           if (firstScan) res.statusesSet++;
           else res.statusesChanged++;
           log.add("info", `${name}: ${prev.value} → ${value}${firstScan ? " (first evidence from this source — not a change)" : ""}`, sourceUrl ?? undefined);
@@ -703,9 +725,8 @@ async function aiStep(
     }
 
     // Facts (only from changed pages — a catalog-only re-run reads nothing new about the company)
-    if (opts.facts) {
-      const knownFacts = await db.profileFact.findMany({ where: { competitorId, dismissedAt: null }, select: { kind: true, value: true }, orderBy: { createdAt: "asc" } });
-      const ext = await extractFacts(competitorName, knownFacts, pages, (d, t) => void progress("Facts")(d, t));
+    if (extPromise) {
+      const ext = await extPromise;
       res.aiCalls += ext.calls;
       const now = new Date();
       for (const f of ext.value) {
@@ -720,7 +741,10 @@ async function aiStep(
           continue;
         }
         // A source's first scan sets the baseline; only later finds are "changes".
-        await db.profileFact.create({ data: { workspaceId, competitorId, kind: f.kind, value: f.value, sourceUrl: f.url || null, sourceLabel, factDate, scanId, lastSeenScanId: scanId, changedAt: firstScan ? null : now } });
+        const headline = clean(f.headline, "fact headline", f.url);
+        const summary = clean(f.summary, "fact summary", f.url);
+        const imageUrl = !firstScan && headline ? await previewImage(f.url) : null;
+        await db.profileFact.create({ data: { workspaceId, competitorId, kind: f.kind, value: f.value, sourceUrl: f.url || null, sourceLabel, factDate, scanId, lastSeenScanId: scanId, changedAt: firstScan ? null : now, headline, summary, imageUrl } });
         res.factsChanged++;
       }
       log.add("info", `Facts: ${ext.value.length} found, ${res.factsChanged} new`);

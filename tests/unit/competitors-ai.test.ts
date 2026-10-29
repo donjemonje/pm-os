@@ -34,7 +34,7 @@ describe("chunkPages", () => {
 });
 
 describe("mergeStatus", () => {
-  const s = (value: ClassifiedStatus["value"], confidence: number, product = ""): ClassifiedStatus => ({ capability: "A", value, confidence, quote: value === "unknown" ? "" : `q-${value}`, url: value === "unknown" ? "" : `https://e.com/${value}`, product });
+  const s = (value: ClassifiedStatus["value"], confidence: number, product = ""): ClassifiedStatus => ({ capability: "A", value, confidence, quote: value === "unknown" ? "" : `q-${value}`, url: value === "unknown" ? "" : `https://e.com/${value}`, product, summary: "" });
   it("presence beats absence whatever the confidence", () => {
     expect(mergeStatus(s("missing", 0.95), s("has", 0.6)).value).toBe("has");
     expect(mergeStatus(s("partial", 0.9), s("missing", 0.99)).value).toBe("partial");

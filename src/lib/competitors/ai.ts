@@ -147,7 +147,7 @@ async function callTool<T>(system: string, shared: string, tail: string, tool: R
         // rejected). HIGH (Daniel, 2026-10-26): the status call weighs 26
         // capabilities against 50 pages and runs once a week per competitor,
         // so accuracy beats speed. Thinking is billed against maxOutputTokens.
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
+        thinkingConfig: { thinkingLevel: thinkingLevel() },
         maxOutputTokens: maxTokens + 16000,
         responseMimeType: "application/json",
         responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
@@ -208,7 +208,7 @@ For EVERY capability in the catalog, decide from the page text whether the compe
 - "partial" — the site describes a limited, beta, add-on, services-only or narrower version of it;
 - "missing" — the site describes the surrounding area but this capability is absent, or the site contradicts it; when the pages cover the competitor's whole product catalog or pricing matrix and the capability appears nowhere in it, answer missing, not unknown;
 - "unknown" — the pages give no evidence either way.
-Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty. When the pages name the competitor's product, module or plan that provides the capability, give it in "product" (their exact name; empty when not stated).
+Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty. When the pages name the competitor's product, module or plan that provides the capability, give it in "product" (their exact name; empty when not stated). When your answer differs from the previous status (or there is none and the value is has/partial), write "summary": one plain sentence for a product manager saying what the competitor now offers for this capability and since when if the page says (≤ 200 characters, no marketing words); otherwise leave summary empty.
 
 Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. The gate for a suggestion: it would appear as its own line in an RFP, a vendor sells it as a module or named product, and removing it would be noticed. Anything smaller is a FEATURE of an existing catalog capability — do not suggest it (it belongs in that capability's evidence instead). Names are vendor-neutral: never a product, brand or marketing name, always the generic capability (e.g. "MCP server for external AI agents", not "Agent471"). When no catalog domain fits, name a NEW domain instead (short, title case, the kind of name the catalog uses) and give its one-sentence definition in newDomainDescription; otherwise leave newDomainDescription empty. At most 8, one per distinct capability — never several wordings of the same thing; skip marketing claims and product names; skip anything that is a synonym of a catalog capability or of an already-suggested one (listed when there are any).
 
@@ -231,8 +231,9 @@ export const CLASSIFY_TOOL = {
             quote: { type: "string" },
             url: { type: "string" },
             product: { type: "string", description: "The competitor's product/module that provides it, or empty." },
+            summary: { type: "string", description: "One sentence on what they now offer for it, only when the status changed; else empty." },
           },
-          required: ["capability", "value", "confidence", "quote", "url", "product"],
+          required: ["capability", "value", "confidence", "quote", "url", "product", "summary"],
         },
       },
       suggestions: {
@@ -258,7 +259,7 @@ export interface CatalogForAi {
   domains: { name: string; description: string; capabilities: { name: string; description: string }[] }[];
 }
 export interface PreviousStatus { capability: string; value: StatusValue; confidence: number | null }
-export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string; product: string }
+export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string; product: string; /** One-sentence digest of the change, when the status moved; "" otherwise. */ summary: string }
 /** `newDomain` is set when the domain is not in the catalog: the AI proposes it with a one-sentence definition. */
 export interface Suggestion { name: string; domain: string; quote: string; url: string; newDomain: { description: string } | null }
 export interface Classification { statuses: ClassifiedStatus[]; suggestions: Suggestion[] }
@@ -330,7 +331,7 @@ export async function classifyCapabilities(
       if (!name || seen.has(name) || !(STATUS_VALUES as readonly string[]).includes(value)) continue;
       seen.add(name);
       const conf = typeof o.confidence === "number" && Number.isFinite(o.confidence) ? Math.max(0, Math.min(1, o.confidence)) : 0.5;
-      const cur: ClassifiedStatus = { capability: name, value, confidence: conf, quote: value === "unknown" ? "" : str(o.quote, 240), url: value === "unknown" ? "" : str(o.url, 500), product: value === "unknown" ? "" : str(o.product, 80) };
+      const cur: ClassifiedStatus = { capability: name, value, confidence: conf, quote: value === "unknown" ? "" : str(o.quote, 240), url: value === "unknown" ? "" : str(o.url, 500), product: value === "unknown" ? "" : str(o.product, 80), summary: value === "unknown" ? "" : str(o.summary, 300) };
       const before = merged.get(name);
       merged.set(name, before ? mergeStatus(before, cur) : cur);
     }
@@ -367,7 +368,7 @@ Return facts of these kinds only:
 - hq: the headquarters city and country, as stated.
 - founded: the founding year, as stated.
 - milestone: a dated company event the pages state — founding, acquisition, launch, rename, new office (one short line each).
-Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate: one fact per thing. When the profile already holds a fact (KNOWN FACTS) and a page restates it, return it with exactly the known wording so it is recognised — never a reworded copy; add its date when the page states one.`;
+Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). For a product, customer, funding, milestone, hiring or ownership fact also write the news for a product manager who will not open the page: "headline" — one line saying what happened (≤ 90 characters, e.g. "Recorded Future released an MCP server for external AI agents"), and "summary" — two plain sentences on what it is and why it matters, from the page only (≤ 300 characters, no marketing words). For the other kinds leave headline and summary empty. Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate: one fact per thing. When the profile already holds a fact (KNOWN FACTS) and a page restates it, return it with exactly the known wording so it is recognised — never a reworded copy; add its date when the page states one.`;
 
 export const FACTS_TOOL = {
   name: "extract_facts",
@@ -384,8 +385,10 @@ export const FACTS_TOOL = {
             value: { type: "string" },
             url: { type: "string" },
             date: { type: "string", description: "Date the page states for the fact: YYYY-MM-DD, YYYY-MM or YYYY; empty when none." },
+            headline: { type: "string", description: "One line saying what happened; empty for tagline/pricing/integration/certification/vertical/headcount/hq/founded." },
+            summary: { type: "string", description: "Two plain sentences: what it is and why it matters, from the page; empty when headline is empty." },
           },
-          required: ["kind", "value", "url", "date"],
+          required: ["kind", "value", "url", "date", "headline", "summary"],
         },
       },
     },
@@ -393,7 +396,16 @@ export const FACTS_TOOL = {
   },
 };
 
-export interface ExtractedFact { kind: FactKind; value: string; url: string; /** "YYYY", "YYYY-MM" or "YYYY-MM-DD"; null when the page states none. */ date: string | null }
+export interface ExtractedFact {
+  kind: FactKind;
+  value: string;
+  url: string;
+  /** "YYYY", "YYYY-MM" or "YYYY-MM-DD"; null when the page states none. */
+  date: string | null;
+  /** The news in one line and two sentences, for the feed and the email; null for facts that are not news. */
+  headline: string | null;
+  summary: string | null;
+}
 
 /** A stated date → a Date at the start of its period, or null. */
 export function factDateOf(v: string | null | undefined): Date | null {
@@ -434,9 +446,22 @@ export async function extractFacts(competitorName: string, known: KnownFact[], p
       if (seen.has(key)) continue;
       seen.add(key);
       const date = str(o.date, 10);
-      facts.push({ kind: kind as FactKind, value, url: str(o.url, 500), date: factDateOf(date) ? date : null });
+      facts.push({ kind: kind as FactKind, value, url: str(o.url, 500), date: factDateOf(date) ? date : null, headline: str(o.headline, 120) || null, summary: str(o.summary, 400) || null });
     }
     onChunk?.(i + 1, chunks.length);
   }
   return { value: facts, usage, calls };
+}
+
+/**
+ * Gemini thinking level: HIGH by default (accuracy over speed for a weekly
+ * scan); COMPETITORS_THINKING=medium|low|minimal trades accuracy for a faster
+ * answer (a live demo, a small hand-in).
+ */
+function thinkingLevel(): ThinkingLevel {
+  const v = process.env.COMPETITORS_THINKING?.trim().toLowerCase();
+  if (v === "low") return ThinkingLevel.LOW;
+  if (v === "medium") return ThinkingLevel.MEDIUM;
+  if (v === "minimal") return ThinkingLevel.MINIMAL;
+  return ThinkingLevel.HIGH;
 }

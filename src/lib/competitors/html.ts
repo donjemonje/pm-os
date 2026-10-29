@@ -132,3 +132,24 @@ export function looksEmptyWithoutJs(text: string, html: string): boolean {
   if (text.length >= 400) return false;
   return /<div\s+id=["'](root|app|__next|___gatsby)["']\s*>\s*<\/div>|window\.__NUXT__|__NEXT_DATA__/i.test(html) || text.length < 120;
 }
+
+/** The page's own preview image (og:image, then twitter:image), absolute; "" when the page states none. */
+export function ogImageOf(html: string, baseUrl: string): string {
+  const head = html.slice(0, 200_000);
+  const pick = (re: RegExp) => {
+    const m = head.match(re);
+    return m ? decodeEntities(m[1] || m[2] || "").trim() : "";
+  };
+  const raw =
+    pick(/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]*content=["']([^"']+)["']/i) ||
+    pick(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:image(?::secure_url)?["']/i) ||
+    pick(/<meta[^>]+name=["']twitter:image(?::src)?["'][^>]*content=["']([^"']+)["']/i) ||
+    pick(/<meta[^>]+content=["']([^"']+)["'][^>]*name=["']twitter:image(?::src)?["']/i);
+  if (!raw) return "";
+  try {
+    const u = new URL(raw, baseUrl);
+    return /^https?:$/.test(u.protocol) ? u.href : "";
+  } catch {
+    return "";
+  }
+}
