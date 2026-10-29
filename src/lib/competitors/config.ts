@@ -160,6 +160,7 @@ export const SOURCE_TYPES = [
   "archive",
   "apidocs",
   "changelog",
+  "blog",
   "code",
   "social",
   "reviews",

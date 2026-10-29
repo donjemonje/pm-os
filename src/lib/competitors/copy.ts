@@ -171,6 +171,7 @@ export const COMPETITORS_COPY = {
       archive: "Web archive",
       apidocs: "API docs",
       changelog: "Changelog",
+      blog: "Blog",
       code: "Code repositories",
       social: "Social",
       reviews: "Reviews & analysts",
@@ -220,7 +221,6 @@ export const COMPETITORS_COPY = {
     signals: (n: number) => `${n} signal${n === 1 ? "" : "s"}`,
     highImpact: (n: number) => `${n} high impact`,
     allRead: "All read",
-    forOrg: (org: string) => `For ${org}:`,
     tags: { gap: "Gap evidence", raised: "Capability", lowered: "Capability", suggestion: "Suggestion" } as Record<string, string>,
     meaning: {
       gap: (org: string, competitor: string, n: number, total: number) => `${org} is missing this; ${competitor} now has it — ${n} of ${total} competitors do.`,

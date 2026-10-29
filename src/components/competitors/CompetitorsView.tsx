@@ -848,9 +848,16 @@ function feedTag(item: FeedItem): { label: string; className: string } {
   return { label: C.feed.tags[item.kind], className: "bg-[#eef1f6] text-[#4a5b74]" };
 }
 
+/** "Press & news · zerofox.com": the kind of source the item's URL belongs to, and the site it is on. */
 function feedSourceLabel(item: FeedItem): string {
-  if (item.sourceType) return C.profile.sourceTypes[item.sourceType] ?? item.sourceType;
-  return item.kind === "suggestion" ? C.matrix.suggested : C.profile.sourceTypes.website ?? "Website";
+  const type = C.profile.sourceTypes[item.sourceType ?? "website"] ?? item.sourceType ?? "";
+  let host = "";
+  try {
+    if (item.sourceUrl) host = new URL(item.sourceUrl).hostname.replace(/^www\./, "");
+  } catch {
+    host = "";
+  }
+  return host ? `${type} · ${host}` : type;
 }
 
 function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; open: boolean; onOpen: () => void }) {
@@ -869,7 +876,7 @@ function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedI
         <span className={cn("truncate text-[13.5px]", item.read ? "font-medium text-[#1f2f47]" : "font-semibold text-foreground")}>{title}</span>
         <span className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-fg-muted">
           <span className="font-semibold">{feedSourceLabel(item)}</span><span>·</span><span>{when}</span><span>·</span>
-          <span className="truncate text-fg-3"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</span>
+          <span className="truncate text-fg-3">{meaning}</span>
         </span>
       </span>
       <span className={cn("inline-flex shrink-0 items-center rounded-md px-2 py-px text-[11px] font-semibold", tag.className)}>{tag.label}</span>
@@ -894,7 +901,7 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
     <div className="border-b border-[rgba(200,212,232,.5)] px-4 pb-4 pl-[62px] pt-1" data-testid="cmp-feed-detail">
       <div className="rounded-inner border border-border bg-white px-4 py-1">
           {item.summary && <p className="my-2 text-[14px] leading-relaxed text-foreground">{item.summary}</p>}
-          <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</div>
+          <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground">{meaning}</div>
           {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
             <>
               <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "unknown"]} → {C.values[item.to ?? "unknown"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>

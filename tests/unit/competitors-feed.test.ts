@@ -1,6 +1,6 @@
 /** Story 3 (competitors) — the news feed's pure parts: how a status move reads, and its impact. */
 import { describe, expect, it } from "vitest";
-import { compareFeed, impactOf, statusKind } from "@/lib/competitors/feed";
+import { compareFeed, impactOf, sourceTypeForUrl, statusKind } from "@/lib/competitors/feed";
 
 describe("statusKind", () => {
   it("gap when the org lacks it, raised when it has it too, lowered on a drop, nothing on a tie", () => {
@@ -31,5 +31,23 @@ describe("compareFeed", () => {
       { key: "lowScanLater", impact: "Low" as const, at: "2026-10-29T12:00:00Z", factDate: null },
     ];
     expect([...rows].sort(compareFeed).map((r) => r.key)).toEqual(["high", "medium", "lowScanLater", "lowNew", "lowOld"]);
+  });
+});
+
+describe("sourceTypeForUrl", () => {
+  const sources = [
+    { type: "website", url: "https://www.zerofox.com/" },
+    { type: "blog", url: "https://www.zerofox.com/blog/" },
+    { type: "press", url: "https://www.zerofox.com/news-and-press-releases/" },
+  ];
+  it("picks the source whose URL is the longest prefix, ignoring the website root", () => {
+    expect(sourceTypeForUrl("https://www.zerofox.com/blog/some-post", sources)).toBe("blog");
+    expect(sourceTypeForUrl("https://zerofox.com/news-and-press-releases/x", sources)).toBe("press");
+  });
+  it("falls back to a path hint, else null", () => {
+    expect(sourceTypeForUrl("https://www.zerofox.com/press-release/zerofox-launches-hntr", sources)).toBe("press");
+    expect(sourceTypeForUrl("https://docs.example.com/changelog/2026", [])).toBe("changelog");
+    expect(sourceTypeForUrl("https://www.zerofox.com/platform/", sources)).toBeNull();
+    expect(sourceTypeForUrl(null, sources)).toBeNull();
   });
 });

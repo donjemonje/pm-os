@@ -73,6 +73,30 @@ export function compareFeed(a: Pick<FeedItem, "at" | "factDate" | "impact">, b: 
   return IMPACT_RANK[a.impact] - IMPACT_RANK[b.impact] || newsDate(b).localeCompare(newsDate(a)) || b.at.localeCompare(a.at);
 }
 
+const bare = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "");
+
+/**
+ * Where a URL comes from, for the feed's "Source" line: the competitor's source
+ * whose URL is the longest prefix of it (a page under /blog/ is the blog source,
+ * whatever scan happened to find it), else a hint in the path, else null.
+ */
+export function sourceTypeForUrl(url: string | null | undefined, sources: readonly { type: string; url: string }[]): string | null {
+  if (!url) return null;
+  const u = bare(url);
+  let best: { type: string; len: number } | null = null;
+  for (const s of sources) {
+    const p = bare(s.url);
+    if (s.type === "website" || s.type === "archive" || p.length < 4) continue;
+    if (u.startsWith(p) && (!best || p.length > best.len)) best = { type: s.type, len: p.length };
+  }
+  if (best) return best.type;
+  const path = u.slice(u.indexOf("/"));
+  if (/press-release|\/press\b|\/news\b|newsroom/.test(path)) return "press";
+  if (/changelog|release-notes|product-updates|whats-new/.test(path)) return "changelog";
+  if (/\/blog\b/.test(path)) return "blog";
+  return null;
+}
+
 /** Every news item of the workspace since the baseline, newest first, with the user's read marks. */
 export async function collectFeed(workspaceId: string, baselineUntil: string | null, userId: string | null): Promise<FeedItem[]> {
   const since = baselineUntil ? new Date(baselineUntil) : null;
@@ -98,11 +122,14 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       take: FEED_LIMIT,
       include: { domain: { select: { name: true, state: true } } },
     }),
-    db.competitor.findMany({ where: { workspaceId }, select: { id: true, name: true } }),
+    db.competitor.findMany({ where: { workspaceId }, select: { id: true, name: true, sources: { select: { type: true, url: true } } } }),
     userId ? db.competitorFeedRead.findMany({ where: { workspaceId, userId }, select: { key: true } }) : [],
   ]);
   void after;
   const nameOf = new Map(competitors.map((c) => [c.id, c.name]));
+  const sourcesOf = new Map(competitors.map((c) => [c.id, c.sources]));
+  const typeFor = (competitorId: string, url: string | null | undefined, scanId: string | null) =>
+    sourceTypeForUrl(url, sourcesOf.get(competitorId) ?? []) ?? (scanId ? sourceTypeOf.get(scanId) ?? null : null);
   const readKeys = new Set(reads.map((r) => r.key));
   const scanIds = [...new Set([...statuses.map((s) => s.scanId), ...facts.map((f) => f.scanId)].filter((id): id is string => Boolean(id)))];
   const scans = scanIds.length ? await db.competitorScan.findMany({ where: { id: { in: scanIds } }, select: { id: true, source: { select: { type: true } } } }) : [];
@@ -125,7 +152,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       title: s.capability.name, domain: s.capability.domain.name, capabilityId: s.capabilityId,
       from: before.value as StatusValue, to: s.value as StatusValue, own,
       factKind: null, factDate: null, product: s.product, quote: s.quote, sourceUrl: s.sourceUrl,
-      sourceType: s.scanId ? sourceTypeOf.get(s.scanId) ?? null : null, headline: null, summary: s.summary, imageUrl: s.imageUrl, suggestionState: null, newDomain: false,
+      sourceType: typeFor(s.competitorId, s.sourceUrl, s.scanId), headline: null, summary: s.summary, imageUrl: s.imageUrl, suggestionState: null, newDomain: false,
       read: readKeys.has(key),
     });
   }
@@ -137,7 +164,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       competitorId: f.competitorId, competitorName: nameOf.get(f.competitorId) ?? "",
       title: f.overrideValue ?? f.value, domain: null, capabilityId: null, from: null, to: null, own: null,
       factKind: f.kind, factDate: f.factDate?.toISOString() ?? null, product: null, quote: null, sourceUrl: f.sourceUrl,
-      sourceType: f.scanId ? sourceTypeOf.get(f.scanId) ?? null : null, headline: f.headline, summary: f.summary, imageUrl: f.imageUrl, suggestionState: null, newDomain: false,
+      sourceType: typeFor(f.competitorId, f.sourceUrl, f.scanId), headline: f.headline, summary: f.summary, imageUrl: f.imageUrl, suggestionState: null, newDomain: false,
       read: readKeys.has(key),
     });
   }
@@ -149,7 +176,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       competitorId: k.suggestedById!, competitorName: nameOf.get(k.suggestedById!) ?? "",
       title: k.name, domain: k.domain.name, capabilityId: k.id, from: null, to: null, own: null,
       factKind: null, factDate: null, product: null, quote: m ? m[1] : k.suggestedQuote, sourceUrl: m ? m[2] : null,
-      sourceType: null, headline: null, summary: null, imageUrl: null, suggestionState: k.state, newDomain: k.domain.state === "suggested",
+      sourceType: typeFor(k.suggestedById!, m ? m[2] : null, null), headline: null, summary: null, imageUrl: null, suggestionState: k.state, newDomain: k.domain.state === "suggested",
       read: readKeys.has(key),
     });
   }
