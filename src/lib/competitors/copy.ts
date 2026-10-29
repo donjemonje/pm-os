@@ -413,7 +413,6 @@ export const COMPETITORS_COPY = {
       sites: (scanned: number, changed: number) => `${scanned} site${scanned === 1 ? "" : "s"} scanned · ${changed} changed`,
       pages: (read: number, changed: number) => `${read} pages · ${changed} changed`,
       glance: "At a glance",
-      unchanged: (names: string[]) => `${names.join(", ")} had no changes and ${names.length === 1 ? "is" : "are"} not listed.`,
       gapOpened: "Gap opened",
       raised: "Status raised",
       lowered: "Status lowered",

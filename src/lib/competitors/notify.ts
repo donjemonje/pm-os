@@ -267,11 +267,11 @@ function changeCard(x: StatusChangeItem, org: string): string {
   return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px solid ${t.border};background:${t.bg};border-radius:10px;padding:12px 16px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
       <td style="font-family:${TITLE};font-weight:600;font-size:15px;color:${INK};">${esc(x.capability)}</td>
-      <td align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;color:${t.fg};white-space:nowrap;padding-left:12px;">${esc(move)}</td>
+      <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;color:${t.fg};white-space:nowrap;padding-left:12px;">${esc(move)}</td>
     </tr></table>
     ${x.summary ? `<div style="font-family:${BODY};font-size:13.5px;line-height:1.5;color:${INK};margin-top:6px;">${esc(x.summary)}</div>` : ""}
     ${x.quote ? `<div style="font-family:${BODY};font-size:13px;line-height:1.5;color:#1f2f47;font-style:italic;margin-top:5px;">“${esc(x.quote)}”</div>` : ""}
-    <div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:5px;">${x.product ? `${esc(x.product)} · ` : ""}${x.sourceUrl ? link(x.sourceUrl, short(x.sourceUrl)) : esc(x.domain)}</div>
+    <div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:5px;word-break:break-word;">${x.product ? `${esc(x.product)} · ` : ""}${x.sourceUrl ? link(x.sourceUrl, short(x.sourceUrl)) : esc(x.domain)}</div>
   </td></tr></table>`;
 }
 
@@ -294,7 +294,7 @@ function competitorBlock(c: CompetitorChanges, i: number, n: RunNotification, si
     html += `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 14px;"><tr>
       <td style="width:30px;"><span id="c-${esc(c.competitorId)}" style="display:inline-block;width:30px;height:30px;line-height:30px;text-align:center;border-radius:8px;background:${bar};color:#fff;font-family:${TITLE};font-weight:700;font-size:12px;">${esc(initials(c.name))}</span></td>
       <td style="padding-left:10px;font-family:${TITLE};font-weight:700;font-size:19px;letter-spacing:-.01em;color:${INK};">${esc(c.name)}</td>
-      <td align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;white-space:nowrap;">${link(`${n.appUrl}/competitors`, C.notify.email.openProfile)}</td>
+      <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;white-space:nowrap;">${link(`${n.appUrl}/competitors`, C.notify.email.openProfile)}</td>
     </tr></table>`;
   }
   for (const g of groups) {
@@ -337,7 +337,7 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
     s.facts || s.suggestions ? chip([s.facts && e.chipFacts(s.facts), s.suggestions && e.chipSuggestions(s.suggestions)].filter(Boolean).join(" · "), INK3, "#eef1f8") : "",
   ].join("");
 
-  const glance = single ? "" : `<tr><td style="padding:18px 32px 0;">${eyebrow(e.glance, INK3)}
+  const glance = single ? "" : `<tr><td class="pad" style="padding:18px 32px 0;">${eyebrow(e.glance, INK3)}
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid ${BORDER};border-radius:10px;border-collapse:separate;overflow:hidden;">
     ${n.competitors.map((c, i) => {
       const cs = summarize({ ...n, competitors: [c] }, 0);
@@ -346,26 +346,26 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
           <td style="width:26px;"><span style="display:inline-block;width:26px;height:26px;line-height:26px;text-align:center;border-radius:7px;background:${BARS[i % BARS.length]};color:#fff;font-family:${TITLE};font-weight:700;font-size:11px;">${esc(initials(c.name))}</span></td>
           <td style="padding-left:10px;font-family:${TITLE};font-weight:600;font-size:14px;color:${INK};">${esc(c.name)} <span style="font-family:${BODY};font-weight:400;font-size:12px;color:${MUTED};">${esc(e.pages(c.pagesRead, c.pagesChanged))}</span></td>
-          <td align="right" style="white-space:nowrap;">${chips}</td>
+          <td class="r" align="right" style="white-space:nowrap;">${chips}</td>
         </tr></table></td></tr>`;
     }).join("")}
     </table>
-    ${n.unchanged.length ? `<div style="font-family:${BODY};font-size:12px;color:${MUTED};margin-top:8px;">${esc(e.unchanged(n.unchanged))}</div>` : ""}
   </td></tr>`;
 
   const allSuggestions = n.competitors.flatMap((c) => c.suggestions.map((sg) => ({ ...sg, competitor: c.name })));
   const suggestions = allSuggestions.length
-    ? `<tr><td style="padding:18px 32px 0;${single ? "" : `border-top:1px solid rgba(200,212,232,0.5);`}">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td>${eyebrow(`${e.suggestions} · ${allSuggestions.length}`, INK3)}</td><td align="right" style="font-family:${BODY};font-size:12px;color:${MUTED};padding-bottom:8px;">${esc(e.suggestionsHint)}</td></tr></table>
+    ? `<tr><td class="pad" style="padding:18px 32px 0;${single ? "" : `border-top:1px solid rgba(200,212,232,0.5);`}">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td>${eyebrow(`${e.suggestions} · ${allSuggestions.length}`, INK3)}</td><td class="r" align="right" style="font-family:${BODY};font-size:12px;color:${MUTED};padding-bottom:8px;">${esc(e.suggestionsHint)}</td></tr></table>
         ${allSuggestions.map((sg) => `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:0 0 8px;"><tr><td style="border:1px dashed rgba(59,124,246,0.55);border-radius:10px;padding:9px 14px;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
             <td style="font-family:${BODY};font-size:14px;color:${INK};"><span style="font-weight:500;">${esc(sg.name)}</span> <span style="color:${MUTED};">· ${esc(sg.domain)}${single ? "" : ` · ${esc(sg.competitor)}`}</span></td>
-            <td align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;white-space:nowrap;">${link(`${n.appUrl}/settings/competitors`, e.review)}</td>
+            <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;white-space:nowrap;">${link(`${n.appUrl}/settings/competitors`, e.review)}</td>
           </tr></table></td></tr></table>`).join("")}
       </td></tr>`
     : "";
 
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subject)}</title></head>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(subject)}</title>
+<style>@media only screen and (max-width:520px){.pad{padding-left:18px!important;padding-right:18px!important}h1{font-size:22px!important}td.r{display:block!important;width:100%!important;text-align:left!important;padding:6px 0 0!important;white-space:normal!important}.btn td{display:block!important;padding:0 0 10px!important}.btn a{display:block!important;text-align:center!important}}</style></head>
 <body style="margin:0;padding:0;background:#eef1f8;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${esc(preheader)}</div>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#eef1f8;"><tr><td align="center" style="padding:24px 16px 40px;">
@@ -373,25 +373,25 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
   <tr><td style="background:#0b1430;padding:24px 32px 22px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
       <td style="font-family:${TITLE};font-weight:700;font-size:17px;letter-spacing:-.01em;"><span style="color:#f3f1fb;">PM</span><span style="color:#7aa7ff;">-OS</span></td>
-      <td align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#aaa3c4;">${esc(e.eyebrow)}</td>
+      <td class="r" align="right" style="font-family:${TITLE};font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#aaa3c4;">${esc(e.eyebrow)}</td>
     </tr></table>
     <h1 style="margin:12px 0 12px;font-family:${TITLE};font-weight:700;font-size:26px;line-height:1.2;letter-spacing:-.02em;color:#ffffff;">${esc(heading)}</h1>
     <div>${headChips.map((t) => chip(t, "#f3f1fb", "rgba(255,255,255,0.1)")).join("")}</div>
   </td></tr>
-  <tr><td style="padding:18px 32px 0;">${summaryChips}</td></tr>
+  <tr><td class="pad" style="padding:18px 32px 0;">${summaryChips}</td></tr>
   ${glance}
   ${n.competitors.map((c, i) => competitorBlock(c, i, n, single)).join("")}
   ${suggestions}
-  <tr><td style="padding:18px 32px 0;">
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>
+  <tr><td class="pad" style="padding:18px 32px 0;">
+    <table role="presentation" class="btn" cellspacing="0" cellpadding="0" border="0"><tr>
       <td style="border-radius:8px;background:${ACCENT};"><a href="${esc(n.appUrl)}/competitors" style="display:inline-block;padding:10px 16px;font-family:${TITLE};font-weight:600;font-size:14px;color:#ffffff;text-decoration:none;">${esc(e.openMatrix)}</a></td>
       <td style="padding-left:10px;"><a href="${esc(n.appUrl)}/settings/competitors" style="display:inline-block;padding:9px 16px;border:1px solid ${BORDER};border-radius:8px;font-family:${TITLE};font-weight:600;font-size:14px;color:${ACCENT};text-decoration:none;">${esc(e.openLog)}</a></td>
     </tr></table>
   </td></tr>
-  <tr><td style="padding:24px 32px 18px;">
+  <tr><td class="pad" style="padding:24px 32px 18px;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-top:1px solid rgba(200,212,232,0.5);"><tr>
       <td style="padding-top:14px;font-family:${BODY};font-size:12px;color:${MUTED};">${link(`${n.appUrl}/settings/competitors`, e.settings, MUTED)}</td>
-      <td align="right" style="padding-top:14px;font-family:${BODY};font-size:12px;color:${MUTED};">${esc(single ? e.footer : e.footerMany)}</td>
+      <td class="r" align="right" style="padding-top:14px;font-family:${BODY};font-size:12px;color:${MUTED};">${esc(single ? e.footer : e.footerMany)}</td>
     </tr></table>
   </td></tr>
 </table>
@@ -415,7 +415,6 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
     }
     lines.push("");
   }
-  if (n.unchanged.length) lines.push(e.unchanged(n.unchanged), "");
   if (allSuggestions.length) {
     lines.push(`${e.suggestions} (${allSuggestions.length})`);
     for (const sg of allSuggestions) lines.push(`- ${sg.name} · ${sg.domain}${single ? "" : ` · ${sg.competitor}`}`);
