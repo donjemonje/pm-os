@@ -45,7 +45,7 @@ export const COMPETITORS_COPY = {
     partial: "Partial",
     partialSub: "Limited or in beta",
     only: (org: string) => `Only ${org}`,
-    closest: "Offering proximity",
+    closest: "Offering Proximity",
     closestSub: (org: string) => `How close each competitor's offering is to ${org}'s capability list: share of capabilities they have, a partial counts half. 0–100, higher = closer.`,
     closestNone: "No competitors yet",
     closestScore: (has: number, partial: number, total: number) => `${has} has, ${partial} partial of ${total}`,
