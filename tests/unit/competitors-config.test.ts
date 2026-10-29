@@ -2,7 +2,7 @@
  * Story 2 (competitors) — workspace config merge and time helpers. Pure modules.
  */
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_PAGES, frequencyMs, mergeCompetitorsConfig } from "@/lib/competitors/config";
+import { DEFAULT_MAX_PAGES, frequencyMs, mergeCompetitorsConfig, splitSuggestedQuote } from "@/lib/competitors/config";
 import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
@@ -56,5 +56,15 @@ describe("domain name mentions (rename cascade)", () => {
       "Not here: exposed credentials belong to Exposure & response; see also Threat Intelligence and CTI feeds.",
     );
     expect(renameMentions("", "a", "b")).toBe("");
+  });
+});
+
+describe("splitSuggestedQuote", () => {
+  it("splits the quote from a trailing source URL", () => {
+    expect(splitSuggestedQuote("Detects weapons in images — https://example.com/p")).toEqual({ quote: "Detects weapons in images", url: "https://example.com/p" });
+  });
+  it("keeps a quote without a URL and tolerates null", () => {
+    expect(splitSuggestedQuote("Plain quote")).toEqual({ quote: "Plain quote", url: null });
+    expect(splitSuggestedQuote(null)).toEqual({ quote: "", url: null });
   });
 });

@@ -9,7 +9,7 @@ import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -893,8 +893,7 @@ function DecideButtons({ accept, dismiss, onDecide }: { accept: string; dismiss:
 function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide }: {
   capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
 }) {
-  const quote = capability.suggestedQuote?.replace(/\s+—\s+https?:\/\/\S+$/, "") ?? "";
-  const url = capability.suggestedQuote?.match(/\s—\s(https?:\/\/\S+)$/)?.[1] ?? null;
+  const { quote, url } = splitSuggestedQuote(capability.suggestedQuote);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;

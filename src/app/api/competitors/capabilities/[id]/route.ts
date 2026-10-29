@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { isOwnStatus } from "@/lib/competitors/config";
+import { isOwnStatus, splitSuggestedQuote } from "@/lib/competitors/config";
 import { cleanProductLines } from "../route";
 
 type Params = { params: Promise<{ id: string }> };
@@ -93,6 +93,18 @@ export async function PATCH(req: Request, { params }: Params) {
   }
 
   await db.capability.update({ where: { id }, data });
+  if (decision === "accepted" && existing.suggestedById) {
+    // The competitor whose scan proposed the row has it: write that cell from the
+    // suggestion's evidence, unless a later scan already classified it.
+    const { quote, url } = splitSuggestedQuote(existing.suggestedQuote);
+    const current = await db.capabilityStatus.findUnique({ where: { competitorId_capabilityId: { competitorId: existing.suggestedById, capabilityId: id } }, select: { id: true, value: true } });
+    const evidence = { value: "has", quote: quote || null, sourceUrl: url, confidence: null, scanId: null, changedAt: null };
+    if (!current) {
+      await db.capabilityStatus.create({ data: { workspaceId: ctx.workspaceId, competitorId: existing.suggestedById, capabilityId: id, ...evidence } });
+    } else if (current.value === "unknown") {
+      await db.capabilityStatus.update({ where: { id: current.id }, data: evidence });
+    }
+  }
   if (decision) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_capability_suggestion", {
       capabilityId: id,
