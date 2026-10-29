@@ -61,6 +61,18 @@ export function impactOf(kind: FeedKind): FeedImpact {
 
 export const FEED_LIMIT = 500;
 
+const IMPACT_RANK: Record<FeedImpact, number> = { High: 0, Medium: 1, Low: 2 };
+
+/** The date a row is about: a fact's own date when the page states one, else when the scan found it. */
+export function newsDate(item: Pick<FeedItem, "at" | "factDate">): string {
+  return item.factDate ?? item.at;
+}
+
+/** Feed order: high impact first, then newest news first (by the item's own date, not the scan time). */
+export function compareFeed(a: Pick<FeedItem, "at" | "factDate" | "impact">, b: Pick<FeedItem, "at" | "factDate" | "impact">): number {
+  return IMPACT_RANK[a.impact] - IMPACT_RANK[b.impact] || newsDate(b).localeCompare(newsDate(a)) || b.at.localeCompare(a.at);
+}
+
 /** Every news item of the workspace since the baseline, newest first, with the user's read marks. */
 export async function collectFeed(workspaceId: string, baselineUntil: string | null, userId: string | null): Promise<FeedItem[]> {
   const since = baselineUntil ? new Date(baselineUntil) : null;
@@ -141,6 +153,6 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       read: readKeys.has(key),
     });
   }
-  items.sort((a, b) => b.at.localeCompare(a.at));
+  items.sort(compareFeed);
   return items.slice(0, FEED_LIMIT);
 }
