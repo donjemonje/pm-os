@@ -1082,8 +1082,8 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
                 {cell.quote ? <blockquote className="border-l-2 border-border pl-2.5 italic leading-relaxed">“{cell.quote}”</blockquote> : <div className="text-fg-faint">{C.cell.noEvidence}</div>}
                 {cell.sourceUrl && (
-                  <a href={cell.sourceUrl} target="_blank" rel="noreferrer" className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-primary hover:underline">
-                    <ExternalLink size={11} /> {cell.sourceUrl.replace(/^https?:\/\//, "").slice(0, 60)}
+                  <a href={cell.sourceUrl} target="_blank" rel="noreferrer" title={cell.sourceUrl} className="mt-1.5 flex max-w-full items-center gap-1 text-[12px] text-primary hover:underline">
+                    <ExternalLink size={11} className="shrink-0" /> <span className="min-w-0 truncate">{cell.sourceUrl.replace(/^https?:\/\//, "")}</span>
                   </a>
                 )}
               </div>
