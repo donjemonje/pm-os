@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
-import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
+import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue, type CompetitorKind } from "./config";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -30,6 +30,8 @@ export interface CompetitorRow {
   host: string;
   logoUrl: string | null;
   position: number;
+  /** "direct" | "indirect" — set by the org's PMs in Settings. */
+  kind: CompetitorKind;
   /** The website source (the one the scanner crawls). */
   source: {
     id: string;
@@ -249,6 +251,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         host: c.host,
         logoUrl: c.logoUrl,
         position: c.position,
+        kind: c.kind === "indirect" ? "indirect" : "direct",
         source: website
           ? { id: website.id, lastScanAt: website.lastScanAt?.toISOString() ?? null, lastStatus: website.lastStatus, lastError: website.lastError }
           : null,

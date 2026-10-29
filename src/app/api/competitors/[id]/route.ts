@@ -4,6 +4,7 @@ import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { isCompetitorKind } from "@/lib/competitors/config";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -17,7 +18,7 @@ export async function PATCH(req: Request, { params }: Params) {
   const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
   if (!existing) return bad("Not found", 404);
 
-  const data: { name?: string; websiteUrl?: string; host?: string; logoUrl?: string | null } = {};
+  const data: { name?: string; websiteUrl?: string; host?: string; logoUrl?: string | null; kind?: string } = {};
   if (body.name !== undefined) {
     const name = cleanName(body.name);
     if (!name) return bad(C.settings.nameRequired);
@@ -42,7 +43,14 @@ export async function PATCH(req: Request, { params }: Params) {
   if (body.logoUrl !== undefined) {
     data.logoUrl = typeof body.logoUrl === "string" && body.logoUrl.trim() ? body.logoUrl.trim().slice(0, 500) : null;
   }
+  if (body.kind !== undefined) {
+    if (!isCompetitorKind(body.kind)) return bad("Pick direct or indirect.");
+    data.kind = body.kind;
+  }
   await db.competitor.update({ where: { id }, data });
+  if (data.kind && data.kind !== existing.kind) {
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_kind", { competitorId: id, kind: data.kind });
+  }
   if (data.websiteUrl) {
     await db.competitorSource.updateMany({ where: { competitorId: id, type: "website" }, data: { url: data.websiteUrl } });
   }

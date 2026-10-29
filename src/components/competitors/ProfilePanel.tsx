@@ -248,6 +248,7 @@ function Header({ c, org, facts, capabilities, cellOf, onPatchFact, onAddFact }:
           <span className="flex flex-wrap items-baseline gap-2.5">
             <h2 className="font-title m-0 text-[20px] font-bold tracking-[-0.01em]">{c.name}</h2>
             <a href={c.websiteUrl} target="_blank" rel="noreferrer" className="text-[12px] text-primary hover:underline">{c.host}</a>
+            <span className={cn("rounded-full border px-1.5 py-px font-mono text-[9.5px] font-semibold leading-[14px]", c.kind === "indirect" ? "border-border text-fg-muted" : "border-[rgba(36,87,245,.35)] text-[#2a5fd0]")} title={C.matrix.kindHint[c.kind]}>{C.matrix.kinds[c.kind]}</span>
           </span>
           {about ? <span className="text-[12.5px] text-fg-3">{about}</span> : tagline ? <span className="text-[12.5px] italic text-fg-3">“{tagline.value}”</span> : <span className="text-[12.5px] text-fg-faint">—</span>}
           {about && tagline && <span className="text-[12.5px] italic text-fg-3">“{tagline.value}”</span>}

@@ -12,6 +12,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { FeedItem } from "@/lib/competitors/feed";
+import { rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -64,6 +65,37 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
     <div className="glass rounded-card px-10 py-16 text-center">
       <div className="font-title mb-1 text-[16px] font-bold">{title}</div>
       <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{body}</div>
+    </div>
+  );
+}
+
+/** The strip's last card: competitors ranked by how much of the org's capability list they cover. */
+function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; onOpen: (competitorId: string) => void }) {
+  return (
+    <div className="flex flex-[1_1_300px] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3" data-testid="cmp-closest-card">
+      <span className="flex items-baseline justify-between gap-2">
+        <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.strip.closest(org)}</span>
+        <span className="truncate text-[10.5px] text-fg-faint" title={C.strip.closestSub(org)}>{C.strip.closestSub(org)}</span>
+      </span>
+      {!measured || ranked.length === 0 ? (
+        <span className="text-[12px] text-fg-faint">{C.strip.closestNone}</span>
+      ) : (
+        <ol className="m-0 grid list-none grid-cols-1 gap-x-5 gap-y-1 p-0 sm:grid-cols-2">
+          {ranked.map(({ competitor: c, closeness }, i) => (
+            <li key={c.id}>
+              <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] px-1 py-0.5 text-left hover:bg-white" title={C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}>
+                <span className="w-3 shrink-0 font-mono text-[10px] text-fg-faint">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{c.name}</span>
+                <span className={cn("shrink-0 rounded-full border px-1.5 py-px font-mono text-[9px] font-semibold leading-[13px]", c.kind === "indirect" ? "border-border text-fg-muted" : "border-[rgba(36,87,245,.35)] text-[#2a5fd0]")}>{C.matrix.kinds[c.kind]}</span>
+                <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+                  <span className="block h-full bg-[#5b6c85]" style={{ width: `${closeness.score ?? 0}%` }} />
+                </span>
+                <span className="w-8 shrink-0 text-right font-mono text-[11px] font-semibold text-fg-3">{closeness.score == null ? "—" : `${closeness.score}%`}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }
@@ -263,6 +295,12 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCaps, state.cells, competitors.length]);
 
+  const closest = useMemo(
+    () => rankByCloseness(competitors, activeCaps.map((k) => k.id), (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.value),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [competitors, activeCaps, state.cells],
+  );
+
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
   const matchesStatus = (k: CapabilityRow) => {
@@ -458,6 +496,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
               <StatCard label={C.strip.gaps} tone="#f0b43c" toneFg="#8a5a00" value={summary.measured ? summary.gaps : null} sub={summary.measured ? C.strip.gapsSub(summary.gaps) : C.strip.gapsNone} />
               <StatCard label={C.strip.partial} tone="#3b7cf6" toneFg="#2a5fd0" value={summary.measured ? summary.partial : null} sub={C.strip.partialSub} />
               <StatCard label={C.strip.only(own)} tone="#17b26a" toneFg="#0f7a47" value={summary.measured ? summary.only : null} sub={summary.measured ? C.strip.onlySub(summary.only) : C.strip.onlyNone} />
+              <ClosestCard org={own} ranked={closest} measured={summary.measured} onOpen={(id) => openProfile(id, "cell")} />
             </div>
 
             {/* Filters */}
@@ -502,6 +541,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                           <button onClick={() => openProfile(c.id, "cell")} className="flex w-full flex-col items-center gap-1.5 pt-[13px] hover:opacity-80" title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
+                            <span className={cn("rounded-full border px-1.5 py-px font-mono text-[9px] font-semibold leading-[13px]", c.kind === "indirect" ? "border-border text-fg-muted" : "border-[rgba(36,87,245,.35)] text-[#2a5fd0]")} title={C.matrix.kindHint[c.kind]} data-testid="cmp-competitor-kind-tag">{C.matrix.kinds[c.kind]}</span>
                             {(c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable") && (
                               <span className="rounded-full bg-[rgba(239,90,138,.15)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#c23767]">{C.settings.badges[c.lastScan.badge]}{c.lastGoodScanAt ? ` · ${shortDate(c.lastGoodScanAt)}` : ""}</span>
                             )}
