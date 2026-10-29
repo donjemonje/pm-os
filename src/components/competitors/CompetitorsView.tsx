@@ -970,7 +970,10 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide 
         </td>
       ))}
       <td className="px-4">
-        {canEdit ? <DecideButtons accept={C.matrix.accept} dismiss={C.matrix.dismiss} onDecide={onDecide} /> : <span className="text-[11px] text-fg-faint">{C.matrix.suggested}</span>}
+        {/* Same 98 px footprint as the coverage bar + "n of N" above, so the ✓ / × pair sits centred under it. */}
+        <span className="flex w-[98px] items-center justify-center">
+          {canEdit ? <DecideButtons accept={C.matrix.accept} dismiss={C.matrix.dismiss} onDecide={onDecide} /> : <span className="text-[11px] text-fg-faint">{C.matrix.suggested}</span>}
+        </span>
       </td>
     </tr>
   );
