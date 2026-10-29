@@ -889,29 +889,30 @@ function DecideButtons({ accept, dismiss, onDecide }: { accept: string; dismiss:
   );
 }
 
-/** A capability a scan proposed: dashed row at the end of its domain, the evidence in the proposing competitor's cell, ✓ / × to decide. */
+/** A capability a scan proposed: dashed row at the end of its domain, same height as a catalog row; the proposing competitor's ✓ opens the evidence; ✓ / × to decide. */
 function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide }: {
   capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
 }) {
   const quote = capability.suggestedQuote?.replace(/\s+—\s+https?:\/\/\S+$/, "") ?? "";
   const url = capability.suggestedQuote?.match(/\s—\s(https?:\/\/\S+)$/)?.[1] ?? null;
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    track("cmp_suggestion_evidence_opened", { capabilityId: capability.id, competitorId: capability.suggestedById, hasUrl: Boolean(url) });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   return (
-    <tr className="group border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
-      <td className="px-4 py-2 pl-[30px] font-medium text-[#1f2f47]" title={C.matrix.suggestedRowHint(seenAt)}>
+    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
+      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]" title={C.matrix.suggestedRowHint}>
         <span className="inline-flex flex-wrap items-center gap-2">
           {capability.name}
-          <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested} · {C.settings.suggestedBy(seenAt)}</span>
+          <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested}</span>
         </span>
-        {(quote || url) && (
-          <div className="mt-0.5 flex items-baseline gap-2 text-[11.5px] font-normal text-fg-muted">
-            {quote && <span className="line-clamp-1 italic" title={quote}>“{quote}”</span>}
-            {url && (
-              <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="inline-flex shrink-0 items-center gap-0.5 not-italic text-primary hover:underline" data-testid="cmp-suggestion-link">
-                {C.matrix.learnMore}<ExternalLink size={11} />
-              </a>
-            )}
-          </div>
-        )}
       </td>
       <td className="bg-[rgba(36,87,245,.06)] text-center" title={C.matrix.ownCellTitle(org)}>
         <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px font-mono text-[10px] font-semibold text-[#8a5a00]">{C.matrix.ownSuggested}</span>
@@ -919,7 +920,50 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide 
       {competitors.map((c) => (
         <td key={c.id} className="text-center">
           {c.id === capability.suggestedById ? (
-            <span className="inline-flex items-center justify-center" title={quote || undefined}><OkMark size={16} /></span>
+            <span className="relative inline-flex items-center justify-center">
+              <button
+                type="button"
+                onClick={() => setOpen(!open)}
+                title={C.matrix.suggestedCellHint(seenAt)}
+                aria-label={`${capability.name}: ${C.values.has} — ${C.matrix.suggestedCellHint(seenAt)}`}
+                aria-expanded={open}
+                className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", open && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
+                data-testid="cmp-suggestion-evidence"
+              >
+                <OkMark size={16} />
+              </button>
+              {open && (
+                <>
+                  <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
+                  <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
+                    <div className="mb-2 flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13px] font-bold">{capability.name}</div>
+                        <div className="text-[11.5px] text-fg-muted">{C.matrix.suggested} · {C.settings.suggestedBy(seenAt)}</div>
+                      </div>
+                      <button type="button" onClick={() => setOpen(false)} aria-label={C.feed.detail.close} className="rounded-md p-1 text-fg-muted hover:bg-background"><X size={14} /></button>
+                    </div>
+                    {capability.description && <p className="m-0 mb-2 text-[12.5px] leading-snug text-foreground">{capability.description}</p>}
+                    {quote ? (
+                      <blockquote className="m-0 rounded-[8px] border-l-[3px] border-primary bg-bg-2 px-2.5 py-2 text-[12.5px] italic leading-snug text-[#1f2f47]">“{quote}”</blockquote>
+                    ) : (
+                      <div className="text-[12px] text-fg-faint">{C.cell.noEvidence}</div>
+                    )}
+                    {url && (
+                      <a href={url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-[12.5px] text-primary hover:underline" data-testid="cmp-suggestion-link">
+                        {C.matrix.learnMore}<ExternalLink size={12} />
+                      </a>
+                    )}
+                    {canEdit && (
+                      <div className="mt-3 flex items-center gap-2 border-t border-border pt-2.5">
+                        <Button size="sm" onClick={() => { setOpen(false); onDecide("active"); }}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
+                        <Button size="sm" variant="secondary" onClick={() => { setOpen(false); onDecide("dismissed"); }}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </span>
           ) : (
             <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" aria-label={C.values.unknown} />
           )}
