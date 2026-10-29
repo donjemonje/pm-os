@@ -23,7 +23,7 @@ export const COMPETITORS_COPY = {
   run: {
     button: "Scan",
     buttonTitle: "Scan every competitor now and email what changed",
-    running: (done: number, total: number, name: string | null) => `Scanning ${Math.min(done + 1, total)} of ${total}${name ? ` · ${name}` : ""}…`,
+    running: (_done: number, _total: number, _name: string | null) => "Scanning…",
     finished: (competitors: number) =>
       competitors === 0 ? "Scan finished — nothing new." : `Scan finished — ${competitors} competitor${competitors === 1 ? "" : "s"} changed.`,
     notified: (n: number) => `Notification sent to ${n} ${n === 1 ? "person" : "people"}.`,
