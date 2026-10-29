@@ -7,7 +7,8 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { frequencyMs, MAX_DOMAIN_DESCRIPTION, MAX_MAX_PAGES, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
+import { frequencyMs, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_MAX_PAGES, MAX_OWN_PRODUCT, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
+import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
@@ -416,9 +417,11 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
+  const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editSummary, setEditSummary] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -433,11 +436,11 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
   async function add() {
     if (!name.trim()) return;
-    if (await onAdd({ name, description })) { setName(""); setDescription(""); setAdding(false); }
+    if (await onAdd({ name, summary, description })) { setName(""); setSummary(""); setDescription(""); setAdding(false); }
   }
   async function saveEdit(id: string) {
     const d = domains.find((x) => x.id === id);
-    const body = { name: editName, description: editDescription };
+    const body = { name: editName, summary: editSummary, description: editDescription };
     const renamed = d && editName.trim() !== d.name;
     if (await (renamed ? onRename(d, body) : onSave(id, body))) setEditingId(null);
   }
@@ -456,6 +459,10 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); }
     else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
   };
+  const summaryEditor = (value: string, onChange: (v: string) => void) => (
+    <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={3} maxLength={MAX_DOMAIN_SUMMARY}
+      placeholder={C.settings.domainSummaryPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} disabled={busy} />
+  );
   const descriptionEditor = (value: string, onChange: (v: string) => void) => (
     <div>
       <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={10} maxLength={MAX_DOMAIN_DESCRIPTION}
@@ -480,6 +487,10 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
           <label className="block">
             <span className={FIELD_LABEL}>{C.settings.domainName}</span>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
+          </label>
+          <label className="block">
+            <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
+            {summaryEditor(summary, setSummary)}
           </label>
           <label className="block">
             <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
@@ -519,6 +530,10 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                     <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder={C.settings.domainPlaceholder} className={INPUT} maxLength={80} disabled={busy} autoFocus />
                   </label>
                   <label className="block">
+                    <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
+                    {summaryEditor(editSummary, setEditSummary)}
+                  </label>
+                  <label className="block">
                     <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
                     {descriptionEditor(editDescription, setEditDescription)}
                   </label>
@@ -545,12 +560,14 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                             <GripVertical size={14} />
                           </span>
                           <span className="mx-0.5 h-4 w-px bg-border" />
-                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
+                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditSummary(d.summary); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
                           <button onClick={() => void onRemove(d)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={13} /></button>
                         </>
                       )}
                     </span>
                   </div>
+                  <p className={cn("m-0 mb-2 text-[13px] leading-snug", d.summary ? "text-foreground" : "italic text-fg-faint")}>{d.summary || C.settings.domainSummaryEmpty}</p>
+                  <div className={FIELD_LABEL}>{C.settings.domainDescription}</div>
                   {d.description ? (
                     <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
                   ) : (
@@ -582,9 +599,11 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   const [name, setName] = useState("");
   const [domainId, setDomainId] = useState(domains[0]?.id ?? "");
   const [description, setDescription] = useState("");
+  const [ownProduct, setOwnProduct] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editOwnProduct, setEditOwnProduct] = useState("");
 
   useEffect(() => {
     if (!domainId && domains[0]) setDomainId(domains[0].id);
@@ -593,11 +612,38 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   async function add(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !domainId) return;
-    if (await onAdd({ name, domainId, description })) { setName(""); setDescription(""); setAdding(false); }
+    if (await onAdd({ name, domainId, description, ownProduct })) { setName(""); setDescription(""); setOwnProduct(""); setAdding(false); }
   }
   async function saveEdit(id: string) {
-    if (await onSave(id, { name: editName, description: editDescription })) setEditingId(null);
+    if (await onSave(id, { name: editName, description: editDescription, ownProduct: editOwnProduct })) setEditingId(null);
   }
+  /** Name, domain, own product and description, each under its label; the add form and the row editor share it. */
+  const fields = (v: { name: string; domainId?: string; description: string; ownProduct: string }, set: { name: (s: string) => void; domainId?: (s: string) => void; description: (s: string) => void; ownProduct: (s: string) => void }) => (
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        <label className="block w-64">
+          <span className={FIELD_LABEL}>{C.settings.capabilityName}</span>
+          <input value={v.name} onChange={(e) => set.name(e.target.value)} placeholder={C.settings.capabilityPlaceholder} className={INPUT} disabled={busy} autoFocus />
+        </label>
+        {set.domainId && (
+          <label className="block w-52">
+            <span className={FIELD_LABEL}>{C.settings.capabilityDomain}</span>
+            <select value={v.domainId} onChange={(e) => set.domainId?.(e.target.value)} className={SELECT} disabled={busy}>
+              {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="block w-64">
+          <span className={FIELD_LABEL}>{C.settings.ownProduct}</span>
+          <input value={v.ownProduct} onChange={(e) => set.ownProduct(e.target.value)} placeholder={C.settings.ownProductPlaceholder} className={INPUT} maxLength={MAX_OWN_PRODUCT} disabled={busy} />
+        </label>
+      </div>
+      <label className="block">
+        <span className={FIELD_LABEL}>{C.settings.capabilityDescription}</span>
+        <textarea value={v.description} onChange={(e) => set.description(e.target.value)} placeholder={C.settings.capabilityDescriptionPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} rows={3} maxLength={MAX_CAPABILITY_DESCRIPTION} disabled={busy} />
+      </label>
+    </div>
+  );
   function toggleLine(k: CapabilityRow, line: string) {
     const next = k.productLines.includes(line) ? k.productLines.filter((l) => l !== line) : [...k.productLines, line];
     void onSave(k.id, { productLines: next });
@@ -614,12 +660,8 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
         {productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
       </div>
       {adding && (
-        <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } }} className="flex items-start gap-2 border-b border-border px-5 py-4">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.capabilityPlaceholder} className={cn(INPUT, "w-64 shrink-0")} disabled={busy} autoFocus />
-          <select value={domainId} onChange={(e) => setDomainId(e.target.value)} className={cn(SELECT, "w-52 shrink-0")} disabled={busy} aria-label="Domain">
-            {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={C.settings.capabilityDescriptionPlaceholder} className={INPUT} disabled={busy} />
+        <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void add(e); } }} className="flex items-end gap-2 border-b border-border px-5 py-4">
+          {fields({ name, domainId, description, ownProduct }, { name: setName, domainId: setDomainId, description: setDescription, ownProduct: setOwnProduct })}
           <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || !domainId}><Check size={13} /> {C.settings.save}</Button>
         </form>
@@ -639,10 +681,9 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
               return (
                 <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3">
                   {editing ? (
-                    <div className="flex min-w-0 flex-1 items-center gap-2"
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void saveEdit(k.id); } if (e.key === "Escape") setEditingId(null); }}>
-                      <input value={editName} onChange={(e) => setEditName(e.target.value)} className={cn(INPUT, "w-64")} disabled={busy} autoFocus />
-                      <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className={INPUT} disabled={busy} placeholder={C.settings.capabilityDescriptionPlaceholder} />
+                    <div className="flex min-w-0 flex-1 items-end gap-2"
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !(e.target instanceof HTMLTextAreaElement))) { e.preventDefault(); void saveEdit(k.id); } if (e.key === "Escape") setEditingId(null); }}>
+                      {fields({ name: editName, description: editDescription, ownProduct: editOwnProduct }, { name: setEditName, description: setEditDescription, ownProduct: setEditOwnProduct })}
                       <button onClick={() => setEditingId(null)} className={ICON_BTN} aria-label={C.settings.cancel}><X size={14} /></button>
                       <button onClick={() => saveEdit(k.id)} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !editName.trim()}><Check size={14} /></button>
                     </div>
@@ -651,6 +692,7 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[14px] font-medium">{k.name}</span>
                         {k.origin === "ai" && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
+                        {k.ownProduct && <span className="max-w-[220px] truncate rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[10px] font-semibold text-[#2a5fd0]" title={`${C.settings.ownProduct}: ${k.ownProduct}`}>{ownProductLabel(k.ownProduct)}</span>}
                         <span className="ml-1 inline-flex items-center gap-1" title={C.settings.ourStatus}>
                           {OWN_STATUS_VALUES.map((v) => (
                             <button key={v} type="button" onClick={() => k.ourStatus !== v && void onSave(k.id, { ourStatus: v })} disabled={busy} aria-pressed={k.ourStatus === v}
@@ -693,7 +735,7 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                       <select value={k.domainId} onChange={(e) => void onSave(k.id, { domainId: e.target.value })} className="rounded-lg border border-border bg-white px-2 py-1 text-[12px]" disabled={busy} aria-label="Move to domain">
                         {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
                       </select>
-                      <button onClick={() => { setEditingId(k.id); setEditName(k.name); setEditDescription(k.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
+                      <button onClick={() => { setEditingId(k.id); setEditName(k.name); setEditDescription(k.description); setEditOwnProduct(k.ownProduct); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
                       <button onClick={() => void onRemove(k)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>
                     </div>
                   )}

@@ -96,6 +96,12 @@ export function frequencyMs(f: ScanFrequency): number {
 
 /** A domain's PMOS AI definition text (definition, belongs here, not here, typical phrases). */
 export const MAX_DOMAIN_DESCRIPTION = 6000;
+/** A domain's plain summary for people (tooltip, deep dive). */
+export const MAX_DOMAIN_SUMMARY = 600;
+/** A capability's plain description (row tooltip; also in the scan prompt). */
+export const MAX_CAPABILITY_DESCRIPTION = 500;
+/** The org's own product chip on a capability. */
+export const MAX_OWN_PRODUCT = 160;
 
 /** The org's own cell on a capability — set by PMs, never scanned. */
 export const OWN_STATUS_VALUES = ["has", "partial", "missing"] as const;

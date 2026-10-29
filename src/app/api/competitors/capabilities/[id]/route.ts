@@ -3,13 +3,13 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { isOwnStatus, splitSuggestedQuote } from "@/lib/competitors/config";
+import { isOwnStatus, MAX_OWN_PRODUCT, splitSuggestedQuote } from "@/lib/competitors/config";
 import { cleanProductLines } from "../route";
 
 type Params = { params: Promise<{ id: string }> };
 
 /**
- * PATCH: rename, describe, move to another domain, set product lines, set the
+ * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
  * org's own status (`ourStatus`: has / partial / missing — any member), or
  * decide a suggestion (`state`: "active" = accept, "dismissed" = dismiss).
  * DELETE: remove the row and every status on it.
@@ -44,6 +44,11 @@ export async function PATCH(req: Request, { params }: Params) {
   if (description !== undefined) {
     data.description = description;
     field = field ?? "description";
+  }
+  const ownProduct = cleanText(body.ownProduct, MAX_OWN_PRODUCT);
+  if (ownProduct !== undefined) {
+    data.ownProduct = ownProduct;
+    field = field ?? "ownProduct";
   }
   if (body.domainId !== undefined) {
     const domain = typeof body.domainId === "string"

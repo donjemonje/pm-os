@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { canManageOrgSettings } from "../admin-auth";
 import { orgFeatureDisabledResponse } from "../api-auth";
 import { getCurrentUser, type AuthUser } from "../auth";
+import { MAX_CAPABILITY_DESCRIPTION } from "./config";
 import { getCompetitorsState, type CompetitorsState } from "./store";
 
 /**
@@ -48,7 +49,7 @@ export function bad(message: string, status = 400): NextResponse {
 }
 
 export const MAX_NAME = 80;
-export const MAX_DESCRIPTION = 500;
+export const MAX_DESCRIPTION = MAX_CAPABILITY_DESCRIPTION;
 export const MAX_NOTE = 500;
 
 export function cleanName(v: unknown): string | null {

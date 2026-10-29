@@ -67,7 +67,10 @@ export interface MediaRow { id: string; label: string; kind: string | null; medi
 export interface DomainRow {
   id: string;
   name: string;
+  /** The PMOS AI definition text. */
   description: string;
+  /** Plain text for people; "" when not written yet. */
+  summary: string;
   color: string | null;
   position: number;
   /** "manual" | "ai" */
@@ -82,6 +85,8 @@ export interface CapabilityRow {
   domainId: string;
   name: string;
   description: string;
+  /** The org's own product or module that carries it; "" when none. */
+  ownProduct: string;
   productLines: string[];
   /** The org's own cell: has | partial | missing. */
   ourStatus: StatusValue;
@@ -276,12 +281,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
     }),
-    domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, color: d.color, position: d.position, origin: d.origin, state: d.state, suggestedById: d.suggestedById })),
+    domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, summary: d.summary, color: d.color, position: d.position, origin: d.origin, state: d.state, suggestedById: d.suggestedById })),
     capabilities: capabilities.map((k) => ({
       id: k.id,
       domainId: k.domainId,
       name: k.name,
       description: k.description,
+      ownProduct: k.ownProduct,
       productLines: asStringArray(k.productLines),
       ourStatus: (k.ourStatus === "partial" || k.ourStatus === "missing" ? k.ourStatus : "has") as StatusValue,
       position: k.position,

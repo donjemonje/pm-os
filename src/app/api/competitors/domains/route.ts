@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
-import { MAX_DOMAIN_DESCRIPTION } from "@/lib/competitors/config";
+import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
 import { nextChipColor } from "@/lib/ideas/colors";
 import { nextPosition } from "@/lib/competitors/store";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
-/** POST {name, description?}: add a domain; it gets the least-used palette color. */
+/** POST {name, description?, summary?}: add a domain; it gets the least-used palette color. */
 export async function POST(req: Request) {
   const ctx = await competitorsGuard({ admin: true });
   if (ctx instanceof NextResponse) return ctx;
@@ -25,6 +25,7 @@ export async function POST(req: Request) {
       workspaceId: ctx.workspaceId,
       name,
       description: cleanText(body.description, MAX_DOMAIN_DESCRIPTION) ?? "",
+      summary: cleanText(body.summary, MAX_DOMAIN_SUMMARY) ?? "",
       color: nextChipColor(used),
       position: await nextPosition("competitorDomain", ctx.workspaceId),
     },

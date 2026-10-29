@@ -10,6 +10,7 @@ import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { FeedItem } from "@/lib/competitors/feed";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -540,7 +541,14 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     </span>
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
-                                    <OwnCell capability={k} org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                    <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
+                                      <OwnCell capability={k} org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      {k.ownProduct && (
+                                        <span className="inline-block max-w-[52px] truncate rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[9.5px] font-semibold leading-[15px] text-[#2a5fd0]" title={C.matrix.ownProductTip(own, k.ownProduct)} data-testid="cmp-own-product">
+                                          {ownProductLabel(k.ownProduct)}
+                                        </span>
+                                      )}
+                                    </span>
                                   </td>
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
@@ -743,7 +751,7 @@ function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, chi
       <tr data-testid={isSuggested ? "cmp-suggested-domain" : undefined}>
         <td colSpan={colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
-            <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
+            <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : domain.summary || undefined}>
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
               <span className="text-[14px] font-bold">{domain.name}</span>
               {isSuggested ? (

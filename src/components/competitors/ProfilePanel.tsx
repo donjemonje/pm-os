@@ -578,7 +578,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
         const isCollapsed = collapsed[d.id];
         return (
           <div key={d.id}>
-            <button onClick={() => setCollapsed((p) => ({ ...p, [d.id]: !p[d.id] }))} className="flex w-full items-center gap-3 border-b border-border px-4 py-2 text-left" style={{ background: `linear-gradient(90deg, ${color}24, rgba(255,255,255,0) 60%)` }}>
+            <button onClick={() => setCollapsed((p) => ({ ...p, [d.id]: !p[d.id] }))} className="flex w-full items-center gap-3 border-b border-border px-4 py-2 text-left" style={{ background: `linear-gradient(90deg, ${color}24, rgba(255,255,255,0) 60%)` }} title={d.summary || undefined}>
               <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: color, boxShadow: `0 0 10px ${color}99` }} />
               <span className="text-[13px] font-bold">{d.name}</span>
               <span className="text-[11px] text-fg-muted">domain · {prods.length} product{prods.length === 1 ? "" : "s"} · {rows.length} capabilit{rows.length === 1 ? "y" : "ies"}{prods.length ? ` · ${prods.join(", ")}` : ""}</span>
@@ -592,6 +592,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
             </button>
             {!isCollapsed && (
               <>
+                {d.summary && <p className="m-0 border-b border-border px-4 py-1.5 text-[12px] leading-snug text-fg-3">{d.summary}</p>}
                 {prods.map((p) => {
                   const inProduct = rows.filter((k) => productOf(k) === p);
                   return (

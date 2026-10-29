@@ -640,7 +640,10 @@ model CompetitorDomain {
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   name        String
+  /// The PMOS AI definition (definition, belongs here, not here, typical phrases); feeds the scan prompt.
   description String    @default("")
+  /// Two or three plain sentences for people: the matrix tooltip and the profile deep dive.
+  summary     String    @default("")
   /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
   color       String?
   position    Int       @default(0)
@@ -671,7 +674,10 @@ model Capability {
   domainId       String
   domain         CompetitorDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
   name           String
+  /// Plain text for people: the pain and what the capability does (row tooltip; also in the scan prompt).
   description    String           @default("")
+  /// The org's own product or module that carries this capability — a chip in the org's column.
+  ownProduct     String           @default("")
   /// Product-line names of the org that serve this capability (story 2 decision:
   /// product lines are the org's only; competitor products live in ProfileFact).
   productLines   Json             @default("[]")

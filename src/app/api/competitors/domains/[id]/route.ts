@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
-import { MAX_DOMAIN_DESCRIPTION } from "@/lib/competitors/config";
+import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
 import { isChipColorId } from "@/lib/ideas/colors";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { getCompetitorsState } from "@/lib/competitors/store";
@@ -10,7 +10,7 @@ import { mentionsName, renameMentions } from "@/lib/competitors/mentions";
 type Params = { params: Promise<{ id: string }> };
 
 /**
- * PATCH: rename, describe (the PMOS AI definition text) or recolor a domain.
+ * PATCH: rename, describe (the PMOS AI definition text), summarize (the plain text for people) or recolor a domain.
  * A rename cascades: every other domain's and every capability's description
  * that mentions the old name is rewritten with the new one (the texts
  * cross-reference domains by name); the answer carries `renamedReferences`.
@@ -24,7 +24,7 @@ export async function PATCH(req: Request, { params }: Params) {
   if (body instanceof NextResponse) return body;
   const existing = await db.competitorDomain.findFirst({ where: { id, workspaceId: ctx.workspaceId }, select: { id: true, name: true, state: true, suggestedById: true } });
   if (!existing) return bad("Not found", 404);
-  const data: { name?: string; description?: string; color?: string; state?: string; position?: number } = {};
+  const data: { name?: string; description?: string; summary?: string; color?: string; state?: string; position?: number } = {};
   let field: string | null = null;
   // Decide a suggested domain: accept (its suggested capabilities stay for their own decision) or dismiss
   // (its suggested capabilities go with it; the name is never proposed again).
@@ -56,6 +56,11 @@ export async function PATCH(req: Request, { params }: Params) {
   if (description !== undefined) {
     data.description = description;
     field = field ?? "description";
+  }
+  const summary = cleanText(body.summary, MAX_DOMAIN_SUMMARY);
+  if (summary !== undefined) {
+    data.summary = summary;
+    field = field ?? "summary";
   }
   if (body.color !== undefined) {
     if (!isChipColorId(body.color)) return bad("Unknown color.");
