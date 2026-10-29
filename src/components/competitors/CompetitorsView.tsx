@@ -305,6 +305,17 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     }
     return groups.filter((g) => g.items.length > 0);
   })();
+  const [feedOpen, setFeedOpen] = useState<FeedItem | null>(null);
+  /** The "For <org>" line — derived from the data, no AI: what the item means against the org's own status. */
+  const feedMeaning = (i: FeedItem): string => {
+    if (i.kind === "gap" && i.capabilityId) {
+      const n = competitors.filter((c) => cellOf(c.id, i.capabilityId!)?.value === "has").length;
+      return C.feed.meaning.gap(own, i.competitorName, n, competitors.length);
+    }
+    if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "unknown"].toLowerCase());
+    if (i.kind === "fact") return C.feed.meaning.fact(i.competitorName, C.notify.email.factKinds[i.factKind ?? ""] ?? i.factKind ?? "");
+    return C.feed.meaning.suggestion((C.feed.suggestionStates[i.suggestionState ?? ""] ?? "").toLowerCase());
+  };
   async function markRead(keys: string[]) {
     if (keys.length === 0) return;
     const res = await fetch("/api/competitors/feed/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) });
@@ -598,22 +609,41 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
             ) : visibleFeed.length === 0 ? (
               <div className="glass rounded-card px-10 py-10 text-center text-[13px] text-fg-3">{C.feed.noMatch}</div>
             ) : (
-              <div className="flex flex-col gap-5" data-testid="cmp-feed">
-                {feedGroups.map((g) => (
-                  <div key={g.key}>
-                    <div className="font-title mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-fg-muted">
-                      {C.feed.groups[g.key]}<span className="font-mono text-[10.5px] font-medium normal-case tracking-normal text-fg-faint">{g.items.length}</span>
-                    </div>
-                    <div className="flex flex-col gap-2">
+              <div className="flex flex-col gap-3.5" data-testid="cmp-feed">
+                {feedGroups.map((g, gi) => {
+                  const high = g.items.filter((i) => i.impact === "High").length;
+                  const allRead = g.items.every((i) => i.read);
+                  const first = new Date(g.items[0].at);
+                  const label = g.key === "today" || g.key === "yesterday" ? `${C.feed.groups[g.key]} · ${first.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}` : C.feed.groups[g.key];
+                  const accent = gi === 0 && g.key === "today" ? "#2457f5" : "#5b6c85";
+                  return (
+                    <section key={g.key} className="glass rounded-card">
+                      <div className="flex items-center gap-3 border-b border-[rgba(200,212,232,.5)] px-4 py-2.5" style={{ background: `linear-gradient(90deg, ${accent === "#2457f5" ? "rgba(36,87,245,.14)" : "rgba(91,108,133,.14)"}, rgba(255,255,255,0) 60%)` }}>
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: accent, boxShadow: `0 0 10px ${accent}99` }} />
+                        <span className="text-[14px] font-bold">{label}</span>
+                        <span className="text-[11px] text-fg-muted">{C.feed.signals(g.items.length)}</span>
+                        <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
+                          {allRead ? (
+                            <span className="inline-flex items-center gap-1 font-semibold text-[#0f7a47]"><Check size={12} strokeWidth={3} />{C.feed.allRead}</span>
+                          ) : high > 0 ? (
+                            <span className="font-semibold text-[#c23767]">{C.feed.highImpact(high)}</span>
+                          ) : null}
+                        </span>
+                      </div>
                       {g.items.map((item) => (
-                        <FeedCard key={item.key} item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null}
-                          onRead={() => void markRead([item.key])}
-                          onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, capabilityId: item.capabilityId! }); } : null} />
+                        <FeedRow key={item.key} item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null}
+                          meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(item); if (!item.read) void markRead([item.key]); }} />
                       ))}
-                    </div>
-                  </div>
-                ))}
+                    </section>
+                  );
+                })}
               </div>
+            )}
+            {feedOpen && (
+              <FeedDetailDrawer item={state.feed.find((i) => i.key === feedOpen.key) ?? feedOpen} org={own} competitor={competitors.find((c) => c.id === feedOpen.competitorId) ?? null} meaning={feedMeaning(feedOpen)}
+                canEdit={canEdit} onClose={() => setFeedOpen(null)}
+                onOpenCell={feedOpen.capabilityId && feedOpen.kind !== "suggestion" ? () => { setFeedOpen(null); setTab("parity"); setOpenCell({ competitorId: feedOpen.competitorId, capabilityId: feedOpen.capabilityId! }); } : null}
+                onDecide={feedOpen.kind === "suggestion" && feedOpen.suggestionState === "suggested" && feedOpen.capabilityId ? (decision) => { void decideCapability(feedOpen.capabilityId!, decision); setFeedOpen(null); } : null} />
             )}
           </section>
         )}
@@ -736,46 +766,123 @@ function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, chi
   );
 }
 
-// ————— News feed card —————
+// ————— News feed rows (design C2: one line per signal, day groups) + the detail drawer —————
 
-const IMPACT_TONE: Record<string, { fg: string; bg: string }> = {
-  High: { fg: "#c23767", bg: "rgba(239,90,138,.15)" },
-  Medium: { fg: "#2a5fd0", bg: "rgba(59,124,246,.15)" },
-  Low: { fg: "#4a5b74", bg: "#eef1f6" },
+const IMPACT_PILL: Record<string, string> = {
+  High: "border-[rgba(239,90,138,.4)] bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  Medium: "border-[rgba(240,180,60,.6)] bg-[#fff7e0] text-[#8a5a00]",
+  Low: "border-[rgba(23,178,106,.4)] bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
+};
+const FACT_TAG_TONE: Record<string, string> = {
+  product: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]", tagline: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]", pricingTier: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
+  customer: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]", hiring: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]", vertical: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]", funding: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]",
 };
 
-function FeedCard({ item, org, competitor, onRead, onOpenCell }: {
-  item: FeedItem; org: string; competitor: CompetitorRow | null; onRead: () => void; onOpenCell: (() => void) | null;
-}) {
-  const tone = IMPACT_TONE[item.impact];
-  const when = new Date(item.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  const detail = item.kind === "fact"
-    ? `${C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind}${item.factDate ? ` · ${shortDate(item.factDate)}` : ""}`
-    : item.kind === "suggestion"
-      ? `${item.domain ?? ""}${item.newDomain ? ` · ${C.notify.email.newDomain}` : ""} · ${C.feed.suggestionStates[item.suggestionState ?? ""] ?? ""}`
-      : `${C.values[item.from ?? "unknown"]} → ${C.values[item.to ?? "unknown"]} · ${C.feed.ownStatus(org, C.values[item.own ?? "unknown"].toLowerCase())}${item.product ? ` · ${item.product}` : ""}`;
+/** What the row's tag says: gap evidence, capability, the fact kind, or suggestion. */
+function feedTag(item: FeedItem): { label: string; className: string } {
+  if (item.kind === "fact") return { label: C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind ?? "", className: FACT_TAG_TONE[item.factKind ?? ""] ?? "bg-[#eef1f6] text-[#4a5b74]" };
+  if (item.kind === "gap") return { label: C.feed.tags.gap, className: "border border-dashed border-[#f0b43c] bg-[#fff7e0] text-[#8a5a00]" };
+  if (item.kind === "suggestion") return { label: C.feed.tags.suggestion, className: "border border-dashed border-[rgba(36,87,245,.55)] bg-white text-[#2a5fd0]" };
+  return { label: C.feed.tags[item.kind], className: "bg-[#eef1f6] text-[#4a5b74]" };
+}
+
+function feedSourceLabel(item: FeedItem): string {
+  if (item.sourceType) return C.profile.sourceTypes[item.sourceType] ?? item.sourceType;
+  return item.kind === "suggestion" ? C.matrix.suggested : C.profile.sourceTypes.website ?? "Website";
+}
+
+function FeedRow({ item, org, competitor, meaning, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; onOpen: () => void }) {
+  const when = new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const tag = feedTag(item);
+  const title = item.kind === "fact" || item.kind === "suggestion"
+    ? `${item.competitorName}: ${item.title}`
+    : `${item.competitorName} ${C.values[item.from ?? "unknown"].toLowerCase()} → ${C.values[item.to ?? "unknown"].toLowerCase()} on ${item.title}`;
   return (
-    <article className={cn("glass-weak relative flex gap-3.5 rounded-card border px-4 py-3", item.read ? "border-border" : "border-[rgba(36,87,245,.35)] bg-white")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
-      {!item.read && <span className="absolute left-1.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-primary" aria-label={C.feed.unread} />}
-      <div className="pt-0.5">{competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}</div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2 text-[12px] text-fg-3">
-          <span className="font-semibold text-foreground">{item.competitorName}</span>
-          <span className="inline-flex items-center rounded-full px-2 py-px font-mono text-[10px] font-semibold" style={{ color: tone.fg, background: tone.bg }}>{C.feed.kinds[item.kind]}</span>
-          {item.domain && item.kind !== "suggestion" && <span className="text-fg-muted">{item.domain}</span>}
-          {item.sourceType && <span className="text-fg-muted">{C.profile.sourceTypes[item.sourceType] ?? item.sourceType}</span>}
-          <span className="ml-auto font-mono text-[10.5px] text-fg-faint">{when}</span>
+    <button type="button" onClick={onOpen} className="flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
+      {competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}
+      <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+        <span className={cn("truncate text-[13.5px]", item.read ? "font-medium text-[#1f2f47]" : "font-semibold text-foreground")}>{title}</span>
+        <span className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-fg-muted">
+          <span className="font-semibold">{feedSourceLabel(item)}</span><span>·</span><span>{when}</span><span>·</span>
+          <span className="truncate text-fg-3"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</span>
+        </span>
+      </span>
+      <span className={cn("inline-flex shrink-0 items-center rounded-md px-2 py-px text-[11px] font-semibold", tag.className)}>{tag.label}</span>
+      <span className="flex w-[84px] shrink-0 justify-end"><span className={cn("inline-flex items-center rounded-full border px-2.5 py-px text-[12px] font-semibold", IMPACT_PILL[item.impact])}>{item.impact}</span></span>
+    </button>
+  );
+}
+
+function FeedDetailDrawer({ item, org, competitor, meaning, canEdit, onClose, onOpenCell, onDecide }: {
+  item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; canEdit: boolean; onClose: () => void;
+  onOpenCell: (() => void) | null; onDecide: ((decision: "active" | "dismissed") => void) | null;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const tag = feedTag(item);
+  const at = new Date(item.at);
+  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <div className="grid grid-cols-[120px_1fr] gap-3 border-b border-[rgba(200,212,232,.5)] py-3 text-[13px] last:border-b-0">
+      <span className="text-[12px] font-semibold uppercase tracking-[0.06em] text-fg-muted">{label}</span>
+      <span className="min-w-0">{children}</span>
+    </div>
+  );
+  return (
+    <>
+      <div className="fixed inset-0 z-40 bg-[rgba(12,25,41,.18)]" onClick={onClose} />
+      <div className="fixed bottom-0 right-0 top-0 z-[41] flex w-[560px] max-w-[95vw] flex-col border-l border-border bg-white shadow-[var(--app-shadow-drawer)]" data-testid="cmp-feed-detail">
+        <div className="flex items-start gap-3 border-b border-border px-6 pb-4 pt-[18px]">
+          {competitor ? <Logo c={competitor} /> : null}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2 text-[12px] text-fg-3">
+              <span className="font-semibold text-foreground">{item.competitorName}</span>
+              <span className={cn("inline-flex items-center rounded-md px-2 py-px text-[11px] font-semibold", tag.className)}>{tag.label}</span>
+              <span className={cn("inline-flex items-center rounded-full border px-2.5 py-px text-[12px] font-semibold", IMPACT_PILL[item.impact])}>{item.impact}</span>
+            </div>
+            <h2 className="font-title mt-1 text-[16px] font-bold leading-snug">{item.title}</h2>
+          </div>
+          <button onClick={onClose} aria-label={C.feed.detail.close} className="rounded-md p-1 text-fg-muted hover:bg-background"><X size={16} /></button>
         </div>
-        <div className="mt-1 text-[14px] font-semibold text-foreground">{item.title}</div>
-        <div className="mt-0.5 text-[12.5px] text-fg-3">{detail}</div>
-        {item.quote && <div className="mt-1 text-[12.5px] italic text-fg-muted">“{item.quote}”</div>}
-        <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[12px]">
-          {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">{C.matrix.learnMore}<ExternalLink size={11} /></a>}
-          {onOpenCell && <button type="button" onClick={onOpenCell} className="text-primary hover:underline">{C.feed.openCell}</button>}
-          {!item.read && <button type="button" onClick={onRead} className="ml-auto text-fg-muted hover:text-foreground" data-testid="cmp-feed-read">{C.feed.markRead}</button>}
+        <div className="flex-1 overflow-y-auto px-6 py-2">
+          <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</div>
+          {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
+            <>
+              <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "unknown"]} → {C.values[item.to ?? "unknown"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>
+              <Row label={C.feed.detail.yourStatus}><span className="font-semibold">{C.values[item.own ?? "unknown"]}</span></Row>
+              {item.product && <Row label={C.feed.detail.product}>{item.product}</Row>}
+            </>
+          )}
+          {item.kind === "fact" && (
+            <Row label={C.feed.kinds.fact}>{C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind}{item.factDate && <span className="text-fg-muted"> · {shortDate(item.factDate)}</span>}</Row>
+          )}
+          {item.kind === "suggestion" && (
+            <Row label={C.feed.tags.suggestion}>{item.domain}{item.newDomain && <span className="text-fg-muted"> · {C.notify.email.newDomain}</span>}<span className="text-fg-muted"> · {C.feed.suggestionStates[item.suggestionState ?? ""] ?? ""}</span></Row>
+          )}
+          {item.quote && <Row label={C.feed.detail.evidence}><span className="italic text-[#1f2f47]">“{item.quote}”</span></Row>}
+          <Row label={C.feed.detail.source}>
+            <span className="flex flex-wrap items-center gap-2">
+              <span>{feedSourceLabel(item)}</span>
+              {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">{C.matrix.learnMore}<ExternalLink size={11} /></a>}
+            </span>
+          </Row>
+          <Row label={C.feed.detail.found}>{at.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Row>
+        </div>
+        <div className="flex items-center gap-2 border-t border-border px-6 py-3">
+          {onOpenCell && <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>}
+          {onDecide && canEdit && (
+            <span className="ml-auto inline-flex gap-2">
+              <Button size="sm" onClick={() => onDecide("active")}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
+              <Button size="sm" variant="secondary" onClick={() => onDecide("dismissed")}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
+            </span>
+          )}
         </div>
       </div>
-    </article>
+    </>
   );
 }
 
