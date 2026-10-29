@@ -106,12 +106,6 @@ export const MAX_OWN_PRODUCT = 160;
 /** The org's own cell on a capability — set by PMs, never scanned. */
 export const OWN_STATUS_VALUES = ["has", "partial", "missing"] as const;
 export type OwnStatus = (typeof OWN_STATUS_VALUES)[number];
-export const COMPETITOR_KINDS = ["direct", "indirect"] as const;
-export type CompetitorKind = (typeof COMPETITOR_KINDS)[number];
-export function isCompetitorKind(v: unknown): v is CompetitorKind {
-  return typeof v === "string" && (COMPETITOR_KINDS as readonly string[]).includes(v);
-}
-
 export function isOwnStatus(v: unknown): v is OwnStatus {
   return typeof v === "string" && (OWN_STATUS_VALUES as readonly string[]).includes(v);
 }

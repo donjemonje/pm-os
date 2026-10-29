@@ -618,8 +618,6 @@ model Competitor {
   host        String
   logoUrl     String?
   position    Int       @default(0)
-  /// "direct" | "indirect" — set by the org's PMs in Settings; shown under the name in the matrix header and the profile.
-  kind        String    @default("direct")
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 

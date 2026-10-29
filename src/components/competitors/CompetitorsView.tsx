@@ -83,7 +83,7 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
             const [bar, fg] = tone(closeness.score);
             return (
               <li key={c.id}>
-                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.matrix.kinds[c.kind]} · ${C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}`}>
+                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}`}>
                   <Logo c={c} size={16} />
                   <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
                   <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
@@ -541,7 +541,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                           <button onClick={() => openProfile(c.id, "cell")} className="flex w-full flex-col items-center gap-1.5 pt-[13px] hover:opacity-80" title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
-                            <span className={cn("rounded-full border px-1.5 py-px font-mono text-[9px] font-semibold leading-[13px]", c.kind === "indirect" ? "border-border text-fg-muted" : "border-[rgba(36,87,245,.35)] text-[#2a5fd0]")} title={C.matrix.kindHint[c.kind]} data-testid="cmp-competitor-kind-tag">{C.matrix.kinds[c.kind]}</span>
                             {(c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable") && (
                               <span className="rounded-full bg-[rgba(239,90,138,.15)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#c23767]">{C.settings.badges[c.lastScan.badge]}{c.lastGoodScanAt ? ` · ${shortDate(c.lastGoodScanAt)}` : ""}</span>
                             )}

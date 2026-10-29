@@ -7,7 +7,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { frequencyMs, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_MAX_PAGES, MAX_OWN_PRODUCT, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES, COMPETITOR_KINDS, type CompetitorKind } from "@/lib/competitors/config";
+import { frequencyMs, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_MAX_PAGES, MAX_OWN_PRODUCT, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -228,14 +228,13 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(c.name);
   const [website, setWebsite] = useState(c.websiteUrl);
-  const [kind, setKind] = useState<CompetitorKind>(c.kind);
   const [starting, setStarting] = useState(false);
   const [logoBroken, setLogoBroken] = useState(false);
   const status = c.activeScanId ? "running" : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
   const summary = c.activeScanId ? "" : scanSummaryLine(c, nextScanAt);
 
   async function save() {
-    if (await onSave(c.id, { name, website, kind })) setEditing(false);
+    if (await onSave(c.id, { name, website })) setEditing(false);
   }
 
   return (
@@ -251,12 +250,6 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
           }}>
           <input value={name} onChange={(e) => setName(e.target.value)} className={cn(INPUT, "w-48")} disabled={busy} autoFocus />
           <input value={website} onChange={(e) => setWebsite(e.target.value)} className={INPUT} disabled={busy} aria-label={C.settings.website} />
-          <label className="flex shrink-0 items-center gap-1.5 text-[12px] text-fg-muted">
-            {C.settings.kind}
-            <select value={kind} onChange={(e) => setKind(e.target.value as CompetitorKind)} className={SELECT} disabled={busy} data-testid="cmp-competitor-kind">
-              {COMPETITOR_KINDS.map((k) => <option key={k} value={k}>{C.settings.kinds[k]}</option>)}
-            </select>
-          </label>
           <button onClick={() => setEditing(false)} className={ICON_BTN} aria-label={C.settings.cancel} disabled={busy}><X size={14} /></button>
           <button onClick={save} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !name.trim()}><Check size={14} /></button>
         </div>
@@ -264,7 +257,6 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[14px] font-medium">{c.name}</span>
-            <span className={cn("inline-flex shrink-0 rounded-full border px-2 py-px font-mono text-[10px] font-semibold", c.kind === "indirect" ? "border-border text-fg-muted" : "border-[rgba(36,87,245,.35)] text-[#2a5fd0]")}>{C.matrix.kinds[c.kind]}</span>
             <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status]}>
               {status === "running" ? C.settings.scanning : status === "never" ? C.settings.neverScanned : C.settings.badges[status] ?? status}
             </span>
@@ -294,7 +286,7 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
           </button>
           {canEdit && (
             <>
-              <button onClick={() => { setName(c.name); setWebsite(c.websiteUrl); setKind(c.kind); setEditing(true); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
+              <button onClick={() => { setName(c.name); setWebsite(c.websiteUrl); setEditing(true); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
               <button onClick={() => void onRemove(c)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy || status === "running"}><Trash2 size={14} /></button>
             </>
           )}
