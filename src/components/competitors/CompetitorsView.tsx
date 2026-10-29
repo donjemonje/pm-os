@@ -893,12 +893,7 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
   return (
     <div className="border-b border-[rgba(200,212,232,.5)] px-4 pb-4 pl-[62px] pt-1" data-testid="cmp-feed-detail">
       <div className="rounded-inner border border-border bg-white px-4 py-1">
-          {(item.summary || item.imageUrl) && (
-            <div className="my-2 flex gap-4">
-              {item.imageUrl && <a href={item.sourceUrl ?? item.imageUrl} target="_blank" rel="noreferrer" className="shrink-0"><img src={item.imageUrl} alt="" className="h-[120px] w-[200px] rounded-inner border border-border object-cover" /></a>}
-              {item.summary && <p className="m-0 self-center text-[14px] leading-relaxed text-foreground">{item.summary}</p>}
-            </div>
-          )}
+          {item.summary && <p className="my-2 text-[14px] leading-relaxed text-foreground">{item.summary}</p>}
           <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</div>
           {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
             <>

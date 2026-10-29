@@ -7,6 +7,7 @@ import { initialsOf } from "@/components/ui/Avatar";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, STATUS_VALUES, type StatusValue } from "@/lib/competitors/config";
 import { track } from "@/lib/analytics/track";
+import { Lightbox } from "@/components/ui/Lightbox";
 import type { CapabilityRow, CellRow, CompetitorRow, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -730,6 +731,7 @@ function WhatChanged({ c, capabilities, cellOf, facts }: { c: CompetitorRow; cap
 function Gallery({ c }: { c: CompetitorRow }) {
   const [all, setAll] = useState(false);
   const items = c.media;
+  const [openMedia, setOpenMedia] = useState<(typeof items)[number] | null>(null);
   if (items.length === 0) return null;
   const shown = all ? items : items.slice(0, 4);
   return (
@@ -741,12 +743,15 @@ function Gallery({ c }: { c: CompetitorRow }) {
       </span>
       <div className="grid grid-cols-2 gap-2">
         {shown.map((g) => (
-          <a key={g.id} href={mediaUrl(g.mediaPath)} target="_blank" rel="noreferrer" onClick={() => track("cmp_media_opened", { competitorId: c.id, capabilityId: null, kind: g.kind })} className="group flex flex-col gap-1">
-            <span className="block h-[84px] overflow-hidden rounded-[9px] border border-border bg-white"><img src={mediaUrl(g.mediaPath)} alt={g.label} className="h-full w-full object-cover object-top transition group-hover:scale-[1.02]" /></span>
-            <span className="truncate text-[11px] text-fg-muted">{g.label}{g.sourceLabel ? ` · ${g.sourceLabel}` : ""}</span>
-          </a>
+          <button key={g.id} type="button" onClick={() => { setOpenMedia(g); track("cmp_media_opened", { competitorId: c.id, capabilityId: null, kind: g.kind }); }} className="group flex flex-col gap-1 text-left" data-testid="cmp-media-thumb">
+            <span className="block h-[84px] w-full overflow-hidden rounded-[9px] border border-border bg-white"><img src={mediaUrl(g.mediaPath)} alt={g.label} className="h-full w-full object-cover object-top transition group-hover:scale-[1.02]" /></span>
+            <span className="block truncate text-[11px] text-fg-muted">{g.label}{g.sourceLabel ? ` · ${g.sourceLabel}` : ""}</span>
+          </button>
         ))}
       </div>
+      {openMedia && (
+        <Lightbox src={mediaUrl(openMedia.mediaPath)} alt={openMedia.label} caption={`${openMedia.label}${openMedia.sourceLabel ? ` · ${openMedia.sourceLabel}` : ""}`} href={mediaUrl(openMedia.mediaPath)} closeLabel={C.feed.detail.close} linkLabel={C.profile.openOriginal} onClose={() => setOpenMedia(null)} />
+      )}
     </section>
   );
 }

@@ -189,6 +189,7 @@ export const COMPETITORS_COPY = {
     addFact: "Add fact",
     addFactKind: "Kind",
     addFactValue: "Value",
+    openOriginal: "Open original",
     addFactPlaceholder: "The fact, as the competitor states it",
     addFactSave: "Add",
     lastScan: (ago: string, pages: number) => `Last scan ${ago} · ${pages} page${pages === 1 ? "" : "s"}`,
