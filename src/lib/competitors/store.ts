@@ -95,6 +95,8 @@ export interface CapabilityRow {
   state: string;
   suggestedById: string | null;
   suggestedQuote: string | null;
+  /** The Idea created from this row on the Roadmap tab, with its Jira key once pushed. */
+  idea: { id: string; title: string; batchStatus: string; jiraKey: string | null } | null;
 }
 
 export interface CellRow {
@@ -180,7 +182,11 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       },
     }),
     db.competitorDomain.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
-    db.capability.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
+    db.capability.findMany({
+      where: { workspaceId },
+      orderBy: [{ position: "asc" }, { name: "asc" }],
+      include: { idea: { select: { id: true, title: true, batchStatus: true, sources: { where: { kind: "jira" }, select: { jiraKey: true }, take: 1 } } } },
+    }),
     db.capabilityStatus.findMany({ where: { workspaceId }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
     db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
     db.competitorScan.findMany({
@@ -295,6 +301,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       state: k.state,
       suggestedById: k.suggestedById,
       suggestedQuote: k.suggestedQuote,
+      idea: k.idea ? { id: k.idea.id, title: k.idea.title, batchStatus: k.idea.batchStatus, jiraKey: k.idea.sources[0]?.jiraKey ?? null } : null,
     })),
     cells: statuses.map((s) => {
       const scanned = s.value as StatusValue;

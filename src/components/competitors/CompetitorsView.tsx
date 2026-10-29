@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, RefreshCw, Search, Undo2, X } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
@@ -387,6 +387,21 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   }, [tab, domainFilter, productFilter, competitorFilter, statusFilter, gapsOnly, newChanges]);
 
   // ——— Corrections ———
+  /** POST without a body: a create action whose answer is the new state. */
+  async function post(url: string): Promise<boolean> {
+    setError(null);
+    try {
+      const res = await fetch(url, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? C.cell.saveFailed);
+      if (data.state) setState(data.state);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : C.cell.saveFailed);
+      return false;
+    }
+  }
+
   async function patch(url: string, body: unknown): Promise<boolean> {
     setError(null);
     try {
@@ -747,38 +762,119 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           </section>
         )}
 
-        {tab === "roadmap" && (
-          <section aria-label={C.tabs.roadmap} className="flex flex-col gap-4">
-            {([
-              { title: C.roadmap.gaps, sub: C.roadmap.gapsSub(own), empty: C.roadmap.gapsEmpty, kind: "gap" as const },
-              { title: C.roadmap.partial, sub: C.roadmap.partialSub(own), empty: C.roadmap.partialEmpty, kind: "partial" as const },
-            ]).map((g) => {
-              const rows = summary.measured ? activeCaps.filter((k) => rowKind(k) === g.kind) : [];
-              return (
-                <div key={g.title} className="glass overflow-hidden rounded-card">
-                  <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
-                    <span className="text-[14px] font-bold">{g.title}</span>
-                    <span className="text-[11px] text-fg-muted">{g.sub} · {rows.length}</span>
+        {tab === "roadmap" && (() => {
+          const gapRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "gap") : [];
+          const partialRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "partial") : [];
+          const total = gapRows.length + partialRows.length;
+          const sections = [
+            { key: "gap", title: C.roadmap.gaps, sub: C.roadmap.gapsSub(own), empty: C.roadmap.gapsEmpty, rows: gapRows, color: "#f0b43c", glow: "rgba(240,180,60,.6)", gradient: "linear-gradient(90deg, rgba(240,180,60,.18), rgba(255,255,255,0) 60%)" },
+            { key: "partial", title: C.roadmap.partial, sub: C.roadmap.partialSub(own), empty: C.roadmap.partialEmpty, rows: partialRows, color: "#3b7cf6", glow: "rgba(59,124,246,.6)", gradient: "linear-gradient(90deg, rgba(59,124,246,.16), rgba(255,255,255,0) 60%)" },
+          ];
+          return (
+            <section aria-label={C.tabs.roadmap} className="flex flex-col gap-4">
+              <div className="flex items-center gap-2.5 rounded-inner border border-border bg-[rgba(36,87,245,.08)] px-3.5 py-2.5 text-[13px] text-foreground" data-testid="cmp-roadmap-intro">
+                <Sparkles size={16} className="shrink-0 text-primary" />
+                {total > 0 ? <span><b className="font-semibold">{C.roadmap.intro(total)}</b> {C.roadmap.introSub}</span> : <span>{C.roadmap.introNone}</span>}
+              </div>
+              {sections.map((g) => {
+                const notInJira = g.rows.filter((k) => !k.idea?.jiraKey).length;
+                return (
+                  <div key={g.key} className="glass overflow-hidden rounded-card" data-testid={`cmp-roadmap-${g.key}`}>
+                    <div className="flex items-center gap-3 border-b border-[rgba(200,212,232,.5)] px-4 py-2.5" style={{ background: g.gradient }}>
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: g.color, boxShadow: `0 0 10px ${g.glow}` }} />
+                      <span className="text-[14px] font-bold">{g.title}</span>
+                      <span className="text-[11px] text-fg-muted">{g.sub} · {g.rows.length}</span>
+                      {notInJira > 0 && <span className="ml-auto text-[12px] font-semibold text-[#c98a00]">{C.roadmap.notInJira(notInJira)}</span>}
+                    </div>
+                    {g.rows.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-[13px] text-fg-3">{g.empty}</div>
+                    ) : (
+                      g.rows.map((k) => (
+                        <RoadmapRow key={k.id} capability={k} kind={g.key as "gap" | "partial"} competitors={competitors} cellOf={cellOf} domain={state.domains.find((d) => d.id === k.domainId)?.name ?? ""} onCreateIdea={() => post(`/api/competitors/capabilities/${k.id}/idea`)} />
+                      ))
+                    )}
                   </div>
-                  {rows.length === 0 ? (
-                    <div className="px-4 py-8 text-center text-[13px] text-fg-3">{g.empty}</div>
-                  ) : (
-                    rows.map((k) => {
-                      const haveN = competitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
-                      return (
-                        <div key={k.id} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
-                          <span className="text-[13.5px] font-semibold">{k.name}</span>
-                          <span className="text-[12px] text-fg-muted">{C.matrix.ofN(haveN, competitors.length)} competitors · {state.domains.find((d) => d.id === k.domainId)?.name}</span>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              );
-            })}
-          </section>
-        )}
+                );
+              })}
+            </section>
+          );
+        })()}
       </div>
+    </div>
+  );
+}
+
+// ————— Roadmap row (design C2): name, evidence line, Jira / idea pill, Create idea, Evidence · N —————
+
+function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreateIdea }: {
+  capability: CapabilityRow;
+  kind: "gap" | "partial";
+  competitors: CompetitorRow[];
+  cellOf: (competitorId: string, capabilityId: string) => CellRow | undefined;
+  domain: string;
+  onCreateIdea: () => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const withIt = competitors
+    .map((c) => ({ c, cell: cellOf(c.id, k.id) }))
+    .filter(({ cell }) => cell && (cell.value === "has" || cell.value === "partial"));
+  const full = withIt.filter(({ cell }) => cell?.value === "has").length;
+  const names = withIt.map(({ c }) => c.name);
+  const headline = kind === "gap" ? C.roadmap.haveIt(withIt.length, competitors.length) : C.roadmap.haveItFull(full, competitors.length);
+  const sub = [headline, names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} +${names.length - 3}`, domain].filter(Boolean).join(" · ");
+  const evidence = withIt.filter(({ cell }) => cell?.quote || cell?.sourceUrl);
+  const toggle = () => {
+    setOpen((v) => !v);
+    if (!open) track("cmp_roadmap_evidence_opened", { capabilityId: k.id, kind, count: evidence.length });
+  };
+  async function create() {
+    setBusy(true);
+    await onCreateIdea();
+    setBusy(false);
+  }
+  return (
+    <div className="border-b border-[rgba(200,212,232,.5)] last:border-b-0" data-testid="cmp-roadmap-row">
+      <div className="flex flex-wrap items-center gap-3.5 px-4 py-2.5">
+        <span className="flex min-w-[260px] flex-1 flex-col gap-[3px]">
+          <span className="text-[13.5px] font-semibold">{k.name}</span>
+          <span className="text-[11.5px] text-fg-muted">{sub}</span>
+        </span>
+        {k.idea?.jiraKey ? (
+          <a href="/ideas" className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.55)] bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0] hover:underline" data-testid="cmp-roadmap-jira">{k.idea.jiraKey}</a>
+        ) : k.idea ? (
+          <a href="/ideas" className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.55)] bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0] hover:underline" data-testid="cmp-roadmap-idea">{C.roadmap.ideaTag(k.idea.batchStatus)}</a>
+        ) : (
+          <span className="inline-flex items-center whitespace-nowrap rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px text-[11px] font-semibold text-[#8a5a00]">{C.roadmap.notInJiraTag}</span>
+        )}
+        <span className="flex gap-2">
+          {k.idea ? (
+            <Button size="sm" variant="secondary" onClick={() => { track("cmp_roadmap_idea_opened", { capabilityId: k.id, ideaId: k.idea?.id }); window.location.assign("/ideas"); }}>{C.roadmap.openIdea}</Button>
+          ) : (
+            <Button size="sm" variant="primary" onClick={() => void create()} disabled={busy} data-testid="cmp-roadmap-create-idea">{busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} strokeWidth={2.25} />}{busy ? C.roadmap.creating : C.roadmap.createIdea}</Button>
+          )}
+          <Button size="sm" variant={k.idea ? "ghost" : "secondary"} onClick={toggle} aria-expanded={open} data-testid="cmp-roadmap-evidence">{C.roadmap.evidenceN(evidence.length)}</Button>
+        </span>
+      </div>
+      {open && (
+        <div className="border-t border-dashed border-[rgba(200,212,232,.7)] bg-[rgba(255,255,255,.55)] px-4 py-2.5">
+          {evidence.length === 0 ? (
+            <span className="text-[12px] text-fg-faint">{C.roadmap.evidenceNone}</span>
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-2 p-0">
+              {evidence.map(({ c, cell }) => (
+                <li key={c.id} className="grid grid-cols-[150px_1fr] gap-3 text-[12.5px]">
+                  <span className="flex items-center gap-2 font-semibold"><CellValue cell={cell} /><span className="truncate">{c.name}</span></span>
+                  <span className="min-w-0">
+                    {cell?.quote && <span className="italic text-[#1f2f47]">“{cell.quote}”</span>}
+                    {cell?.sourceUrl && <a href={cell.sourceUrl} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-0.5 text-primary hover:underline">{C.matrix.learnMore}<ExternalLink size={11} /></a>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -488,6 +488,8 @@ model Idea {
 
   sources IdeaSource[]
   events  ReviewEvent[]
+  /// Competitor capabilities whose roadmap row created this idea.
+  capabilities Capability[]
 
   @@index([workspaceId])
 }
@@ -691,6 +693,9 @@ model Capability {
   /// Which competitor's scan suggested it (null for manual rows).
   suggestedById  String?
   suggestedQuote String?
+  /// The Idea a PM created from this row on the Roadmap tab (null = none yet).
+  ideaId         String?
+  idea           Idea?            @relation(fields: [ideaId], references: [id], onDelete: SetNull)
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
