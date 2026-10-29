@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, competitorsGuard, readJson } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { launchScan } from "@/lib/competitors/run";
+import { failStaleScans, launchScan } from "@/lib/competitors/run";
+import { STALE_RUNNER_MS } from "@/lib/competitors/runs";
 import { createScan, manualScansToday } from "@/lib/competitors/scan";
 import { getCompetitorsConfig } from "@/lib/competitors/store";
 import { rescanLimitEnforced } from "@/lib/competitors/config";
@@ -31,6 +32,7 @@ export async function POST(req: Request) {
       return bad(C.settings.rescanLimited, 429);
     }
   }
+  await failStaleScans(STALE_RUNNER_MS);
   const created = await createScan(ctx.workspaceId, competitor.id, "manual", ctx.user.id);
   if ("error" in created) {
     return bad(created.error === "running" ? C.settings.scanRunning : C.errors.scanFailed, 409);

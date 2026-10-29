@@ -103,5 +103,12 @@ export async function failStaleScans(staleMs = 10 * 60_000): Promise<number> {
     });
     await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "the scan stopped responding and was abandoned" } });
   }
-  return stale.length;
+  // A run whose runner died: no scan of it alive any more, yet still "running" — close it so the next press can start.
+  const runs = await db.competitorScanRun.findMany({ where: { status: "running", startedAt: { lt: cutoff } }, select: { id: true } });
+  for (const r of runs) {
+    const alive = await db.competitorScan.findFirst({ where: { runId: r.id, status: { in: ["queued", "running"] } }, select: { id: true } });
+    if (alive) continue;
+    await db.competitorScanRun.update({ where: { id: r.id }, data: { status: "failed", finishedAt: new Date(), current: null } });
+  }
+  return stale.length + runs.length;
 }

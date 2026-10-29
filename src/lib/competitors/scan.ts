@@ -340,6 +340,8 @@ export async function runScan(scanId: string): Promise<void> {
   const log = new ScanLog(scanId);
   const t0 = Date.now();
   const config = await getCompetitorsConfig(workspaceId);
+  // Liveness: a scan heartbeats every 30 s so a dead runner (process reload, crash) is told apart from a long AI call.
+  const heartbeat = setInterval(() => void db.competitorScan.update({ where: { id: scanId }, data: { heartbeatAt: new Date() } }).catch(() => undefined), 30_000);
   const isWebsite = source.type === "website";
   // Pages handed in by a collector (importPages) are read back, whatever the source type; only a plain website scan crawls.
   const handedIn = scan.fetchMode === "bundle";
@@ -461,6 +463,7 @@ export async function runScan(scanId: string): Promise<void> {
     error = e instanceof Error ? e.message.slice(0, 300) : String(e);
     log.add("error", `Scan aborted: ${error}`);
   } finally {
+    clearInterval(heartbeat);
     await closeBrowser().catch(() => undefined);
   }
 

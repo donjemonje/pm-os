@@ -305,7 +305,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     }
     return groups.filter((g) => g.items.length > 0);
   })();
-  const [feedOpen, setFeedOpen] = useState<FeedItem | null>(null);
+  const [feedOpen, setFeedOpen] = useState<string | null>(null);
   /** The "For <org>" line — derived from the data, no AI: what the item means against the org's own status. */
   const feedMeaning = (i: FeedItem): string => {
     if (i.kind === "gap" && i.capabilityId) {
@@ -630,20 +630,24 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                           ) : null}
                         </span>
                       </div>
-                      {g.items.map((item) => (
-                        <FeedRow key={item.key} item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null}
-                          meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(item); if (!item.read) void markRead([item.key]); }} />
-                      ))}
+                      {g.items.map((item) => {
+                        const isOpen = feedOpen === item.key;
+                        return (
+                          <div key={item.key} className={cn(isOpen && "bg-[rgba(36,87,245,.035)]")}>
+                            <FeedRow item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null} open={isOpen}
+                              meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(isOpen ? null : item.key); if (!item.read) void markRead([item.key]); }} />
+                            {isOpen && (
+                              <FeedDetail item={item} org={own} meaning={feedMeaning(item)} canEdit={canEdit}
+                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, capabilityId: item.capabilityId! }); } : null}
+                                onDecide={item.kind === "suggestion" && item.suggestionState === "suggested" && item.capabilityId ? (decision) => { void decideCapability(item.capabilityId!, decision); } : null} />
+                            )}
+                          </div>
+                        );
+                      })}
                     </section>
                   );
                 })}
               </div>
-            )}
-            {feedOpen && (
-              <FeedDetailDrawer item={state.feed.find((i) => i.key === feedOpen.key) ?? feedOpen} org={own} competitor={competitors.find((c) => c.id === feedOpen.competitorId) ?? null} meaning={feedMeaning(feedOpen)}
-                canEdit={canEdit} onClose={() => setFeedOpen(null)}
-                onOpenCell={feedOpen.capabilityId && feedOpen.kind !== "suggestion" ? () => { setFeedOpen(null); setTab("parity"); setOpenCell({ competitorId: feedOpen.competitorId, capabilityId: feedOpen.capabilityId! }); } : null}
-                onDecide={feedOpen.kind === "suggestion" && feedOpen.suggestionState === "suggested" && feedOpen.capabilityId ? (decision) => { void decideCapability(feedOpen.capabilityId!, decision); setFeedOpen(null); } : null} />
             )}
           </section>
         )}
@@ -791,14 +795,14 @@ function feedSourceLabel(item: FeedItem): string {
   return item.kind === "suggestion" ? C.matrix.suggested : C.profile.sourceTypes.website ?? "Website";
 }
 
-function FeedRow({ item, org, competitor, meaning, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; onOpen: () => void }) {
+function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; open: boolean; onOpen: () => void }) {
   const when = new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const tag = feedTag(item);
   const title = item.kind === "fact" || item.kind === "suggestion"
     ? `${item.competitorName}: ${item.title}`
     : `${item.competitorName} ${C.values[item.from ?? "unknown"].toLowerCase()} → ${C.values[item.to ?? "unknown"].toLowerCase()} on ${item.title}`;
   return (
-    <button type="button" onClick={onOpen} className="flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
+    <button type="button" onClick={onOpen} aria-expanded={open} className={cn("flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left hover:bg-[rgba(255,255,255,.7)]", !open && "[.group-last>&]:border-b-0")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
       {competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}
       <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
         <span className={cn("truncate text-[13.5px]", item.read ? "font-medium text-[#1f2f47]" : "font-semibold text-foreground")}>{title}</span>
@@ -813,42 +817,21 @@ function FeedRow({ item, org, competitor, meaning, onOpen }: { item: FeedItem; o
   );
 }
 
-function FeedDetailDrawer({ item, org, competitor, meaning, canEdit, onClose, onOpenCell, onDecide }: {
-  item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; canEdit: boolean; onClose: () => void;
+/** The signal opened in place, under its row: everything the feed knows about it, and the actions. */
+function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
+  item: FeedItem; org: string; meaning: string; canEdit: boolean;
   onOpenCell: (() => void) | null; onDecide: ((decision: "active" | "dismissed") => void) | null;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const tag = feedTag(item);
   const at = new Date(item.at);
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <div className="grid grid-cols-[120px_1fr] gap-3 border-b border-[rgba(200,212,232,.5)] py-3 text-[13px] last:border-b-0">
-      <span className="text-[12px] font-semibold uppercase tracking-[0.06em] text-fg-muted">{label}</span>
+    <div className="grid grid-cols-[120px_1fr] gap-3 border-b border-[rgba(200,212,232,.5)] py-2.5 text-[13px] last:border-b-0">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-muted">{label}</span>
       <span className="min-w-0">{children}</span>
     </div>
   );
   return (
-    <>
-      <div className="fixed inset-0 z-40 bg-[rgba(12,25,41,.18)]" onClick={onClose} />
-      <div className="fixed bottom-0 right-0 top-0 z-[41] flex w-[560px] max-w-[95vw] flex-col border-l border-border bg-white shadow-[var(--app-shadow-drawer)]" data-testid="cmp-feed-detail">
-        <div className="flex items-start gap-3 border-b border-border px-6 pb-4 pt-[18px]">
-          {competitor ? <Logo c={competitor} /> : null}
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-fg-3">
-              <span className="font-semibold text-foreground">{item.competitorName}</span>
-              <span className={cn("inline-flex items-center rounded-md px-2 py-px text-[11px] font-semibold", tag.className)}>{tag.label}</span>
-              <span className={cn("inline-flex items-center rounded-full border px-2.5 py-px text-[12px] font-semibold", IMPACT_PILL[item.impact])}>{item.impact}</span>
-            </div>
-            <h2 className="font-title mt-1 text-[16px] font-bold leading-snug">{item.title}</h2>
-          </div>
-          <button onClick={onClose} aria-label={C.feed.detail.close} className="rounded-md p-1 text-fg-muted hover:bg-background"><X size={16} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-6 py-2">
+    <div className="border-b border-[rgba(200,212,232,.5)] px-4 pb-4 pl-[62px] pt-1" data-testid="cmp-feed-detail">
+      <div className="rounded-inner border border-border bg-white px-4 py-1">
           <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground"><b className="font-semibold text-[#2a5fd0]">{C.feed.forOrg(org)}</b> {meaning}</div>
           {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
             <>
@@ -871,18 +854,19 @@ function FeedDetailDrawer({ item, org, competitor, meaning, canEdit, onClose, on
             </span>
           </Row>
           <Row label={C.feed.detail.found}>{at.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Row>
-        </div>
-        <div className="flex items-center gap-2 border-t border-border px-6 py-3">
-          {onOpenCell && <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>}
-          {onDecide && canEdit && (
-            <span className="ml-auto inline-flex gap-2">
-              <Button size="sm" onClick={() => onDecide("active")}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
-              <Button size="sm" variant="secondary" onClick={() => onDecide("dismissed")}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
-            </span>
-          )}
-        </div>
+        {(onOpenCell || (onDecide && canEdit)) && (
+          <div className="flex items-center gap-2 py-3">
+            {onOpenCell && <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>}
+            {onDecide && canEdit && (
+              <span className="ml-auto inline-flex gap-2">
+                <Button size="sm" onClick={() => onDecide("active")}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
+                <Button size="sm" variant="secondary" onClick={() => onDecide("dismissed")}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
-    </>
+    </div>
   );
 }
 

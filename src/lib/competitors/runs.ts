@@ -17,7 +17,11 @@ import { bundleForHost, hasBundleForHost } from "./bundle";
 import { rescanLimitEnforced } from "./config";
 import { importPages } from "./import";
 import { notifyRun } from "./notify";
+import { failStaleScans } from "./run";
 import { createScan, manualScansToday, runScan } from "./scan";
+
+/** No heartbeat for this long = the runner is gone (scans heartbeat every 30 s). */
+export const STALE_RUNNER_MS = 2 * 60_000;
 import { getCompetitorsConfig } from "./store";
 
 export type RunMode = "live" | "bundle";
@@ -71,6 +75,8 @@ export async function startRun(
   startedById: string | null,
   opts: { trigger: "manual" | "scheduled"; exemptFromLimit: boolean },
 ): Promise<StartRunResult> {
+  // A press must never be blocked by a run whose runner died (dev server reload, crash): 2 min without a heartbeat = abandoned.
+  await failStaleScans(STALE_RUNNER_MS);
   const [activeScan, activeRun] = await Promise.all([
     db.competitorScan.findFirst({ where: { workspaceId, status: { in: ["queued", "running"] } }, select: { id: true } }),
     db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, select: { id: true } }),
