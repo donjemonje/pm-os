@@ -136,6 +136,9 @@ export const COMPETITORS_COPY = {
     note: (first: number) => `${first} → today · dated facts from the competitor's sources · scroll sideways for earlier years`,
     empty: "No dated facts yet — funding rounds, acquisitions and launches appear here once a source states their dates.",
     all: "All",
+    zoom: "Axis width",
+    zoomIn: "Wider axis (more room between facts)",
+    zoomOut: "Narrower axis",
   },
   profile: {
     emptyTitle: "No competitor profiles yet",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, ExternalLink, Flag, Lightbulb, Pencil, Plus, Undo2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ExternalLink, Flag, Lightbulb, Minus, Pencil, Plus, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { initialsOf } from "@/components/ui/Avatar";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
@@ -342,8 +342,28 @@ function Header({ c, org, facts, capabilities, cellOf, onPatchFact, onAddFact }:
 interface TimelineEvent { key: string; date: string; title: string; type: EventType; sourceUrl: string | null }
 
 const TL_PAD = 24;
-/** The axis is this many times the visible width: room between markers, scrolled sideways. */
-const TL_ZOOM = 9;
+/** The axis is this many times the visible width: room between markers, scrolled sideways. + / − step it; the last choice is kept for every profile. */
+const TL_ZOOM_DEFAULT = 9;
+const TL_ZOOM_MIN = 1;
+const TL_ZOOM_MAX = 27;
+const TL_ZOOM_STEP = 1.5;
+const TL_ZOOM_KEY = "pmos.competitors.timelineZoom";
+
+function readZoom(): number {
+  try {
+    const v = Number(window.localStorage.getItem(TL_ZOOM_KEY));
+    return Number.isFinite(v) && v >= TL_ZOOM_MIN && v <= TL_ZOOM_MAX ? v : TL_ZOOM_DEFAULT;
+  } catch {
+    return TL_ZOOM_DEFAULT;
+  }
+}
+function storeZoom(z: number) {
+  try {
+    window.localStorage.setItem(TL_ZOOM_KEY, String(z));
+  } catch {
+    /* private window or blocked storage: the choice lives for this page only */
+  }
+}
 
 function tlWhen(date: string): string {
   return date.length > 7 ? `${new Date(date).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${new Date(date).getUTCFullYear()}` : date.slice(0, 4);
@@ -363,7 +383,16 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   );
   const [filter, setFilterState] = useState<EventType | "all">("all");
   const [containerWidth, setContainerWidth] = useState(880);
+  const [zoom, setZoom] = useState(TL_ZOOM_DEFAULT);
+  useEffect(() => setZoom(readZoom()), []);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const stepZoom = (dir: 1 | -1) => {
+    const next = Math.min(TL_ZOOM_MAX, Math.max(TL_ZOOM_MIN, Math.round((dir > 0 ? zoom * TL_ZOOM_STEP : zoom / TL_ZOOM_STEP) * 100) / 100));
+    if (next === zoom) return;
+    setZoom(next);
+    storeZoom(next);
+    track("cmp_profile_timeline_zoom", { competitorId: c.id, zoom: next });
+  };
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
@@ -377,7 +406,7 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollLeft = el.scrollWidth;
-  }, [c.id, containerWidth, events.length]);
+  }, [c.id, containerWidth, events.length, zoom]);
   const setFilter = (f: EventType | "all") => {
     setFilterState(f);
     track("cmp_profile_timeline_filtered", { competitorId: c.id, type: f });
@@ -393,7 +422,7 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   const first = new Date(events[0].date).getFullYear();
   const last = Math.max(new Date(events[events.length - 1].date).getFullYear(), new Date().getFullYear());
   const span = Math.max(1, last - first + 1);
-  const width = containerWidth * TL_ZOOM;
+  const width = containerWidth * zoom;
   const axis = width - 2 * TL_PAD;
   /** Axis position of a date in px (year + month + day). */
   const xOf = (iso: string) => {
@@ -423,6 +452,11 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
             {TL_LABEL[t]} · {events.filter((e) => e.type === t).length}
           </TlChip>
         ))}
+        <span className="ml-auto inline-flex items-center gap-1" role="group" aria-label={C.timeline.zoom}>
+          <button type="button" onClick={() => stepZoom(-1)} disabled={zoom <= TL_ZOOM_MIN} aria-label={C.timeline.zoomOut} title={C.timeline.zoomOut} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-[#3f506b] hover:border-primary/55 disabled:opacity-40" data-testid="cmp-timeline-zoom-out"><Minus size={13} /></button>
+          <span className="w-9 text-center font-mono text-[10.5px] text-fg-muted" title={C.timeline.zoom}>{zoom}×</span>
+          <button type="button" onClick={() => stepZoom(1)} disabled={zoom >= TL_ZOOM_MAX} aria-label={C.timeline.zoomIn} title={C.timeline.zoomIn} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-[#3f506b] hover:border-primary/55 disabled:opacity-40" data-testid="cmp-timeline-zoom-in"><Plus size={13} /></button>
+        </span>
       </div>
       <div ref={scrollRef} className="overflow-x-auto pb-1" data-testid="cmp-timeline">
         <div className="relative mx-14 h-[222px]" style={{ width }}>
