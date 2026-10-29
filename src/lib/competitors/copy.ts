@@ -123,6 +123,19 @@ export const COMPETITORS_COPY = {
     missing: "Missing",
     unknown: "Unknown",
   } as Record<string, string>,
+  timeline: {
+    title: "Timeline",
+    note: (first: number) => `${first} → today · dated facts from the competitor's sources`,
+    expandedNote: (first: number) => `${first} → today · expanded, scroll sideways`,
+    empty: "No dated facts yet — funding rounds, acquisitions and launches appear here once a source states their dates.",
+    all: "All",
+    cluster: (n: number) => `${n} facts`,
+    clusterSpan: (from: string, to: string) => (from === to ? from : `${from} → ${to}`),
+    open: "Open",
+    collapse: "Collapse",
+    more: (n: number) => `+${n} more`,
+    clusterHint: "Click to expand the axis around these facts",
+  },
   profile: {
     emptyTitle: "No competitor profiles yet",
     emptyBody:

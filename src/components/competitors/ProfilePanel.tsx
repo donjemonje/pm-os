@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, ExternalLink, Flag, Lightbulb, Pencil, Plus, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { initialsOf } from "@/components/ui/Avatar";
@@ -340,6 +340,40 @@ function Header({ c, org, facts, capabilities, cellOf, onPatchFact, onAddFact }:
 
 interface TimelineEvent { key: string; date: string; title: string; type: EventType; sourceUrl: string | null }
 
+/** Two markers closer than this (px) share a cluster; a card is 120 px wide. */
+const TL_CLUSTER_PX = 132;
+const TL_MAX_ZOOM = 16;
+const TL_PAD = 24;
+
+interface TimelineCluster { key: string; x: number; items: (TimelineEvent & { x: number })[] }
+
+/** Greedy left-to-right grouping of markers that would overlap at this scale. */
+function clusterEvents(events: { e: TimelineEvent; x: number }[]): TimelineCluster[] {
+  const out: TimelineCluster[] = [];
+  for (const { e, x } of events) {
+    const cur = out[out.length - 1];
+    if (cur && x - cur.items[cur.items.length - 1].x < TL_CLUSTER_PX) {
+      cur.items.push({ ...e, x });
+    } else {
+      out.push({ key: e.key, x, items: [{ ...e, x }] });
+    }
+  }
+  // A cluster sits at the middle of its members.
+  for (const c of out) c.x = (c.items[0].x + c.items[c.items.length - 1].x) / 2;
+  return out;
+}
+
+function tlWhen(date: string): string {
+  return date.length > 7 ? `${new Date(date).toLocaleString("en-US", { month: "short", timeZone: "UTC" })} ${new Date(date).getUTCFullYear()}` : date.slice(0, 4);
+}
+
+/**
+ * Dated facts on one axis. Markers that would overlap collapse into a cluster
+ * (dot with a count); opening a cluster widens the axis until its members
+ * stand apart (the panel scrolls sideways) and Collapse returns to the
+ * overview. Members that share a date cannot be separated: at full zoom the
+ * cluster lists them instead.
+ */
 function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   const events = useMemo<TimelineEvent[]>(
     () => facts
@@ -349,6 +383,18 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
     [facts],
   );
   const [filter, setFilterState] = useState<EventType | "all">("all");
+  const [zoom, setZoom] = useState(1);
+  const [containerWidth, setContainerWidth] = useState(880);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setContainerWidth(Math.max(760, el.clientWidth - 2 * 56));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const setFilter = (f: EventType | "all") => {
     setFilterState(f);
     track("cmp_profile_timeline_filtered", { competitorId: c.id, type: f });
@@ -356,63 +402,120 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
   if (events.length === 0) {
     return (
       <section className="glass flex flex-col gap-2 rounded-card px-[18px] py-4" aria-label="Company timeline">
-        <span className="text-[14px] font-bold">Timeline</span>
-        <span className="text-[12.5px] text-fg-3">No dated facts yet — funding rounds, acquisitions and launches appear here once a source states their dates.</span>
+        <span className="text-[14px] font-bold">{C.timeline.title}</span>
+        <span className="text-[12.5px] text-fg-3">{C.timeline.empty}</span>
       </section>
     );
   }
   const first = new Date(events[0].date).getFullYear();
   const last = Math.max(new Date(events[events.length - 1].date).getFullYear(), new Date().getFullYear());
   const span = Math.max(1, last - first + 1);
-  const x = (iso: string) => {
+  const width = containerWidth * zoom;
+  const axis = width - 2 * TL_PAD;
+  /** Axis position of a date in px, at the current zoom (year + month + day, so same-month facts still spread). */
+  const xOf = (iso: string, z = zoom) => {
     const d = new Date(iso);
-    return 2 + ((d.getFullYear() + d.getMonth() / 12 - first) / span) * 94;
+    const frac = d.getUTCFullYear() + d.getUTCMonth() / 12 + (d.getUTCDate() - 1) / 365 - first;
+    return TL_PAD + (frac / span) * (containerWidth * z - 2 * TL_PAD);
   };
-  const todayX = Math.min(96, x(new Date().toISOString()));
+  const todayX = Math.min(width - TL_PAD, xOf(new Date().toISOString()));
   const shown = events.filter((e) => filter === "all" || e.type === filter);
+  const clusters = clusterEvents(shown.map((e) => ({ e, x: xOf(e.date) })));
   const types = (Object.keys(TL_LABEL) as EventType[]).filter((t) => events.some((e) => e.type === t));
   const years: number[] = [];
-  const step = span > 12 ? 3 : span > 6 ? 2 : 1;
+  const perYear = axis / span;
+  const step = perYear >= 90 ? 1 : perYear >= 45 ? 2 : perYear >= 30 ? 3 : 5;
   for (let y = first; y <= last; y += step) years.push(y);
+
+  const openCluster = (cl: TimelineCluster) => {
+    // The zoom at which the two closest members stand a card apart (capped; same-day members never separate).
+    let minGap = Infinity;
+    for (let i = 1; i < cl.items.length; i++) minGap = Math.min(minGap, (cl.items[i].x - cl.items[i - 1].x) / zoom);
+    const needed = minGap > 0 && Number.isFinite(minGap) ? Math.ceil(TL_CLUSTER_PX / minGap) : TL_MAX_ZOOM;
+    const next = Math.min(TL_MAX_ZOOM, Math.max(zoom + 1, needed));
+    setZoom(next);
+    track("cmp_profile_timeline_cluster_opened", { competitorId: c.id, size: cl.items.length, zoom: next });
+    const centre = xOf(cl.items[Math.floor(cl.items.length / 2)].date, next);
+    requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTo({ left: Math.max(0, centre + 56 - el.clientWidth / 2), behavior: "smooth" });
+    });
+  };
+
   return (
     <section className="glass flex flex-col gap-2.5 rounded-card px-[18px] py-4" aria-label="Company timeline">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-2.5 flex flex-col gap-0.5">
-          <span className="text-[14px] font-bold">Timeline</span>
-          <span className="text-[11px] text-fg-muted">{first} → today · not to scale · dated facts from the competitor's sources</span>
+          <span className="text-[14px] font-bold">{C.timeline.title}</span>
+          <span className="text-[11px] text-fg-muted">{zoom > 1 ? C.timeline.expandedNote(first) : C.timeline.note(first)}</span>
         </span>
-        <TlChip on={filter === "all"} onClick={() => setFilter("all")}>All · {events.length}</TlChip>
+        <TlChip on={filter === "all"} onClick={() => setFilter("all")}>{C.timeline.all} · {events.length}</TlChip>
         {types.map((t) => (
           <TlChip key={t} on={filter === t} onClick={() => setFilter(t)}>
             <span className="h-2 w-2 rounded-full" style={{ background: TL_COLOR[t] }} />
             {TL_LABEL[t]} · {events.filter((e) => e.type === t).length}
           </TlChip>
         ))}
+        {zoom > 1 && (
+          <button onClick={() => { setZoom(1); scrollRef.current?.scrollTo({ left: 0 }); }} className="ml-auto inline-flex h-7 items-center gap-1 rounded-full border border-border bg-white px-2.5 text-[11.5px] font-semibold text-[#3f506b] hover:border-primary/55" data-testid="cmp-timeline-collapse">
+            <X size={12} />{C.timeline.collapse}
+          </button>
+        )}
       </div>
-      <div className="overflow-x-auto pb-1">
-        <div className="relative mx-14 h-[222px] min-w-[760px]">
-          <span className="absolute left-0 top-[96px] h-[2px] bg-[#c8d4e8]" style={{ width: `${todayX}%` }} />
-          <span className="absolute top-[72px] h-[50px] w-[2px] -translate-x-1/2 bg-primary" style={{ left: `${todayX}%` }} />
-          <span className="absolute top-[56px] -translate-x-1/2 rounded-full bg-primary px-[7px] py-px text-[10px] font-semibold text-white" style={{ left: `${todayX}%` }}>Today</span>
+      <div ref={scrollRef} className="overflow-x-auto pb-1" data-testid="cmp-timeline" data-zoom={zoom}>
+        <div className="relative mx-14 h-[222px]" style={{ width }}>
+          <span className="absolute left-0 top-[96px] h-[2px] bg-[#c8d4e8]" style={{ width: todayX }} />
+          <span className="absolute top-[72px] h-[50px] w-[2px] -translate-x-1/2 bg-primary" style={{ left: todayX }} />
+          <span className="absolute top-[56px] -translate-x-1/2 rounded-full bg-primary px-[7px] py-px text-[10px] font-semibold text-white" style={{ left: todayX }}>Today</span>
           {years.map((y) => (
-            <span key={y} className="absolute top-[204px] -translate-x-1/2 text-[10px] text-fg-faint" style={{ left: `${2 + ((y - first) / span) * 94}%` }}>{y}</span>
+            <span key={y} className="absolute top-[204px] -translate-x-1/2 text-[10px] text-fg-faint" style={{ left: TL_PAD + ((y - first) / span) * axis }}>{y}</span>
           ))}
-          {shown.map((e, i) => {
+          {clusters.map((cl, i) => {
             const above = i % 2 === 0;
-            const color = TL_COLOR[e.type];
-            const dot = <span className="h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }} />;
-            const when = e.date.length > 7 ? `${new Date(e.date).getUTCFullYear()} ${new Date(e.date).toLocaleString("en-US", { month: "short", timeZone: "UTC" })}` : e.date.slice(0, 4);
-            const card = (
-              <span className="rounded-[8px] border border-border bg-[rgba(255,255,255,.92)] px-2 py-1 text-center text-[11px] leading-[1.3] text-[#1f2f47]">
-                <b className="block font-semibold">{e.title}</b>
-                {when} · {TL_LABEL[e.type].toLowerCase()}
+            const cls = cn("absolute flex w-[120px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]");
+            const stem = <span className="h-3.5 w-px bg-[#c8d4e8]" />;
+            if (cl.items.length === 1) {
+              const e = cl.items[0];
+              const color = TL_COLOR[e.type];
+              const dot = <span className="h-3.5 w-3.5 rounded-full border-2 border-white" style={{ background: color, boxShadow: `0 0 0 1px ${color}` }} />;
+              const card = (
+                <span className="rounded-[8px] border border-border bg-[rgba(255,255,255,.92)] px-2 py-1 text-center text-[11px] leading-[1.3] text-[#1f2f47]">
+                  <b className="block font-semibold">{e.title}</b>
+                  {tlWhen(e.date)} · {TL_LABEL[e.type].toLowerCase()}
+                </span>
+              );
+              const body = above ? <>{card}{stem}{dot}</> : <>{dot}{stem}{card}</>;
+              return e.sourceUrl
+                ? <a key={cl.key} href={e.sourceUrl} target="_blank" rel="noreferrer" className={cn(cls, "hover:opacity-80")} style={{ left: cl.x }} title={e.sourceUrl}>{body}</a>
+                : <div key={cl.key} className={cls} style={{ left: cl.x }}>{body}</div>;
+            }
+            // A cluster: count badge on the dot; at full zoom the members are listed, otherwise one click opens the axis around them.
+            const atMax = zoom >= TL_MAX_ZOOM;
+            const typesIn = [...new Set(cl.items.map((e) => e.type))];
+            const dot = (
+              <span className="relative flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-white bg-[#0b1430] px-1 font-mono text-[10px] font-bold text-white shadow-[0_0_0_1px_#0b1430]">
+                {cl.items.length}
+                <span className="absolute -bottom-1.5 flex gap-px">{typesIn.map((t) => <span key={t} className="h-1.5 w-1.5 rounded-full border border-white" style={{ background: TL_COLOR[t] }} />)}</span>
               </span>
             );
-            const body = above ? <>{card}<span className="h-3.5 w-px bg-[#c8d4e8]" />{dot}</> : <>{dot}<span className="h-3.5 w-px bg-[#c8d4e8]" />{card}</>;
-            const cls = cn("absolute flex w-[120px] -translate-x-1/2 flex-col items-center gap-1", above ? "top-0 h-[104px] justify-end" : "top-[90px] h-[104px]");
-            return e.sourceUrl
-              ? <a key={e.key} href={e.sourceUrl} target="_blank" rel="noreferrer" className={cn(cls, "hover:opacity-80")} style={{ left: `${x(e.date)}%` }} title={e.sourceUrl}>{body}</a>
-              : <div key={e.key} className={cls} style={{ left: `${x(e.date)}%` }}>{body}</div>;
+            const card = atMax ? (
+              <span className="flex max-h-[76px] w-full flex-col gap-0.5 overflow-y-auto rounded-[8px] border border-dashed border-[rgba(36,87,245,.55)] bg-[rgba(255,255,255,.95)] px-2 py-1 text-left text-[10.5px] leading-[1.3] text-[#1f2f47]">
+                {cl.items.slice(0, 8).map((e) => e.sourceUrl
+                  ? <a key={e.key} href={e.sourceUrl} target="_blank" rel="noreferrer" className="truncate hover:text-primary" title={`${e.title} · ${tlWhen(e.date)}`}>{e.title}</a>
+                  : <span key={e.key} className="truncate" title={`${e.title} · ${tlWhen(e.date)}`}>{e.title}</span>)}
+                {cl.items.length > 8 && <span className="text-fg-muted">{C.timeline.more(cl.items.length - 8)}</span>}
+              </span>
+            ) : (
+              <span className="rounded-[8px] border border-dashed border-[rgba(36,87,245,.55)] bg-[rgba(255,255,255,.92)] px-2 py-1 text-center text-[11px] leading-[1.3] text-[#1f2f47]">
+                <b className="block font-semibold">{C.timeline.cluster(cl.items.length)}</b>
+                {C.timeline.clusterSpan(tlWhen(cl.items[0].date), tlWhen(cl.items[cl.items.length - 1].date))}
+                <span className="block font-semibold text-primary">{C.timeline.open} ↔</span>
+              </span>
+            );
+            const body = above ? <>{card}{stem}{dot}</> : <>{dot}{stem}{card}</>;
+            return atMax
+              ? <div key={cl.key} className={cls} style={{ left: cl.x }} data-testid="cmp-timeline-cluster">{body}</div>
+              : <button key={cl.key} type="button" onClick={() => openCluster(cl)} className={cn(cls, "hover:opacity-85")} style={{ left: cl.x }} title={C.timeline.clusterHint} data-testid="cmp-timeline-cluster">{body}</button>;
           })}
         </div>
       </div>
