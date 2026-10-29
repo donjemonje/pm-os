@@ -376,7 +376,6 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
   <tr><td style="padding:18px 20px 0;">
     <table role="presentation" class="btn" cellspacing="0" cellpadding="0" border="0"><tr>
       <td style="border-radius:8px;background:${ACCENT};"><a href="${esc(n.appUrl)}/competitors" style="display:inline-block;padding:10px 16px;font-family:${TITLE};font-weight:600;font-size:14px;color:#ffffff;text-decoration:none;">${esc(e.openMatrix)}</a></td>
-      <td style="padding-left:10px;"><a href="${esc(n.appUrl)}/settings/competitors" style="display:inline-block;padding:9px 16px;border:1px solid ${BORDER};border-radius:8px;font-family:${TITLE};font-weight:600;font-size:14px;color:${ACCENT};text-decoration:none;">${esc(e.openLog)}</a></td>
     </tr></table>
   </td></tr>
   <tr><td style="padding:18px 20px 14px;">
@@ -411,7 +410,7 @@ export function renderRunEmail(n: RunNotification): { subject: string; html: str
     for (const sg of allSuggestions) lines.push(`- ${sg.name} · ${sg.domain}${single ? "" : ` · ${sg.competitor}`}`);
     lines.push("");
   }
-  lines.push(`${e.openMatrix}: ${n.appUrl}/competitors`, `${e.openLog}: ${n.appUrl}/settings/competitors`, "", single ? e.footer : e.footerMany);
+  lines.push(`${e.openMatrix}: ${n.appUrl}/competitors`, "", single ? e.footer : e.footerMany);
   return { subject, html, text: lines.join("\n") };
 }
 

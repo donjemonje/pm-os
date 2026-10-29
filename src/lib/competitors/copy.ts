@@ -425,7 +425,6 @@ export const COMPETITORS_COPY = {
       source: "Source",
       openProfile: "Open profile →",
       openMatrix: "Open the competitor matrix",
-      openLog: "See the scan log",
       ownStatus: (org: string, value: string) => `${org} ${value}`,
       chipGap: (n: number) => `${n} gap${n === 1 ? "" : "s"} opened`,
       chipRaised: (n: number) => `${n} status${n === 1 ? "" : "es"} raised`,
