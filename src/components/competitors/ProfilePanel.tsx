@@ -420,22 +420,21 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
     );
   }
   const first = new Date(events[0].date).getFullYear();
-  const last = Math.max(new Date(events[events.length - 1].date).getFullYear(), new Date().getFullYear());
-  const span = Math.max(1, last - first + 1);
+  const now = new Date();
+  const yearOf = (d: Date) => d.getUTCFullYear() + d.getUTCMonth() / 12 + (d.getUTCDate() - 1) / 365;
+  // The axis runs from 1 Jan of the first year to today exactly, so Today is always the right end.
+  const span = Math.max(0.5, yearOf(now) - first);
+  const last = now.getUTCFullYear();
   const width = containerWidth * zoom;
   const axis = width - 2 * TL_PAD;
   /** Axis position of a date in px (year + month + day). */
-  const xOf = (iso: string) => {
-    const d = new Date(iso);
-    const frac = d.getUTCFullYear() + d.getUTCMonth() / 12 + (d.getUTCDate() - 1) / 365 - first;
-    return TL_PAD + (frac / span) * axis;
-  };
-  const todayX = Math.min(width - TL_PAD, xOf(new Date().toISOString()));
+  const xOf = (iso: string) => TL_PAD + Math.min(1, Math.max(0, (yearOf(new Date(iso)) - first) / span)) * axis;
+  const todayX = width - TL_PAD;
   const shown = events.filter((e) => filter === "all" || e.type === filter);
   const types = (Object.keys(TL_LABEL) as EventType[]).filter((t) => events.some((e) => e.type === t));
   const years: number[] = [];
   const perYear = axis / span;
-  const step = perYear >= 90 ? 1 : perYear >= 45 ? 2 : perYear >= 30 ? 3 : 5;
+  const step = perYear >= 40 ? 1 : perYear >= 22 ? 2 : perYear >= 15 ? 3 : 5;
   for (let y = first; y <= last; y += step) years.push(y);
 
   return (
@@ -459,13 +458,19 @@ function Timeline({ c, facts }: { c: CompetitorRow; facts: FactRow[] }) {
         </span>
       </div>
       <div ref={scrollRef} className="overflow-x-auto pb-1" data-testid="cmp-timeline">
-        <div className="relative mx-14 h-[222px]" style={{ width }}>
+        <div className="relative mx-14 h-[238px]" style={{ width }}>
           <span className="absolute left-0 top-[96px] h-[2px] bg-[#c8d4e8]" style={{ width: todayX }} />
           <span className="absolute top-[72px] h-[50px] w-[2px] -translate-x-1/2 bg-primary" style={{ left: todayX }} />
           <span className="absolute top-[56px] -translate-x-1/2 rounded-full bg-primary px-[7px] py-px text-[10px] font-semibold text-white" style={{ left: todayX }}>Today</span>
-          {years.map((y) => (
-            <span key={y} className="absolute top-[204px] -translate-x-1/2 text-[10px] text-fg-faint" style={{ left: TL_PAD + ((y - first) / span) * axis }}>{y}</span>
-          ))}
+          {years.map((y) => {
+            const x = TL_PAD + ((y - first) / span) * axis;
+            return (
+              <span key={y}>
+                <span className="absolute top-[92px] h-[10px] w-px -translate-x-1/2 bg-[#c8d4e8]" style={{ left: x }} />
+                <span className="absolute top-[220px] -translate-x-1/2 font-mono text-[10px] text-fg-muted" style={{ left: x }}>{y}</span>
+              </span>
+            );
+          })}
           {shown.map((e, i) => {
             const above = i % 2 === 0;
             const x = xOf(e.date);
