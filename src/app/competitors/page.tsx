@@ -21,7 +21,7 @@ export default async function CompetitorsPage() {
   const user = await requireUserPage("/competitors");
   if (!(await featureEnabledForCurrentUser("competitors"))) notFound();
   const workspace = await getOrCreateWorkspace();
-  const state = await getCompetitorsState(workspace.id, user.organizationName ?? "");
+  const state = await getCompetitorsState(workspace.id, user.organizationName ?? "", user.id);
 
   return (
     <AppShell>

@@ -77,6 +77,11 @@ export async function startRun(
   ]);
   if (activeScan || activeRun) return { error: "running" };
   const mode = await runModeFor(workspaceId);
+  if (mode === "bundle") {
+    // Demo news: the prepared pages must read as new each time the button is pressed.
+    const undone = await undoDemoRuns(workspaceId);
+    if (undone.runs) await recordCompetitorEvent(workspaceId, startedById, "cmp_demo_reset", { runs: undone.runs, statuses: undone.statuses, facts: undone.facts, suggestions: undone.suggestions });
+  }
   const { plan, skipped } = await planRun(workspaceId, mode, opts);
   if (plan.length === 0) return { error: "nothing" };
   const run = await db.competitorScanRun.create({
@@ -158,4 +163,41 @@ export async function executeRun(runId: string): Promise<void> {
   } catch (e) {
     console.error("[competitors] run notification failed", runId, e);
   }
+}
+
+/**
+ * Showcase only (bundle mode): before a demo run starts, undo what earlier
+ * demo runs did, so the same prepared pages read as new again — statuses
+ * back to the value before the first demo change, facts and suggestions the
+ * demo scans added removed, the runs and their scans (and pages) deleted.
+ * Nothing the set-up imports or a live crawl wrote is touched.
+ */
+export async function undoDemoRuns(workspaceId: string): Promise<{ runs: number; statuses: number; facts: number; suggestions: number }> {
+  const runs = await db.competitorScanRun.findMany({ where: { workspaceId, mode: "bundle" }, select: { id: true, startedAt: true } });
+  const out = { runs: runs.length, statuses: 0, facts: 0, suggestions: 0 };
+  if (runs.length === 0) return out;
+  const minStart = runs.reduce((m, r) => (r.startedAt < m ? r.startedAt : m), runs[0].startedAt);
+  const scans = await db.competitorScan.findMany({ where: { runId: { in: runs.map((r) => r.id) } }, select: { id: true, source: { select: { competitorId: true } } } });
+  const scanIds = scans.map((s) => s.id);
+  const competitorIds = [...new Set(scans.map((s) => s.source.competitorId))];
+
+  const touched = await db.capabilityStatus.findMany({ where: { scanId: { in: scanIds } }, select: { id: true } });
+  for (const st of touched) {
+    const before = await db.statusHistory.findFirst({ where: { statusId: st.id, at: { gte: minStart } }, orderBy: { at: "asc" } });
+    if (before) {
+      await db.capabilityStatus.update({ where: { id: st.id }, data: { value: before.value, quote: before.quote, sourceUrl: before.sourceUrl, scanId: before.scanId, changedAt: null } });
+      await db.statusHistory.deleteMany({ where: { statusId: st.id, at: { gte: minStart } } });
+    } else {
+      // First evidence the demo scan set on an empty cell: back to unknown.
+      await db.capabilityStatus.update({ where: { id: st.id }, data: { value: "unknown", quote: null, sourceUrl: null, confidence: null, product: null, scanId: null, changedAt: null } });
+    }
+    out.statuses++;
+  }
+  out.facts = (await db.profileFact.deleteMany({ where: { scanId: { in: scanIds } } })).count;
+  out.suggestions = (await db.capability.deleteMany({ where: { workspaceId, origin: "ai", suggestedById: { in: competitorIds }, createdAt: { gte: minStart } } })).count;
+  await db.competitorDomain.deleteMany({ where: { workspaceId, origin: "ai", suggestedById: { in: competitorIds }, createdAt: { gte: minStart } } });
+  await db.competitorScan.deleteMany({ where: { id: { in: scanIds } } });
+  await db.competitorScanRun.deleteMany({ where: { id: { in: runs.map((r) => r.id) } } });
+  await db.competitorSource.updateMany({ where: { competitorId: { in: competitorIds }, lastStatus: { in: ["running", "failed"] } }, data: { lastStatus: "ok", lastError: null } });
+  return out;
 }

@@ -862,6 +862,20 @@ model CompetitorScan {
   @@index([runId])
 }
 
+/// A news-feed item a user has read (per user; items are derived from statuses,
+/// facts and suggestions, so `key` = kind:rowId:timestamp). "Mark all read" inserts
+/// one row per item shown.
+model CompetitorFeedRead {
+  id          String   @id @default(uuid())
+  workspaceId String
+  userId      String
+  key         String
+  readAt      DateTime @default(now())
+
+  @@unique([workspaceId, userId, key])
+  @@index([workspaceId, userId])
+}
+
 /// One press of Scan on the Competitors page (or one scheduled round): the
 /// competitors scanned one after another, and the one notification email sent
 /// when the last of them finishes. `summary` is what that email said.

@@ -20,6 +20,8 @@ export interface CompetitorsConfig {
   manualRescansPerDay: number;
   /** Users (ids, same organization) who receive the scan notification email. */
   notifyUserIds: string[];
+  /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
+  baselineUntil: string | null;
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
@@ -27,6 +29,7 @@ export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
   maxPagesPerScan: DEFAULT_MAX_PAGES,
   manualRescansPerDay: DEFAULT_MANUAL_RESCANS_PER_DAY,
   notifyUserIds: [],
+  baselineUntil: null,
 };
 
 // ————— Scanner rules (story 2, 2026-10-26) —————
@@ -75,6 +78,7 @@ export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
     maxPagesPerScan: pages,
     manualRescansPerDay: rescans,
     notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
+    baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
   };
 }
 

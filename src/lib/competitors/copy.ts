@@ -203,6 +203,15 @@ export const COMPETITORS_COPY = {
     emptyTitle: "No signals yet",
     emptyBody:
       "PMOS AI posts what changed at each competitor here, day by day, with what it means for your roadmap, once competitors and sources are added.",
+    noMatch: "No signal matches these filters.",
+    groups: { today: "Today", yesterday: "Yesterday", week: "This week", earlier: "Earlier" } as Record<string, string>,
+    kinds: { gap: "Gap opened", raised: "Status raised", lowered: "Status lowered", fact: "New on the site", suggestion: "Suggested capability" } as Record<string, string>,
+    since: (date: string) => `News since ${date} — what the set-up imports found before that is in the profiles, not here.`,
+    unreadCount: (n: number) => `${n} unread`,
+    markRead: "Mark read",
+    openCell: "Open in matrix",
+    suggestionStates: { suggested: "Awaiting review", active: "Accepted", dismissed: "Dismissed" } as Record<string, string>,
+    ownStatus: (org: string, value: string) => `${org}: ${value}`,
   },
   cards: {
     count: (n: number) => `${n} card${n === 1 ? "" : "s"}`,

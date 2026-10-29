@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
+import { collectFeed, type FeedItem } from "./feed";
 import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
 
 /**
@@ -151,13 +152,15 @@ export interface CompetitorsState {
   activeRun: { id: string; total: number; done: number; current: string | null; mode: string } | null;
   /** The last finished run and what its notification said. */
   lastRun: { id: string; finishedAt: string | null; status: string; summary: Record<string, unknown> } | null;
+  /** News feed items since the baseline, newest first, with the signed-in user's read marks. */
+  feed: FeedItem[];
 }
 
 function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-export async function getCompetitorsState(workspaceId: string, orgName: string): Promise<CompetitorsState> {
+export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null): Promise<CompetitorsState> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const [workspace, productLines, competitors, domains, capabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
@@ -208,12 +211,14 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     return u ? u.name || u.email : null;
   };
   const activeBySource = new Map(activeScans.map((s) => [s.sourceId, s.id]));
-  const [members, activeRun, lastRun] = await Promise.all([
+  const config = mergeCompetitorsConfig(workspace?.competitorsConfig);
+  const [members, activeRun, lastRun, feed] = await Promise.all([
     workspace
       ? db.user.findMany({ where: { organizationId: workspace.organizationId, deactivatedAt: null }, orderBy: [{ name: "asc" }, { email: "asc" }], select: { id: true, name: true, email: true } })
       : [],
     db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, orderBy: { startedAt: "desc" }, select: { id: true, total: true, done: true, current: true, mode: true } }),
     db.competitorScanRun.findFirst({ where: { workspaceId, status: { in: ["ok", "failed"] } }, orderBy: { startedAt: "desc" }, select: { id: true, finishedAt: true, status: true, summary: true } }),
+    collectFeed(workspaceId, config.baselineUntil, userId),
   ]);
 
   let lastScanAt: Date | null = null;
@@ -225,7 +230,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
 
   return {
     orgName,
-    config: mergeCompetitorsConfig(workspace?.competitorsConfig),
+    config,
     productLines: productLines.map((p) => p.name),
     competitors: competitors.map((c) => {
       const website = c.sources.find((s) => s.type === "website") ?? null;
@@ -330,6 +335,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string):
     rescanLimitEnforced: rescanLimitEnforced(),
     members,
     activeRun,
+    feed,
     lastRun: lastRun
       ? { id: lastRun.id, finishedAt: lastRun.finishedAt?.toISOString() ?? null, status: lastRun.status, summary: lastRun.summary && typeof lastRun.summary === "object" && !Array.isArray(lastRun.summary) ? (lastRun.summary as Record<string, unknown>) : {} }
       : null,

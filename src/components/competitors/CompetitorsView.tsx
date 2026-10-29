@@ -10,6 +10,7 @@ import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import type { FeedItem } from "@/lib/competitors/feed";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -276,6 +277,40 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   });
   const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && (visibleCaps.some((k) => k.domainId === d.id) || visibleSuggested.some((k) => k.domainId === d.id)));
   const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
+
+  // ——— News feed: items since the baseline, grouped by day, per-user read marks ———
+  const feedSources = [...new Set(state.feed.map((i) => i.sourceType).filter((s): s is string => Boolean(s)))].map((s) => C.profile.sourceTypes[s] ?? s);
+  const unreadCount = state.feed.filter((i) => !i.read).length;
+  const fq = signalQuery.trim().toLowerCase();
+  const visibleFeed = state.feed.filter((i) => {
+    if (fq && !i.title.toLowerCase().includes(fq) && !(i.quote ?? "").toLowerCase().includes(fq) && !i.competitorName.toLowerCase().includes(fq)) return false;
+    if (feedCompetitor.length && !feedCompetitor.includes(i.competitorName)) return false;
+    if (sourceFilter.length && !sourceFilter.includes(i.sourceType ? C.profile.sourceTypes[i.sourceType] ?? i.sourceType : "")) return false;
+    if (impactFilter.length && !impactFilter.includes(i.impact)) return false;
+    if (unreadOnly && i.read) return false;
+    return true;
+  });
+  const feedGroups = (() => {
+    const now = new Date();
+    const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    const today = dayKey(now);
+    const yesterday = dayKey(new Date(now.getTime() - 86_400_000));
+    const weekAgo = now.getTime() - 7 * 86_400_000;
+    const groups: { key: string; items: FeedItem[] }[] = [{ key: "today", items: [] }, { key: "yesterday", items: [] }, { key: "week", items: [] }, { key: "earlier", items: [] }];
+    for (const i of visibleFeed) {
+      const d = new Date(i.at);
+      const k = dayKey(d);
+      const g = k === today ? 0 : k === yesterday ? 1 : d.getTime() >= weekAgo ? 2 : 3;
+      groups[g].items.push(i);
+    }
+    return groups.filter((g) => g.items.length > 0);
+  })();
+  async function markRead(keys: string[]) {
+    if (keys.length === 0) return;
+    const res = await fetch("/api/competitors/feed/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) });
+    const data = await res.json();
+    if (res.ok && data.state) setState(data.state);
+  }
 
   useEffect(() => {
     if (tab !== "parity") return;
@@ -544,19 +579,42 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
             <div className="mb-3.5 flex flex-wrap items-center gap-2">
               <SearchBox value={signalQuery} onChange={setSignalQuery} placeholder={C.feed.searchSignals} />
               <FilterPopover label={C.filters.competitor} accent="customer" options={competitors.map((c) => c.name)} selected={feedCompetitor} onToggle={toggleIn(setFeedCompetitor)} emptyText={C.filters.noCompetitors} />
-              <FilterPopover label={C.feed.source} accent="platform" options={[]} selected={sourceFilter} onToggle={toggleIn(setSourceFilter)} emptyText="No sources yet" />
+              <FilterPopover label={C.feed.source} accent="platform" options={feedSources} selected={sourceFilter} onToggle={toggleIn(setSourceFilter)} emptyText="No sources yet" />
               <FilterPopover label={C.feed.impact} accent="status" options={IMPACTS} selected={impactFilter} onToggle={toggleIn(setImpactFilter)} />
               <span className="mx-1 h-5 w-px bg-border" />
               <button aria-pressed={unreadOnly} onClick={() => setUnreadOnly((v) => !v)} className={chipClass(unreadOnly)}>
                 {C.feed.unread}{unreadOnly && <Check size={12} strokeWidth={3} />}
+                {unreadCount > 0 && <span className={cn("inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px] font-semibold", unreadOnly ? "bg-white/25 text-white" : "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]")}>{unreadCount}</span>}
               </button>
               <div className="ml-auto">
-                <span title={C.feed.noSignalsToMark} className="inline-flex">
-                  <Button size="sm" variant="ghost" disabled><CheckCheck size={13} strokeWidth={2.25} />{C.feed.markAllRead}</Button>
+                <span title={unreadCount === 0 ? C.feed.noSignalsToMark : undefined} className="inline-flex">
+                  <Button size="sm" variant="ghost" disabled={unreadCount === 0} onClick={() => void markRead(state.feed.filter((i) => !i.read).map((i) => i.key))} data-testid="cmp-feed-mark-all"><CheckCheck size={13} strokeWidth={2.25} />{C.feed.markAllRead}</Button>
                 </span>
               </div>
             </div>
-            <EmptyPanel title={C.feed.emptyTitle} body={C.feed.emptyBody} />
+            {state.config.baselineUntil && <div className="mb-3 text-[12px] text-fg-muted">{C.feed.since(shortDate(state.config.baselineUntil))}</div>}
+            {state.feed.length === 0 ? (
+              <EmptyPanel title={C.feed.emptyTitle} body={C.feed.emptyBody} />
+            ) : visibleFeed.length === 0 ? (
+              <div className="glass rounded-card px-10 py-10 text-center text-[13px] text-fg-3">{C.feed.noMatch}</div>
+            ) : (
+              <div className="flex flex-col gap-5" data-testid="cmp-feed">
+                {feedGroups.map((g) => (
+                  <div key={g.key}>
+                    <div className="font-title mb-2 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-fg-muted">
+                      {C.feed.groups[g.key]}<span className="font-mono text-[10.5px] font-medium normal-case tracking-normal text-fg-faint">{g.items.length}</span>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {g.items.map((item) => (
+                        <FeedCard key={item.key} item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null}
+                          onRead={() => void markRead([item.key])}
+                          onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, capabilityId: item.capabilityId! }); } : null} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
@@ -675,6 +733,49 @@ function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, chi
       {open && children}
       {open && suggestedRows}
     </>
+  );
+}
+
+// ————— News feed card —————
+
+const IMPACT_TONE: Record<string, { fg: string; bg: string }> = {
+  High: { fg: "#c23767", bg: "rgba(239,90,138,.15)" },
+  Medium: { fg: "#2a5fd0", bg: "rgba(59,124,246,.15)" },
+  Low: { fg: "#4a5b74", bg: "#eef1f6" },
+};
+
+function FeedCard({ item, org, competitor, onRead, onOpenCell }: {
+  item: FeedItem; org: string; competitor: CompetitorRow | null; onRead: () => void; onOpenCell: (() => void) | null;
+}) {
+  const tone = IMPACT_TONE[item.impact];
+  const when = new Date(item.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const detail = item.kind === "fact"
+    ? `${C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind}${item.factDate ? ` · ${shortDate(item.factDate)}` : ""}`
+    : item.kind === "suggestion"
+      ? `${item.domain ?? ""}${item.newDomain ? ` · ${C.notify.email.newDomain}` : ""} · ${C.feed.suggestionStates[item.suggestionState ?? ""] ?? ""}`
+      : `${C.values[item.from ?? "unknown"]} → ${C.values[item.to ?? "unknown"]} · ${C.feed.ownStatus(org, C.values[item.own ?? "unknown"].toLowerCase())}${item.product ? ` · ${item.product}` : ""}`;
+  return (
+    <article className={cn("glass-weak relative flex gap-3.5 rounded-card border px-4 py-3", item.read ? "border-border" : "border-[rgba(36,87,245,.35)] bg-white")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
+      {!item.read && <span className="absolute left-1.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-primary" aria-label={C.feed.unread} />}
+      <div className="pt-0.5">{competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}</div>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-fg-3">
+          <span className="font-semibold text-foreground">{item.competitorName}</span>
+          <span className="inline-flex items-center rounded-full px-2 py-px font-mono text-[10px] font-semibold" style={{ color: tone.fg, background: tone.bg }}>{C.feed.kinds[item.kind]}</span>
+          {item.domain && item.kind !== "suggestion" && <span className="text-fg-muted">{item.domain}</span>}
+          {item.sourceType && <span className="text-fg-muted">{C.profile.sourceTypes[item.sourceType] ?? item.sourceType}</span>}
+          <span className="ml-auto font-mono text-[10.5px] text-fg-faint">{when}</span>
+        </div>
+        <div className="mt-1 text-[14px] font-semibold text-foreground">{item.title}</div>
+        <div className="mt-0.5 text-[12.5px] text-fg-3">{detail}</div>
+        {item.quote && <div className="mt-1 text-[12.5px] italic text-fg-muted">“{item.quote}”</div>}
+        <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[12px]">
+          {item.sourceUrl && <a href={item.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">{C.matrix.learnMore}<ExternalLink size={11} /></a>}
+          {onOpenCell && <button type="button" onClick={onOpenCell} className="text-primary hover:underline">{C.feed.openCell}</button>}
+          {!item.read && <button type="button" onClick={onRead} className="ml-auto text-fg-muted hover:text-foreground" data-testid="cmp-feed-read">{C.feed.markRead}</button>}
+        </div>
+      </div>
+    </article>
   );
 }
 

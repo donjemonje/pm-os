@@ -82,7 +82,7 @@ export async function PATCH(req: Request, { params }: Params) {
     await db.competitorDomain.update({ where: { id }, data });
   }
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "domain", action: data.name && data.name !== existing.name ? "rename" : "update", entityId: id, field, renamedReferences });
-  const state = await getCompetitorsState(ctx.workspaceId, ctx.orgName);
+  const state = await getCompetitorsState(ctx.workspaceId, ctx.orgName, ctx.user.id);
   return NextResponse.json({ state, renamedReferences });
 }
 
