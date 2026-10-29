@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Loader2, Pencil, RefreshCw, Search, Undo2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, RefreshCw, Search, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
@@ -542,12 +542,11 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
                               const descOpen = openDesc === k.id;
                               return (
-                                <Fragment key={k.id}>
-                                <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]", descOpen && "border-b-0")}>
-                                  <td className={cn("cursor-pointer px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")} onClick={() => toggleDesc(k.id)} role="button" aria-expanded={descOpen} aria-label={C.matrix.descriptionToggle(k.name)} data-testid="cmp-capability-name">
+                                <tr key={k.id} className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
+                                  <td className={cn("px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")}>
                                     <span className="inline-flex flex-wrap items-center gap-2">
-                                      <ChevronRight size={12} className={cn("-ml-4 shrink-0 text-fg-faint transition-transform", descOpen && "rotate-90")} aria-hidden />
                                       {k.name}
+                                      <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
                                       {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
                                     </span>
@@ -579,8 +578,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     </span>
                                   </td>
                                 </tr>
-                                {descOpen && <DescriptionRow colSpan={3 + shownCompetitors.length} description={k.description} ownProduct={k.ownProduct} org={own} />}
-                                </Fragment>
                               );
                             })}
                           </DomainGroup>
@@ -930,11 +927,11 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide,
   }, [open]);
   return (
     <>
-    <tr className={cn("group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]", descOpen && "border-b-0")} data-testid="cmp-suggested-row">
-      <td className="cursor-pointer px-4 pl-[30px] font-medium text-[#1f2f47]" onClick={onToggleDesc} role="button" aria-expanded={descOpen} aria-label={C.matrix.descriptionToggle(capability.name)} data-testid="cmp-capability-name">
+    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
+      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]">
         <span className="inline-flex flex-wrap items-center gap-2">
-          <ChevronRight size={12} className={cn("-ml-4 shrink-0 text-fg-faint transition-transform", descOpen && "rotate-90")} aria-hidden />
           {capability.name}
+          <DescriptionInfo name={capability.name} description={capability.description} ownProduct="" org={org} open={descOpen} onToggle={onToggleDesc} suggested hint={C.matrix.suggestedRowHint} />
           <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested}</span>
         </span>
       </td>
@@ -1000,23 +997,49 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide,
         </span>
       </td>
     </tr>
-    {descOpen && <DescriptionRow colSpan={3 + competitors.length} description={capability.description} ownProduct="" org={org} suggested hint={C.matrix.suggestedRowHint} />}
     </>
   );
 }
 
-/** The inner row under a capability (click on its name): the plain description, the org's product when known. */
-function DescriptionRow({ colSpan, description, ownProduct, org, suggested = false, hint }: { colSpan: number; description: string; ownProduct: string; org: string; suggested?: boolean; hint?: string }) {
+/** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
+function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, suggested = false, hint }: {
+  name: string; description: string; ownProduct: string; org: string; open: boolean; onToggle: () => void; suggested?: boolean; hint?: string;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onToggle();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onToggle]);
   return (
-    <tr className={cn("border-b border-border", suggested && "border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)]")} data-testid="cmp-description-row">
-      <td colSpan={colSpan} className="px-4 pb-3 pl-[46px] pt-0 align-top">
-        <div className="max-w-[720px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-[12.5px] leading-relaxed text-foreground shadow-[0_4px_14px_-10px_rgba(10,22,40,.25)]">
-          {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
-          {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
-          {suggested && hint && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{hint}</p>}
-        </div>
-      </td>
-    </tr>
+    <span className="relative inline-flex items-center">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggle(); }}
+        aria-label={C.matrix.descriptionToggle(name)}
+        aria-expanded={open}
+        className={cn("inline-flex h-5 w-5 items-center justify-center rounded-full text-fg-faint hover:bg-white hover:text-fg-2", open && "bg-white text-primary shadow-[0_0_0_2px_var(--app-accent-soft)]")}
+        data-testid="cmp-description-info"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24]" onClick={onToggle} />
+          <div className={cn("absolute left-0 top-[calc(100%+6px)] z-[25] w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", suggested && "border-dashed border-[rgba(36,87,245,.45)]")} data-testid="cmp-description-card">
+            <div className="mb-1 flex items-start gap-2">
+              <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
+              <button type="button" onClick={onToggle} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
+            </div>
+            {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
+            {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
+            {suggested && hint && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{hint}</p>}
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 
