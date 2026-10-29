@@ -69,31 +69,31 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
   );
 }
 
-/** The strip's last card: competitors ranked by how much of the org's capability list they cover. */
+/** The strip's last card (C2 "Risk" slot): competitors ranked by how much of the org's capability list they cover. */
 function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; onOpen: (competitorId: string) => void }) {
+  const tone = (score: number | null) => (score == null ? ["#9aa8be", "#5b6c85"] : score >= 70 ? ["#c23767", "#c23767"] : score >= 50 ? ["#f0b43c", "#8a5a00"] : ["#17b26a", "#0f7a47"]);
   return (
     <div className="flex flex-[1_1_300px] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3" data-testid="cmp-closest-card">
-      <span className="flex items-baseline justify-between gap-2">
-        <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.strip.closest(org)}</span>
-        <span className="truncate text-[10.5px] text-fg-faint" title={C.strip.closestSub(org)}>{C.strip.closestSub(org)}</span>
-      </span>
+      <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted" title={C.strip.closestSub(org)}>{C.strip.closest}</span>
       {!measured || ranked.length === 0 ? (
         <span className="text-[12px] text-fg-faint">{C.strip.closestNone}</span>
       ) : (
-        <ol className="m-0 grid list-none grid-cols-1 gap-x-5 gap-y-1 p-0 sm:grid-cols-2">
-          {ranked.map(({ competitor: c, closeness }, i) => (
-            <li key={c.id}>
-              <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] px-1 py-0.5 text-left hover:bg-white" title={C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}>
-                <span className="w-3 shrink-0 font-mono text-[10px] text-fg-faint">{i + 1}</span>
-                <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{c.name}</span>
-                <span className={cn("shrink-0 rounded-full border px-1.5 py-px font-mono text-[9px] font-semibold leading-[13px]", c.kind === "indirect" ? "border-border text-fg-muted" : "border-[rgba(36,87,245,.35)] text-[#2a5fd0]")}>{C.matrix.kinds[c.kind]}</span>
-                <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
-                  <span className="block h-full bg-[#5b6c85]" style={{ width: `${closeness.score ?? 0}%` }} />
-                </span>
-                <span className="w-8 shrink-0 text-right font-mono text-[11px] font-semibold text-fg-3">{closeness.score == null ? "—" : `${closeness.score}%`}</span>
-              </button>
-            </li>
-          ))}
+        <ol className="m-0 grid list-none grid-cols-1 gap-x-[18px] gap-y-1 p-0 text-[12px] sm:grid-cols-2">
+          {ranked.map(({ competitor: c, closeness }) => {
+            const [bar, fg] = tone(closeness.score);
+            return (
+              <li key={c.id}>
+                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.matrix.kinds[c.kind]} · ${C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}`}>
+                  <Logo c={c} size={16} />
+                  <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
+                  <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+                    <span className="block h-full" style={{ width: `${closeness.score ?? 0}%`, background: bar }} />
+                  </span>
+                  <span className="w-[22px] shrink-0 text-right text-[10.5px] font-semibold" style={{ color: fg }}>{closeness.score ?? "—"}</span>
+                </button>
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>
