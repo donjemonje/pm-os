@@ -98,6 +98,8 @@ export const COMPETITORS_COPY = {
     ownSuggested: "missing?",
     legendSuggested: "suggested by a scan — accept or dismiss",
     learnMore: "Learn more",
+    descriptionToggle: (name: string) => `${name}: show or hide the description`,
+    descriptionEmpty: "No description yet. Add one in Settings → Competitors.",
     capabilitiesCount: (n: number) => `${n} capabilit${n === 1 ? "y" : "ies"}`,
     covered: "covered",
     partialN: (n: number) => `${n} partial`,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Loader2, Pencil, RefreshCw, Search, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
@@ -133,6 +133,15 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   const [tab, setTab] = useState<Tab>("parity");
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(null);
   const [openCell, setOpenCell] = useState<{ competitorId: string; capabilityId: string } | null>(null);
+  // Capability whose description row is open under it (click on the name cell).
+  const [openDesc, setOpenDesc] = useState<string | null>(null);
+  const toggleDesc = useCallback((capabilityId: string) => {
+    setOpenDesc((cur) => {
+      const next = cur === capabilityId ? null : capabilityId;
+      if (next) track("cmp_capability_description_opened", { capabilityId });
+      return next;
+    });
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -526,15 +535,18 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                           <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} partial={partial} gaps={gaps} colSpan={3 + shownCompetitors.length}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} suggestedCount={sugRows.length} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}
                             suggestedRows={sugRows.map((k) => (
-                              <SuggestedRow key={k.id} capability={k} org={own} seenAt={competitorName(k.suggestedById)} competitors={shownCompetitors} canEdit={canEdit} onDecide={(decision) => void decideCapability(k.id, decision)} />
+                              <SuggestedRow key={k.id} capability={k} org={own} seenAt={competitorName(k.suggestedById)} competitors={shownCompetitors} canEdit={canEdit} onDecide={(decision) => void decideCapability(k.id, decision)} descOpen={openDesc === k.id} onToggleDesc={() => toggleDesc(k.id)} />
                             ))}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
+                              const descOpen = openDesc === k.id;
                               return (
-                                <tr key={k.id} className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
-                                  <td className={cn("px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")} title={k.description || undefined}>
+                                <Fragment key={k.id}>
+                                <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]", descOpen && "border-b-0")}>
+                                  <td className={cn("cursor-pointer px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")} onClick={() => toggleDesc(k.id)} role="button" aria-expanded={descOpen} aria-label={C.matrix.descriptionToggle(k.name)} data-testid="cmp-capability-name">
                                     <span className="inline-flex flex-wrap items-center gap-2">
+                                      <ChevronRight size={12} className={cn("-ml-4 shrink-0 text-fg-faint transition-transform", descOpen && "rotate-90")} aria-hidden />
                                       {k.name}
                                       {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
@@ -567,6 +579,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     </span>
                                   </td>
                                 </tr>
+                                {descOpen && <DescriptionRow colSpan={3 + shownCompetitors.length} description={k.description} ownProduct={k.ownProduct} org={own} />}
+                                </Fragment>
                               );
                             })}
                           </DomainGroup>
@@ -898,8 +912,9 @@ function DecideButtons({ accept, dismiss, onDecide }: { accept: string; dismiss:
 }
 
 /** A capability a scan proposed: dashed row at the end of its domain, same height as a catalog row; the proposing competitor's ✓ opens the evidence; ✓ / × to decide. */
-function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide }: {
+function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide, descOpen, onToggleDesc }: {
   capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
+  descOpen: boolean; onToggleDesc: () => void;
 }) {
   const { quote, url } = splitSuggestedQuote(capability.suggestedQuote);
   const [open, setOpen] = useState(false);
@@ -914,9 +929,11 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   return (
-    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
-      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]" title={C.matrix.suggestedRowHint}>
+    <>
+    <tr className={cn("group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]", descOpen && "border-b-0")} data-testid="cmp-suggested-row">
+      <td className="cursor-pointer px-4 pl-[30px] font-medium text-[#1f2f47]" onClick={onToggleDesc} role="button" aria-expanded={descOpen} aria-label={C.matrix.descriptionToggle(capability.name)} data-testid="cmp-capability-name">
         <span className="inline-flex flex-wrap items-center gap-2">
+          <ChevronRight size={12} className={cn("-ml-4 shrink-0 text-fg-faint transition-transform", descOpen && "rotate-90")} aria-hidden />
           {capability.name}
           <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested}</span>
         </span>
@@ -981,6 +998,23 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide 
         <span className="flex w-[98px] items-center justify-center">
           {canEdit ? <DecideButtons accept={C.matrix.accept} dismiss={C.matrix.dismiss} onDecide={onDecide} /> : <span className="text-[11px] text-fg-faint">{C.matrix.suggested}</span>}
         </span>
+      </td>
+    </tr>
+    {descOpen && <DescriptionRow colSpan={3 + competitors.length} description={capability.description} ownProduct="" org={org} suggested hint={C.matrix.suggestedRowHint} />}
+    </>
+  );
+}
+
+/** The inner row under a capability (click on its name): the plain description, the org's product when known. */
+function DescriptionRow({ colSpan, description, ownProduct, org, suggested = false, hint }: { colSpan: number; description: string; ownProduct: string; org: string; suggested?: boolean; hint?: string }) {
+  return (
+    <tr className={cn("border-b border-border", suggested && "border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)]")} data-testid="cmp-description-row">
+      <td colSpan={colSpan} className="px-4 pb-3 pl-[46px] pt-0 align-top">
+        <div className="max-w-[720px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-[12.5px] leading-relaxed text-foreground shadow-[0_4px_14px_-10px_rgba(10,22,40,.25)]">
+          {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
+          {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
+          {suggested && hint && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{hint}</p>}
+        </div>
       </td>
     </tr>
   );
