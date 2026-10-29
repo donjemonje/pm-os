@@ -25,10 +25,11 @@ export async function POST(_req: Request, { params }: Params) {
     include: {
       domain: { select: { name: true } },
       statuses: { include: { competitor: { select: { name: true, host: true } } } },
+      ideas: { select: { ideaId: true } },
     },
   });
   if (!capability) return bad("Not found", 404);
-  if (capability.ideaId) return stateResponse(ctx);
+  if (capability.ideas.length > 0) return stateResponse(ctx);
 
   const evidence = capability.statuses
     .map((s) => ({ s, value: (s.overrideValue ?? s.value) as string }))
@@ -63,7 +64,7 @@ export async function POST(_req: Request, { params }: Params) {
   // mutateIdeas returns the whole state, not the new row: it is the newest manual idea with this title.
   const idea = await db.idea.findFirst({ where: { workspaceId: ctx.workspaceId, title: capability.name, origin: "manual" }, orderBy: { createdAt: "desc" }, select: { id: true } });
   if (!idea) return bad(C.roadmap.ideaFailed, 500);
-  await db.capability.update({ where: { id }, data: { ideaId: idea.id } });
+  await db.capabilityIdea.create({ data: { capabilityId: id, ideaId: idea.id, origin: "created" } });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_roadmap_idea_created", { capabilityId: id, ideaId: idea.id, evidence: evidence.length, kind: capability.ourStatus === "missing" ? "gap" : "partial" });
   return stateResponse(ctx, 201);
 }

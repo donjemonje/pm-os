@@ -95,8 +95,8 @@ export interface CapabilityRow {
   state: string;
   suggestedById: string | null;
   suggestedQuote: string | null;
-  /** The Idea created from this row on the Roadmap tab, with its Jira key once pushed. */
-  idea: { id: string; title: string; batchStatus: string; jiraKey: string | null } | null;
+  /** Ideas linked to this roadmap row (created from it or matched), each with its Jira key and live Jira status when known. */
+  ideas: { id: string; title: string; batchStatus: string; origin: string; jiraKey: string | null; jiraStatus: string | null }[];
 }
 
 export interface CellRow {
@@ -185,7 +185,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     db.capability.findMany({
       where: { workspaceId },
       orderBy: [{ position: "asc" }, { name: "asc" }],
-      include: { idea: { select: { id: true, title: true, batchStatus: true, sources: { where: { kind: "jira" }, select: { jiraKey: true }, take: 1 } } } },
+      include: { ideas: { orderBy: { createdAt: "asc" }, select: { origin: true, idea: { select: { id: true, title: true, batchStatus: true, sources: { where: { kind: "jira" }, select: { jiraKey: true }, take: 1 } } } } } },
     }),
     db.capabilityStatus.findMany({ where: { workspaceId }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
     db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
@@ -239,6 +239,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     }
   }
 
+  // Live Jira status for linked ideas (the snapshot is a render cache replaced on every import).
+  const jiraKeys = [...new Set(capabilities.flatMap((k) => k.ideas.map((l) => l.idea.sources[0]?.jiraKey).filter((v): v is string => Boolean(v))))];
+  const jiraStatusOf = new Map(
+    jiraKeys.length
+      ? (await db.jiraIdeaSnapshot.findMany({ where: { workspaceId, key: { in: jiraKeys } }, select: { key: true, status: true } })).map((j) => [j.key, j.status])
+      : [],
+  );
   return {
     orgName,
     config,
@@ -301,7 +308,10 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       state: k.state,
       suggestedById: k.suggestedById,
       suggestedQuote: k.suggestedQuote,
-      idea: k.idea ? { id: k.idea.id, title: k.idea.title, batchStatus: k.idea.batchStatus, jiraKey: k.idea.sources[0]?.jiraKey ?? null } : null,
+      ideas: k.ideas.map((l) => {
+        const key = l.idea.sources[0]?.jiraKey ?? null;
+        return { id: l.idea.id, title: l.idea.title, batchStatus: l.idea.batchStatus, origin: l.origin, jiraKey: key, jiraStatus: key ? jiraStatusOf.get(key) ?? null : null };
+      }),
     })),
     cells: statuses.map((s) => {
       const scanned = s.value as StatusValue;

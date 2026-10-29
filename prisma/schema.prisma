@@ -488,8 +488,8 @@ model Idea {
 
   sources IdeaSource[]
   events  ReviewEvent[]
-  /// Competitor capabilities whose roadmap row created this idea.
-  capabilities Capability[]
+  /// Competitor capabilities (roadmap rows) linked to this idea.
+  capabilities CapabilityIdea[]
 
   @@index([workspaceId])
 }
@@ -693,9 +693,8 @@ model Capability {
   /// Which competitor's scan suggested it (null for manual rows).
   suggestedById  String?
   suggestedQuote String?
-  /// The Idea a PM created from this row on the Roadmap tab (null = none yet).
-  ideaId         String?
-  idea           Idea?            @relation(fields: [ideaId], references: [id], onDelete: SetNull)
+  /// Ideas this roadmap row is linked to: created from the row, or matched to an existing idea.
+  ideas          CapabilityIdea[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
@@ -707,6 +706,20 @@ model Capability {
 
 /// One matrix cell. `value` is what the last scan found; the override fields,
 /// when set, win over every later scan until a PM resets them.
+/// Roadmap row ⇄ Idea. `origin` = "created" (the row's Create idea button) or
+/// "matched" (an existing idea linked to the row by hand or by PMOS AI).
+model CapabilityIdea {
+  capabilityId String
+  capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  ideaId       String
+  idea         Idea       @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  origin       String     @default("matched")
+  createdAt    DateTime   @default(now())
+
+  @@id([capabilityId, ideaId])
+  @@index([ideaId])
+}
+
 model CapabilityStatus {
   id           String     @id @default(uuid())
   workspaceId  String

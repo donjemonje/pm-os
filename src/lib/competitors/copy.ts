@@ -265,6 +265,7 @@ export const COMPETITORS_COPY = {
     createIdea: "Create idea",
     creating: "Creating…",
     openIdea: "Open idea",
+    openIdeas: (n: number) => `Open ${n} ideas`,
     ideaTag: (status: string) => `Idea · ${status}`,
     evidenceN: (n: number) => `Evidence · ${n}`,
     evidenceNone: "No competitor evidence captured yet.",

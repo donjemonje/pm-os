@@ -771,7 +771,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                 {total > 0 ? <span><b className="font-semibold">{C.roadmap.intro(total)}</b> {C.roadmap.introSub}</span> : <span>{C.roadmap.introNone}</span>}
               </div>
               {sections.map((g) => {
-                const notInJira = g.rows.filter((k) => !k.idea?.jiraKey).length;
+                const notInJira = g.rows.filter((k) => !k.ideas.some((i) => i.jiraKey)).length;
                 return (
                   <div key={g.key} className="glass overflow-hidden rounded-card" data-testid={`cmp-roadmap-${g.key}`}>
                     <div className="flex items-center gap-3 border-b border-[rgba(200,212,232,.5)] px-4 py-2.5" style={{ background: g.gradient }}>
@@ -834,20 +834,24 @@ function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreate
           <span className="text-[13.5px] font-semibold">{k.name}</span>
           <span className="text-[11.5px] text-fg-muted">{sub}</span>
         </span>
-        {k.idea?.jiraKey ? (
-          <a href="/ideas" className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.55)] bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0] hover:underline" data-testid="cmp-roadmap-jira">{k.idea.jiraKey}</a>
-        ) : k.idea ? (
-          <a href="/ideas" className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.55)] bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0] hover:underline" data-testid="cmp-roadmap-idea">{C.roadmap.ideaTag(k.idea.batchStatus)}</a>
-        ) : (
+        {k.ideas.length === 0 ? (
           <span className="inline-flex items-center whitespace-nowrap rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px text-[11px] font-semibold text-[#8a5a00]">{C.roadmap.notInJiraTag}</span>
+        ) : (
+          <span className="flex flex-wrap gap-1.5">
+            {k.ideas.map((i) => (
+              <a key={i.id} href="/ideas" title={i.title} onClick={() => track("cmp_roadmap_idea_opened", { capabilityId: k.id, ideaId: i.id, via: "pill" })} className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-[rgba(59,124,246,.55)] bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0] hover:underline" data-testid={i.jiraKey ? "cmp-roadmap-jira" : "cmp-roadmap-idea"}>
+                {i.jiraKey ? `${i.jiraKey}${i.jiraStatus ? ` · ${i.jiraStatus}` : ""}` : C.roadmap.ideaTag(i.batchStatus)}
+              </a>
+            ))}
+          </span>
         )}
         <span className="flex gap-2">
-          {k.idea ? (
-            <Button size="sm" variant="secondary" onClick={() => { track("cmp_roadmap_idea_opened", { capabilityId: k.id, ideaId: k.idea?.id }); window.location.assign("/ideas"); }}>{C.roadmap.openIdea}</Button>
+          {k.ideas.length > 0 ? (
+            <Button size="sm" variant="secondary" onClick={() => { track("cmp_roadmap_idea_opened", { capabilityId: k.id, ideaId: k.ideas[0].id, via: "button" }); window.location.assign("/ideas"); }}>{k.ideas.length === 1 ? C.roadmap.openIdea : C.roadmap.openIdeas(k.ideas.length)}</Button>
           ) : (
             <Button size="sm" variant="primary" onClick={() => void create()} disabled={busy} data-testid="cmp-roadmap-create-idea">{busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} strokeWidth={2.25} />}{busy ? C.roadmap.creating : C.roadmap.createIdea}</Button>
           )}
-          <Button size="sm" variant={k.idea ? "ghost" : "secondary"} onClick={toggle} aria-expanded={open} data-testid="cmp-roadmap-evidence">{C.roadmap.evidenceN(evidence.length)}</Button>
+          <Button size="sm" variant={k.ideas.length > 0 ? "ghost" : "secondary"} onClick={toggle} aria-expanded={open} data-testid="cmp-roadmap-evidence">{C.roadmap.evidenceN(evidence.length)}</Button>
         </span>
       </div>
       {open && (
