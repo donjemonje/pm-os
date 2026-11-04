@@ -13,6 +13,7 @@ import {
 import { getCompetitorsVertexLocation } from "@/lib/competitors/vertex";
 import { AdminShell } from "../AdminShell";
 import { AdminScans } from "./AdminScans";
+import { AdminScanning } from "./AdminScanning";
 
 /**
  * Admin → Competitors: the PMOS AI prompts of the competitors feature
@@ -46,7 +47,7 @@ export default async function AdminCompetitorsPage() {
       user={admin}
       org={org}
       title="Competitors"
-      description="The competitors feature's PMOS AI — model, region and the two prompts — and the scanner's runs across every organization. Per-org setup (competitors, catalog, schedule) is in each organization's Settings → Competitors."
+      description="The competitors feature's PMOS AI — model, region and the two prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
     >
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -86,6 +87,7 @@ export default async function AdminCompetitorsPage() {
           </div>
         </section>
 
+        <AdminScanning />
         <AdminScans />
       </div>
     </AdminShell>

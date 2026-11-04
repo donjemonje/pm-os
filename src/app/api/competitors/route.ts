@@ -4,6 +4,7 @@ import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { fetchPlain } from "@/lib/competitors/fetcher";
 import { siteLogoOf, siteNameOf } from "@/lib/competitors/html";
+import { createAndRouteScan } from "@/lib/competitors/scan";
 import { nextPosition } from "@/lib/competitors/store";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
@@ -32,11 +33,22 @@ export async function POST(req: Request) {
   } catch (e) {
     return bad(e instanceof InvalidUrlError && e.reason === "private" ? C.settings.privateHost : C.settings.invalidUrl);
   }
-  const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true } });
-  if (dupHost) return bad(C.settings.duplicateHost, 409);
+  const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true, deletedAt: true } });
+  if (dupHost && !dupHost.deletedAt) return bad(C.settings.duplicateHost, 409);
 
   const probe = await fetchPlain(site.url);
   if (probe.status === 0) return bad(C.settings.unreachable, 422);
+
+  if (dupHost?.deletedAt) {
+    // Re-adding a removed competitor restores it with its pages, hashes and scan history (PRD: retention, not deletion).
+    await db.competitor.update({ where: { id: dupHost.id }, data: { deletedAt: null, websiteUrl: site.url, position: await nextPosition("competitor", ctx.workspaceId) } });
+    await db.competitorSource.updateMany({ where: { competitorId: dupHost.id, type: "website" }, data: { url: site.url, lastStatus: "never" } });
+    const source = await db.competitorSource.findFirst({ where: { competitorId: dupHost.id, type: "website" }, select: { id: true } });
+    if (!source) await db.competitorSource.create({ data: { workspaceId: ctx.workspaceId, competitorId: dupHost.id, type: "website", url: site.url } });
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_added", { competitorId: dupHost.id, source: "settings", restored: true });
+    void createAndRouteScan(ctx.workspaceId, dupHost.id, "manual", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
+    return stateResponse(ctx, 201);
+  }
 
   let name = body.name !== undefined && body.name !== "" ? cleanName(body.name) : null;
   if (body.name !== undefined && body.name !== "" && !name) return bad(C.settings.nameRequired);
@@ -64,5 +76,7 @@ export async function POST(req: Request) {
     select: { id: true },
   });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_added", { competitorId: competitor.id, source: "settings", nameFromSite: !body.name });
+  // Onboarding (PRD): adding a competitor starts its first scan — the whole site.
+  void createAndRouteScan(ctx.workspaceId, competitor.id, "manual", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
   return stateResponse(ctx, 201);
 }

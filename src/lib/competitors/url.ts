@@ -87,10 +87,16 @@ export function pageKey(u: URL): string {
   return `${u.protocol}//${host}${path}${video ? `?v=${video}` : ""}`;
 }
 
-const NON_PAGE_EXT = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|pdf|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
+/** Assets that are never pages. PDFs ARE pages (Website Scanning PRD 2026-11-04: "the entire website, PDFs included"). */
+const NON_PAGE_EXT = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
 
 export function looksLikePage(u: URL): boolean {
   return !NON_PAGE_EXT.test(u.pathname);
+}
+
+export function isPdfUrl(u: URL | string): boolean {
+  const path = typeof u === "string" ? u.replace(/[?#].*$/, "") : u.pathname;
+  return /\.pdf$/i.test(path);
 }
 
 /**

@@ -4,7 +4,8 @@
  *
  *   npm run competitors:scan -- --scan <scanId>        one queued scan
  *   npm run competitors:scan -- --run <runId>        one Scan run (every competitor, then the notification)
- *   npm run competitors:scan -- --due                  every source whose schedule has come
+ *   npm run competitors:scan -- --tick                 the hourly tick: stale sweep, due sources, queued starts,
+ *                                                      24-hour alerts, retention (Cloud Scheduler runs this; --due is an alias)
  *   npm run competitors:scan -- --import <manifest>    hand a collector's pages to the pipeline
  *
  * --import reads a manifest and runs one scan per source, in order:
@@ -27,7 +28,7 @@
 import { db } from "../src/lib/db";
 import { readBundleManifest } from "../src/lib/competitors/bundle";
 import { importPages } from "../src/lib/competitors/import";
-import { failStaleScans, runDueScans } from "../src/lib/competitors/run";
+import { failStaleScans, tick } from "../src/lib/competitors/run";
 import { executeRun } from "../src/lib/competitors/runs";
 import { runScan } from "../src/lib/competitors/scan";
 
@@ -62,7 +63,7 @@ async function main() {
   const importIdx = args.indexOf("--import");
   const runIdx = args.indexOf("--run");
   const stale = await failStaleScans();
-  if (stale) console.log(`[scanner] abandoned ${stale} stale scan${stale === 1 ? "" : "s"}`);
+  if (stale) console.log(`[scanner] ${stale} stale scan${stale === 1 ? "" : "s"} swept`);
   if (scanIdx >= 0 && args[scanIdx + 1]) {
     const id = args[scanIdx + 1];
     console.log(`[scanner] running scan ${id}`);
@@ -73,11 +74,10 @@ async function main() {
     await executeRun(id);
   } else if (importIdx >= 0 && args[importIdx + 1]) {
     await runImport(args[importIdx + 1]);
-  } else if (args.includes("--due")) {
-    const n = await runDueScans((m) => console.log(`[scanner] ${m}`));
-    console.log(`[scanner] ${n} scan${n === 1 ? "" : "s"} run`);
+  } else if (args.includes("--tick") || args.includes("--due")) {
+    await tick((m) => console.log(`[scanner] ${m}`));
   } else {
-    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --due | --import <manifest.json>");
+    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json>");
     process.exitCode = 2;
   }
 }

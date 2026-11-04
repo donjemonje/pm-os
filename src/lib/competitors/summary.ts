@@ -12,9 +12,14 @@ export function scanSummaryLine(c: CompetitorRow, nextScanAt: string | null): st
   const s = c.lastScan;
   if (!s) return "";
   const parts: string[] = [];
+  if (s.badge === "stale") {
+    parts.push(`The scan on ${shortDate(s.startedAt)} stopped early; the next one continues where it stopped.`);
+    if (c.lastGoodScanAt) parts.push(C.settings.showingDataFrom(shortDate(c.lastGoodScanAt)));
+    return parts.join(" ");
+  }
   if (s.badge === "blocked" || s.badge === "unreachable") {
     const why = s.badge === "blocked" ? (s.error ? `(${s.error})` : "") : s.error ? `(${s.error})` : "";
-    parts.push(`${s.badge === "blocked" ? "Blocked our scanner" : "Did not answer"} on ${shortDate(s.startedAt)}${why ? ` ${why}` : ""}.`);
+    parts.push(`${s.badge === "blocked" ? "The site refused the scan" : "The site did not answer"} on ${shortDate(s.startedAt)}${why ? ` ${why}` : ""}.`);
     if (c.lastGoodScanAt) parts.push(C.settings.showingDataFrom(shortDate(c.lastGoodScanAt)));
     if (nextScanAt) parts.push(C.settings.nextRetry(timeUntil(nextScanAt)));
     parts.push(C.settings.addFactsManually);

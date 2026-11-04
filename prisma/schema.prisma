@@ -620,6 +620,8 @@ model Competitor {
   host        String
   logoUrl     String?
   position    Int       @default(0)
+  /// Soft delete (Website Scanning PRD 2026-11-04): pages, hashes and scan history stay for the retention period; re-adding the same host restores the row.
+  deletedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -831,14 +833,18 @@ model CompetitorSource {
   /// pipeline from there.
   type         String     @default("website")
   url          String
+  /// Scan frequency in days, set per source in Administration (PRD: once every 2 days).
+  scanEveryDays Int       @default(2)
   lastScanAt   DateTime?
-  /// "never" | "ok" | "partial" | "failed" | "running"
+  /// "never" | "ok" | "partial" | "failed" | "running" | "pending" (waiting for the local lane)
   lastStatus   String     @default("never")
   lastError    String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  scans CompetitorScan[]
+  scans         CompetitorScan[]
+  pages         SourcePage[]
+  localRequests LocalScanRequest[]
 
   @@unique([competitorId, type])
   @@index([workspaceId])
@@ -858,8 +864,16 @@ model CompetitorScan {
   /// The Scan press (or scheduled round) this scan belongs to; null for a single Scan now / import.
   runId         String?
   run           CompetitorScanRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
-  /// "queued" | "running" | "ok" | "partial" | "failed"
+  /// "queued" (waiting for a slot or for the running scan of the site to end) | "pending_local" (waiting for the local
+  /// lane) | "running" | "ok" | "partial" | "failed" | "stale" (no heartbeat for 10 min; the next run resumes it) | "cancelled"
   status        String           @default("queued")
+  /// Which lane read the pages: "remote" (the scanner job) | "local" (a PM's browser via the hand-in route) | "bundle" (a collector).
+  /// Admin log only — customers never see it.
+  lane          String           @default("remote")
+  /// The stale scan this one continued (pending pages first).
+  resumedFromId String?
+  /// Pages discovered but never attempted because the scan stopped early (ceiling, slow down, stale).
+  pagesNotAttempted Int          @default(0)
   /// "plain" | "browser" (browser after a bot wall) | "bundle" (pages were handed in, nothing fetched).
   fetchMode     String?
   startedAt     DateTime         @default(now())
@@ -874,9 +888,9 @@ model CompetitorScan {
   /// "none" | "timeout" | "http4xx" | "http5xx" | "botwall" | "ai" | "limit" | "other"
   errorKind     String?
   error         String?
-  /// What the user sees: "full" | "incomplete" | "blocked" | "unreachable" (null while running).
+  /// What the user sees: "full" | "incomplete" | "blocked" | "unreachable" | "stale" (null while running).
   badge         String?
-  /// Failed/skipped page counts by category: {robots, denied, login, notfound, timeout, cap, policy}.
+  /// Not-read page counts by category: {robots, denied, login, notfound, timeout, cap, slowdown}.
   outcomes      Json             @default("{}")
   /// robots.txt paths that kept pages out of this scan (first 50).
   robotsDisallowed Json          @default("[]")
@@ -887,7 +901,10 @@ model CompetitorScan {
   pages         Json             @default("[]")
   log           Json             @default("[]")
 
-  pageTexts ScanPage[]
+  pageTexts    ScanPage[]
+  versions     SourcePageVersion[]
+  localRequest LocalScanRequest?
+  tokens       ScanToken[]
 
   @@index([workspaceId, startedAt])
   @@index([sourceId, startedAt])
@@ -966,6 +983,130 @@ model ScanPage {
 
 /// A UI capture, image or clip of the competitor's product, stored in the
 /// media store (lib/competitors/media.ts) under `mediaPath`.
+/// The current state of one page of a source (Website Scanning PRD 2026-11-04).
+/// One row per URL, kept forever: hash, title, state. The current text lives
+/// here; superseded texts are SourcePageVersion rows (retention applies to those).
+model SourcePage {
+  id          String           @id @default(uuid())
+  workspaceId String
+  sourceId    String
+  source      CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// Canonical page key (lib/competitors/url.ts pageKey).
+  url         String
+  title       String?
+  /// page | document | article | transcript | capture | quotes
+  kind        String           @default("page")
+  /// sha256 (32 hex) of the normalized text — "changed or not".
+  hash        String
+  /// The current text, as complete as we could get it; null only before the first successful read.
+  text        String?
+  chars       Int              @default(0)
+  /// "present" | "missing" (not found once) | "removed" (not found twice in a row) | "unlinked" (answers, but no inbound link)
+  state       String           @default("present")
+  /// Consecutive scans that answered not-found (404/410 or a not-found page in the local lane).
+  notFoundStreak Int           @default(0)
+  /// "home" | "sitemap" | "link" | "handin"
+  discoveredVia String         @default("link")
+  firstSeenAt DateTime         @default(now())
+  /// Last scan that read the page successfully.
+  lastReadAt  DateTime?
+  lastReadScanId String?
+  /// Last scan that attempted the page (read or not).
+  lastAttemptScanId String?
+  /// Last scan in which an inbound link or sitemap entry pointed at the page.
+  lastLinkedScanId String?
+  removedAt   DateTime?
+  updatedAt   DateTime         @updatedAt
+
+  versions SourcePageVersion[]
+
+  @@unique([sourceId, url])
+  @@index([workspaceId])
+  @@index([sourceId, state])
+}
+
+/// A superseded text of a page: written when the hash changed, so "what
+/// changed" can show the sentences. Retention (Administration, default one
+/// year) nulls `text` of versions superseded before the window; the hash stays.
+model SourcePageVersion {
+  id           String         @id @default(uuid())
+  pageId       String
+  page         SourcePage     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  /// The scan that read this version.
+  scanId       String?
+  scan         CompetitorScan? @relation(fields: [scanId], references: [id], onDelete: SetNull)
+  hash         String
+  title        String?
+  text         String?
+  chars        Int            @default(0)
+  createdAt    DateTime       @default(now())
+  /// When a newer version replaced it (null = this is the current one, mirrored on SourcePage).
+  supersededAt DateTime?
+
+  @@index([pageId, createdAt])
+  @@index([supersededAt])
+}
+
+/// A scan waiting for, or running in, the local lane (a PM's browser on a
+/// machine that polls PM-OS with a machine key).
+model LocalScanRequest {
+  id          String           @id @default(uuid())
+  workspaceId String
+  scanId      String           @unique
+  scan        CompetitorScan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  sourceId    String
+  source      CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// "waiting" | "running" | "done" | "cancelled"
+  state       String           @default("waiting")
+  createdAt   DateTime         @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  /// The 24-hour alert email was sent (once per request).
+  alertedAt   DateTime?
+  /// The machine key that took the request.
+  keyId       String?
+
+  @@index([state, createdAt])
+  @@index([workspaceId])
+}
+
+/// A local station's machine key (server-to-server, no expiry). Created once
+/// in Administration; the poller rotates it every 30 days through the check-in
+/// call; revoking it here is the only manual act. Serves every workspace.
+model ScannerKey {
+  id                 String    @id @default(uuid())
+  label              String
+  keyHash            String    @unique
+  /// After a rotation the previous key stays valid for a short grace window.
+  previousKeyHash    String?
+  previousValidUntil DateTime?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  lastUsedAt         DateTime?
+  rotatedAt          DateTime?
+  revokedAt          DateTime?
+}
+
+/// A short-lived token that can only post pages into one scan. Valid while the
+/// scan is pending or running and for 15 minutes after it reached a final state.
+model ScanToken {
+  id        String         @id @default(uuid())
+  scanId    String
+  scan      CompetitorScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  tokenHash String         @unique
+  createdAt DateTime       @default(now())
+
+  @@index([scanId])
+}
+
+/// Global settings set in Administration (one row per key): competitors.remoteScanEnabled,
+/// competitors.retentionDays, and — in test environments only — the clock knob.
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
 model CompetitorMedia {
   id           String     @id @default(uuid())
   workspaceId  String

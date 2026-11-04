@@ -3,15 +3,20 @@ import { db } from "@/lib/db";
 import { bad, competitorsGuard } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
-/** GET ?competitorId=: the scan log — every run of the competitor's website source, newest first. */
+/**
+ * GET ?competitorId=: the customer-facing scan log — every scan of the
+ * competitor's website source, newest first. Customers see what was read and
+ * what was not, never HOW a scan ran: no lane, no fetch mode, no runner log
+ * lines (those live in Administration → Competitors).
+ */
 export async function GET(req: Request) {
   const ctx = await competitorsGuard();
   if (ctx instanceof NextResponse) return ctx;
   const competitorId = new URL(req.url).searchParams.get("competitorId") ?? "";
-  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId }, select: { id: true, name: true } });
+  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null }, select: { id: true, name: true } });
   if (!competitor) return bad("Not found", 404);
   const scans = await db.competitorScan.findMany({
-    where: { workspaceId: ctx.workspaceId, source: { competitorId } },
+    where: { workspaceId: ctx.workspaceId, source: { competitorId }, status: { not: "cancelled" } },
     orderBy: { startedAt: "desc" },
     take: 20,
   });
@@ -25,24 +30,21 @@ export async function GET(req: Request) {
       id: s.id,
       trigger: s.trigger,
       status: s.status,
-      fetchMode: s.fetchMode,
       startedAt: s.startedAt.toISOString(),
       finishedAt: s.finishedAt?.toISOString() ?? null,
       pagesFetched: s.pagesFetched,
       pagesChanged: s.pagesChanged,
+      pagesNotAttempted: s.pagesNotAttempted,
       statusesChanged: s.statusesChanged,
       factsChanged: s.factsChanged,
       suggestions: s.suggestions,
-      aiCalls: s.aiCalls,
       errorKind: s.errorKind,
       error: s.error,
       badge: s.badge,
       outcomes: s.outcomes,
       robotsDisallowed: s.robotsDisallowed,
       removedPages: s.removedPages,
-      piiHits: s.piiHits,
       pages: s.pages,
-      log: s.log,
     })),
   });
 }

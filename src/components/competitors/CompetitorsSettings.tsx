@@ -7,7 +7,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { frequencyMs, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_MAX_PAGES, MAX_OWN_PRODUCT, MIN_MAX_PAGES, OWN_STATUS_VALUES, SCAN_FREQUENCIES } from "@/lib/competitors/config";
+import { MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -28,11 +28,15 @@ const ICON_BTN = "rounded-md p-1.5 text-fg-muted hover:bg-background hover:text-
 const STATUS_PILL: Record<string, string> = {
   full: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
   incomplete: "bg-[#fff7e0] text-[#8a5a00]",
-  blocked: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  blocked: "bg-[#fff7e0] text-[#8a5a00]",
   unreachable: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  stale: "bg-[#fff7e0] text-[#8a5a00]",
   running: "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]",
+  pending: "bg-[#eef1f6] text-[#4a5b74]",
+  pendingLate: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
   never: "bg-[#eef1f6] text-[#4a5b74]",
 };
+const PENDING_LATE_MS = 24 * 3600_000;
 
 const POLL_MS = 3000;
 
@@ -124,7 +128,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
   // Suggested domains are decided in the matrix (dashed group); the catalog panels show accepted ones.
   const activeDomains = state.domains.filter((d) => d.state === "active");
   const nextScanAt = (c: CompetitorRow) =>
-    c.source?.lastScanAt ? new Date(new Date(c.source.lastScanAt).getTime() + frequencyMs(state.config.scanFrequency)).toISOString() : null;
+    c.source?.lastScanAt ? new Date(new Date(c.source.lastScanAt).getTime() + c.source.scanEveryDays * 86_400_000).toISOString() : null;
 
   return (
     <div className="space-y-8">
@@ -230,8 +234,17 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
   const [website, setWebsite] = useState(c.websiteUrl);
   const [starting, setStarting] = useState(false);
   const [logoBroken, setLogoBroken] = useState(false);
-  const status = c.activeScanId ? "running" : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
-  const summary = c.activeScanId ? "" : scanSummaryLine(c, nextScanAt);
+  // Customers see one thing, a scan: pending, in progress, or the last result. Never how it ran.
+  const pendingLate = c.pending ? Date.now() - new Date(c.pending.since).getTime() > PENDING_LATE_MS : false;
+  const status = c.running ? "running" : c.pending ? (pendingLate ? "pendingLate" : "pending") : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
+  const pillText = c.running
+    ? C.settings.scanInProgress(c.running.pagesSoFar)
+    : c.pending
+      ? C.settings.scanPendingSince(timeAgo(c.pending.since))
+      : status === "never"
+        ? C.settings.neverScanned
+        : C.settings.badges[status] ?? status;
+  const summary = c.running || c.pending ? "" : scanSummaryLine(c, nextScanAt);
 
   async function save() {
     if (await onSave(c.id, { name, website })) setEditing(false);
@@ -257,28 +270,28 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[14px] font-medium">{c.name}</span>
-            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status]}>
-              {status === "running" ? C.settings.scanning : status === "never" ? C.settings.neverScanned : C.settings.badges[status] ?? status}
+            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status === "pendingLate" ? "pending" : status]} data-testid="cmp-scan-status">
+              {pillText}
             </span>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-fg-muted">
             <a href={c.websiteUrl} target="_blank" rel="noreferrer" className="hover:underline">{c.host}</a>
             {c.source?.lastScanAt && <span>· {C.settings.lastScan(timeAgo(c.source.lastScanAt))}</span>}
-            {nextScanAt && status !== "running" && <span>· {C.settings.nextScan(timeUntil(nextScanAt))}</span>}
+            {nextScanAt && !c.running && !c.pending && <span>· {C.settings.nextScan(timeUntil(nextScanAt))}</span>}
           </div>
-          {summary && <div className={cn("mt-1 text-[12px]", status === "blocked" || status === "unreachable" ? "text-[#c23767]" : "text-fg-3")}>{summary}</div>}
+          {summary && <div className={cn("mt-1 text-[12px]", status === "unreachable" ? "text-[#c23767]" : "text-fg-3")}>{summary}</div>}
         </div>
       )}
       {!editing && (
         <>
-          <span title={scanning ? C.settings.scanRunning : rescanLimited ? C.settings.rescanLimited : undefined}>
+          <span title={c.running || c.pending ? C.settings.scanRunning : rescanLimited ? C.settings.rescanLimited : undefined}>
             <button
               onClick={async () => { setStarting(true); await onScan(c); setStarting(false); }}
-              disabled={scanning || starting || busy || rescanLimited}
+              disabled={Boolean(c.running || c.pending) || starting || busy || rescanLimited}
               className={SMALL_BTN}
             >
-              {status === "running" || starting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-              {status === "running" ? C.settings.scanning : rescanLimited ? C.settings.rescanLimitedShort : C.settings.scanNow}
+              {c.running || starting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              {c.running ? C.settings.scanning : rescanLimited ? C.settings.rescanLimitedShort : C.settings.scanNow}
             </button>
           </span>
           <button onClick={() => onLog(c)} className={SMALL_BTN} title={C.settings.viewLog}>
@@ -287,7 +300,7 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
           {canEdit && (
             <>
               <button onClick={() => { setName(c.name); setWebsite(c.websiteUrl); setEditing(true); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
-              <button onClick={() => void onRemove(c)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy || status === "running"}><Trash2 size={14} /></button>
+              <button onClick={() => void onRemove(c)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy || Boolean(c.running)}><Trash2 size={14} /></button>
             </>
           )}
         </>
@@ -757,19 +770,6 @@ function SchedulePanel({ config, canEdit, busy, onSave }: {
   busy: boolean;
   onSave: (body: unknown) => Promise<boolean>;
 }) {
-  const [pages, setPages] = useState(String(config.maxPagesPerScan));
-  const [saved, setSaved] = useState(false);
-  useEffect(() => setPages(String(config.maxPagesPerScan)), [config.maxPagesPerScan]);
-
-  async function savePages() {
-    const n = Number(pages);
-    if (!Number.isFinite(n)) return;
-    if (await onSave({ maxPagesPerScan: n })) {
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
-    }
-  }
-
   return (
     <section className="rounded-xl border border-border bg-card">
       <div className="border-b border-border px-5 py-4">
@@ -778,28 +778,11 @@ function SchedulePanel({ config, canEdit, busy, onSave }: {
       </div>
       <div className="flex flex-wrap items-end gap-6 px-5 py-4">
         <label className="block">
-          <span className="mb-1 block text-[12px] font-medium text-fg-3">{C.settings.frequency}</span>
-          <select value={config.scanFrequency} onChange={(e) => void onSave({ scanFrequency: e.target.value })} className={cn(SELECT, "w-44")} disabled={!canEdit || busy}>
-            {SCAN_FREQUENCIES.map((f) => <option key={f} value={f}>{C.settings.frequencies[f]}</option>)}
-          </select>
-        </label>
-        <label className="block">
           <span className="mb-1 block text-[12px] font-medium text-fg-3">{C.settings.manualRescans}</span>
           <select value={config.manualRescansPerDay} onChange={(e) => void onSave({ manualRescansPerDay: Number(e.target.value) })} className={cn(SELECT, "w-44")} disabled={!canEdit || busy} title={C.settings.manualRescansHint}>
             {[1, 2, 3, 5, 10].map((n) => <option key={n} value={n}>{n} per day</option>)}
           </select>
         </label>
-        <label className="block">
-          <span className="mb-1 block text-[12px] font-medium text-fg-3">{C.settings.maxPages}</span>
-          <div className="flex items-center gap-2">
-            <input type="number" min={MIN_MAX_PAGES} max={MAX_MAX_PAGES} value={pages} onChange={(e) => setPages(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void savePages(); } }}
-              onBlur={() => { if (Number(pages) !== config.maxPagesPerScan) void savePages(); }}
-              className={cn(INPUT, "w-28")} disabled={!canEdit || busy} />
-            {saved && <span className="inline-flex items-center gap-1 text-[12px] font-medium text-[#0f7a47]"><Check size={12} strokeWidth={2.5} /> {C.settings.saved}</span>}
-          </div>
-        </label>
-        <p className="basis-full text-[12px] text-fg-muted">{C.settings.maxPagesHint}</p>
       </div>
     </section>
   );

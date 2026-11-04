@@ -115,9 +115,36 @@ export function extractLinks(html: string, base: string): URL[] {
   return out;
 }
 
-/** Stable fingerprint of the text (not the HTML — markup churn is not a change). */
+/**
+ * Text as compared between scans (Website Scanning PRD: "text is normalized
+ * before hashing, so dates and tracking strings do not count as change").
+ * Strips what changes on every load without the page changing: dates and
+ * times in common shapes, "x minutes ago", tracking query strings, long hex
+ * or numeric ids (visitor ids, build hashes), and whitespace noise. The stored
+ * text is NOT normalized — only the fingerprint is.
+ */
+export function normalizeText(text: string): string {
+  return text
+    .replace(/\b(utm_[a-z]+|gclid|fbclid|msclkid|mc_[a-z]+|_ga|_gl|ref|sessionid|sid|visitor_?id)=[^\s&"']+/gi, " ")
+    .replace(/\b(?:\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?)\b/g, " ")
+    .replace(/\b(?:\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b/g, " ")
+    .replace(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b/gi, " ")
+    .replace(/\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?,?\s+\d{4}\b/gi, " ")
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?\b/gi, " ")
+    .replace(/\b\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago\b/gi, " ")
+    .replace(/(?:©|\(c\)|copyright)\s*\d{4}(?:\s*[-–]\s*\d{4})?/gi, " ")
+    .replace(/\b[0-9a-f]{16,}\b/gi, " ")
+    .replace(/\b\d{8,}\b/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Stable fingerprint of the normalized text (not the HTML — markup churn is not a change). */
 export function contentHash(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 32);
+  return createHash("sha256").update(normalizeText(text)).digest("hex").slice(0, 32);
 }
 
 /** Cloudflare / Akamai / Imperva interstitials and the like. */

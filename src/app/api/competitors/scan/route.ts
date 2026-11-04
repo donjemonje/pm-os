@@ -2,9 +2,8 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, competitorsGuard, readJson } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { failStaleScans, launchScan } from "@/lib/competitors/run";
-import { STALE_RUNNER_MS } from "@/lib/competitors/runs";
-import { createScan, manualScansToday } from "@/lib/competitors/scan";
+import { failStaleScans } from "@/lib/competitors/run";
+import { createAndRouteScan, manualScansToday } from "@/lib/competitors/scan";
 import { getCompetitorsConfig } from "@/lib/competitors/store";
 import { rescanLimitEnforced } from "@/lib/competitors/config";
 import { isPmosAdmin } from "@/lib/admin-auth";
@@ -12,9 +11,10 @@ import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
 /**
  * POST {competitorId}: Scan now — any member of the org, within the org's
- * manual-rescans-per-site-per-day limit (PM-OS admins are exempt). Answers at
- * once with the scan id; the page polls GET ?scanId= until status leaves
- * queued/running and then reloads the state in one go.
+ * manual-rescans-per-site-per-day limit (PM-OS admins are exempt). A site that
+ * is already scanning gets the new scan queued behind the running one (PRD:
+ * never two scans on one site). Answers at once with the scan id and where it
+ * went; the page polls the state until nothing is active.
  */
 export async function POST(req: Request) {
   const ctx = await competitorsGuard();
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
   const competitorId = typeof body.competitorId === "string" ? body.competitorId : "";
-  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId }, select: { id: true, sources: { where: { type: "website" }, select: { id: true } } } });
+  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null }, select: { id: true, sources: { where: { type: "website" }, select: { id: true } } } });
   if (!competitor) return bad("Not found", 404);
   if (rescanLimitEnforced() && !isPmosAdmin(ctx.user) && competitor.sources[0]) {
     const config = await getCompetitorsConfig(ctx.workspaceId);
@@ -32,20 +32,15 @@ export async function POST(req: Request) {
       return bad(C.settings.rescanLimited, 429);
     }
   }
-  await failStaleScans(STALE_RUNNER_MS);
-  const created = await createScan(ctx.workspaceId, competitor.id, "manual", ctx.user.id);
-  if ("error" in created) {
-    return bad(created.error === "running" ? C.settings.scanRunning : C.errors.scanFailed, 409);
-  }
+  await failStaleScans();
   try {
-    await launchScan(created.scanId);
+    const created = await createAndRouteScan(ctx.workspaceId, competitor.id, "manual", ctx.user.id);
+    if ("error" in created) return bad(C.errors.scanFailed, 409);
+    return NextResponse.json({ scanId: created.scanId, state: created.state }, { status: 202 });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    await db.competitorScan.update({ where: { id: created.scanId }, data: { status: "failed", finishedAt: new Date(), errorKind: "other", error: message.slice(0, 300) } });
-    await db.competitorSource.updateMany({ where: { competitor: { id: competitor.id }, type: "website" }, data: { lastStatus: "failed", lastError: message.slice(0, 300) } });
+    console.error("[competitors] scan now failed", e);
     return bad(C.errors.scanFailed, 502);
   }
-  return NextResponse.json({ scanId: created.scanId }, { status: 202 });
 }
 
 /** GET ?scanId=: the scan's status and counters (polled while running). */
@@ -55,7 +50,7 @@ export async function GET(req: Request) {
   const scanId = new URL(req.url).searchParams.get("scanId") ?? "";
   const scan = await db.competitorScan.findFirst({
     where: { id: scanId, workspaceId: ctx.workspaceId },
-    select: { id: true, status: true, pagesFetched: true, pagesChanged: true, startedAt: true, finishedAt: true, error: true, errorKind: true },
+    select: { id: true, status: true, pagesFetched: true, pagesChanged: true, pagesNotAttempted: true, startedAt: true, finishedAt: true, error: true, errorKind: true },
   });
   if (!scan) return bad("Not found", 404);
   return NextResponse.json({ scan });

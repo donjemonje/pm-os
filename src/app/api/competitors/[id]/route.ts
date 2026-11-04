@@ -4,6 +4,7 @@ import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { cancelLocalRequests } from "@/lib/competitors/local";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -14,7 +15,7 @@ export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
-  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
+  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId, deletedAt: null } });
   if (!existing) return bad("Not found", 404);
 
   const data: { name?: string; websiteUrl?: string; host?: string; logoUrl?: string | null } = {};
@@ -22,7 +23,7 @@ export async function PATCH(req: Request, { params }: Params) {
     const name = cleanName(body.name);
     if (!name) return bad(C.settings.nameRequired);
     const dup = await db.competitor.findFirst({
-      where: { workspaceId: ctx.workspaceId, id: { not: id }, name: { equals: name, mode: "insensitive" } },
+      where: { workspaceId: ctx.workspaceId, id: { not: id }, deletedAt: null, name: { equals: name, mode: "insensitive" } },
       select: { id: true },
     });
     if (dup) return bad(C.settings.duplicateName, 409);
@@ -32,6 +33,7 @@ export async function PATCH(req: Request, { params }: Params) {
     try {
       const site = normalizeWebsite(typeof body.website === "string" ? body.website : "");
       const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true } });
+      // A removed competitor still holds the host (its history stays); say so rather than fail on the unique index.
       if (dup) return bad(C.settings.duplicateHost, 409);
       data.websiteUrl = site.url;
       data.host = site.host;
@@ -54,19 +56,23 @@ export async function DELETE(_req: Request, { params }: Params) {
   if (ctx instanceof NextResponse) return ctx;
   const { id } = await params;
   const existing = await db.competitor.findFirst({
-    where: { id, workspaceId: ctx.workspaceId },
-    select: { id: true, sources: { select: { lastScanAt: true } } },
+    where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+    select: { id: true, sources: { select: { id: true, lastScanAt: true } } },
   });
   if (!existing) return bad("Not found", 404);
   const running = await db.competitorScan.findFirst({
-    where: { workspaceId: ctx.workspaceId, status: { in: ["queued", "running"] }, source: { competitorId: id } },
+    where: { workspaceId: ctx.workspaceId, status: "running", source: { competitorId: id } },
     select: { id: true },
   });
   if (running) return bad(C.settings.scanRunning, 409);
-  await db.competitor.delete({ where: { id } });
+  // Soft delete (PRD): pages, hashes and scan history stay for the retention period; a waiting local-scan request is cancelled.
+  const cancelled = await cancelLocalRequests(existing.sources.map((s) => s.id));
+  await db.competitorScan.updateMany({ where: { source: { competitorId: id }, status: "queued" }, data: { status: "cancelled", finishedAt: new Date(), error: "the competitor was removed" } });
+  await db.competitor.update({ where: { id }, data: { deletedAt: new Date() } });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_removed", {
     competitorId: id,
     hadScans: existing.sources.some((s) => s.lastScanAt != null),
+    cancelledRequests: cancelled,
   });
   return stateResponse(ctx);
 }

@@ -15,13 +15,6 @@ export interface RobotsRules {
   crawlDelaySec: number | null;
 }
 
-/** Pages about people — skipped by policy (scanner rule 6), never fetched. */
-const PEOPLE_PATH = /\/(team|our-team|leadership|management|people|staff|board|founders|executives|careers|jobs|join-us|about-us\/team|about\/team|company\/team|authors?)(\/|$)/i;
-
-export function isPeoplePage(u: URL): boolean {
-  return PEOPLE_PATH.test(u.pathname);
-}
-
 export async function readRobots(origin: string): Promise<RobotsRules> {
   const rules: RobotsRules = { disallow: [], sitemaps: [], crawlDelaySec: null };
   const res = await fetchPlain(new URL("/robots.txt", origin).href);
@@ -104,12 +97,12 @@ export interface PageCandidate {
   key: string;
   url: string;
   priority: number;
-  /** "home" | "sitemap" | "link" */
+  /** "home" | "sitemap" | "link" | "known" (a page of an earlier scan) */
   via: string;
 }
 
 /** Why the frontier kept a URL out — reported to users as counts (and paths for robots). */
-export type SkipReason = "robots" | "policy";
+export type SkipReason = "robots";
 
 /** Order: priority, then shorter paths (hub pages before leaves), then alphabetical. */
 export function orderCandidates(list: PageCandidate[]): PageCandidate[] {
@@ -134,8 +127,10 @@ export class Frontier {
   private readonly rules: RobotsRules;
   /** Distinct paths robots.txt kept out, first 50 — shown in the scan log. */
   readonly robotsSkipped: string[] = [];
-  /** People pages kept out by policy, first 50. */
-  readonly policySkipped: string[] = [];
+  /** Pages robots.txt kept out, all of them (the "robots" count). */
+  robotsSkippedCount = 0;
+  /** Every URL that pointed somewhere this scan (inbound link or sitemap entry) — feeds "unlinked". */
+  readonly linked = new Set<string>();
 
   constructor(host: string, rules: RobotsRules) {
     this.host = host;
@@ -143,29 +138,41 @@ export class Frontier {
   }
 
   private noteSkip(reason: SkipReason, u: URL) {
-    const list = reason === "robots" ? this.robotsSkipped : this.policySkipped;
+    const list = reason === "robots" ? this.robotsSkipped : this.robotsSkipped;
     const path = u.pathname || "/";
+    this.robotsSkippedCount++;
     if (list.length < 50 && !list.includes(path)) list.push(path);
   }
 
-  add(u: URL, via: string): boolean {
+  /**
+   * Queue a URL. Everything a human PM would look at is in: people pages,
+   * localized copies and PDFs included (Website Scanning PRD 2026-11-04).
+   * Only robots.txt, the site boundary and plain non-content paths keep a
+   * URL out. `first` puts the page ahead of its priority class (a resumed
+   * scan's pending pages).
+   */
+  add(u: URL, via: string, opts: { first?: boolean } = {}): boolean {
     if (!isInsideSite(u, this.host) || !looksLikePage(u)) return false;
-    if (!isAllowed(u, this.rules)) {
-      this.noteSkip("robots", u);
-      return false;
-    }
-    if (isPeoplePage(u)) {
-      this.noteSkip("policy", u);
-      return false;
-    }
-    // Skip localized duplicates and obvious non-content paths.
-    if (/^\/(?:[a-z]{2}(?:-[a-z]{2})?)\//i.test(u.pathname) && !/^\/en\b/i.test(u.pathname)) return false;
-    if (/\/(wp-json|wp-admin|wp-content|feed|tag|author|page\/\d+|cdn-cgi)\b/i.test(u.pathname)) return false;
     const key = pageKey(u);
+    if (via === "link" || via === "sitemap") this.linked.add(key);
+    if (!isAllowed(u, this.rules)) {
+      if (!this.seen.has(key)) {
+        this.seen.add(key);
+        this.noteSkip("robots", u);
+      }
+      return false;
+    }
+    // Obvious non-content paths (CMS internals, feeds, pagination duplicates).
+    if (/\/(wp-json|wp-admin|wp-content|feed|page\/\d+|cdn-cgi)\b/i.test(u.pathname)) return false;
     if (this.seen.has(key)) return false;
     this.seen.add(key);
-    this.pending.push({ key, url: key, priority: pagePriority(u), via });
+    this.pending.push({ key, url: key, priority: opts.first ? -1 : pagePriority(u), via });
     return true;
+  }
+
+  /** Discovered but not fetched (the scan stopped early) — "not attempted". */
+  remainingUrls(): string[] {
+    return this.pending.map((p) => p.url);
   }
 
   addLinksFrom(html: string, base: string): number {

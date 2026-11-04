@@ -19,10 +19,8 @@ import { importPages } from "./import";
 import { notifyRun } from "./notify";
 import { failStaleScans } from "./run";
 import { createScan, manualScansToday, runScan } from "./scan";
-
-/** No heartbeat for this long = the runner is gone (scans heartbeat every 30 s). */
-export const STALE_RUNNER_MS = 2 * 60_000;
 import { getCompetitorsConfig } from "./store";
+import { routeScan } from "./tick";
 
 export type RunMode = "live" | "bundle";
 
@@ -40,7 +38,7 @@ interface PlanItem {
 /** Which competitors a run would scan, in matrix order, and which it leaves out (with the reason). */
 async function planRun(workspaceId: string, mode: RunMode, opts: { exemptFromLimit: boolean }): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
   const competitors = await db.competitor.findMany({
-    where: { workspaceId },
+    where: { workspaceId, deletedAt: null },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     select: { id: true, name: true, host: true, sources: { where: { type: "website" }, select: { id: true } } },
   });
@@ -75,10 +73,10 @@ export async function startRun(
   startedById: string | null,
   opts: { trigger: "manual" | "scheduled"; exemptFromLimit: boolean },
 ): Promise<StartRunResult> {
-  // A press must never be blocked by a run whose runner died (dev server reload, crash): 2 min without a heartbeat = abandoned.
-  await failStaleScans(STALE_RUNNER_MS);
+  // A press must never be blocked by a run whose runner died (dev server reload, crash): 10 min without a heartbeat = stale.
+  await failStaleScans();
   const [activeScan, activeRun] = await Promise.all([
-    db.competitorScan.findFirst({ where: { workspaceId, status: { in: ["queued", "running"] } }, select: { id: true } }),
+    db.competitorScan.findFirst({ where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } }, select: { id: true } }),
     db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, select: { id: true } }),
   ]);
   if (activeScan || activeRun) return { error: "running" };
@@ -121,9 +119,11 @@ export async function executeRun(runId: string): Promise<void> {
       });
       for (const s of scans) {
         await progress(s.source.competitor.name);
-        // Scans waiting their turn are alive: keep failStaleScans off them.
+        // Scans waiting their turn are alive: keep the stale sweep off them.
         await db.competitorScan.updateMany({ where: { runId, status: "queued" }, data: { heartbeatAt: new Date() } });
-        await runScan(s.id);
+        // Remote OFF: the scan is parked in the local lane and the run moves on (its result arrives when the station reads the site).
+        const routed = await routeScan(s.id);
+        if (routed === "queued") await runScan(s.id);
         done++;
       }
     } else {

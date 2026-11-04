@@ -16,6 +16,9 @@ const STATUS_CHIP: Record<string, string> = {
   failed: "bg-red-50 text-red-700 border-red-200",
   running: "bg-blue-50 text-blue-700 border-blue-200",
   queued: "bg-slate-50 text-slate-600 border-slate-200",
+  pending_local: "bg-slate-50 text-slate-600 border-slate-200",
+  stale: "bg-amber-50 text-amber-800 border-amber-200",
+  cancelled: "bg-slate-50 text-slate-400 border-slate-200",
 };
 
 function secs(ms: number | null): string {
@@ -88,7 +91,7 @@ export function AdminScans() {
         <div>
           <h2 className="text-sm font-bold">Scan runs — all organizations</h2>
           <p className="mt-0.5 text-xs text-slate-500">
-            Every website scan the scanner ran, newest first: trigger, how it fetched (plain / browser after a bot wall), pages, what changed, AI calls, and the full log. In prod the job's own executions are in Cloud Run → Jobs → pmos-competitors-scanner.
+            Every scan, newest first: trigger, lane (remote = the scanner job, local = a PM's browser through the station, bundle = a collector), how it fetched, pages read / changed / not attempted, what changed, AI calls, and the full log. This is the only place a lane is named; customers see "a scan". In prod the job's own executions are in Cloud Run → Jobs → pmos-competitors-scanner.
           </p>
         </div>
         <button onClick={() => void load()} disabled={loading} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-medium hover:bg-slate-50 disabled:opacity-50">
@@ -109,6 +112,7 @@ export function AdminScans() {
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Badge</th>
                 <th className="px-3 py-2">Trigger</th>
+                <th className="px-3 py-2">Lane</th>
                 <th className="px-3 py-2">Fetch</th>
                 <th className="px-3 py-2 text-right">Pages</th>
                 <th className="px-3 py-2 text-right">Changed</th>
@@ -139,6 +143,7 @@ export function AdminScans() {
                       </td>
                       <td className="px-3 py-2">{r.badge ?? "–"}{r.piiHits > 0 && <span className="ml-1 text-amber-700" title="PII hits dropped">·{r.piiHits}</span>}</td>
                       <td className="px-3 py-2">{r.trigger}</td>
+                      <td className="px-3 py-2">{r.lane}</td>
                       <td className="px-3 py-2">{r.fetchMode ?? "–"}</td>
                       <td className="px-3 py-2 text-right font-mono">{r.pagesFetched}</td>
                       <td className="px-3 py-2 text-right font-mono">{r.pagesChanged}</td>
@@ -150,11 +155,11 @@ export function AdminScans() {
                     </tr>
                     {isOpen && (
                       <tr className="border-t border-slate-100 bg-slate-50/60">
-                        <td colSpan={15} className="px-4 py-3">
+                        <td colSpan={16} className="px-4 py-3">
                           <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{r.url}</div>
                           {r.error && <div className="mb-2 text-xs text-red-700">{r.error}</div>}
                           {Object.keys(r.outcomes ?? {}).length > 0 && (
-                            <div className="mb-2 text-xs text-slate-600">Not read: {Object.entries(r.outcomes).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(" · ")}{r.robotsDisallowed.length > 0 && <span className="text-slate-400"> — robots: {r.robotsDisallowed.join(", ")}</span>}{r.removedPages.length > 0 && <span> · removed: {r.removedPages.length}</span>}</div>
+                            <div className="mb-2 text-xs text-slate-600">Not read: {Object.entries(r.outcomes).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k}`).join(" · ")}{r.pagesNotAttempted > 0 && <span> · not attempted: {r.pagesNotAttempted}</span>}{r.robotsDisallowed.length > 0 && <span className="text-slate-400"> — robots: {r.robotsDisallowed.join(", ")}</span>}{r.removedPages.length > 0 && <span> · removed: {r.removedPages.length}</span>}</div>
                           )}
                           <div className="grid gap-3 lg:grid-cols-2">
                             <div>

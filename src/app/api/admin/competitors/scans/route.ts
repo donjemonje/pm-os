@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { getGlobalScanSettings } from "@/lib/competitors/settings";
 
 /**
  * Every organization's competitor scans, newest first — PM-OS Admin's view of
@@ -13,12 +14,15 @@ export interface AdminScanRow {
   url: string;
   trigger: string;
   status: string;
+  /** remote | local | bundle — admin only. */
+  lane: string;
   fetchMode: string | null;
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
   pagesFetched: number;
   pagesChanged: number;
+  pagesNotAttempted: number;
   statusesChanged: number;
   factsChanged: number;
   suggestions: number;
@@ -63,12 +67,14 @@ export async function GET(req: Request) {
     url: s.source.url,
     trigger: s.trigger,
     status: s.status,
+    lane: s.lane,
     fetchMode: s.fetchMode,
     startedAt: s.startedAt.toISOString(),
     finishedAt: s.finishedAt?.toISOString() ?? null,
     durationMs: s.finishedAt ? s.finishedAt.getTime() - s.startedAt.getTime() : null,
     pagesFetched: s.pagesFetched,
     pagesChanged: s.pagesChanged,
+    pagesNotAttempted: s.pagesNotAttempted,
     statusesChanged: s.statusesChanged,
     factsChanged: s.factsChanged,
     suggestions: s.suggestions,
@@ -89,7 +95,7 @@ export async function GET(req: Request) {
 async function metrics(): Promise<AdminScanMetrics> {
   const since = new Date(Date.now() - 30 * 86_400_000);
   const finished = await db.competitorScan.findMany({
-    where: { startedAt: { gte: since }, status: { in: ["ok", "partial", "failed"] } },
+    where: { startedAt: { gte: since }, status: { in: ["ok", "partial", "failed", "stale"] } },
     orderBy: { startedAt: "desc" },
     select: { startedAt: true, badge: true, pages: true, piiHits: true, source: { select: { competitor: { select: { host: true, workspace: { select: { organization: { select: { name: true } } } } } } } } },
   });
@@ -110,13 +116,9 @@ async function metrics(): Promise<AdminScanMetrics> {
     piiHitsTotal += s.piiHits;
   }
   const cutoff = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
-  // Texts that should have been pruned: pages with text whose scan is not among its source's last 2 finished scans.
-  const sources = await db.competitorSource.findMany({ select: { id: true } });
-  let textsPastRetention = 0;
-  for (const src of sources) {
-    const keep = await db.competitorScan.findMany({ where: { sourceId: src.id, status: { in: ["ok", "partial", "running", "queued"] } }, orderBy: { startedAt: "desc" }, take: 2, select: { id: true } });
-    textsPastRetention += await db.scanPage.count({ where: { sourceId: src.id, text: { not: null }, scanId: { notIn: keep.map((k) => k.id) } } });
-  }
+  // Superseded page texts past the retention window still holding text — should be 0 when the tick's retention ran.
+  const { retentionDays } = await getGlobalScanSettings();
+  const textsPastRetention = await db.sourcePageVersion.count({ where: { supersededAt: { lt: new Date(Date.now() - retentionDays * 86_400_000) }, text: { not: null } } });
   return {
     domains: [...byHost.values()].sort((a, b) => b.blocked - a.blocked || b.scans - a.scans),
     requestsPerDay: [...byDay.entries()].filter(([d]) => d >= cutoff).sort(([a], [b]) => a.localeCompare(b)).map(([day, requests]) => ({ day, requests })),

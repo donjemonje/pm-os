@@ -1,22 +1,27 @@
 /**
- * Story 2 (competitors) — workspace config merge and time helpers. Pure modules.
+ * Competitors — workspace config merge and time helpers. Pure modules.
+ * Since the Website Scanning PRD (2026-11-04) the scan frequency lives per
+ * source and there is no page cap, so the config carries only the manual
+ * rescan limit, the recipients and the news baseline; old keys are ignored.
  */
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_PAGES, frequencyMs, mergeCompetitorsConfig, splitSuggestedQuote } from "@/lib/competitors/config";
+import { CEILING_MS, CEILING_PAGES, DEFAULT_SCAN_EVERY_DAYS, mergeCompetitorsConfig, splitSuggestedQuote, STALE_MS } from "@/lib/competitors/config";
 import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
-  it("fills defaults (weekly, 50 pages) and clamps the page limit", () => {
-    expect(mergeCompetitorsConfig(null)).toEqual({ scanFrequency: "weekly", maxPagesPerScan: DEFAULT_MAX_PAGES, manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ scanFrequency: "daily", maxPagesPerScan: 5, manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig({ scanFrequency: "hourly", maxPagesPerScan: 10_000 })).toEqual({ scanFrequency: "weekly", maxPagesPerScan: 500, manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig("junk")).toEqual({ scanFrequency: "weekly", maxPagesPerScan: DEFAULT_MAX_PAGES, manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
+  it("fills defaults and ignores the retired per-org frequency and page cap", () => {
+    expect(mergeCompetitorsConfig(null)).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
+    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
+    expect(mergeCompetitorsConfig("junk")).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
     expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] }).notifyUserIds).toEqual(["u1", "u2"]);
+    expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
+    expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
   });
-  it("turns a frequency into its interval", () => {
-    expect(frequencyMs("daily")).toBe(86_400_000);
-    expect(frequencyMs("weekly")).toBe(7 * 86_400_000);
-    expect(frequencyMs("monthly")).toBe(30 * 86_400_000);
+  it("carries the PRD's numbers: every 2 days, 2,000 pages or 3 h ceiling, stale after 10 min", () => {
+    expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);
+    expect(CEILING_PAGES).toBe(2000);
+    expect(CEILING_MS).toBe(3 * 3600_000);
+    expect(STALE_MS).toBe(10 * 60_000);
   });
 });
 

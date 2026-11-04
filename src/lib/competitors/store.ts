@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
-import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
+import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -36,7 +36,13 @@ export interface CompetitorRow {
     lastScanAt: string | null;
     lastStatus: string;
     lastError: string | null;
+    /** Scan frequency in days (set per source in Administration). */
+    scanEveryDays: number;
   } | null;
+  /** A scan is waiting its turn (Website Scanning PRD: customers see "Scan pending"). Since = when it was created. */
+  pending: { since: string } | null;
+  /** A scan is reading pages right now. */
+  running: { pagesSoFar: number; startedAt: string } | null;
   /** Every source of the competitor, website first. */
   sources: SourceRow[];
   /** The last finished website scan, as users see it. */
@@ -174,7 +180,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
-      where: { workspaceId },
+      where: { workspaceId, deletedAt: null },
       orderBy: [{ position: "asc" }, { name: "asc" }],
       include: {
         sources: { orderBy: { createdAt: "asc" } },
@@ -190,12 +196,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     db.capabilityStatus.findMany({ where: { workspaceId }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
     db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
     db.competitorScan.findMany({
-      where: { workspaceId, status: { in: ["queued", "running"] } },
-      select: { id: true, sourceId: true },
+      where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } },
+      select: { id: true, sourceId: true, status: true, startedAt: true, heartbeatAt: true, pagesFetched: true },
+      orderBy: { startedAt: "asc" },
     }),
     // Finished scans, newest first — the badge, the staleness horizon and today's manual count come from here.
     db.competitorScan.findMany({
-      where: { workspaceId, status: { in: ["ok", "partial", "failed"] } },
+      where: { workspaceId, status: { in: ["ok", "partial", "failed", "stale"] } },
       orderBy: { startedAt: "desc" },
       select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, pages: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
     }),
@@ -221,7 +228,15 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     const u = users.find((x) => x.id === id);
     return u ? u.name || u.email : null;
   };
-  const activeBySource = new Map(activeScans.map((s) => [s.sourceId, s.id]));
+  // One active scan per source: a running one wins over a pending/queued one. A running scan whose heartbeat stopped
+  // for 10 minutes is stale (the tick sweeps it); until then the row still says "in progress".
+  const nowMs = Date.now();
+  const activeBySource = new Map<string, (typeof activeScans)[number]>();
+  for (const s of activeScans) {
+    const cur = activeBySource.get(s.sourceId);
+    if (!cur || (s.status === "running" && cur.status !== "running")) activeBySource.set(s.sourceId, s);
+  }
+  const isStaleRow = (s: (typeof activeScans)[number]) => s.status === "running" && nowMs - s.heartbeatAt.getTime() > STALE_MS;
   const config = mergeCompetitorsConfig(workspace?.competitorsConfig);
   const [members, activeRun, lastRun, feed] = await Promise.all([
     workspace
@@ -263,8 +278,16 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         logoUrl: c.logoUrl,
         position: c.position,
         source: website
-          ? { id: website.id, lastScanAt: website.lastScanAt?.toISOString() ?? null, lastStatus: website.lastStatus, lastError: website.lastError }
+          ? { id: website.id, lastScanAt: website.lastScanAt?.toISOString() ?? null, lastStatus: website.lastStatus, lastError: website.lastError, scanEveryDays: website.scanEveryDays }
           : null,
+        pending: (() => {
+          const a = website ? activeBySource.get(website.id) : undefined;
+          return a && (a.status === "queued" || a.status === "pending_local" || isStaleRow(a)) ? { since: a.startedAt.toISOString() } : null;
+        })(),
+        running: (() => {
+          const a = website ? activeBySource.get(website.id) : undefined;
+          return a && a.status === "running" && !isStaleRow(a) ? { pagesSoFar: a.pagesFetched, startedAt: a.startedAt.toISOString() } : null;
+        })(),
         sources: [...c.sources]
           .sort((a, b) => (a.type === "website" ? -1 : b.type === "website" ? 1 : 0))
           .map((s) => {
@@ -279,7 +302,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
                 badge: (last.badge as ScanBadge | null) ?? null,
                 startedAt: last.startedAt.toISOString(),
                 pagesFetched: last.pagesFetched,
-                pagesSkipped: pages.filter((p) => p.outcome === "failed" || p.outcome === "skipped").length + Object.entries(asRecord(last.outcomes)).filter(([k]) => k === "robots" || k === "policy" || k === "cap").reduce((n, [, v]) => n + v, 0),
+                pagesSkipped: pages.filter((p) => p.outcome === "failed" || p.outcome === "skipped").length + Object.entries(asRecord(last.outcomes)).filter(([k]) => k === "robots" || k === "cap").reduce((n, [, v]) => n + v, 0),
                 outcomes: asRecord(last.outcomes),
                 robotsDisallowed: asStringArray(last.robotsDisallowed),
                 removedPages: asStringArray(last.removedPages).length,
@@ -290,7 +313,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         lastGoodScanAt: websiteScans.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null,
         lastAnyScanAt: lastAny?.toISOString() ?? null,
         manualScansToday: website ? websiteScans.filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(website.id) ? 1 : 0) : 0,
-        activeScanId: website ? activeBySource.get(website.id) ?? null : null,
+        activeScanId: website ? activeBySource.get(website.id)?.id ?? null : null,
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
     }),

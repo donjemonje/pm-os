@@ -10,45 +10,57 @@ import {
 } from "./ai";
 import { recordCompetitorEvent } from "./analytics";
 import {
+  ACTIVE_SCAN_STATUSES,
   CRAWL_DELAY_CAP_MS,
-  KEEP_TEXT_SCANS,
-  SCAN_PAUSE_MS,
-  SCAN_TIME_BUDGET_MS,
+  HEARTBEAT_MS,
+  PAGE_RETRIES,
+  ceiling,
+  scanPauseMs,
   type OutcomeCategory,
   type ScanBadge,
+  type ScanLane,
   type SourceType,
   type StatusValue,
 } from "./config";
 import { COMPETITORS_COPY as C } from "./copy";
-import { getCompetitorsConfig } from "./store";
 import { Frontier, readRobots, readSitemap } from "./crawl";
-import { browserAvailable, closeBrowser, fetchPage, fetchPlain, outcomeCategoryOf, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
-import { contentHash, ogImageOf, titleOf } from "./html";
+import { browserAvailable, closeBrowser, fetchPage, fetchPlain, isRetryable, outcomeCategoryOf, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
+import { ogImageOf } from "./html";
+import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
+import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
+import { getGlobalScanSettings, now } from "./settings";
+import { isPdfUrl } from "./url";
 
 /**
- * One scan of one source, end to end, in two halves:
+ * One scan of one source, end to end, in two halves (Website Scanning PRD
+ * 2026-11-04):
  *
- *   collect — where the pages come from. The website source is crawled here
- *   under the scanner rules (robots, pause, page cap, time budget, bot-wall
- *   fallback). Every other source type has its pages handed in beforehand by
- *   a collector (lib/competitors/import.ts: an import, an upload, a later
- *   connector) and the collect half only reads them back and diffs them.
+ *   collect — where the pages come from.
+ *     remote  the crawler reads the whole site: known pages of earlier scans
+ *             first (a stale scan's pending pages before everything), then the
+ *             home page, the sitemap and every link found; robots.txt, the
+ *             pause, the ceiling (2,000 pages / 3 h) and "stop on 429" apply.
+ *             Nothing is trusted as unchanged: every page is fetched and hashed.
+ *     local   a PM's browser read the pages and posted them to the hand-in
+ *             route, which stored them with recordPage() as they arrived; here
+ *             the scan only reads back what the route logged.
+ *     bundle  a collector handed pages in before the scan (import.ts).
  *
- *   process — the same for every source: new/changed/unchanged against the
- *   previous scan → PMOS AI → statuses, suggestions, facts → fact liveness →
- *   text retention → badge and log.
+ *   process — the same for every lane: page states (missing / removed /
+ *             unlinked) → PMOS AI on new and changed pages → statuses,
+ *             suggestions, facts → fact liveness → badge and log.
  *
  * Runs inside the scanner job (Cloud Run) or in-process in local dev; both
- * call runScan(scanId).
+ * call runScan(scanId). The local lane's "done" call runs it too.
  */
 
-export type PageOutcome = "new" | "changed" | "unchanged" | "failed" | "skipped";
+export type PageOutcome = StoreOutcome | "skipped";
 export interface PageLogEntry {
   url: string;
   status: number;
   outcome: PageOutcome;
-  /** Why it failed or was skipped — one of the user-facing categories. */
+  /** Why it failed — one of the user-facing categories. */
   category?: OutcomeCategory;
   chars: number;
   ms: number;
@@ -63,21 +75,34 @@ export interface LogLine {
 }
 export type OutcomeCounts = Partial<Record<OutcomeCategory, number>>;
 
-const HEARTBEAT_EVERY = 5;
+const FLUSH_EVERY = 5;
 
-class ScanLog {
+export class ScanLog {
   readonly lines: LogLine[] = [];
   readonly pages: PageLogEntry[] = [];
   readonly outcomes: OutcomeCounts = {};
+  notAttempted = 0;
   private readonly scanId: string;
-  constructor(scanId: string) {
+  constructor(scanId: string, initial?: { lines?: LogLine[]; pages?: PageLogEntry[]; outcomes?: OutcomeCounts }) {
     this.scanId = scanId;
+    if (initial?.lines) this.lines.push(...initial.lines);
+    if (initial?.pages) this.pages.push(...initial.pages);
+    if (initial?.outcomes) Object.assign(this.outcomes, initial.outcomes);
   }
   add(level: LogLine["level"], msg: string, url?: string) {
     this.lines.push({ at: new Date().toISOString(), level, msg, ...(url ? { url } : {}) });
   }
   count(category: OutcomeCategory, n = 1) {
     this.outcomes[category] = (this.outcomes[category] ?? 0) + n;
+  }
+  get read(): number {
+    return this.pages.filter((p) => p.outcome === "new" || p.outcome === "changed" || p.outcome === "unchanged").length;
+  }
+  get changed(): number {
+    return this.pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length;
+  }
+  get failedUrls(): Set<string> {
+    return new Set(this.pages.filter((p) => p.outcome === "failed").map((p) => p.url));
   }
   async flush(extra: Prisma.CompetitorScanUpdateInput = {}) {
     await db.competitorScan.update({
@@ -87,39 +112,95 @@ class ScanLog {
         log: this.lines as unknown as Prisma.InputJsonValue,
         pages: this.pages as unknown as Prisma.InputJsonValue,
         outcomes: this.outcomes as unknown as Prisma.InputJsonValue,
-        pagesFetched: this.pages.filter((p) => p.outcome !== "skipped" && p.outcome !== "failed").length,
-        pagesChanged: this.pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length,
+        pagesFetched: this.read,
+        pagesChanged: this.changed,
+        pagesNotAttempted: this.notAttempted,
         ...extra,
       },
     });
   }
 }
 
-function errorKindOf(e: FetchErrorKind | undefined): string {
-  return e ?? "other";
+/** Append one page the local lane posted: the route records the page and logs it here so the process half can read it back. */
+export async function appendHandedInPage(scanId: string, entry: PageLogEntry): Promise<void> {
+  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, outcomes: true } });
+  const pages = (Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : []).filter((p) => p.url !== entry.url);
+  pages.push(entry);
+  const outcomes = (scan.outcomes && typeof scan.outcomes === "object" && !Array.isArray(scan.outcomes) ? { ...(scan.outcomes as OutcomeCounts) } : {}) as OutcomeCounts;
+  if (entry.outcome === "failed" && entry.category) outcomes[entry.category] = (outcomes[entry.category] ?? 0) + 1;
+  await db.competitorScan.update({
+    where: { id: scanId },
+    data: {
+      heartbeatAt: new Date(),
+      pages: pages as unknown as Prisma.InputJsonValue,
+      outcomes: outcomes as unknown as Prisma.InputJsonValue,
+      pagesFetched: pages.filter((p) => p.outcome === "new" || p.outcome === "changed" || p.outcome === "unchanged").length,
+      pagesChanged: pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length,
+    },
+  });
 }
 
-/** Create the Scan row for a source; the caller launches it. Refuses when a scan already runs in the workspace. */
+// ————— Creating scans —————
+
+export type CreateScanResult =
+  | { scanId: string; state: "queued" | "pending_local" | "started" | "no_station" }
+  | { error: "no_source" | "removed" };
+
+/**
+ * Create a scan of a competitor's website and route it (PRD): the remote
+ * lane when it is ON (started at once when a slot is free, else queued), the
+ * local lane when OFF. A scan of a site that is already scanning is queued
+ * behind the running one — never two scans on one site.
+ */
+export async function createAndRouteScan(
+  workspaceId: string,
+  competitorId: string,
+  trigger: "manual" | "scheduled",
+  startedById: string | null,
+  sourceType: SourceType = "website",
+): Promise<CreateScanResult> {
+  const source = await db.competitorSource.findFirst({ where: { workspaceId, competitorId, type: sourceType }, select: { id: true, competitor: { select: { deletedAt: true } } } });
+  if (!source) return { error: "no_source" };
+  if (source.competitor.deletedAt) return { error: "removed" };
+  const t = await now();
+  const active = await db.competitorScan.findFirst({ where: { sourceId: source.id, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true } });
+  const scan = await db.competitorScan.create({
+    data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", startedAt: t, heartbeatAt: t },
+    select: { id: true },
+  });
+  await recordCompetitorEvent(workspaceId, startedById, "cmp_scan_started", { scanId: scan.id, competitorId, trigger });
+  if (active) {
+    // Behind the running scan of the same site; the finishing scan (or the tick) picks it up.
+    return { scanId: scan.id, state: "queued" };
+  }
+  await db.competitorSource.update({ where: { id: source.id }, data: { lastStatus: "running" } });
+  const { routeScan, startQueuedScans } = await import("./tick");
+  const routed = await routeScan(scan.id);
+  if (routed !== "queued") return { scanId: scan.id, state: routed };
+  const { launchScan } = await import("./run");
+  const started = await startQueuedScans(launchScan);
+  return { scanId: scan.id, state: started > 0 ? "started" : "queued" };
+}
+
+/**
+ * Compatibility entry for Scan runs (runs.ts): the row only; the run executes
+ * it itself. Refuses when a scan of the source is active.
+ */
 export async function createScan(
   workspaceId: string,
   competitorId: string,
   trigger: "manual" | "scheduled",
   startedById: string | null,
   sourceType: SourceType = "website",
-  /** A Scan run queues several scans at once: it checks for an active scan itself and passes its id here. */
   run: { runId: string } | null = null,
 ): Promise<{ scanId: string } | { error: "running" | "no_source" }> {
-  if (!run) {
-    const active = await db.competitorScan.findFirst({
-      where: { workspaceId, status: { in: ["queued", "running"] } },
-      select: { id: true },
-    });
-    if (active) return { error: "running" };
-  }
-  const source = await db.competitorSource.findFirst({ where: { workspaceId, competitorId, type: sourceType } });
+  const source = await db.competitorSource.findFirst({ where: { workspaceId, competitorId, type: sourceType, competitor: { deletedAt: null } } });
   if (!source) return { error: "no_source" };
+  const active = await db.competitorScan.findFirst({ where: { sourceId: source.id, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true } });
+  if (active) return { error: "running" };
+  const t = await now();
   const scan = await db.competitorScan.create({
-    data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", runId: run?.runId ?? null },
+    data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", runId: run?.runId ?? null, startedAt: t, heartbeatAt: t },
     select: { id: true },
   });
   await db.competitorSource.update({ where: { id: source.id }, data: { lastStatus: "running" } });
@@ -127,93 +208,132 @@ export async function createScan(
   return { scanId: scan.id };
 }
 
-/** Manual scans of a source since local midnight — the per-day limit (PM-OS admins are exempt). */
+/** Manual scans of a source since local midnight (scanner clock) — the per-day limit (PM-OS admins are exempt). */
 export async function manualScansToday(sourceId: string): Promise<number> {
-  const start = new Date();
+  const start = await now();
   start.setHours(0, 0, 0, 0);
-  return db.competitorScan.count({ where: { sourceId, trigger: "manual", startedAt: { gte: start } } });
+  return db.competitorScan.count({ where: { sourceId, trigger: "manual", startedAt: { gte: start }, status: { not: "cancelled" } } });
 }
 
 // ————— Collect —————
 
-interface PreviousPage {
-  hash: string;
-  etag: string | null;
-  lastModified: string | null;
-  text: string | null;
-}
-
 interface CollectContext {
   scanId: string;
+  workspaceId: string;
   source: { id: string; type: string; url: string };
   competitor: { id: string; name: string; host: string };
   sourceLabel: string;
-  /** Previous pages of this source by URL (hash, validators, retained text). */
-  prev: Map<string, PreviousPage>;
   log: ScanLog;
   t0: number;
-  maxPages: number;
+  /** The stale scan this one resumes, if any: its unattempted pages go first. */
+  resumedFromId: string | null;
 }
 
 interface Collected {
   /** Pages read this scan (new, changed or unchanged). */
   count: number;
   changedPages: PageText[];
-  /** Every page read this scan — re-classified when the catalog grew. */
-  allPages: PageText[];
   seenUrls: Set<string>;
-  homeFailed: boolean;
-  capReached: boolean;
-  budgetReached: boolean;
-  mode: FetchMode | "bundle";
+  /** Home page could not be read; the kind says Blocked vs Unreachable. */
+  homeFailed: FetchErrorKind | null;
+  /** The scan stopped early: ceiling or slow down. */
+  stoppedBy: "cap" | "slowdown" | null;
+  mode: FetchMode | ScanLane;
   errorKind: string | null;
   error: string | null;
   robotsDisallowed: string[];
+  /** Attempted pages that were refused (denied / login / bot wall). */
+  denied: number;
+  attempted: number;
 }
 
-/** The website: crawl under the scanner rules. */
-async function collectWebsite(ctx: CollectContext): Promise<Collected> {
-  const { scanId, source, competitor, log, prev, t0 } = ctx;
-  const out: Collected = { count: 0, changedPages: [], allPages: [], seenUrls: new Set(), homeFailed: false, capReached: false, budgetReached: false, mode: "plain", errorKind: null, error: null, robotsDisallowed: [] };
-  let mode: FetchMode = "plain";
+function emptyCollected(mode: Collected["mode"]): Collected {
+  return { count: 0, changedPages: [], seenUrls: new Set(), homeFailed: null, stoppedBy: null, mode, errorKind: null, error: null, robotsDisallowed: [], denied: 0, attempted: 0 };
+}
 
-  // ——— 1. Frontier: robots, sitemap, home ———
+function statusOf(error: FetchErrorKind | undefined): PageReadStatus {
+  switch (error) {
+    case undefined:
+      return "ok";
+    case "notfound":
+      return "notfound";
+    case "botwall":
+    case "http4xx":
+      return "blocked";
+    case "login":
+      return "login";
+    case "slowdown":
+      return "slowdown";
+    case "noindex":
+      return "robots";
+    case "timeout":
+    case "http5xx":
+      return "timeout";
+    default:
+      return "other";
+  }
+}
+
+function noteResult(log: ScanLog, out: Collected, r: RecordPageResult, page: FetchedPage, via: string) {
+  if (r.outcome === "failed") {
+    const category = r.category ?? outcomeCategoryOf(page.error);
+    log.count(category);
+    log.pages.push({ url: r.url, status: page.status, outcome: "failed", category, chars: 0, ms: page.ms, via, error: page.errorDetail ?? page.error });
+    log.add("warn", `Not read (${category}): ${page.errorDetail ?? page.error ?? "unknown"}`, r.url);
+    if (category === "denied" || category === "login") out.denied++;
+    return;
+  }
+  out.count++;
+  out.seenUrls.add(r.url);
+  log.pages.push({ url: r.url, status: page.status, outcome: r.outcome, chars: r.chars, ms: page.ms, via });
+  if (r.outcome !== "unchanged" && r.pageText) out.changedPages.push(r.pageText);
+}
+
+/** The website: the remote lane crawls under the scanner rules. */
+async function collectWebsite(ctx: CollectContext): Promise<Collected> {
+  const { scanId, workspaceId, source, competitor, log, t0 } = ctx;
+  const out = emptyCollected("plain");
+  let mode: FetchMode = "plain";
+  const limits = ceiling();
+
+  // ——— 1. Frontier: known pages (pending ones first), home, robots, sitemap ———
   const rules = await readRobots(source.url);
-  const pauseMs = rules.crawlDelaySec ? Math.min(CRAWL_DELAY_CAP_MS, Math.max(SCAN_PAUSE_MS, rules.crawlDelaySec * 1000)) : SCAN_PAUSE_MS;
+  const pauseMs = rules.crawlDelaySec ? Math.min(CRAWL_DELAY_CAP_MS, Math.max(scanPauseMs(), rules.crawlDelaySec * 1000)) : scanPauseMs();
   log.add("info", `robots.txt: ${rules.disallow.length} disallow rule${rules.disallow.length === 1 ? "" : "s"}, ${rules.sitemaps.length} sitemap${rules.sitemaps.length === 1 ? "" : "s"}${rules.crawlDelaySec ? `, Crawl-delay ${rules.crawlDelaySec} s (pause ${pauseMs / 1000} s)` : ""}`);
   const frontier = new Frontier(competitor.host, rules);
+  const known = await knownPages(source.id);
+  let pendingFirst = 0;
+  for (const k of known) {
+    if (k.state === "removed") continue; // removed pages leave the crawl until a link or the sitemap rediscovers them
+    const first = ctx.resumedFromId != null && k.lastAttemptScanId !== ctx.resumedFromId;
+    if (frontier.add(new URL(k.url), "known", { first }) && first) pendingFirst++;
+  }
   frontier.add(new URL(source.url), "home");
   const sitemapUrls = rules.sitemaps.length ? rules.sitemaps : [new URL("/sitemap.xml", source.url).href];
   const fromSitemap = await readSitemap(sitemapUrls, competitor.host);
   let added = 0;
   for (const u of fromSitemap) if (frontier.add(u, "sitemap")) added++;
-  log.add("info", `sitemap: ${fromSitemap.length} URLs listed, ${added} inside the site and allowed`);
+  log.add("info", `${known.length} known page${known.length === 1 ? "" : "s"}${pendingFirst ? ` (${pendingFirst} pending from the stale scan, read first)` : ""}; sitemap: ${fromSitemap.length} URLs listed, ${added} new inside the site and allowed`);
 
   // ——— 2. Fetch loop ———
-  const fetched: FetchedPage[] = [];
-  let attempts = 0;
-  // Failed fetches (stale sitemap entries → 404) don't eat the page budget,
-  // but attempts are capped so a broken site cannot loop.
-  const maxAttempts = ctx.maxPages + 15;
+  let n = 0;
   while (true) {
-    if (out.count >= ctx.maxPages || attempts >= maxAttempts) {
-      out.capReached = frontier.remaining > 0;
+    if (out.count + out.attempted - out.count >= limits.pages || out.attempted >= limits.pages) {
+      out.stoppedBy = "cap";
       break;
     }
-    if (Date.now() - t0 > SCAN_TIME_BUDGET_MS) {
-      out.budgetReached = true;
+    if (Date.now() - t0 > limits.ms) {
+      out.stoppedBy = "cap";
       break;
     }
     const cand = frontier.next();
     if (!cand) break;
-    if (attempts > 0) await sleep(pauseMs);
-    attempts++;
-    const validators = mode === "plain" ? { etag: prev.get(cand.url)?.etag, lastModified: prev.get(cand.url)?.lastModified } : {};
-    let page = await fetchPage(cand.url, mode, validators);
-
-    // Bot wall or JS-only page → switch the whole site to browser mode, once.
-    // (Open question 9: whether this fallback stays.)
-    if (page.needsBrowser && mode === "plain") {
+    if (n > 0) await sleep(pauseMs);
+    n++;
+    out.attempted++;
+    let page = await fetchPage(cand.url, mode);
+    // Bot wall or JS-only page → switch the whole site to the browser, once (always on in production).
+    if (page.needsBrowser && mode === "plain" && !isPdfUrl(cand.url)) {
       if (browserAvailable()) {
         mode = "browser";
         out.mode = mode;
@@ -223,86 +343,72 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
         log.add("error", "Bot protection blocks the plain fetch and no browser is available in this environment", cand.url);
       }
     }
-
-    if (page.notModified) {
-      // 304: the previous text still stands — costs nothing, counts as a read page.
-      const p = prev.get(cand.url);
-      out.count++;
-      out.seenUrls.add(cand.url);
-      if (p?.text) out.allPages.push({ url: cand.url, title: "", text: p.text, sourceLabel: ctx.sourceLabel });
-      log.pages.push({ url: cand.url, status: 304, outcome: "unchanged", chars: p?.text?.length ?? 0, ms: page.ms, via: cand.via });
-      await db.scanPage.create({
-        data: { scanId, sourceId: source.id, url: cand.url, contentHash: p?.hash ?? "", text: p?.text ?? null, chars: p?.text?.length ?? 0, etag: page.etag ?? p?.etag ?? null, lastModified: page.lastModified ?? p?.lastModified ?? null },
-      });
-      continue;
+    // Retry transient failures within the scan (PRD: a page is pending until done; 1-3 attempts).
+    for (let attempt = 0; attempt < PAGE_RETRIES && page.error && isRetryable(page.error); attempt++) {
+      await sleep(pauseMs);
+      log.add("info", `Retry ${attempt + 1} after ${page.errorDetail ?? page.error}`, cand.url);
+      page = await fetchPage(cand.url, mode);
     }
-
-    if (page.error) {
-      const category = outcomeCategoryOf(page.error);
-      log.count(category);
-      log.pages.push({ url: cand.url, status: page.status, outcome: page.error === "noindex" ? "skipped" : "failed", category, chars: 0, ms: page.ms, via: cand.via, error: page.errorDetail ?? page.error });
-      log.add("warn", `${page.error === "noindex" ? "Skipped" : "Failed"}: ${page.errorDetail ?? page.error}`, cand.url);
-      if (cand.via === "home") {
-        out.homeFailed = true;
-        out.errorKind = errorKindOf(page.error);
-        out.error = page.errorDetail ?? page.error;
-        break;
-      }
-      continue;
+    if (page.error === "slowdown") {
+      // The site said slow down: stop this scan, everything left is "not attempted", the next scan continues.
+      log.count("slowdown");
+      log.pages.push({ url: cand.url, status: page.status, outcome: "failed", category: "slowdown", chars: 0, ms: page.ms, via: cand.via, error: page.errorDetail });
+      log.add("warn", "The site answered 429 Too Many Requests — stopping this scan; the next one continues from here", cand.url);
+      await recordPage({ scanId, sourceId: source.id, workspaceId, url: cand.url, status: "slowdown", via: cand.via, httpStatus: page.status, ms: page.ms }, ctx.sourceLabel);
+      out.stoppedBy = "slowdown";
+      break;
     }
-
-    out.count++;
-    out.seenUrls.add(cand.url);
-    const hash = contentHash(page.text);
-    const before = prev.get(cand.url);
-    const outcome: PageOutcome = before == null ? "new" : before.hash === hash ? "unchanged" : "changed";
-    log.pages.push({ url: cand.url, status: page.status, outcome, chars: page.text.length, ms: page.ms, via: cand.via });
-    fetched.push(page);
-    const title = titleOf(page.html);
-    await db.scanPage.create({
-      data: { scanId, sourceId: source.id, url: cand.url, title: title || null, contentHash: hash, text: page.text, chars: page.text.length, etag: page.etag ?? null, lastModified: page.lastModified ?? null },
-    });
-    const pt: PageText = { url: cand.url, title, text: page.text, sourceLabel: ctx.sourceLabel };
-    out.allPages.push(pt);
-    if (outcome !== "unchanged") out.changedPages.push(pt);
-    frontier.addLinksFrom(page.html, page.finalUrl);
-    if (out.count % HEARTBEAT_EVERY === 0) await log.flush({ fetchMode: mode });
+    const r = await recordPage(
+      { scanId, sourceId: source.id, workspaceId, url: cand.url, status: statusOf(page.error), html: page.html || null, text: page.kind === "document" ? page.text : null, kind: page.kind, via: cand.via, httpStatus: page.status, ms: page.ms, errorDetail: page.errorDetail ?? null },
+      ctx.sourceLabel,
+    );
+    noteResult(log, out, r, page, cand.via);
+    if (cand.via === "home" && page.error && page.error !== "notfound") {
+      out.homeFailed = page.error;
+      out.errorKind = page.error;
+      out.error = page.errorDetail ?? page.error;
+      // A home page that cannot be read says something about the whole site: stop here.
+      break;
+    }
+    if (!page.error && page.html) frontier.addLinksFrom(page.html, page.finalUrl);
+    if (n % FLUSH_EVERY === 0) await log.flush({ fetchMode: mode });
   }
 
-  // Pages kept out before any request: robots.txt and the people-page policy.
+  // ——— 3. Bookkeeping ———
+  await markLinked(source.id, scanId, frontier.linked);
   out.robotsDisallowed = frontier.robotsSkipped;
-  if (frontier.robotsSkipped.length) {
-    log.count("robots", frontier.robotsSkipped.length);
-    log.add("info", `Blocked by robots.txt: ${frontier.robotsSkipped.length} path${frontier.robotsSkipped.length === 1 ? "" : "s"} (${frontier.robotsSkipped.slice(0, 5).join(", ")}${frontier.robotsSkipped.length > 5 ? ", …" : ""})`);
+  if (frontier.robotsSkippedCount) {
+    log.count("robots", frontier.robotsSkippedCount);
+    log.add("info", `Kept out by robots.txt: ${frontier.robotsSkippedCount} page${frontier.robotsSkippedCount === 1 ? "" : "s"} (${frontier.robotsSkipped.slice(0, 5).join(", ")}${frontier.robotsSkipped.length > 5 ? ", …" : ""})`);
   }
-  if (frontier.policySkipped.length) {
-    log.count("policy", frontier.policySkipped.length);
-    log.add("info", `Skipped by policy (people pages): ${frontier.policySkipped.length} (${frontier.policySkipped.slice(0, 5).join(", ")}${frontier.policySkipped.length > 5 ? ", …" : ""})`);
-  }
-  if (out.capReached) {
-    log.count("cap", frontier.remaining);
-    log.add("info", `Page limit reached (${ctx.maxPages}) — ${frontier.remaining} discovered pages not fetched`);
-  }
-  if (out.budgetReached) {
-    log.count("cap", frontier.remaining + 1);
-    log.add("warn", `Time budget reached (${Math.round(SCAN_TIME_BUDGET_MS / 60000)} min) — ${frontier.remaining + 1} discovered pages not fetched`);
+  const left = frontier.remainingUrls();
+  if (left.length) {
+    log.notAttempted = left.length;
+    if (out.stoppedBy === "cap") {
+      log.count("cap", left.length);
+      log.add("warn", `Ceiling reached (${limits.pages} pages / ${Math.round(limits.ms / 60000)} min) — ${left.length} discovered page${left.length === 1 ? "" : "s"} not attempted; the next run continues from them`);
+    } else if (out.stoppedBy === "slowdown") {
+      log.add("warn", `${left.length} discovered page${left.length === 1 ? "" : "s"} not attempted after the slow-down answer`);
+    } else if (out.homeFailed) {
+      log.add("warn", `${left.length} known page${left.length === 1 ? "" : "s"} not attempted — the home page could not be read`);
+    }
   }
   out.mode = mode;
   return out;
 }
 
 /**
- * Pages handed in by a collector before the scan was launched (rows of this
- * scan already in ScanPage): read them back and diff against the previous
- * scan of the source. No fetching, so none of the politeness limits apply.
+ * Pages handed in by a collector before the scan was launched (ScanPage rows
+ * of this scan): store each through the page store and diff. No fetching, so
+ * none of the politeness limits apply.
  */
 async function collectBundle(ctx: CollectContext): Promise<Collected> {
-  const { scanId, log, prev } = ctx;
-  const out: Collected = { count: 0, changedPages: [], allPages: [], seenUrls: new Set(), homeFailed: false, capReached: false, budgetReached: false, mode: "bundle", errorKind: null, error: null, robotsDisallowed: [] };
+  const { scanId, workspaceId, source, log } = ctx;
+  const out = emptyCollected("bundle");
   const rows = await db.scanPage.findMany({
     where: { scanId },
     orderBy: { fetchedAt: "asc" },
-    select: { url: true, title: true, kind: true, contentHash: true, text: true, chars: true, observedAt: true },
+    select: { url: true, title: true, kind: true, text: true, chars: true, observedAt: true },
   });
   log.add("info", `${rows.length} page${rows.length === 1 ? "" : "s"} handed in by the collector`);
   for (const r of rows) {
@@ -310,18 +416,48 @@ async function collectBundle(ctx: CollectContext): Promise<Collected> {
       log.pages.push({ url: r.url, status: 0, outcome: "skipped", chars: 0, ms: 0, via: "bundle", error: "empty" });
       continue;
     }
-    out.count++;
-    out.seenUrls.add(r.url);
-    const before = prev.get(r.url);
-    const outcome: PageOutcome = before == null ? "new" : before.hash === r.contentHash ? "unchanged" : "changed";
-    log.pages.push({ url: r.url, status: 200, outcome, chars: r.chars, ms: 0, via: "bundle" });
-    const pt: PageText = { url: r.url, title: r.title ?? "", text: r.text, kind: r.kind, sourceLabel: ctx.sourceLabel, observedAt: r.observedAt?.toISOString() ?? null };
-    out.allPages.push(pt);
-    if (outcome !== "unchanged") out.changedPages.push(pt);
+    out.attempted++;
+    const rec = await recordPage({ scanId, sourceId: source.id, workspaceId, url: r.url, status: "ok", text: r.text, title: r.title, kind: (r.kind as PageText["kind"]) as never, via: "handin" }, ctx.sourceLabel);
+    if (rec.pageText) rec.pageText.observedAt = r.observedAt?.toISOString() ?? null;
+    noteResult(log, out, rec, { url: r.url, finalUrl: r.url, status: 200, html: "", text: r.text, kind: "page", mode: "plain", ms: 0, needsBrowser: false }, "bundle");
   }
   if (out.count === 0) {
     out.errorKind = "other";
     out.error = "the collector handed in no page text";
+  }
+  return out;
+}
+
+/**
+ * The local lane: the hand-in route already stored every page with
+ * recordPage() and logged it on the scan; read the log back and load the
+ * texts of new/changed pages for PMOS AI.
+ */
+async function collectLocal(ctx: CollectContext): Promise<Collected> {
+  const { scanId, source, log } = ctx;
+  const out = emptyCollected("local");
+  for (const p of log.pages) {
+    if (p.outcome === "skipped") continue;
+    out.attempted++;
+    if (p.outcome === "failed") {
+      if (p.category === "denied" || p.category === "login") out.denied++;
+      continue;
+    }
+    out.count++;
+    out.seenUrls.add(p.url);
+  }
+  const changedUrls = log.pages.filter((p) => p.outcome === "new" || p.outcome === "changed").map((p) => p.url);
+  if (changedUrls.length) {
+    const rows = await db.sourcePage.findMany({ where: { sourceId: source.id, url: { in: changedUrls } }, select: { url: true, title: true, text: true, kind: true } });
+    out.changedPages = rows.filter((r) => r.text).map((r) => ({ url: r.url, title: r.title ?? "", text: r.text ?? "", kind: r.kind, sourceLabel: ctx.sourceLabel }));
+  }
+  const notAttempted = await db.competitorScan.findUnique({ where: { id: scanId }, select: { pagesNotAttempted: true } });
+  log.notAttempted = notAttempted?.pagesNotAttempted ?? 0;
+  if (log.notAttempted) out.stoppedBy = "cap";
+  log.add("info", `${out.count} page${out.count === 1 ? "" : "s"} handed in from the station, ${out.attempted - out.count} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
+  if (out.count === 0 && out.attempted === 0) {
+    out.errorKind = "other";
+    out.error = "the station handed in no pages";
   }
   return out;
 }
@@ -333,29 +469,32 @@ export async function runScan(scanId: string): Promise<void> {
     where: { id: scanId },
     include: { source: { include: { competitor: true } } },
   });
-  if (!scan || (scan.status !== "queued" && scan.status !== "running")) return;
+  if (!scan || !(ACTIVE_SCAN_STATUSES as readonly string[]).includes(scan.status)) return;
   const { source } = scan;
   const competitor = source.competitor;
   const workspaceId = scan.workspaceId;
-  const log = new ScanLog(scanId);
+  const lane: ScanLane = scan.fetchMode === "bundle" ? "bundle" : (scan.lane as ScanLane);
+  // The local lane logged its pages on the row already; everything else starts a fresh log.
+  const log = lane === "local"
+    ? new ScanLog(scanId, { lines: Array.isArray(scan.log) ? (scan.log as unknown as LogLine[]) : [], pages: Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : [], outcomes: (scan.outcomes ?? {}) as OutcomeCounts })
+    : new ScanLog(scanId);
   const t0 = Date.now();
-  const config = await getCompetitorsConfig(workspaceId);
-  // Liveness: a scan heartbeats every 30 s so a dead runner (process reload, crash) is told apart from a long AI call.
-  const heartbeat = setInterval(() => void db.competitorScan.update({ where: { id: scanId }, data: { heartbeatAt: new Date() } }).catch(() => undefined), 30_000);
-  const isWebsite = source.type === "website";
-  // Pages handed in by a collector (importPages) are read back, whatever the source type; only a plain website scan crawls.
-  const handedIn = scan.fetchMode === "bundle";
+  const heartbeat = setInterval(() => void db.competitorScan.update({ where: { id: scanId }, data: { heartbeatAt: new Date() } }).catch(() => undefined), HEARTBEAT_MS);
   const sourceLabel = C.profile.sourceTypes[source.type] ?? source.type;
-  await db.competitorScan.update({ where: { id: scanId }, data: { status: "running", startedAt: new Date() } });
-  log.add("info", !handedIn
-    ? `Scan started (${scan.trigger}) for ${competitor.name} — ${source.url}, limit ${config.maxPagesPerScan} pages, budget ${Math.round(SCAN_TIME_BUDGET_MS / 60000)} min`
-    : `Scan started (${scan.trigger}) for ${competitor.name} — ${sourceLabel} pages handed in by a collector`);
+  // A remote scan may resume the last stale scan of the source: its pending pages go first.
+  const staleBefore = lane === "remote" ? await db.competitorScan.findFirst({ where: { sourceId: source.id, status: "stale" }, orderBy: { startedAt: "desc" }, select: { id: true } }) : null;
+  await db.competitorScan.update({ where: { id: scanId }, data: { status: "running", lane, ...(lane === "remote" ? { startedAt: new Date() } : {}), resumedFromId: staleBefore?.id ?? null } });
+  log.add("info", lane === "remote"
+    ? `Scan started (${scan.trigger}) for ${competitor.name} — ${source.url}${staleBefore ? ", resuming the stale scan's pending pages first" : ""}`
+    : lane === "local"
+      ? `Processing ${competitor.name} — pages handed in from the station`
+      : `Scan started (${scan.trigger}) for ${competitor.name} — ${sourceLabel} pages handed in by a collector`);
 
   let finalStatus: "ok" | "partial" | "failed" = "ok";
   let badge: ScanBadge = "full";
   let errorKind: string | null = null;
   let error: string | null = null;
-  let mode: FetchMode | "bundle" = handedIn ? "bundle" : "plain";
+  let mode: Collected["mode"] = lane;
   let aiCalls = 0;
   let statusesChanged = 0;
   let statusesSet = 0;
@@ -364,40 +503,28 @@ export async function runScan(scanId: string): Promise<void> {
   let piiHits = 0;
   let robotsDisallowed: string[] = [];
   let removedPages: string[] = [];
+  let handToLocal = false;
 
   try {
-    // Previous pages of this source: hashes (changed vs unchanged), validators
-    // (conditional requests) and the URL set (removed pages).
-    // Only scans that finished (ok or partial) established anything: pages a failed or abandoned scan
-    // stored never count as "seen", or the next scan would skip PMOS AI over pages it never processed.
-    const previousPages = await db.scanPage.findMany({
-      where: { sourceId: source.id, scanId: { not: scanId }, scan: { status: { in: ["ok", "partial"] } } },
-      orderBy: { fetchedAt: "desc" },
-      select: { url: true, contentHash: true, etag: true, lastModified: true, text: true, scanId: true },
-    });
-    const lastScanId = previousPages[0]?.scanId ?? null;
-    const prev = new Map<string, PreviousPage>();
-    for (const p of previousPages) if (!prev.has(p.url)) prev.set(p.url, { hash: p.contentHash, etag: p.etag, lastModified: p.lastModified, text: p.text });
-    const lastScanUrls = new Set(previousPages.filter((p) => p.scanId === lastScanId).map((p) => p.url));
-    const firstScan = prev.size === 0;
-
-    const ctx: CollectContext = { scanId, source, competitor, sourceLabel, prev, log, t0, maxPages: config.maxPagesPerScan };
-    const col = handedIn ? await collectBundle(ctx) : await collectWebsite(ctx);
+    const firstScan = (await db.sourcePage.count({ where: { sourceId: source.id, lastReadScanId: { not: scanId } } })) === 0;
+    const ctx: CollectContext = { scanId, workspaceId, source, competitor, sourceLabel, log, t0, resumedFromId: staleBefore?.id ?? null };
+    const col = lane === "bundle" ? await collectBundle(ctx) : lane === "local" ? await collectLocal(ctx) : await collectWebsite(ctx);
     mode = col.mode;
     errorKind = col.errorKind;
     error = col.error;
     robotsDisallowed = col.robotsDisallowed;
-    const { count, changedPages, allPages, seenUrls, homeFailed, capReached, budgetReached } = col;
+    const { count, changedPages, seenUrls, homeFailed, stoppedBy } = col;
+    const notRead = log.pages.filter((p) => p.outcome === "failed" && p.category !== "notfound").length;
+    const full = !homeFailed && !stoppedBy && notRead === 0 && robotsDisallowed.length === 0 && count > 0;
 
-    // Pages the last scan read that this one did not see — a removed pricing page is a signal.
-    // Only a crawl can assert removal: a collector's hand-in brings what it found, not the whole site.
-    if (!homeFailed && lastScanUrls.size && mode !== "bundle") {
-      const failedNow = new Set(log.pages.filter((p) => p.outcome === "failed").map((p) => p.url));
-      removedPages = [...lastScanUrls].filter((u) => !seenUrls.has(u) && (failedNow.has(u) || !capReached && !budgetReached)).slice(0, 100);
-      if (removedPages.length) log.add("info", `Removed since the last scan: ${removedPages.length} page${removedPages.length === 1 ? "" : "s"} (${removedPages.slice(0, 3).map((u) => u.replace(/^https?:\/\/[^/]+/, "")).join(", ")}${removedPages.length > 3 ? ", …" : ""})`);
-    }
-    log.add("info", `${handedIn ? "Read" : "Fetched"} ${count} pages${!handedIn ? ` via ${mode}` : ""}: ${changedPages.length} new or changed, ${count - changedPages.length} unchanged, ${log.pages.filter((p) => p.outcome === "failed").length} failed`);
-    await log.flush({ fetchMode: mode, robotsDisallowed: robotsDisallowed as unknown as Prisma.InputJsonValue, removedPages: removedPages as unknown as Prisma.InputJsonValue });
+    // ——— Page states: missing / removed / unlinked (removed needs proof: two consecutive not-found answers) ———
+    const states = await finalizePageStates(source.id, scanId, full && lane !== "bundle");
+    removedPages = states.removedUrls;
+    if (states.removedUrls.length) log.add("info", `Removed (not found twice in a row): ${states.removedUrls.length} page${states.removedUrls.length === 1 ? "" : "s"} (${states.removedUrls.slice(0, 3).map((u) => u.replace(/^https?:\/\/[^/]+/, "")).join(", ")}${states.removedUrls.length > 3 ? ", …" : ""})`);
+    if (states.missing) log.add("info", `${states.missing} page${states.missing === 1 ? "" : "s"} missing (not found once — nothing happens until the next scan)`);
+    if (states.unlinked) log.add("info", `${states.unlinked} page${states.unlinked === 1 ? "" : "s"} unlinked (still answer, nothing points at them)`);
+    log.add("info", `${lane === "remote" ? "Fetched" : "Read"} ${count} pages${lane === "remote" ? ` via ${mode}` : ""}: ${changedPages.length} new or changed, ${count - changedPages.length} unchanged, ${log.pages.filter((p) => p.outcome === "failed").length} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
+    await log.flush({ fetchMode: mode === "local" || mode === "bundle" ? mode : mode, robotsDisallowed: robotsDisallowed as unknown as Prisma.InputJsonValue, removedPages: removedPages as unknown as Prisma.InputJsonValue });
 
     if (homeFailed) {
       finalStatus = "failed";
@@ -411,11 +538,11 @@ export async function runScan(scanId: string): Promise<void> {
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
     } else {
       // ——— PMOS AI ———
-      // Nothing changed but the catalog grew: classify the new capabilities
-      // from the stored pages (that is what the text retention is for).
+      // Nothing changed but the catalog grew: classify the new capabilities from the stored current texts.
       const catalogGrew = changedPages.length === 0;
-      if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${allPages.length} stored pages`);
-      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, catalogGrew ? allPages : changedPages, firstScan, log, { facts: !catalogGrew });
+      const pagesForAi = catalogGrew ? await currentPageTexts(source.id, sourceLabel) : changedPages;
+      if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${pagesForAi.length} stored pages`);
+      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew });
       aiCalls = r.aiCalls;
       statusesChanged = r.statusesChanged;
       statusesSet = r.statusesSet;
@@ -430,32 +557,21 @@ export async function runScan(scanId: string): Promise<void> {
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
     }
 
-    // ——— Prune page texts older than the last KEEP_TEXT_SCANS scans ———
-    const keep = await db.competitorScan.findMany({
-      where: { sourceId: source.id, status: { in: ["ok", "partial", "running"] } },
-      orderBy: { startedAt: "desc" },
-      take: KEEP_TEXT_SCANS,
-      select: { id: true },
-    });
-    const pruned = await db.scanPage.updateMany({
-      where: { sourceId: source.id, scanId: { notIn: keep.map((k) => k.id) }, text: { not: null } },
-      data: { text: null },
-    });
-    if (pruned.count) log.add("info", `Page-text cleanup: ${pruned.count} older page text${pruned.count === 1 ? "" : "s"} dropped (hashes kept)`);
-
-    // ——— Badge ———
-    const denied = (log.outcomes.denied ?? 0) + (log.outcomes.login ?? 0);
+    // ——— Badge (PRD): Blocked = the site refused us on most pages or at the door; Unreachable = no answer at all ———
+    const refusedAtDoor = homeFailed === "botwall" || homeFailed === "http4xx" || homeFailed === "login";
     if (homeFailed) {
-      badge = errorKind === "botwall" || errorKind === "http4xx" || errorKind === "login" ? "blocked" : "unreachable";
+      badge = refusedAtDoor ? "blocked" : "unreachable";
     } else if (count === 0) {
-      badge = "unreachable";
-    } else if (denied > 0 && denied >= count) {
+      badge = col.denied > 0 ? "blocked" : "unreachable";
+    } else if (col.denied > 0 && col.denied * 2 >= col.attempted) {
       badge = "blocked";
-    } else if (capReached || budgetReached || finalStatus === "partial" || log.pages.some((p) => p.outcome === "failed") || robotsDisallowed.length > 0) {
+    } else if (!full || finalStatus === "partial") {
       badge = "incomplete";
     } else {
       badge = "full";
     }
+    // Blocked in the remote lane hands the site to the local lane (a PM's browser), when a station is enrolled.
+    handToLocal = badge === "blocked" && lane === "remote";
   } catch (e) {
     finalStatus = "failed";
     badge = "unreachable";
@@ -469,10 +585,11 @@ export async function runScan(scanId: string): Promise<void> {
 
   const durationMs = Date.now() - t0;
   log.add("info", `Scan ${finalStatus} (${badge}) in ${Math.round(durationMs / 1000)} s · ${aiCalls} AI call${aiCalls === 1 ? "" : "s"} · ${statusesChanged} status change${statusesChanged === 1 ? "" : "s"}${statusesSet ? ` · ${statusesSet} cell${statusesSet === 1 ? "" : "s"} with first evidence` : ""} · ${factsChanged} fact change${factsChanged === 1 ? "" : "s"} · ${suggestions} suggestion${suggestions === 1 ? "" : "s"}${piiHits ? ` · ${piiHits} PII hit${piiHits === 1 ? "" : "s"} dropped` : ""}`);
+  const finishedAt = new Date();
   await log.flush({
     status: finalStatus,
     badge,
-    finishedAt: new Date(),
+    finishedAt,
     fetchMode: mode,
     aiCalls,
     statusesChanged,
@@ -486,16 +603,19 @@ export async function runScan(scanId: string): Promise<void> {
   });
   await db.competitorSource.update({
     where: { id: source.id },
-    data: { lastScanAt: new Date(), lastStatus: finalStatus, lastError: finalStatus === "ok" ? null : error },
+    data: { lastScanAt: await now(), lastStatus: finalStatus, lastError: finalStatus === "ok" ? null : error },
   });
+  if (lane === "local") await finishLocalRequest(scanId);
   await recordCompetitorEvent(workspaceId, scan.startedById, "cmp_scan_finished", {
     scanId,
     competitorId: competitor.id,
     sourceType: source.type,
+    lane,
     status: finalStatus,
     badge,
-    pagesFetched: log.pages.filter((p) => p.outcome !== "skipped" && p.outcome !== "failed").length,
-    pagesChanged: log.pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length,
+    pagesFetched: log.read,
+    pagesChanged: log.changed,
+    pagesNotAttempted: log.notAttempted,
     statusesChanged,
     factsChanged,
     suggestions,
@@ -503,6 +623,28 @@ export async function runScan(scanId: string): Promise<void> {
     durationMs,
     errorKind: errorKind ?? "none",
   });
+
+  if (handToLocal && (await hasActiveScannerKey())) {
+    // The remote lane was refused: the same site goes to a PM's browser. Customers see "Scan pending".
+    const follow = await db.competitorScan.create({ data: { workspaceId, sourceId: source.id, trigger: scan.trigger, startedById: scan.startedById, status: "queued", lane: "local", startedAt: await now(), heartbeatAt: new Date() }, select: { id: true } });
+    await createLocalRequest(follow.id);
+    log.add("info", `Handed to the local lane (${follow.id})`);
+    await db.competitorScan.update({ where: { id: scanId }, data: { log: log.lines as unknown as Prisma.InputJsonValue } });
+  }
+
+  // A freed slot is used at once: the next queued remote scan starts now, not at the next tick.
+  try {
+    const { startQueuedScans } = await import("./tick");
+    const { launchScan } = await import("./run");
+    await startQueuedScans(launchScan);
+  } catch (e) {
+    console.error("[competitors] could not start the next queued scan", e);
+  }
+}
+
+/** Whether the remote lane may run at all (Administration switch). */
+export async function remoteLaneOn(): Promise<boolean> {
+  return (await getGlobalScanSettings()).remoteScanEnabled;
 }
 
 /**

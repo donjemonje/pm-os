@@ -8,7 +8,7 @@
 #
 # Runtime env (set on the job): DATABASE_URL or the Cloud SQL connector vars
 # (INSTANCE_CONNECTION_NAME, DB_USER, DB_PASSWORD, DB_NAME), VERTEX_PROJECT_ID,
-# COMPETITORS_BROWSER=on. Args: --scan <id> (from the app) or --due (scheduler).
+# COMPETITORS_BROWSER=on. Args: --scan <id> (from the app) or --tick (scheduler, hourly).
 FROM mcr.microsoft.com/playwright:v1.62.1-noble
 
 WORKDIR /app
@@ -32,4 +32,4 @@ COPY tsconfig.json ./
 RUN npm install --no-save --no-audit --no-fund playwright@1.62.1
 
 ENTRYPOINT ["node", "--no-warnings", "--import", "./scripts/ts-resolve-hooks.mjs", "scripts/competitors-scanner.mts"]
-CMD ["--due"]
+CMD ["--tick"]

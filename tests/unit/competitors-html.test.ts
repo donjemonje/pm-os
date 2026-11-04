@@ -68,24 +68,36 @@ describe("Frontier", () => {
     expect(isAllowed(new URL("https://acme.com/files/a.pdf"), rules)).toBe(false);
     expect(isAllowed(new URL("https://acme.com/private/x"), rules)).toBe(false);
   });
-  it("dedupes by page key, stays inside the site, skips assets, feeds and locales, and hands out the most useful page first", () => {
+  it("dedupes by page key, stays inside the site, skips assets and feeds, keeps people pages and locales, and hands out the most useful page first", () => {
     const f = new Frontier("acme.com", rules);
     expect(f.add(new URL("https://acme.com/"), "home")).toBe(true);
     expect(f.add(new URL("https://acme.com/?utm=1"), "link")).toBe(false); // same page
     expect(f.add(new URL("https://acme.com/blog/post-1"), "link")).toBe(true);
     expect(f.add(new URL("https://acme.com/pricing/"), "link")).toBe(true);
-    expect(f.add(new URL("https://acme.com/de/pricing"), "link")).toBe(false); // localized duplicate
+    expect(f.add(new URL("https://acme.com/de/pricing"), "link")).toBe(true); // everything a PM would look at — locales included (PRD 2026-11-04)
     expect(f.add(new URL("https://acme.com/feed"), "link")).toBe(false);
     expect(f.add(new URL("https://acme.com/logo.png"), "link")).toBe(false);
+    expect(f.add(new URL("https://acme.com/brochure.pdf"), "link")).toBe(false); // this site's robots.txt disallows PDFs
     expect(f.add(new URL("https://other.com/"), "link")).toBe(false);
     expect(f.add(new URL("https://acme.com/private/x"), "link")).toBe(false); // robots → recorded
-    expect(f.add(new URL("https://acme.com/team/jane"), "link")).toBe(false); // people page → policy
-    expect(f.robotsSkipped).toEqual(["/private/x"]);
-    expect(f.policySkipped).toEqual(["/team/jane"]);
+    expect(f.add(new URL("https://acme.com/team/jane"), "link")).toBe(true); // people pages are pages too
+    expect(f.robotsSkipped).toEqual(["/brochure.pdf", "/private/x"]);
+    expect(f.robotsSkippedCount).toBe(2);
+    expect(f.linked.has("https://acme.com/pricing")).toBe(true);
     expect(f.next()?.url).toBe("https://acme.com/");
     expect(f.next()?.url).toBe("https://acme.com/pricing");
+    expect(f.next()?.url).toBe("https://acme.com/de/pricing");
+    expect(f.next()?.url).toBe("https://acme.com/team/jane");
     expect(f.next()?.url).toBe("https://acme.com/blog/post-1");
     expect(f.next()).toBeUndefined();
+    expect(f.remainingUrls()).toEqual([]);
+  });
+  it("puts a resumed scan's pending pages ahead of everything", () => {
+    const f = new Frontier("acme.com", rules);
+    f.add(new URL("https://acme.com/"), "home");
+    f.add(new URL("https://acme.com/docs/api"), "known", { first: true });
+    expect(f.next()?.url).toBe("https://acme.com/docs/api");
+    expect(f.next()?.url).toBe("https://acme.com/");
   });
   it("orders equal priorities by depth, then name", () => {
     const sorted = orderCandidates([

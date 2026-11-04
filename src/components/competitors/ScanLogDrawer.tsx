@@ -10,24 +10,21 @@ interface ScanRow {
   id: string;
   trigger: string;
   status: string;
-  fetchMode: string | null;
   startedAt: string;
   finishedAt: string | null;
   pagesFetched: number;
   pagesChanged: number;
+  pagesNotAttempted: number;
   statusesChanged: number;
   factsChanged: number;
   suggestions: number;
-  aiCalls: number;
   errorKind: string | null;
   error: string | null;
   badge: string | null;
   outcomes: Record<string, number>;
   robotsDisallowed: string[];
   removedPages: string[];
-  piiHits: number;
   pages: { url: string; status: number; outcome: string; category?: string; chars: number; ms: number; via: string; error?: string }[];
-  log: { at: string; level: string; msg: string; url?: string }[];
 }
 
 const STATUS_CLASS: Record<string, string> = {
@@ -38,8 +35,10 @@ const STATUS_CLASS: Record<string, string> = {
   failed: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
   blocked: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
   unreachable: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  stale: "bg-[#fff7e0] text-[#8a5a00]",
   running: "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]",
   queued: "bg-[#eef1f6] text-[#4a5b74]",
+  pending_local: "bg-[#eef1f6] text-[#4a5b74]",
 };
 const OUTCOME_CLASS: Record<string, string> = {
   new: "text-[#0f7a47]",
@@ -50,9 +49,10 @@ const OUTCOME_CLASS: Record<string, string> = {
 };
 
 /**
- * The scan log of one competitor: every run, newest first, each expandable
- * to its pages and log lines. How we debug and verify the scraping; PMs can
- * read it too.
+ * The scan log of one competitor as customers see it: every scan, newest
+ * first, each expandable to its pages (read / changed / not read, with the
+ * reason). How a scan ran — lane, fetch mode, runner lines — is admin-only
+ * (Administration → Competitors), never here.
  */
 export function ScanLogDrawer({ competitorId, competitorName, onClose }: { competitorId: string; competitorName: string; onClose: () => void }) {
   const [scans, setScans] = useState<ScanRow[] | null>(null);
@@ -121,7 +121,6 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                   <span className="font-semibold">{shortDate(s.startedAt)}</span>
                   <span className="text-fg-muted" title={new Date(s.startedAt).toLocaleString()}>{timeAgo(s.startedAt)}</span>
                   <span className="text-fg-muted">· {C.log.trigger[s.trigger] ?? s.trigger}</span>
-                  {s.fetchMode && <span className="text-fg-muted">· {C.log.fetchMode[s.fetchMode] ?? s.fetchMode}</span>}
                   <span className="ml-auto font-mono text-[11px] text-fg-muted">
                     {C.log.summary(s.pagesFetched, s.pagesChanged, s.statusesChanged, s.factsChanged, s.suggestions)}
                   </span>
@@ -130,8 +129,7 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                   <div className="border-t border-border bg-[rgba(255,255,255,.6)] px-4 py-3">
                     <div className="mb-3 flex flex-wrap gap-4 font-mono text-[11px] text-fg-3">
                       {seconds != null && <span>{C.log.duration(seconds)}</span>}
-                      <span>{C.log.aiCalls(s.aiCalls)}</span>
-                      {s.piiHits > 0 && <span className="text-[#8a5a00]">{C.log.piiHits(s.piiHits)}</span>}
+                      {s.pagesNotAttempted > 0 && <span className="text-[#8a5a00]">{C.log.notAttempted(s.pagesNotAttempted)}</span>}
                       {s.error && <span className="text-[#c23767]">{s.error}</span>}
                     </div>
                     {(Object.keys(s.outcomes ?? {}).length > 0 || s.removedPages?.length > 0) && (
@@ -163,25 +161,6 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                           <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">{p.status || "—"} · {p.chars.toLocaleString()} ch · {p.ms} ms</span>
                           {p.category && <span className="shrink-0 font-mono text-[10.5px] text-fg-muted">{C.settings.outcomeLabels[p.category] ?? p.category}</span>}
                           {p.error && <span className="shrink-0 font-mono text-[10.5px] text-[#c23767]">{p.error}</span>}
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mb-1.5 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.log.linesHeading}</div>
-                    <div className="max-h-72 overflow-y-auto rounded-[8px] border border-border bg-white px-3 py-2 font-mono text-[11px] leading-relaxed">
-                      {s.log.map((l, i) => (
-                        <div key={i} className={cn("flex gap-2", l.level === "error" ? "text-[#c23767]" : l.level === "warn" ? "text-[#8a5a00]" : "text-fg-2")}>
-                          <span className="shrink-0 text-fg-faint">{new Date(l.at).toLocaleTimeString("en-GB")}</span>
-                          <span className="min-w-0 break-words">
-                            {l.msg}
-                            {l.url && (
-                              <>
-                                {" "}
-                                <a href={l.url} target="_blank" rel="noreferrer" className="text-fg-muted hover:underline">
-                                  {l.url.replace(/^https?:\/\/[^/]+/, "")}
-                                </a>
-                              </>
-                            )}
-                          </span>
                         </div>
                       ))}
                     </div>

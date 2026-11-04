@@ -1,17 +1,19 @@
 import { db } from "../db";
-import { envFeatureDefault, resolveFeature } from "../feature-flags";
-import { frequencyMs, mergeCompetitorsConfig } from "./config";
-import { createScan, runScan } from "./scan";
+import { runScan } from "./scan";
+import { runTick, sweepStale } from "./tick";
+import { now } from "./settings";
 
 /**
- * Where scans execute.
+ * Where scans execute (Website Scanning PRD 2026-11-04).
  *
  * - COMPETITORS_RUNNER=inline (local dev default): runScan runs in this Node
  *   process, fire-and-forget; the page polls the Scan row.
  * - COMPETITORS_RUNNER=cloudrun (prod): the app asks the Cloud Run job
  *   COMPETITORS_JOB (projects/P/locations/L/jobs/J) to run with `--scan <id>`;
  *   the job container has Chromium. Cloud Scheduler runs the same job with
- *   `--due` on the hour.
+ *   `--tick` once an hour: the job (same code, same database) decides what is
+ *   due, sweeps stale scans, sends the 24-hour alerts and runs retention — no
+ *   HTTP route, no new auth surface.
  */
 
 export function runnerMode(): "inline" | "cloudrun" {
@@ -56,59 +58,21 @@ async function triggerCloudRunJob(args: string[]): Promise<void> {
   if (res.status >= 300) throw new Error(`Cloud Run job trigger answered ${res.status}`);
 }
 
-/** Scans whose schedule has come: one per due source, run one after another. */
-export async function runDueScans(log: (msg: string) => void = console.log): Promise<number> {
-  const workspaces = await db.workspace.findMany({
-    select: { id: true, competitorsConfig: true, organization: { select: { features: true } } },
-  });
-  let started = 0;
-  for (const w of workspaces) {
-    if (!resolveFeature(w.organization.features, "competitors", envFeatureDefault("competitors"))) continue;
-    const config = mergeCompetitorsConfig(w.competitorsConfig);
-    const dueBefore = new Date(Date.now() - frequencyMs(config.scanFrequency));
-    const sources = await db.competitorSource.findMany({
-      where: {
-        workspaceId: w.id,
-        type: "website",
-        OR: [{ lastScanAt: null }, { lastScanAt: { lt: dueBefore } }],
-      },
-      include: { competitor: { select: { id: true, name: true } } },
-      orderBy: [{ lastScanAt: "asc" }],
-    });
-    for (const s of sources) {
-      const created = await createScan(w.id, s.competitor.id, "scheduled", null);
-      if ("error" in created) {
-        log(`skip ${s.competitor.name}: ${created.error}`);
-        continue;
-      }
-      log(`scan ${s.competitor.name} (${created.scanId})`);
-      await runScan(created.scanId);
-      started++;
-    }
-  }
-  return started;
+/**
+ * The hourly tick, run by the scanner job (`--tick`) and by the tests
+ * ("scheduler tick" knob). Inline mode runs the scans it starts in-process.
+ */
+export async function tick(log: (msg: string) => void = console.log): Promise<void> {
+  const r = await runTick(launchScan, log);
+  log(`tick: ${r.stale} stale, ${r.due} due, ${r.started} started, ${r.alerts} alerts, ${r.purged} texts purged`);
 }
 
-/** Scans that lost their runner (process restart): mark them failed so the next one can start. */
-export async function failStaleScans(staleMs = 10 * 60_000): Promise<number> {
-  const cutoff = new Date(Date.now() - staleMs);
-  const stale = await db.competitorScan.findMany({
-    where: { status: { in: ["queued", "running"] }, heartbeatAt: { lt: cutoff } },
-    select: { id: true, sourceId: true },
-  });
-  for (const s of stale) {
-    await db.competitorScan.update({
-      where: { id: s.id },
-      data: { status: "failed", finishedAt: new Date(), errorKind: "other", error: "the scan stopped responding and was abandoned" },
-    });
-    await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "the scan stopped responding and was abandoned" } });
-  }
-  // A run whose runner died: no scan of it alive any more, yet still "running" — close it so the next press can start.
-  const runs = await db.competitorScanRun.findMany({ where: { status: "running", startedAt: { lt: cutoff } }, select: { id: true } });
-  for (const r of runs) {
-    const alive = await db.competitorScan.findFirst({ where: { runId: r.id, status: { in: ["queued", "running"] } }, select: { id: true } });
-    if (alive) continue;
-    await db.competitorScanRun.update({ where: { id: r.id }, data: { status: "failed", finishedAt: new Date(), current: null } });
-  }
-  return stale.length + runs.length;
+/** Legacy name kept for the Scan-run code: scans that lost their runner are swept with the PRD rule (10 min without a heartbeat). */
+export async function failStaleScans(): Promise<number> {
+  return sweepStale(await now());
+}
+
+/** Scans of a workspace that are alive right now (any lane). */
+export async function activeScans(workspaceId: string): Promise<{ id: string; sourceId: string; status: string }[]> {
+  return db.competitorScan.findMany({ where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } }, select: { id: true, sourceId: true, status: true } });
 }

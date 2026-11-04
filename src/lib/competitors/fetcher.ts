@@ -1,32 +1,36 @@
 import { htmlToText, looksEmptyWithoutJs, looksLikeBotWall } from "./html";
+import { isPdfUrl } from "./url";
 
 /**
- * Fetching one page of a competitor's website. Plain HTTP first (fast, cheap);
- * a site that answers with a bot wall or JS-only pages is re-read through
- * headless Chromium (Playwright), which the scanner container ships with.
+ * Fetching one page of a competitor's website — the REMOTE lane (Website
+ * Scanning PRD 2026-11-04). Plain HTTP first; a page that comes back empty
+ * (JavaScript-only) or behind a bot wall is read again through headless
+ * Chromium (Playwright), which the scanner container ships with and which is
+ * always on in production. PDFs are pages: their text is extracted here.
+ *
+ * Nothing from the site is trusted as "unchanged": no conditional requests,
+ * no 304. Every scan fetches every page and the server hashes the text.
+ *
  * The app server never loads the browser: the import is dynamic and only
- * taken when COMPETITORS_BROWSER=on (the Cloud Run job sets it).
+ * taken when the browser is available (the Cloud Run job, or
+ * COMPETITORS_BROWSER=on locally).
  */
 
 export const USER_AGENT = "Mozilla/5.0 (compatible; PM-OS/1.0; +https://pm-os.io; competitor-analysis)";
-/** A current desktop Chrome UA for the browser mode — Cloudflare's basic check wants one. */
+/** The browser mode identifies itself too: a current Chrome UA with the PM-OS tag appended. */
 const BROWSER_UA =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 PM-OS/1.0 (+https://pm-os.io)";
 
 export const FETCH_TIMEOUT_MS = 15_000;
 const BROWSER_TIMEOUT_MS = 30_000;
+/** PDFs bigger than this are not read (a 300-page brochure is not a product page). */
+export const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
 export type FetchMode = "plain" | "browser";
-export type FetchErrorKind = "timeout" | "http4xx" | "http5xx" | "botwall" | "login" | "notfound" | "noindex" | "other";
+export type FetchErrorKind = "timeout" | "http4xx" | "http5xx" | "botwall" | "login" | "notfound" | "noindex" | "slowdown" | "other";
 
-/** Validators from the previous scan of the same URL — sent as conditional headers. */
-export interface Validators {
-  etag?: string | null;
-  lastModified?: string | null;
-}
-
-/** The user-facing category of a page that was not read (scanner rules, "what users see"). */
-export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" | "login" | "notfound" | "timeout" | "policy" {
+/** The user-facing category of a page that was not read (the PRD's reasons list). */
+export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" | "login" | "notfound" | "timeout" | "robots" | "slowdown" {
   switch (error) {
     case "botwall":
     case "http4xx":
@@ -36,7 +40,10 @@ export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" |
     case "notfound":
       return "notfound";
     case "noindex":
-      return "policy";
+      // The site asked robots to leave this page out — honoured like robots.txt.
+      return "robots";
+    case "slowdown":
+      return "slowdown";
     case "timeout":
     case "http5xx":
     case "other":
@@ -45,101 +52,138 @@ export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" |
   }
 }
 
+/** Errors worth a second attempt within the same scan (PRD: "ok if fail 1-3 times"). */
+export function isRetryable(error: FetchErrorKind | undefined): boolean {
+  return error === "timeout" || error === "http5xx" || error === "other";
+}
+
 export interface FetchedPage {
   url: string;
   /** Final URL after redirects. */
   finalUrl: string;
   status: number;
+  /** Raw HTML ("" for PDFs and failures). */
   html: string;
   text: string;
+  /** "page" | "document" (a PDF) */
+  kind: "page" | "document";
   mode: FetchMode;
   ms: number;
   /** True when the site needs the browser: bot wall or no text without JS. */
   needsBrowser: boolean;
-  /** 304 Not Modified — the previous scan's text still stands. */
-  notModified?: boolean;
-  etag?: string | null;
-  lastModified?: string | null;
   error?: FetchErrorKind;
   errorDetail?: string;
 }
 
+/**
+ * The headless browser: always on in production (the job image ships
+ * Chromium); locally only with COMPETITORS_BROWSER=on. COMPETITORS_BROWSER=off
+ * turns it off anywhere (local dev without Playwright).
+ */
 export function browserAvailable(): boolean {
   const v = process.env.COMPETITORS_BROWSER?.trim().toLowerCase();
-  return v === "on" || v === "true" || v === "1";
+  if (v === "off" || v === "false" || v === "0") return false;
+  if (v === "on" || v === "true" || v === "1") return true;
+  return process.env.NODE_ENV === "production";
 }
 
-export async function fetchPlain(url: string, validators: Validators = {}): Promise<FetchedPage> {
+function classify(status: number, html: string, xRobots: string): Pick<FetchedPage, "error" | "errorDetail" | "needsBrowser"> {
+  if (status === 429) return { error: "slowdown", errorDetail: "HTTP 429 Too Many Requests", needsBrowser: false };
+  const wall = looksLikeBotWall(status, html);
+  if (wall) return { error: "botwall", errorDetail: "bot protection", needsBrowser: true };
+  if (status === 401 || status === 402 || status === 407) return { error: "login", errorDetail: `HTTP ${status}`, needsBrowser: false };
+  if (status === 404 || status === 410) return { error: "notfound", errorDetail: `HTTP ${status}`, needsBrowser: false };
+  if (status >= 500) return { error: "http5xx", errorDetail: `HTTP ${status}`, needsBrowser: false };
+  if (status >= 400) return { error: "http4xx", errorDetail: `HTTP ${status}`, needsBrowser: false };
+  if (/\b(noindex|none)\b/.test(xRobots)) return { error: "noindex", errorDetail: "X-Robots-Tag: noindex", needsBrowser: false };
+  return { needsBrowser: false };
+}
+
+function failed(url: string, mode: FetchMode, t0: number, e: unknown): FetchedPage {
+  const msg = e instanceof Error ? e.message : String(e);
+  const timeout = /abort|timeout/i.test(msg);
+  return { url, finalUrl: url, status: 0, html: "", text: "", kind: "page", mode, ms: Date.now() - t0, needsBrowser: false, error: timeout ? "timeout" : "other", errorDetail: msg.split("\n")[0].slice(0, 200) };
+}
+
+export async function fetchPlain(url: string): Promise<FetchedPage> {
   const t0 = Date.now();
   try {
     const res = await fetch(url, {
       headers: {
         "user-agent": USER_AGENT,
-        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.7",
         "accept-language": "en-US,en;q=0.9",
-        ...(validators.etag ? { "if-none-match": validators.etag } : {}),
-        ...(validators.lastModified ? { "if-modified-since": validators.lastModified } : {}),
       },
       redirect: "follow",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    const etag = res.headers.get("etag");
-    const lastModified = res.headers.get("last-modified");
-    if (res.status === 304) {
-      return { url, finalUrl: res.url || url, status: 304, html: "", text: "", mode: "plain", ms: Date.now() - t0, needsBrowser: false, notModified: true, etag, lastModified };
+    const finalUrl = res.url || url;
+    const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+    const xRobots = (res.headers.get("x-robots-tag") ?? "").toLowerCase();
+    const isPdf = res.ok && (contentType.includes("application/pdf") || (isPdfUrl(finalUrl) && !contentType.includes("text/html")));
+    if (isPdf) {
+      const length = Number(res.headers.get("content-length") ?? 0);
+      if (length > MAX_PDF_BYTES) {
+        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: `PDF too large (${Math.round(length / 1024 / 1024)} MB)` };
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength > MAX_PDF_BYTES) {
+        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: "PDF too large" };
+      }
+      const text = await pdfToText(bytes);
+      return { url, finalUrl, status: res.status, html: "", text, kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false };
     }
     const html = await res.text();
     const text = htmlToText(html);
-    const wall = looksLikeBotWall(res.status, html);
-    const page: FetchedPage = {
+    const c = classify(res.status, html, xRobots);
+    return {
       url,
-      finalUrl: res.url || url,
+      finalUrl,
       status: res.status,
       html,
       text,
+      kind: "page",
       mode: "plain",
       ms: Date.now() - t0,
-      needsBrowser: wall || (res.ok && looksEmptyWithoutJs(text, html)),
-      etag,
-      lastModified,
+      needsBrowser: c.needsBrowser || (res.ok && !c.error && looksEmptyWithoutJs(text, html)),
+      ...(c.error ? { error: c.error, errorDetail: c.errorDetail } : {}),
     };
-    const xRobots = (res.headers.get("x-robots-tag") ?? "").toLowerCase();
-    if (wall) {
-      page.error = "botwall";
-    } else if (res.status === 401 || res.status === 402 || res.status === 407) {
-      page.error = "login";
-      page.errorDetail = `HTTP ${res.status}`;
-    } else if (res.status === 404 || res.status === 410) {
-      page.error = "notfound";
-      page.errorDetail = `HTTP ${res.status}`;
-    } else if (res.status >= 500) {
-      page.error = "http5xx";
-      page.errorDetail = `HTTP ${res.status}`;
-    } else if (res.status >= 400) {
-      page.error = "http4xx";
-      page.errorDetail = `HTTP ${res.status}`;
-    } else if (/\b(noindex|none)\b/.test(xRobots)) {
-      // The site asked robots to leave this page out — honoured like robots.txt.
-      page.error = "noindex";
-      page.errorDetail = "X-Robots-Tag: noindex";
-    }
-    return page;
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const timeout = /abort|timeout/i.test(msg);
-    return {
-      url,
-      finalUrl: url,
-      status: 0,
-      html: "",
-      text: "",
-      mode: "plain",
-      ms: Date.now() - t0,
-      needsBrowser: false,
-      error: timeout ? "timeout" : "other",
-      errorDetail: msg.slice(0, 200),
-    };
+    return failed(url, "plain", t0, e);
   }
+}
+
+// ————— PDF text —————
+
+type PdfJs = {
+  getDocument(src: { data: Uint8Array; useSystemFonts?: boolean; isEvalSupported?: boolean }): { promise: Promise<{ numPages: number; getPage(n: number): Promise<{ getTextContent(): Promise<{ items: { str?: string; hasEOL?: boolean }[] }> }> }> };
+};
+
+/** PDF bytes → text, one line per text run, page breaks as blank lines. Shared by both lanes (the server parses what the local lane posts). */
+export async function pdfToText(bytes: Uint8Array): Promise<string> {
+  // Computed specifier: the Next bundler must not pull pdf.js into the app routes' client graph.
+  const mod = "pdfjs-dist/legacy/build/pdf.mjs";
+  const pdfjs = (await import(mod)) as PdfJs;
+  const doc = await pdfjs.getDocument({ data: bytes, useSystemFonts: true, isEvalSupported: false }).promise;
+  const out: string[] = [];
+  const pages = Math.min(doc.numPages, 400);
+  for (let i = 1; i <= pages; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    let line = "";
+    for (const item of content.items) {
+      if (item.str) line += item.str;
+      if (item.hasEOL) {
+        out.push(line.trim());
+        line = "";
+      } else if (item.str && !item.str.endsWith(" ")) {
+        line += " ";
+      }
+    }
+    if (line.trim()) out.push(line.trim());
+    out.push("");
+  }
+  return out.map((l) => l.replace(/\s+/g, " ").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // ————— Browser mode —————
@@ -197,45 +241,18 @@ export async function fetchWithBrowser(url: string): Promise<FetchedPage> {
       html = await page.content();
     }
     const text = htmlToText(html);
-    const wall = looksLikeBotWall(status, html);
-    const out: FetchedPage = {
-      url,
-      finalUrl: page.url(),
-      status,
-      html,
-      text,
-      mode: "browser",
-      ms: Date.now() - t0,
-      needsBrowser: true,
-    };
-    if (wall) out.error = "botwall";
-    else if (status === 401 || status === 402) { out.error = "login"; out.errorDetail = `HTTP ${status}`; }
-    else if (status === 404 || status === 410) { out.error = "notfound"; out.errorDetail = `HTTP ${status}`; }
-    else if (status >= 500) { out.error = "http5xx"; out.errorDetail = `HTTP ${status}`; }
-    else if (status >= 400) { out.error = "http4xx"; out.errorDetail = `HTTP ${status}`; }
-    return out;
+    const c = classify(status, html, "");
+    return { url, finalUrl: page.url(), status, html, text, kind: "page", mode: "browser", ms: Date.now() - t0, needsBrowser: true, ...(c.error ? { error: c.error, errorDetail: c.errorDetail } : {}) };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return {
-      url,
-      finalUrl: url,
-      status: 0,
-      html: "",
-      text: "",
-      mode: "browser",
-      ms: Date.now() - t0,
-      needsBrowser: true,
-      error: /timeout/i.test(msg) ? "timeout" : "other",
-      errorDetail: msg.split("\n")[0].slice(0, 200),
-    };
+    return { ...failed(url, "browser", t0, e), needsBrowser: true };
   } finally {
     await page?.close().catch(() => undefined);
   }
 }
 
-/** Fetch in the given mode (conditional headers only make sense in plain mode). */
-export function fetchPage(url: string, mode: FetchMode, validators: Validators = {}): Promise<FetchedPage> {
-  return mode === "browser" ? fetchWithBrowser(url) : fetchPlain(url, validators);
+/** Fetch in the given mode (PDFs are always fetched plain). */
+export function fetchPage(url: string, mode: FetchMode): Promise<FetchedPage> {
+  return mode === "browser" && !isPdfUrl(url) ? fetchWithBrowser(url) : fetchPlain(url);
 }
 
 export function sleep(ms: number): Promise<void> {

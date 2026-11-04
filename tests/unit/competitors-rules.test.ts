@@ -1,12 +1,14 @@
 /**
- * Story 2 scanner rules — the pure parts: the PII check (rule 6), outcome
- * categories, people-page policy, Crawl-delay parsing, config defaults.
+ * Scanner rules — the pure parts: the PII check on extracted snippets,
+ * outcome categories (the PRD's reasons list), text normalization before
+ * hashing, pacing and config defaults. People pages are fetched like any
+ * other page since the Website Scanning PRD (2026-11-04).
  */
 import { describe, expect, it } from "vitest";
 import { checkPii } from "@/lib/competitors/pii";
-import { outcomeCategoryOf } from "@/lib/competitors/fetcher";
-import { isPeoplePage } from "@/lib/competitors/crawl";
-import { mergeCompetitorsConfig, SCAN_PAUSE_MS, CRAWL_DELAY_CAP_MS } from "@/lib/competitors/config";
+import { isRetryable, outcomeCategoryOf } from "@/lib/competitors/fetcher";
+import { contentHash, normalizeText } from "@/lib/competitors/html";
+import { mergeCompetitorsConfig, scanPauseMs, CRAWL_DELAY_CAP_MS } from "@/lib/competitors/config";
 
 describe("checkPii — nothing about a person is stored", () => {
   it("catches emails, phones, profile links and name + title", () => {
@@ -39,19 +41,32 @@ describe("outcome categories — what users see", () => {
     expect(outcomeCategoryOf("notfound")).toBe("notfound");
     expect(outcomeCategoryOf("timeout")).toBe("timeout");
     expect(outcomeCategoryOf("http5xx")).toBe("timeout");
-    expect(outcomeCategoryOf("noindex")).toBe("policy");
+    expect(outcomeCategoryOf("noindex")).toBe("robots");
+    expect(outcomeCategoryOf("slowdown")).toBe("slowdown");
     expect(outcomeCategoryOf(undefined)).toBe("timeout");
+  });
+  it("retries only transient failures", () => {
+    expect(isRetryable("timeout")).toBe(true);
+    expect(isRetryable("http5xx")).toBe(true);
+    expect(isRetryable("notfound")).toBe(false);
+    expect(isRetryable("botwall")).toBe(false);
+    expect(isRetryable("slowdown")).toBe(false);
   });
 });
 
-describe("people pages are never fetched", () => {
-  it("recognises team, leadership, careers and author paths, not product pages", () => {
-    for (const p of ["/team", "/about/team/", "/company/leadership", "/careers/engineer", "/people", "/authors/jane", "/our-team"]) {
-      expect(isPeoplePage(new URL(`https://e.com${p}`)), p).toBe(true);
-    }
-    for (const p of ["/platform/teams", "/pricing", "/products/team-collaboration", "/blog/team-of-one"]) {
-      expect(isPeoplePage(new URL(`https://e.com${p}`)), p).toBe(false);
-    }
+describe("text is normalized before hashing (dates and tracking strings are not a change)", () => {
+  const page = "Pricing\nStarter $49 per month\nLast updated 2026-11-04 10:15\n© 2026 Acme\nSee https://acme.com/x?utm_source=nav&gclid=abc123DEF\nvisitor 3f9a8c7d6e5b4a3f9a8c7d6e5b4a3f9a";
+  it("drops dates, times, copyright years, tracking params and long ids", () => {
+    const n = normalizeText(page);
+    expect(n).toContain("Starter $49 per month");
+    expect(n).not.toMatch(/2026-11-04|10:15|© 2026|utm_source|gclid|3f9a8c7d6e5b4a3f/);
+  });
+  it("gives the same hash when only the noise moved, a different one when a price did", () => {
+    const a = contentHash(page);
+    const b = contentHash(page.replace("2026-11-04 10:15", "2026-11-06 09:02").replace("utm_source=nav", "utm_source=footer"));
+    const c = contentHash(page.replace("$49", "$59"));
+    expect(b).toBe(a);
+    expect(c).not.toBe(a);
   });
 });
 
@@ -63,7 +78,7 @@ describe("rescan limit and pacing defaults", () => {
     expect(mergeCompetitorsConfig({ manualRescansPerDay: 3 }).manualRescansPerDay).toBe(3);
   });
   it("paces at 2 s and caps a site's Crawl-delay at 10 s", () => {
-    expect(SCAN_PAUSE_MS).toBe(2000);
+    expect(scanPauseMs()).toBe(2000);
     expect(CRAWL_DELAY_CAP_MS).toBe(10_000);
   });
 });

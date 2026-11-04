@@ -60,7 +60,8 @@ describe("pageKey / looksLikePage / pagePriority", () => {
   });
   it("skips assets and documents", () => {
     expect(looksLikePage(new URL("https://e.com/platform"))).toBe(true);
-    for (const p of ["/a.css", "/b.js", "/c.png", "/d.pdf", "/sitemap.xml", "/f.woff2"]) {
+    expect(looksLikePage(new URL("https://e.com/d.pdf"))).toBe(true); // PDFs are pages (PRD 2026-11-04)
+    for (const p of ["/a.css", "/b.js", "/c.png", "/sitemap.xml", "/f.woff2"]) {
       expect(looksLikePage(new URL(`https://e.com${p}`))).toBe(false);
     }
   });

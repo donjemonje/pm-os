@@ -3,19 +3,20 @@
  * over these defaults. Pure data — safe for client components.
  */
 
-export const SCAN_FREQUENCIES = ["daily", "weekly", "monthly"] as const;
-export type ScanFrequency = (typeof SCAN_FREQUENCIES)[number];
-
-export const DEFAULT_MAX_PAGES = 50;
-export const MIN_MAX_PAGES = 5;
-export const MAX_MAX_PAGES = 500;
-
+/**
+ * Per-workspace settings (Workspace.competitorsConfig). Since the Website
+ * Scanning PRD (2026-11-04) the scan frequency lives per source
+ * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
+ * what remains here is the manual-rescan limit, the notification recipients
+ * and the news baseline.
+ */
 export const DEFAULT_MANUAL_RESCANS_PER_DAY = 1;
+/** Scan frequency per source, in days (PRD: once every 2 days). */
+export const DEFAULT_SCAN_EVERY_DAYS = 2;
+export const MIN_SCAN_EVERY_DAYS = 1;
+export const MAX_SCAN_EVERY_DAYS = 90;
 
 export interface CompetitorsConfig {
-  scanFrequency: ScanFrequency;
-  /** Pages fetched per competitor per scan (story 2 decision: 50, no depth limit). */
-  maxPagesPerScan: number;
   /** "Scan now" presses allowed per site per day (PM-OS admins are exempt). */
   manualRescansPerDay: number;
   /** Users (ids, same organization) who receive the scan notification email. */
@@ -25,14 +26,12 @@ export interface CompetitorsConfig {
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
-  scanFrequency: "weekly",
-  maxPagesPerScan: DEFAULT_MAX_PAGES,
   manualRescansPerDay: DEFAULT_MANUAL_RESCANS_PER_DAY,
   notifyUserIds: [],
   baselineUntil: null,
 };
 
-// ————— Scanner rules (story 2, 2026-10-26) —————
+// ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————
 /**
  * The manual-rescan limit is a production rule; local dev scans a site as
  * often as needed. Enforced when NODE_ENV is production, or whenever
@@ -44,54 +43,74 @@ export function rescanLimitEnforced(): boolean {
   if (v === "off" || v === "false" || v === "0") return false;
   return process.env.NODE_ENV === "production";
 }
-/** Pause between two requests to the same site. */
-export const SCAN_PAUSE_MS = 2000;
-/** robots.txt Crawl-delay is honoured up to this. */
+/** Pause between two requests to the same site (remote lane). Tests may set COMPETITORS_PAUSE_MS=0 and say so. */
+export function scanPauseMs(): number {
+  const v = Number(process.env.COMPETITORS_PAUSE_MS);
+  return Number.isFinite(v) && v >= 0 && process.env.NODE_ENV !== "production" ? v : 2000;
+}
+/** robots.txt Crawl-delay is honoured up to this (remote lane). */
 export const CRAWL_DELAY_CAP_MS = 10_000;
-/** A scan stops fetching at this age and reports "incomplete". */
-export const SCAN_TIME_BUDGET_MS = 15 * 60_000;
-/** Page text is kept for this many scans per site; older rows keep the hash. */
-export const KEEP_TEXT_SCANS = 2;
-/** A fact not seen for this many scans of its site is stale. */
+/** Safety ceiling: a scan never reads more pages than this … */
+export const CEILING_PAGES = 2000;
+/** … or runs longer than this. Pages beyond are "not attempted" and the next run picks them up. */
+export const CEILING_MS = 3 * 3600_000;
+/** Test knob only (never in production): a lower ceiling so the fixture can hit it. */
+export function ceiling(): { pages: number; ms: number } {
+  if (process.env.NODE_ENV === "production") return { pages: CEILING_PAGES, ms: CEILING_MS };
+  const pages = Number(process.env.COMPETITORS_CEILING_PAGES);
+  const ms = Number(process.env.COMPETITORS_CEILING_MS);
+  return { pages: Number.isFinite(pages) && pages > 0 ? pages : CEILING_PAGES, ms: Number.isFinite(ms) && ms > 0 ? ms : CEILING_MS };
+}
+/** A scan that stopped reporting for this long is stale; the next run resumes its pending pages. */
+export const STALE_MS = 10 * 60_000;
+/** Scans heartbeat this often. */
+export const HEARTBEAT_MS = 30_000;
+/** Remote scans in progress at once, all workspaces (global). */
+export const MAX_PARALLEL_REMOTE = 8;
+/** A local-scan request older than this emails support@pm-os.io once and keeps waiting. */
+export const LOCAL_ALERT_MS = 24 * 3600_000;
+/** A scan token stays valid this long after its scan reached a final state. */
+export const SCAN_TOKEN_GRACE_MS = 15 * 60_000;
+/** The poller rotates its machine key this often (no expiry; rotation is automatic). */
+export const KEY_ROTATE_DAYS = 30;
+/** After a rotation the previous key still works for this long (a poller mid-rotation). */
+export const KEY_ROTATION_GRACE_MS = 10 * 60_000;
+/** Page text retention default, days (Administration setting). Hashes stay forever. */
+export const DEFAULT_RETENTION_DAYS = 365;
+/** A page is "removed" after this many consecutive not-found answers. */
+export const REMOVED_AFTER_NOT_FOUND = 2;
+/** Retries of a page that failed with a retryable error within one scan. */
+export const PAGE_RETRIES = 2;
+/** A fact not seen for this many scans of its site is stale (analysis story; here only the page states feed it). */
 export const STALE_AFTER_SCANS = 3;
 /** Why a page was not read — shown to users as counts. */
-export const OUTCOME_CATEGORIES = ["robots", "denied", "login", "notfound", "timeout", "cap", "policy"] as const;
+export const OUTCOME_CATEGORIES = ["robots", "denied", "login", "notfound", "timeout", "cap", "slowdown"] as const;
 export type OutcomeCategory = (typeof OUTCOME_CATEGORIES)[number];
 /** What the user sees per competitor after a scan. */
-export const SCAN_BADGES = ["full", "incomplete", "blocked", "unreachable"] as const;
+export const SCAN_BADGES = ["full", "incomplete", "blocked", "unreachable", "stale"] as const;
 export type ScanBadge = (typeof SCAN_BADGES)[number];
-
-export function isScanFrequency(v: unknown): v is ScanFrequency {
-  return typeof v === "string" && (SCAN_FREQUENCIES as readonly string[]).includes(v);
-}
+/** Scan row states. */
+export const SCAN_STATUSES = ["queued", "pending_local", "running", "ok", "partial", "failed", "stale", "cancelled"] as const;
+export type ScanStatus = (typeof SCAN_STATUSES)[number];
+/** States a scan can still move out of on its own. */
+export const ACTIVE_SCAN_STATUSES: readonly ScanStatus[] = ["queued", "pending_local", "running"];
+/** States of one page of a source. */
+export const PAGE_STATES = ["present", "missing", "removed", "unlinked"] as const;
+export type PageState = (typeof PAGE_STATES)[number];
+/** Where pages came from. */
+export const SCAN_LANES = ["remote", "local", "bundle"] as const;
+export type ScanLane = (typeof SCAN_LANES)[number];
 
 export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
-  const pages = typeof r.maxPagesPerScan === "number" && Number.isFinite(r.maxPagesPerScan)
-    ? Math.min(MAX_MAX_PAGES, Math.max(MIN_MAX_PAGES, Math.round(r.maxPagesPerScan)))
-    : DEFAULT_MAX_PAGES;
   const rescans = typeof r.manualRescansPerDay === "number" && Number.isFinite(r.manualRescansPerDay)
     ? Math.min(50, Math.max(1, Math.round(r.manualRescansPerDay)))
     : DEFAULT_MANUAL_RESCANS_PER_DAY;
   return {
-    scanFrequency: isScanFrequency(r.scanFrequency) ? r.scanFrequency : DEFAULT_COMPETITORS_CONFIG.scanFrequency,
-    maxPagesPerScan: pages,
     manualRescansPerDay: rescans,
     notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
     baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
   };
-}
-
-/** Milliseconds between scheduled scans for a frequency. */
-export function frequencyMs(f: ScanFrequency): number {
-  switch (f) {
-    case "daily":
-      return 24 * 3600_000;
-    case "weekly":
-      return 7 * 24 * 3600_000;
-    case "monthly":
-      return 30 * 24 * 3600_000;
-  }
 }
 
 /** A domain's PMOS AI definition text (definition, belongs here, not here, typical phrases). */
