@@ -318,7 +318,7 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
   // ——— 2. Fetch loop ———
   let n = 0;
   while (true) {
-    if (out.count + out.attempted - out.count >= limits.pages || out.attempted >= limits.pages) {
+    if (out.attempted >= limits.pages) {
       out.stoppedBy = "cap";
       break;
     }

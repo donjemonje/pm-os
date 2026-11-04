@@ -17,15 +17,38 @@ export class InvalidUrlError extends Error {
   }
 }
 
-/** Registrable host: "www.docs.example.co.uk" → "example.co.uk". */
+/** Registrable host: "www.docs.example.co.uk" → "example.co.uk". IP literals and single labels ("localhost") stay as they are. */
 export function registrableHost(hostname: string): string {
-  const parts = hostname.toLowerCase().replace(/\.$/, "").split(".");
+  const lower = hostname.toLowerCase().replace(/\.$/, "");
+  if (/^[\d.]+$/.test(lower) || lower.includes(":") || !lower.includes(".")) return lower;
+  const parts = lower.split(".");
   if (parts.length <= 2) return parts.join(".");
   const last2 = parts.slice(-2).join(".");
   return TWO_LEVEL_SUFFIXES.has(last2) ? parts.slice(-3).join(".") : last2;
 }
 
+/**
+ * The site a URL belongs to: its registrable host plus a non-default port.
+ * Real websites never carry a port, so this equals registrableHost for them;
+ * it keeps two fixture sites on different ports apart in tests.
+ */
+export function siteHost(u: URL): string {
+  return `${registrableHost(u.hostname)}${u.port ? `:${u.port}` : ""}`;
+}
+
+/**
+ * TEST KNOB (never in production): let a competitor site live on localhost so
+ * the e2e fixture (tests/fixtures/fake-site) can be scanned. Logic unchanged
+ * otherwise — the private-network guard stays on everywhere else.
+ */
+function privateHostsAllowed(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
+  const v = process.env.COMPETITORS_ALLOW_PRIVATE_HOSTS?.trim().toLowerCase();
+  return v === "on" || v === "true" || v === "1";
+}
+
 function isPrivateHost(hostname: string): boolean {
+  if (privateHostsAllowed()) return false;
   // URL keeps IPv6 literals in brackets ("[::1]").
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
@@ -66,14 +89,14 @@ export function normalizeWebsite(input: string): { url: string; host: string } {
   if (isPrivateHost(u.hostname)) throw new InvalidUrlError("private");
   if (u.username || u.password) throw new InvalidUrlError("invalid");
   const url = `${u.protocol}//${u.hostname.toLowerCase()}${u.port ? `:${u.port}` : ""}`;
-  return { url, host: registrableHost(u.hostname) };
+  return { url, host: siteHost(u) };
 }
 
 /** True when `candidate` stays inside the site (same registrable host, http(s)). */
 export function isInsideSite(candidate: URL, host: string): boolean {
   if (candidate.protocol !== "https:" && candidate.protocol !== "http:") return false;
   if (isPrivateHost(candidate.hostname)) return false;
-  return registrableHost(candidate.hostname) === host;
+  return siteHost(candidate) === host;
 }
 
 /**
@@ -82,7 +105,7 @@ export function isInsideSite(candidate: URL, host: string): boolean {
  */
 export function pageKey(u: URL): string {
   const path = u.pathname.replace(/\/+$/, "") || "/";
-  const host = u.hostname.toLowerCase();
+  const host = u.host.toLowerCase();
   const video = /(^|\.)youtube\.com$/.test(host) && path === "/watch" ? u.searchParams.get("v") : null;
   return `${u.protocol}//${host}${path}${video ? `?v=${video}` : ""}`;
 }

@@ -59,6 +59,11 @@ jobs:
       DASHBOARD_ENABLED: "true"
       # competitors-profile.spec.ts P-06 serves files it writes into this dir.
       COMPETITORS_MEDIA_DIR: /tmp/pmos-competitors-media
+      # Website Scanning QA (2026-11-04): test knobs — clock + scheduler tick from the tests, the fixture site on
+      # localhost, no pause between pages (the fixture's robots Crawl-delay still applies). Never in production.
+      COMPETITORS_TEST_KNOBS: "on"
+      COMPETITORS_ALLOW_PRIVATE_HOSTS: "on"
+      COMPETITORS_PAUSE_MS: "0"
       # 2FA secret-encryption key; production-mode boot refuses to start
       # without it. Synthetic — the test DB holds only synthetic accounts.
       TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"
