@@ -802,12 +802,15 @@ test.describe("Website Scanning rows", () => {
     const details = admin.locator("tr", { has: admin.getByText(c.site.url, { exact: true }) });
     await expect(details).toContainText("Not read: 1 timeout");
     await expect(details.getByText("Pages · 12")).toBeVisible();
-    const docsLine = details.locator("div", { has: admin.getByRole("link", { name: "/docs", exact: true }) }).last();
+    // The Pages panel row of /docs (page rows carry the row border; the log line about /docs below does not).
+    const docsLine = details.locator("div.border-b", { has: admin.getByRole("link", { name: "/docs", exact: true }) }).last();
     await expect(docsLine).toContainText("failed");
     await expect(details.getByText(/Log · \d+/)).toBeVisible();
     await expect(details).toContainText("11 pages handed in from the station, 1 not read");
-    // Retries: the PRD allows 1–3 attempts per page; the log names them.
-    await expect.soft(details, "PRD: retries are visible in the log (1–3 attempts per failed page)").toContainText(/Retry 1/);
+    // Retries: the PRD allows 1–3 attempts per page; the station's attempts are in the log (3 attempts on /docs, then gave up).
+    const retryLine = details.locator("div", { has: admin.getByText("Station retried 2 times before giving up (timeout)") }).last();
+    await expect(retryLine).toBeVisible();
+    await expect(retryLine).toContainText("/docs");
   });
 
   test("WS-14 deleting a competitor: pages, hashes and history stay in the DB, hidden from the UI; the waiting request is cancelled and the poller gets nothing", async ({ browser }) => {
