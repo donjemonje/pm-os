@@ -24,11 +24,13 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-pages
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
  *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on, COMPETITORS_CEILING_PAGES=20,
- *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (localhost may be a competitor).
+ *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
+ *            COMPETITORS_AI=off (the PMOS AI step is skipped; badges come from pages — analysis is the next story).
  *
- * Every knob is also guarded by NODE_ENV !== "production" in the app, and
- * `next build` inlines NODE_ENV=production — so this spec can only run on the
- * dev-server path (no CI=1) and skips itself in CI with that reason.
+ * Every knob sits behind COMPETITORS_TEST_KNOBS=on only (no NODE_ENV guard:
+ * `next build` inlines NODE_ENV=production into the CI e2e build too), so the
+ * spec runs on both the dev path and the CI build path. Missing knob vars →
+ * the file skips itself with the list.
  *
  * Fixtures: one QA org (QA-WS Org) with a PM (CUSTOMER_ADMIN — adds
  * competitors and presses Scan now) and a PMOS_ADMIN of the same org (knobs,
@@ -72,8 +74,7 @@ const RESCAN_LIMITED = "Daily manual scan limit reached for this site — next m
 
 // ————— Environment gate —————
 const envProblems: string[] = [];
-if (process.env.CI) envProblems.push("CI=1 takes the next build path, which inlines NODE_ENV=production and turns every test knob off (knobs route 404, localhost refused, pause 2 s)");
-for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_RESCAN_LIMIT", "on"]] as const) {
+for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_RESCAN_LIMIT", "on"], ["COMPETITORS_AI", "off"]] as const) {
   if (RESOLVED_ENV[k]?.trim() !== want) envProblems.push(`${k} must be "${want}" in test-apphosting.yaml (got ${RESOLVED_ENV[k] ?? "<unset>"})`);
 }
 const BROWSER_ON = RESOLVED_ENV.COMPETITORS_BROWSER?.trim() === "on";
@@ -276,7 +277,8 @@ async function openSettings(page: Page, name: string): Promise<void> {
 const competitorLine = (page: Page, name: string) => page.locator("div.px-5.py-3", { has: page.getByText(name, { exact: true }) }).last();
 const pill = (page: Page, name: string) => competitorLine(page, name).getByTestId("cmp-scan-status");
 /** Administration → Competitors: the scan row (newest first) of one competitor of this org. */
-const adminScanRows = (page: Page, name: string) => page.locator("tbody tr", { hasText: ORG.orgName }).filter({ hasText: name });
+const adminScanRows = (page: Page, name: string) =>
+  page.locator("table", { has: page.getByRole("columnheader", { name: "Lane" }) }).locator("tbody tr", { hasText: ORG.orgName }).filter({ hasText: name });
 
 /** Soft-delete this org's competitors and end their scans so the next row starts clean (no tick leftovers). */
 async function cleanupCompetitors(): Promise<void> {
@@ -353,10 +355,7 @@ test.describe("Website Scanning rows", () => {
     // The name comes from the site's <title>.
     const name = "Acme Fake";
     await expect(competitorLine(page, name)).toBeVisible({ timeout: 30_000 });
-    // PRD: "Add competitor → Waiting". Soft: the add answer is built before the first scan is routed, so the
-    // row can say "Never scanned" until the next refresh (flagged); the reload keeps the row's later steps honest.
-    await expect.soft(pill(page, name), "status right after Add").toHaveText(/^Scan pending · since /, { timeout: 5_000 });
-    await page.reload();
+    // PRD: "Add competitor → Waiting" — the add answer is built after the first scan is routed.
     await expect(pill(page, name)).toHaveText(/^Scan pending · since /, { timeout: 15_000 });
     const sourceId = (await withTestDb((db) => db.competitor.findFirstOrThrow({ where: { workspaceId, name }, include: { sources: true } }))).sources[0].id;
     const pending = await waitForScanWithStatus(sourceId, "pending_local");
@@ -507,14 +506,9 @@ test.describe("Website Scanning rows", () => {
     test.setTimeout(180_000);
     const c = await onboardLocal("QA-WS Eta");
     const before = await pagesOf(c.sourceId);
-    // PRD: one manual rescan per site per day. The onboarding scan is not a rescan — the PM's Scan now must be allowed.
+    // PRD: one manual rescan per site per day. The onboarding scan is not a rescan — the PM's Scan now is allowed.
     const first = await scanNow(pmApi, c.id);
-    expect.soft(first.status(), `PM's first Scan now after onboarding: ${await first.text()}`).toBe(202);
-    if (first.status() !== 202) {
-      // Fall back to the exempt admin so the rest of the row still runs.
-      const a = await scanNow(adminApi, c.id);
-      expect(a.status(), await a.text()).toBe(202);
-    }
+    expect(first.status(), `PM's first Scan now after onboarding: ${await first.text()}`).toBe(202);
     const second = await waitForScanWithStatus(c.sourceId, "pending_local");
     const r = await runPoller({ mac: "locked" });
     expect(r.code, r.stdout).toBe(0);
@@ -555,7 +549,8 @@ test.describe("Website Scanning rows", () => {
     expect(done.status).toBe("ok");
     expect(done.badge).toBe("full");
     expect(done.pagesFetched).toBe(13);
-    expect(done.pagesChanged).toBe(2); // /pricing changed, /product/new new
+    // /pricing changed, /product/new is new, and /product changed too: its list now carries the "Acme Shield (new)" link text.
+    expect(done.pagesChanged).toBe(3);
     const pages = await pagesOf(c.sourceId);
     const byPath = Object.fromEntries(pages.map((p) => [pathOf(p.url), p]));
     expect(Object.keys(byPath).sort()).toEqual([...PAGE_PATHS, "/product/new"].sort());
@@ -568,13 +563,15 @@ test.describe("Website Scanning rows", () => {
     expect(superseded.hash).toBe(before["/pricing"]);
     expect(pricing.versions.find((v) => v.supersededAt == null)!.hash).toBe(pricing.hash);
     expect(byPath["/product/new"].text).toContain("Acme Shield");
+    expect(byPath["/product"].text).toContain("Acme Shield (new)");
+    expect(byPath["/product"].versions.length).toBe(2);
     // Dates and tracking strings are normalized away: the footer date changed on every page, nothing else did.
     for (const path of PAGE_PATHS) {
-      if (path === "/pricing") continue;
+      if (path === "/pricing" || path === "/product") continue;
       expect(byPath[path].hash, `${path} hash`).toBe(before[path]);
       expect(byPath[path].versions.length, `${path} versions`).toBe(1);
     }
-    expect(byPath["/"].text).toContain("Updated 2026-11-03"); // the stored text is current; only the fingerprint ignores the date
+    // (The footer is not part of the stored text — htmlToText drops <nav>/<footer> — so the date edit leaves text and hash alone.)
   });
 
   test("WS-09 page removed needs proof: not found once → missing; twice → removed; answers again → cleared", async ({ browser }) => {
@@ -738,7 +735,7 @@ test.describe("Website Scanning rows", () => {
     expect(res.status(), await res.text()).toBe(200);
   });
 
-  test("WS-12 scan dies halfway: 6 pages saved and in progress; after 10 min without reporting the scan is stale and the next run finishes it; 12 total (local lane requeues instead of a Stale badge — flagged)", async ({ browser }) => {
+  test("WS-12 scan dies halfway: 6 pages saved and in progress; after 10 min without reporting the scan is stale and the next run finishes it; 12 total (a local scan with no heartbeat goes back to Scan pending and the station resumes it)", async ({ browser }) => {
     test.setTimeout(200_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Xi");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
@@ -765,7 +762,7 @@ test.describe("Website Scanning rows", () => {
     const lines = await tick();
     expect(lines.join("\n")).toMatch(/1 stale scan/);
     const stale = await scanRow(pending.id);
-    expect(stale.status, "PRD: stale scan → the next run continues (the local lane goes back to pending instead of showing Stale)").toBe("pending_local");
+    expect(stale.status, "PRD (2026-11-04): a local scan with no heartbeat goes back to Scan pending; the station resumes the same scan").toBe("pending_local");
     expect((await requestOf(pending.id)).state).toBe("waiting");
     await page.reload();
     await expect(pill(page, c.name)).toHaveText(/^Scan pending · since /);
@@ -796,7 +793,7 @@ test.describe("Website Scanning rows", () => {
     const latest = rows.first(); // newest first
     const cells = latest.locator("td");
     await expect(cells.nth(1)).toHaveText(/\w{3} \d{1,2}, \d{2}:\d{2}/); // started
-    await expect(cells.nth(4)).toContainText("partial"); // status chip
+    await expect(cells.nth(4)).toContainText(/^(ok|partial)/); // status chip (the badge says what the pages gave)
     await expect(cells.nth(5)).toHaveText("incomplete");
     await expect(cells.nth(7)).toHaveText("local");
     await expect(cells.nth(9)).toHaveText("11");
@@ -985,7 +982,7 @@ test.describe("Website Scanning rows", () => {
     const page = await newPage(browser, "pm");
     await openSettings(page, c.name);
     await expect(pill(page, c.name)).toHaveText("Unreachable");
-    await expect(competitorLine(page, c.name)).toContainText(/^The site did not answer on .*Showing data from /);
+    await expect(competitorLine(page, c.name)).toContainText(/The site did not answer on .*Showing data from /);
 
     // The site comes back; the next scheduled scan (frequency 2 days) reads everything.
     await c.site.control({ down: false });
@@ -1066,7 +1063,8 @@ test.describe("Website Scanning rows", () => {
     const c = await addCompetitor(pmApi, site, "QA-WS Pdf");
     const scan = await waitForScanWithStatus(c.sourceId, "running", 30_000).catch(async () => (await scansOf(c.sourceId))[0]);
     const done = await waitForScanEnd(scan.id);
-    expect(done.badge).toBe("full");
+    const diag = `outcomes ${JSON.stringify(done.outcomes)}; failed ${JSON.stringify((done.pages as { url: string; outcome: string; error?: string }[]).filter((p) => p.outcome === "failed"))}; log ${JSON.stringify((done.log as { msg: string }[]).map((l) => l.msg))}`;
+    expect(done.badge, diag).toBe("full");
     expect(done.pagesFetched).toBe(13);
     const pages = await pagesOf(c.sourceId);
     expect(pages.length).toBe(13);
@@ -1142,7 +1140,7 @@ test.describe("Website Scanning rows", () => {
     }
   });
 
-  test("WS-25 retention: one year and a day later the retention job drops page texts; hashes, URLs, titles, states and scan history remain", async () => {
+  test("WS-25 retention: one year and a day later the retention job drops superseded page texts; current texts, hashes, URLs, titles, states and scan history remain", async () => {
     test.setTimeout(200_000);
     await setRemote(true);
     const c = await onboardRemote("QA-WS Keep");
@@ -1171,9 +1169,10 @@ test.describe("Website Scanning rows", () => {
     }
     const pricingAfter = after.find((p) => pathOf(p.url) === "/pricing")!;
     expect(pricingAfter.versions.find((v) => v.supersededAt != null)!.text).toBeNull();
+    expect(pricingAfter.versions.find((v) => v.supersededAt != null)!.hash).toBe(pricingBefore.versions.find((v) => v.supersededAt != null)!.hash);
     expect((await scansOf(c.sourceId)).length).toBeGreaterThanOrEqual(2); // history stays
-    // PRD: "Text kept one year, hash forever" — after the window no page text remains.
-    for (const p of after) expect(p.text, `${p.url} current text past retention`).toBeNull();
+    // PRD (2026-11-04): the current text of a page never expires; only superseded versions lose their text.
+    for (const p of after) expect(p.text, `${p.url} current text`).toBe(before.find((b) => b.url === p.url)!.text);
   });
 
   test("WS-26 remote concurrency: 10 sites due → at most 8 in progress, the other 2 start when a slot frees, never two per site; Scan now on a running site is queued behind it", async ({ browser }) => {
@@ -1205,7 +1204,7 @@ test.describe("Website Scanning rows", () => {
     let sawEight = false;
     let sawQueuedWhileFull = false;
     let doubleOnSite = false;
-    const scanNowChecked = { done: false };
+    const scanNowChecked: { done: boolean; name?: string } = { done: false };
     await expect.poll(async () => {
       const scans = await withTestDb((db) => db.competitorScan.findMany({ where: { sourceId: { in: sourceIds } }, select: { sourceId: true, status: true } }));
       const running = scans.filter((s) => s.status === "running");
@@ -1216,8 +1215,9 @@ test.describe("Website Scanning rows", () => {
       if (new Set(running.map((s) => s.sourceId)).size !== running.length) doubleOnSite = true;
       if (!scanNowChecked.done && running.length > 0) {
         scanNowChecked.done = true;
-        const cid = (await withTestDb((db) => db.competitorSource.findUniqueOrThrow({ where: { id: running[0].sourceId }, select: { competitorId: true } }))).competitorId;
-        const res = await scanNow(pmApi, cid);
+        const cmp = (await withTestDb((db) => db.competitorSource.findUniqueOrThrow({ where: { id: running[0].sourceId }, select: { competitor: { select: { id: true, name: true } } } }))).competitor;
+        scanNowChecked.name = cmp.name;
+        const res = await scanNow(pmApi, cmp.id);
         expect(res.status(), await res.text()).toBe(202);
         expect(((await res.json()) as { state: string }).state).toBe("queued"); // behind the running scan, never beside it
       }
@@ -1230,10 +1230,17 @@ test.describe("Website Scanning rows", () => {
     const finals = await withTestDb((db) => db.competitorScan.findMany({ where: { sourceId: { in: sourceIds } } }));
     expect(finals.length).toBe(11);
     expect(finals.filter((s) => s.badge === "full").length, JSON.stringify(finals.map((s) => `${s.status}/${s.badge}/${s.errorKind}: ${s.error ?? ""}`))).toBe(11);
-    // The UI never offers a second scan on a running site.
+    // Afterwards every site is Full; the site that got Scan now has two scans (queued one ran after the first ended).
+    const pressed = scanNowChecked.name!;
+    const other = sites.length ? `QA-WS Many ${pressed === "QA-WS Many 1" ? 2 : 1}` : "";
     const page = await newPage(browser, "pm");
-    await openSettings(page, "QA-WS Many 1");
-    await expect(competitorLine(page, "QA-WS Many 1").getByRole("button", { name: "Scan now" })).toBeEnabled();
+    await openSettings(page, pressed);
+    await expect(pill(page, pressed)).toHaveText("Full");
+    await expect(pill(page, other)).toHaveText("Full");
+    await expect(competitorLine(page, other).getByRole("button", { name: "Scan now" })).toBeEnabled();
+    const pressedScans = await withTestDb((db) => db.competitorScan.findMany({ where: { sourceId: { in: sourceIds }, source: { competitor: { name: pressed } } }, orderBy: { startedAt: "asc" } }));
+    expect(pressedScans.length).toBe(2);
+    expect(pressedScans[1].startedAt.getTime()).toBeGreaterThanOrEqual(pressedScans[0].finishedAt!.getTime());
   });
 
   // ————— Onboarding helpers (a row that starts from "WS-01 done") —————

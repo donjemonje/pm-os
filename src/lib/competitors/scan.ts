@@ -122,10 +122,17 @@ export class ScanLog {
 }
 
 /** Append one page the local lane posted: the route records the page and logs it here so the process half can read it back. */
-export async function appendHandedInPage(scanId: string, entry: PageLogEntry): Promise<void> {
-  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, outcomes: true } });
-  const pages = (Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : []).filter((p) => p.url !== entry.url);
+export async function appendHandedInPage(scanId: string, entry: PageLogEntry, linked: Iterable<string> = []): Promise<void> {
+  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, outcomes: true, linkedUrls: true } });
+  const all = Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : [];
+  const earlier = all.find((p) => p.url === entry.url);
+  const pages = all.filter((p) => p.url !== entry.url);
+  // A station may hand the same page in twice within one scan; the second post reads "unchanged" against the first.
+  // The site did not change in between — keep the first post's new/changed verdict.
+  if (earlier && entry.outcome === "unchanged" && (earlier.outcome === "new" || earlier.outcome === "changed")) entry = { ...entry, outcome: earlier.outcome };
   pages.push(entry);
+  const linkedUrls = new Set<string>(Array.isArray(scan.linkedUrls) ? (scan.linkedUrls as string[]) : []);
+  for (const l of linked) if (linkedUrls.size < 5000) linkedUrls.add(l);
   const outcomes = (scan.outcomes && typeof scan.outcomes === "object" && !Array.isArray(scan.outcomes) ? { ...(scan.outcomes as OutcomeCounts) } : {}) as OutcomeCounts;
   if (entry.outcome === "failed" && entry.category) outcomes[entry.category] = (outcomes[entry.category] ?? 0) + 1;
   await db.competitorScan.update({
@@ -134,6 +141,7 @@ export async function appendHandedInPage(scanId: string, entry: PageLogEntry): P
       heartbeatAt: new Date(),
       pages: pages as unknown as Prisma.InputJsonValue,
       outcomes: outcomes as unknown as Prisma.InputJsonValue,
+      linkedUrls: [...linkedUrls] as unknown as Prisma.InputJsonValue,
       pagesFetched: pages.filter((p) => p.outcome === "new" || p.outcome === "changed" || p.outcome === "unchanged").length,
       pagesChanged: pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length,
     },
@@ -451,8 +459,11 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
     const rows = await db.sourcePage.findMany({ where: { sourceId: source.id, url: { in: changedUrls } }, select: { url: true, title: true, text: true, kind: true } });
     out.changedPages = rows.filter((r) => r.text).map((r) => ({ url: r.url, title: r.title ?? "", text: r.text ?? "", kind: r.kind, sourceLabel: ctx.sourceLabel }));
   }
-  const notAttempted = await db.competitorScan.findUnique({ where: { id: scanId }, select: { pagesNotAttempted: true } });
-  log.notAttempted = notAttempted?.pagesNotAttempted ?? 0;
+  const row = await db.competitorScan.findUnique({ where: { id: scanId }, select: { pagesNotAttempted: true, linkedUrls: true } });
+  // Now that every handed-in page has its row, apply the inbound links the station's pages carried (feeds "unlinked").
+  const linked = Array.isArray(row?.linkedUrls) ? (row!.linkedUrls as string[]) : [];
+  if (linked.length) await markLinked(source.id, scanId, linked);
+  log.notAttempted = row?.pagesNotAttempted ?? 0;
   if (log.notAttempted) out.stoppedBy = "cap";
   log.add("info", `${out.count} page${out.count === 1 ? "" : "s"} handed in from the station, ${out.attempted - out.count} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
   if (out.count === 0 && out.attempted === 0) {

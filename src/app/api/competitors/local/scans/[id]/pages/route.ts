@@ -5,7 +5,7 @@ import { isPageKind } from "@/lib/competitors/config";
 import { pdfToText } from "@/lib/competitors/fetcher";
 import { startLocalScan, verifyScanToken } from "@/lib/competitors/local";
 import { extractLinks } from "@/lib/competitors/html";
-import { categoryOf, markLinked, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
+import { categoryOf, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
 import { appendHandedInPage } from "@/lib/competitors/scan";
 import { isInsideSite, pageKey } from "@/lib/competitors/url";
 
@@ -82,12 +82,10 @@ export async function POST(req: Request, { params }: Params) {
     { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via: "handin", ms },
     sourceLabel,
   );
-  // The links on the page say what still points where (the "unlinked" state) — the same bookkeeping as the remote lane.
-  if (html) {
-    const linked = new Set<string>();
-    for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l));
-    if (linked.size) await markLinked(scan.sourceId, id, linked);
-  }
+  // The links on the page say what still points where (the "unlinked" state) — collected on the scan and applied when it is
+  // processed, after every page row exists (the same bookkeeping as the remote lane).
+  const linked = new Set<string>();
+  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l));
   await appendHandedInPage(id, {
     url: r.url,
     status: status === "ok" ? 200 : status === "notfound" ? 404 : status === "login" ? 401 : status === "blocked" ? 403 : 0,
@@ -96,6 +94,6 @@ export async function POST(req: Request, { params }: Params) {
     chars: r.chars,
     ms,
     via: "handin",
-  });
+  }, linked);
   return NextResponse.json({ url: r.url, outcome: r.outcome, state: r.state });
 }

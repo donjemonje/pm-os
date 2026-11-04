@@ -874,6 +874,9 @@ model CompetitorScan {
   resumedFromId String?
   /// Pages discovered but never attempted because the scan stopped early (ceiling, slow down, stale).
   pagesNotAttempted Int          @default(0)
+  /// Local lane: page keys the handed-in pages linked to (deduped, first 5,000) — applied to the page store when the scan is processed,
+  /// so "unlinked" is decided after every page row exists.
+  linkedUrls    Json             @default("[]")
   /// "plain" | "browser" (browser after a bot wall) | "bundle" (pages were handed in, nothing fetched).
   fetchMode     String?
   startedAt     DateTime         @default(now())

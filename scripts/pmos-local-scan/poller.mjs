@@ -287,7 +287,8 @@ async function runClaude(job, limits, token) {
 URL="$1"; STATUS="$2"; FILE="$3"
 API="${APP_URL}/api/competitors/local/scans/${job.scanId}/pages"
 if [ -n "$FILE" ] && [ -f "$FILE" ]; then
-  node -e 'const fs=require("fs");const [u,s,f]=process.argv.slice(1);const html=fs.readFileSync(f,"utf8");process.stdout.write(JSON.stringify({url:u,status:s,html}))' "$URL" "$STATUS" "$FILE" > "$FILE.json"
+  # A PDF (by its %PDF header or .pdf name) is posted as bytes; everything else as HTML. The server extracts the text.
+  node -e 'const fs=require("fs");const [u,s,f]=process.argv.slice(1);const buf=fs.readFileSync(f);const isPdf=buf.subarray(0,5).toString("latin1")==="%PDF-"||/\.pdf$/i.test(f)||/\.pdf(\?|$)/i.test(u);process.stdout.write(JSON.stringify(isPdf?{url:u,status:s,pdfBase64:buf.toString("base64")}:{url:u,status:s,html:buf.toString("utf8")}))' "$URL" "$STATUS" "$FILE" > "$FILE.json"
   curl -sS -X POST "$API" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data-binary @"$FILE.json"
 else
   curl -sS -X POST "$API" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d "{\\"url\\":\\"$URL\\",\\"status\\":\\"$STATUS\\"}"
@@ -313,7 +314,7 @@ For EVERY page you read:
    If it demands a login or a paywall: ${handin} "<url>" login
    If the site refuses you (blocked, a captcha you cannot pass): ${handin} "<url>" blocked
    If it never loads: ${handin} "<url>" timeout
-Hand pages in as you go, not at the end. PDFs linked from product pages count as pages: save the file and hand it in with status ok.
+Hand each page in exactly once, as you go, not at the end. PDFs linked from product pages count as pages: download the file (keep its .pdf name) and hand it in with status ok the same way; do not paste PDF content as HTML.
 Do not summarize or interpret the pages; PM-OS does that. When you are done, or the limits are reached, print exactly one final line: DONE <number of discovered pages you did not read>`;
   const allowed = ["mcp__claude-in-chrome__*", `Write(${dir}/*)`, `Bash(${handin}:*)`];
   const out = await new Promise((resolve) => {
