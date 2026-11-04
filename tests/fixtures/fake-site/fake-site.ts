@@ -8,7 +8,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  *   12 pages: /, /product, /product/features, /pricing, /docs, /docs/start,
  *             /docs/api, /blog, /blog/1, /blog/2, /people, /about
  *   plus      /sitemap.xml and /robots.txt (not pages), /files/brochure.pdf
- *             (a real 2-page PDF), a captioned image on /about, and home links
+ *             (a real 2-page PDF, linked from home and /product only with the
+ *             `linkPdf` variant), a captioned image on /about, and home links
  *             to app.<host>, another domain and linkedin.com. /login demands a
  *             login (reason "login") when the `loginPage` variant links it.
  *
@@ -17,7 +18,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  *
  *   POST /__control  { ...partial Variants }    merge variants
  *   POST /__reset                               defaults + empty request log
- *   GET  /__requests                            [{ at, method, path, ua, status }]
+ *   GET  /__requests                            [{ at, method, host, path, ua, status }]
  *
  * Several sites = this fixture on several ports (startFakeSite({ port })).
  * Pages are deterministic: the same variants always give the same text, so
@@ -57,6 +58,10 @@ export interface Variants {
   loginPage: boolean;
   /** Whole site down: every request is refused at the socket (connection reset). */
   down: boolean;
+  /** Home and /product link /files/brochure.pdf (WS-21). Off by default so the common site is exactly 12 pages. */
+  linkPdf: boolean;
+  /** Every page answers after this many ms (WS-26: scans slow enough to watch the concurrency). 0 = at once. */
+  delayMs: number;
 }
 
 export const DEFAULT_VARIANTS: Variants = {
@@ -78,11 +83,15 @@ export const DEFAULT_VARIANTS: Variants = {
   unlinkPeople: false,
   loginPage: false,
   down: false,
+  linkPdf: false,
+  delayMs: 0,
 };
 
 export interface RequestLogEntry {
   at: number;
   method: string;
+  /** The Host header as the client sent it (app.localhost:port vs localhost:port). */
+  host: string;
   path: string;
   ua: string;
   status: number;
@@ -107,6 +116,7 @@ function page(title: string, body: string, nav: string, footerDate: string): str
 <main>
 <h1>${title}</h1>
 ${body}
+<p>Acme Fake is a fictional vendor that exists only for the PM-OS test suite; nothing on this site describes a real company, product or person.</p>
 </main>
 <footer><p>Acme Fake Inc. ${footerDate}</p></footer>
 </body></html>`;
@@ -155,10 +165,15 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
     const url = new URL(req.url ?? "/", origin(port));
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const ua = req.headers["user-agent"] ?? "";
+    const host = req.headers.host ?? "";
     const send = (status: number, body: string | Buffer, type = "text/html; charset=utf-8", headers: Record<string, string> = {}) => {
-      requests.push({ at: Date.now(), method: req.method ?? "GET", path, ua, status });
-      res.writeHead(status, { "content-type": type, ...headers });
-      res.end(body);
+      requests.push({ at: Date.now(), method: req.method ?? "GET", host, path, ua, status });
+      const write = () => {
+        res.writeHead(status, { "content-type": type, ...headers });
+        res.end(body);
+      };
+      if (variants.delayMs > 0) setTimeout(write, variants.delayMs);
+      else write();
     };
 
     // ——— control plane (never logged as site traffic) ———
@@ -197,7 +212,7 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
 
     // ——— site-wide conditions ———
     if (variants.down) {
-      requests.push({ at: Date.now(), method: req.method ?? "GET", path, ua, status: 0 });
+      requests.push({ at: Date.now(), method: req.method ?? "GET", host, path, ua, status: 0 });
       req.socket.destroy();
       return;
     }
@@ -243,10 +258,10 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
         okPages++;
         return send(200, page("Acme Fake", `<p>Threat intelligence for every analyst.</p>
 <p>Also see <a href="http://app.${hostName}:${port}/dashboard">the app</a>, <a href="https://other-domain.example/partner">our partner</a> and <a href="https://www.linkedin.com/company/acme-fake">LinkedIn</a>.</p>
-<p>Read the <a href="${base}/files/brochure.pdf">brochure (PDF)</a>.</p>${variants.infiniteLinks ? `<p><a href="${base}/loop/1">An endless series</a></p>` : ""}`, nav, footerDate));
+${variants.linkPdf ? `<p>Read the <a href="${base}/files/brochure.pdf">brochure (PDF)</a>.</p>` : ""}${variants.infiniteLinks ? `<p><a href="${base}/loop/1">An endless series</a></p>` : ""}`, nav, footerDate));
       case "/product":
         okPages++;
-        return send(200, page("Product", `<p>Acme Platform collects, correlates and alerts.</p><ul><li><a href="${base}/product/features">Features</a></li>${variants.newProductPage ? `<li><a href="${base}/product/new">Acme Shield (new)</a></li>` : ""}</ul><p>Datasheet: <a href="${base}/files/brochure.pdf">brochure.pdf</a></p>`, nav, footerDate));
+        return send(200, page("Product", `<p>Acme Platform collects, correlates and alerts.</p><ul><li><a href="${base}/product/features">Features</a></li>${variants.newProductPage ? `<li><a href="${base}/product/new">Acme Shield (new)</a></li>` : ""}</ul>${variants.linkPdf ? `<p>Datasheet: <a href="${base}/files/brochure.pdf">brochure.pdf</a></p>` : ""}`, nav, footerDate));
       case "/product/features":
         okPages++;
         return send(200, page("Features", "<ul><li>Dark web monitoring</li><li>Brand protection</li><li>Attack surface management</li><li>Takedowns</li></ul>", nav, footerDate));
@@ -263,7 +278,7 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
       case "/docs":
         if (variants.docsTimeoutAlways || (variants.docsTimeoutOnce && !docsTimedOutOnce)) {
           docsTimedOutOnce = true;
-          requests.push({ at: Date.now(), method: req.method ?? "GET", path, ua, status: 0 });
+          requests.push({ at: Date.now(), method: req.method ?? "GET", host, path, ua, status: 0 });
           return; // never answer; the client times out
         }
         okPages++;

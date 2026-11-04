@@ -18,7 +18,8 @@ describe("normalizeWebsite", () => {
   it("accepts a bare host, a www host and a URL with a path, and keeps the https origin", () => {
     expect(normalizeWebsite("recordedfuture.com")).toEqual({ url: "https://recordedfuture.com", host: "recordedfuture.com" });
     expect(normalizeWebsite(" www.Flashpoint.io/pricing ")).toEqual({ url: "https://www.flashpoint.io", host: "flashpoint.io" });
-    expect(normalizeWebsite("http://docs.example.co.uk/a?b=1")).toEqual({ url: "http://docs.example.co.uk", host: "example.co.uk" });
+    // PRD 2026-11-04: a subdomain is its own site ("app.pm-os.io is a separate add"); only www. folds into the bare host.
+    expect(normalizeWebsite("http://docs.example.co.uk/a?b=1")).toEqual({ url: "http://docs.example.co.uk", host: "docs.example.co.uk" });
   });
   it("refuses private and local addresses before any fetch", () => {
     for (const bad of ["http://10.0.0.1", "http://localhost", "http://127.0.0.1:3000", "http://192.168.1.4", "http://169.254.169.254", "http://[::1]"]) {
@@ -44,8 +45,9 @@ describe("registrableHost / isInsideSite", () => {
     expect(registrableHost("shop.example.co.il")).toBe("example.co.il");
     expect(registrableHost("example.com")).toBe("example.com");
   });
-  it("keeps the crawl inside the site: subdomains yes, other hosts and private hosts no", () => {
-    expect(isInsideSite(new URL("https://docs.example.com/x"), "example.com")).toBe(true);
+  it("keeps the crawl inside the site: www yes, other subdomains no (separate sources), other hosts and private hosts no", () => {
+    expect(isInsideSite(new URL("https://www.example.com/x"), "example.com")).toBe(true);
+    expect(isInsideSite(new URL("https://docs.example.com/x"), "example.com")).toBe(false);
     expect(isInsideSite(new URL("https://example.com.evil.net/x"), "example.com")).toBe(false);
     expect(isInsideSite(new URL("https://other.com/"), "example.com")).toBe(false);
     expect(isInsideSite(new URL("mailto:a@example.com"), "example.com")).toBe(false);

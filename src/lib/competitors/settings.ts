@@ -56,10 +56,28 @@ export async function setGlobalScanSettings(patch: Partial<GlobalScanSettings>):
 
 // ————— Clock (test knob) —————
 
+/**
+ * The one switch for every test knob. Deliberately NOT guarded by NODE_ENV:
+ * `next build` inlines NODE_ENV=production into the e2e build in CI too, so
+ * the guard is "the variable is set", which prod (apphosting.yaml) never does
+ * — see office/versions_prod_changes.md. A warning is logged once when on.
+ */
+let warned = false;
 export function testKnobsEnabled(): boolean {
-  if (process.env.NODE_ENV === "production") return false;
   const v = process.env.COMPETITORS_TEST_KNOBS?.trim().toLowerCase();
-  return v === "on" || v === "true" || v === "1";
+  const on = v === "on" || v === "true" || v === "1";
+  if (on && !warned) {
+    warned = true;
+    console.warn("[competitors] TEST KNOBS ON (COMPETITORS_TEST_KNOBS) — clock, tick, ceiling, pause, private hosts and the AI step are controllable. Never in production.");
+  }
+  return on;
+}
+
+/** Test knob: COMPETITORS_AI=off skips the PMOS AI step (badge from pages only, "PMOS AI skipped" in the log). */
+export function aiStepEnabled(): boolean {
+  if (!testKnobsEnabled()) return true;
+  const v = process.env.COMPETITORS_AI?.trim().toLowerCase();
+  return !(v === "off" || v === "false" || v === "0");
 }
 
 let clockCache: { at: number; offset: number } | null = null;

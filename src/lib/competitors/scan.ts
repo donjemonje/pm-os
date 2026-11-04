@@ -29,7 +29,7 @@ import { ogImageOf } from "./html";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
 import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
-import { getGlobalScanSettings, now } from "./settings";
+import { aiStepEnabled, getGlobalScanSettings, now } from "./settings";
 import { isPdfUrl } from "./url";
 
 /**
@@ -155,7 +155,7 @@ export type CreateScanResult =
 export async function createAndRouteScan(
   workspaceId: string,
   competitorId: string,
-  trigger: "manual" | "scheduled",
+  trigger: "manual" | "scheduled" | "onboarding",
   startedById: string | null,
   sourceType: SourceType = "website",
 ): Promise<CreateScanResult> {
@@ -536,6 +536,10 @@ export async function runScan(scanId: string): Promise<void> {
     } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
+    } else if (!aiStepEnabled()) {
+      // Test knob: the scanning story is tested without the analysis step (deterministic, free).
+      log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");
+      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
     } else {
       // ——— PMOS AI ———
       // Nothing changed but the catalog grew: classify the new capabilities from the stored current texts.
@@ -565,9 +569,11 @@ export async function runScan(scanId: string): Promise<void> {
       badge = col.denied > 0 ? "blocked" : "unreachable";
     } else if (col.denied > 0 && col.denied * 2 >= col.attempted) {
       badge = "blocked";
-    } else if (!full || finalStatus === "partial") {
+    } else if (!full) {
       badge = "incomplete";
     } else {
+      // The badge is about pages (PRD: Incomplete = pages not read, with reasons). A failed analysis step
+      // leaves the scan "partial" with its error in the log; it does not make the site read look incomplete.
       badge = "full";
     }
     // Blocked in the remote lane hands the site to the local lane (a PM's browser), when a station is enrolled.

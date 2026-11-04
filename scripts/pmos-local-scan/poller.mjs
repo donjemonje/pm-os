@@ -165,9 +165,9 @@ function registrable(hostname) {
   return two.has(last2) ? parts.slice(-3).join(".") : last2;
 }
 
-/** The same "site" rule as the server: registrable host plus a non-default port. */
+/** The same "site" rule as the server: the hostname without a leading www., plus a non-default port (subdomains are other sources). */
 function siteOf(u) {
-  return `${registrable(u.hostname)}${u.port ? `:${u.port}` : ""}`;
+  return `${u.hostname.toLowerCase().replace(/^www\./, "")}${u.port ? `:${u.port}` : ""}`;
 }
 
 function pageKey(u) {
@@ -176,6 +176,27 @@ function pageKey(u) {
 }
 
 const NON_PAGE = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
+
+/** One attempt to read a page with this machine's own HTTP. */
+async function readOnce(url, started) {
+  try {
+    const res = await fetch(url, { headers: { "user-agent": BROWSER_UA, accept: "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8", "accept-language": "en-US,en;q=0.9" }, redirect: "follow", signal: AbortSignal.timeout(20_000) });
+    const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+    const ms = Date.now() - started;
+    if (res.status === 404 || res.status === 410) return { url, status: "notfound", ms };
+    if (res.status === 401 || res.status === 402 || res.status === 407) return { url, status: "login", ms };
+    if (res.status === 403 || res.status === 429) return { url, status: "blocked", ms };
+    if (res.status >= 500) return { url, status: "other", ms };
+    if (ct.includes("application/pdf") || /\.pdf$/i.test(new URL(res.url || url).pathname)) {
+      const bytes = Buffer.from(await res.arrayBuffer());
+      return { url, status: "ok", pdfBase64: bytes.toString("base64"), ms };
+    }
+    const html = await res.text();
+    return { url, status: "ok", html, ms, finalUrl: res.url || url };
+  } catch (e) {
+    return { url, status: /abort|timeout/i.test(String(e)) ? "timeout" : "other", ms: Date.now() - started };
+  }
+}
 
 /** The fetch runner: this machine's own HTTP, no robots.txt (a person's browser acting on a person's intent). */
 async function runFetch(job, limits, post) {
@@ -223,30 +244,24 @@ async function runFetch(job, limits, post) {
     n++;
     const started = Date.now();
     let body;
-    try {
-      const res = await fetch(url, { headers: { "user-agent": BROWSER_UA, accept: "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8", "accept-language": "en-US,en;q=0.9" }, redirect: "follow", signal: AbortSignal.timeout(20_000) });
-      const ct = (res.headers.get("content-type") ?? "").toLowerCase();
-      const ms = Date.now() - started;
-      if (res.status === 404 || res.status === 410) body = { url, status: "notfound", ms };
-      else if (res.status === 401 || res.status === 402 || res.status === 407) body = { url, status: "login", ms };
-      else if (res.status === 403 || res.status === 429) body = { url, status: "blocked", ms };
-      else if (res.status >= 500) body = { url, status: "other", ms };
-      else if (ct.includes("application/pdf") || /\.pdf$/i.test(new URL(res.url || url).pathname)) {
-        const bytes = Buffer.from(await res.arrayBuffer());
-        body = { url, status: "ok", pdfBase64: bytes.toString("base64"), ms };
-      } else {
-        const html = await res.text();
-        body = { url, status: "ok", html, ms };
-        for (const m of html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"'#]+)(?:#[^"']*)?["']/gi)) {
-          try {
-            add(new URL(m[1].trim(), res.url || url));
-          } catch {
-            // skip
-          }
+    // PRD: a page is pending until done — up to 3 attempts on a timeout or a server error.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      body = await readOnce(url, started);
+      if (!(body.status === "timeout" || body.status === "other")) break;
+      if (attempt < 3) {
+        log(`  retry ${attempt} after ${body.status} ${url}`);
+        await new Promise((r) => setTimeout(r, Math.max(PAUSE_MS, 500)));
+      }
+    }
+    if (body.status === "ok" && body.html) {
+      for (const m of body.html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"'#]+)(?:#[^"']*)?["']/gi)) {
+        try {
+          add(new URL(m[1].trim(), body.finalUrl || url));
+        } catch {
+          // skip
         }
       }
-    } catch (e) {
-      body = { url, status: /abort|timeout/i.test(String(e)) ? "timeout" : "other", ms: Date.now() - started };
+      delete body.finalUrl;
     }
     const r = await post(body);
     log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);

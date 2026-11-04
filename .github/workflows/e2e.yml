@@ -64,6 +64,7 @@ jobs:
       COMPETITORS_TEST_KNOBS: "on"
       COMPETITORS_ALLOW_PRIVATE_HOSTS: "on"
       COMPETITORS_PAUSE_MS: "0"
+      COMPETITORS_AI: "off"
       # 2FA secret-encryption key; production-mode boot refuses to start
       # without it. Synthetic — the test DB holds only synthetic accounts.
       TOTP_ENC_KEY: "5439664bcd0b64e6fc538ce85f793bcf5439664bcd0b64e6fc538ce85f793bcf"

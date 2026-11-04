@@ -68,6 +68,25 @@ env:
     value: "/tmp/pmos-competitors-media"
     availability:
       - RUNTIME
+  # Website Scanning (2026-11-04, tests/e2e/competitors-scanning.spec.ts) — test-only knobs, never in
+  # production (every one is also guarded by NODE_ENV): the clock offset and the scheduler tick can be set
+  # from the tests; the pause between pages is real only where a row checks it (robots Crawl-delay); the
+  # fixture site lives on localhost; the manual-rescan limit is on (a production rule the spec checks); the
+  # headless browser is on (JavaScript-only page row); the page ceiling is 20 (infinite-link row — every
+  # other fixture site has at most 13 pages). In the CI build path Next inlines NODE_ENV=production, so the
+  # spec skips itself there.
+  - variable: COMPETITORS_TEST_KNOBS
+    value: "on"
+  - variable: COMPETITORS_PAUSE_MS
+    value: "0"
+  - variable: COMPETITORS_ALLOW_PRIVATE_HOSTS
+    value: "on"
+  - variable: COMPETITORS_RESCAN_LIMIT
+    value: "on"
+  - variable: COMPETITORS_BROWSER
+    value: "on"
+  - variable: COMPETITORS_CEILING_PAGES
+    value: "20"
 
   # --- 2FA (mandatory) ---
   # Fixed synthetic key for encrypting the seeded test TOTP secret. Keep this
@@ -94,3 +113,7 @@ env:
   #   value: "TEST"
   # - variable: JIRA_TEST_PRODUCT_LINE_FIELD_ID
   #   value: "customfield_10319"
+  # Website Scanning QA: the scanning story is tested without the analysis step (deterministic, no Gemini calls).
+  # Only read when COMPETITORS_TEST_KNOBS=on. Remove for the Product Review (real PMOS AI).
+  - variable: COMPETITORS_AI
+    value: "off"

@@ -43,10 +43,16 @@ export function rescanLimitEnforced(): boolean {
   if (v === "off" || v === "false" || v === "0") return false;
   return process.env.NODE_ENV === "production";
 }
-/** Pause between two requests to the same site (remote lane). Tests may set COMPETITORS_PAUSE_MS=0 and say so. */
+/** Pause between two requests to the same site (remote lane). Tests may set COMPETITORS_PAUSE_MS=0 (with COMPETITORS_TEST_KNOBS=on) and say so. */
 export function scanPauseMs(): number {
+  if (!knobsOn()) return 2000;
   const v = Number(process.env.COMPETITORS_PAUSE_MS);
-  return Number.isFinite(v) && v >= 0 && process.env.NODE_ENV !== "production" ? v : 2000;
+  return Number.isFinite(v) && v >= 0 ? v : 2000;
+}
+/** Same switch as settings.ts testKnobsEnabled (kept here so this module stays pure data + env). */
+function knobsOn(): boolean {
+  const v = process.env.COMPETITORS_TEST_KNOBS?.trim().toLowerCase();
+  return v === "on" || v === "true" || v === "1";
 }
 /** robots.txt Crawl-delay is honoured up to this (remote lane). */
 export const CRAWL_DELAY_CAP_MS = 10_000;
@@ -54,9 +60,9 @@ export const CRAWL_DELAY_CAP_MS = 10_000;
 export const CEILING_PAGES = 2000;
 /** … or runs longer than this. Pages beyond are "not attempted" and the next run picks them up. */
 export const CEILING_MS = 3 * 3600_000;
-/** Test knob only (never in production): a lower ceiling so the fixture can hit it. */
+/** Test knob only (COMPETITORS_TEST_KNOBS=on): a lower ceiling so the fixture can hit it. */
 export function ceiling(): { pages: number; ms: number } {
-  if (process.env.NODE_ENV === "production") return { pages: CEILING_PAGES, ms: CEILING_MS };
+  if (!knobsOn()) return { pages: CEILING_PAGES, ms: CEILING_MS };
   const pages = Number(process.env.COMPETITORS_CEILING_PAGES);
   const ms = Number(process.env.COMPETITORS_CEILING_MS);
   return { pages: Number.isFinite(pages) && pages > 0 ? pages : CEILING_PAGES, ms: Number.isFinite(ms) && ms > 0 ? ms : CEILING_MS };

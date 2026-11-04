@@ -46,7 +46,7 @@ export async function POST(req: Request) {
     const source = await db.competitorSource.findFirst({ where: { competitorId: dupHost.id, type: "website" }, select: { id: true } });
     if (!source) await db.competitorSource.create({ data: { workspaceId: ctx.workspaceId, competitorId: dupHost.id, type: "website", url: site.url } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_added", { competitorId: dupHost.id, source: "settings", restored: true });
-    void createAndRouteScan(ctx.workspaceId, dupHost.id, "manual", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
+    await createAndRouteScan(ctx.workspaceId, dupHost.id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
     return stateResponse(ctx, 201);
   }
 
@@ -76,7 +76,8 @@ export async function POST(req: Request) {
     select: { id: true },
   });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_added", { competitorId: competitor.id, source: "settings", nameFromSite: !body.name });
-  // Onboarding (PRD): adding a competitor starts its first scan — the whole site.
-  void createAndRouteScan(ctx.workspaceId, competitor.id, "manual", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
+  // Onboarding (PRD): adding a competitor starts its first scan — the whole site. Routed before the answer, so the
+  // new row already says "Scan pending"; the onboarding scan is not one of the PM's daily manual rescans.
+  await createAndRouteScan(ctx.workspaceId, competitor.id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
   return stateResponse(ctx, 201);
 }

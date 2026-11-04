@@ -28,12 +28,15 @@ export function registrableHost(hostname: string): string {
 }
 
 /**
- * The site a URL belongs to: its registrable host plus a non-default port.
- * Real websites never carry a port, so this equals registrableHost for them;
- * it keeps two fixture sites on different ports apart in tests.
+ * The site a URL belongs to (Website Scanning PRD: "one domain — app.pm-os.io
+ * is a separate add"): the hostname without a leading "www.", plus a
+ * non-default port. So www.acme.com and acme.com are one site; docs.acme.com
+ * is another competitor source. Real websites never carry a port; the port
+ * keeps two fixture sites apart in tests.
  */
 export function siteHost(u: URL): string {
-  return `${registrableHost(u.hostname)}${u.port ? `:${u.port}` : ""}`;
+  const h = u.hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+  return `${h}${u.port ? `:${u.port}` : ""}`;
 }
 
 /**
@@ -42,7 +45,8 @@ export function siteHost(u: URL): string {
  * otherwise — the private-network guard stays on everywhere else.
  */
 function privateHostsAllowed(): boolean {
-  if (process.env.NODE_ENV === "production") return false;
+  const knobs = process.env.COMPETITORS_TEST_KNOBS?.trim().toLowerCase();
+  if (!(knobs === "on" || knobs === "true" || knobs === "1")) return false;
   const v = process.env.COMPETITORS_ALLOW_PRIVATE_HOSTS?.trim().toLowerCase();
   return v === "on" || v === "true" || v === "1";
 }
@@ -85,7 +89,8 @@ export function normalizeWebsite(input: string): { url: string; host: string } {
     throw new InvalidUrlError("invalid");
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") throw new InvalidUrlError("scheme");
-  if (!u.hostname || !u.hostname.includes(".") && !isPrivateHost(u.hostname)) throw new InvalidUrlError("invalid");
+  // A single-label host ("localhost") is only a website in the test environment (private-hosts knob).
+  if (!u.hostname || (!u.hostname.includes(".") && !privateHostsAllowed() && !isPrivateHost(u.hostname))) throw new InvalidUrlError("invalid");
   if (isPrivateHost(u.hostname)) throw new InvalidUrlError("private");
   if (u.username || u.password) throw new InvalidUrlError("invalid");
   const url = `${u.protocol}//${u.hostname.toLowerCase()}${u.port ? `:${u.port}` : ""}`;

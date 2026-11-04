@@ -452,7 +452,7 @@ export const COMPETITORS_COPY = {
   log: {
     title: (name: string) => `Scan log · ${name}`,
     empty: "No scans yet.",
-    trigger: { manual: "Scan now", scheduled: "Scheduled" } as Record<string, string>,
+    trigger: { manual: "Scan now", scheduled: "Scheduled", onboarding: "First scan", import: "Import" } as Record<string, string>,
     status: {
       queued: "Pending",
       pending_local: "Pending",
