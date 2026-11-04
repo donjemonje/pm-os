@@ -154,10 +154,15 @@ export function looksLikeBotWall(status: number, html: string): boolean {
   return /just a moment|verify you are human|checking your browser|cf-chl|cf_chl|attention required|access denied|request unsuccessful\. incapsula|_incapsula_|akamai.*bot|px-captcha|captcha-delivery|hcaptcha|recaptcha\/api\.js/i.test(head);
 }
 
-/** Pages that render nothing without JavaScript — a browser is needed. */
+/**
+ * Pages that render nothing without JavaScript — a browser is needed. An
+ * empty app root, or a big document with almost no text. A small page with
+ * little text is just a small page.
+ */
 export function looksEmptyWithoutJs(text: string, html: string): boolean {
   if (text.length >= 400) return false;
-  return /<div\s+id=["'](root|app|__next|___gatsby)["']\s*>\s*<\/div>|window\.__NUXT__|__NEXT_DATA__/i.test(html) || text.length < 120;
+  if (/<div\s+id=["'](root|app|__next|___gatsby)["']\s*>\s*<\/div>|window\.__NUXT__|__NEXT_DATA__/i.test(html)) return true;
+  return text.length < 120 && html.length > 3000;
 }
 
 /** The page's own preview image (og:image, then twitter:image), absolute; "" when the page states none. */

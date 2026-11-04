@@ -24,7 +24,7 @@ import {
 } from "./config";
 import { COMPETITORS_COPY as C } from "./copy";
 import { Frontier, readRobots, readSitemap } from "./crawl";
-import { browserAvailable, closeBrowser, fetchPage, fetchPlain, isRetryable, outcomeCategoryOf, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
+import { acquireBrowser, browserAvailable, fetchPage, fetchPlain, isRetryable, outcomeCategoryOf, releaseBrowser, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
 import { ogImageOf } from "./html";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
 import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
@@ -491,6 +491,7 @@ export async function runScan(scanId: string): Promise<void> {
     : new ScanLog(scanId);
   const t0 = Date.now();
   const heartbeat = setInterval(() => void db.competitorScan.update({ where: { id: scanId }, data: { heartbeatAt: new Date() } }).catch(() => undefined), HEARTBEAT_MS);
+  if (lane === "remote") acquireBrowser();
   const sourceLabel = C.profile.sourceTypes[source.type] ?? source.type;
   // A remote scan may resume the last stale scan of the source: its pending pages go first.
   const staleBefore = lane === "remote" ? await db.competitorScan.findFirst({ where: { sourceId: source.id, status: "stale" }, orderBy: { startedAt: "desc" }, select: { id: true } }) : null;
@@ -597,7 +598,7 @@ export async function runScan(scanId: string): Promise<void> {
     log.add("error", `Scan aborted: ${error}`);
   } finally {
     clearInterval(heartbeat);
-    await closeBrowser().catch(() => undefined);
+    if (lane === "remote") await releaseBrowser().catch(() => undefined);
   }
 
   const durationMs = Date.now() - t0;

@@ -156,6 +156,7 @@ export async function fetchPlain(url: string): Promise<FetchedPage> {
 // ————— PDF text —————
 
 type PdfJs = {
+  GlobalWorkerOptions: { workerSrc: string };
   getDocument(src: { data: Uint8Array; useSystemFonts?: boolean; isEvalSupported?: boolean }): { promise: Promise<{ numPages: number; getPage(n: number): Promise<{ getTextContent(): Promise<{ items: { str?: string; hasEOL?: boolean }[] }> }> }> };
 };
 
@@ -164,6 +165,11 @@ export async function pdfToText(bytes: Uint8Array): Promise<string> {
   // Computed specifier: the Next bundler must not pull pdf.js into the app routes' client graph.
   const mod = "pdfjs-dist/legacy/build/pdf.mjs";
   const pdfjs = (await import(mod)) as PdfJs;
+  // Inside a bundled Next server the worker file cannot be found relative to the bundle: point at it by absolute path.
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+    const { createRequire } = await import("node:module");
+    pdfjs.GlobalWorkerOptions.workerSrc = createRequire(`${process.cwd()}/package.json`).resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  }
   const doc = await pdfjs.getDocument({ data: bytes, useSystemFonts: true, isEvalSupported: false }).promise;
   const out: string[] = [];
   const pages = Math.min(doc.numPages, 400);
@@ -201,6 +207,18 @@ type PwPage = {
 };
 
 let browserPromise: Promise<PwBrowser> | null = null;
+/** Scans using the browser right now (inline mode runs several scans in one process; the Cloud Run job runs one). */
+let browserUsers = 0;
+
+/** A scan that may need the browser says so up front; releaseBrowser() when it is done. The browser closes when the last user leaves. */
+export function acquireBrowser(): void {
+  browserUsers++;
+}
+
+export async function releaseBrowser(): Promise<void> {
+  browserUsers = Math.max(0, browserUsers - 1);
+  if (browserUsers === 0) await closeBrowser();
+}
 
 async function getBrowser(): Promise<PwBrowser> {
   if (!browserPromise) {
