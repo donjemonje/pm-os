@@ -247,6 +247,7 @@ async function runFetch(job, limits, post) {
     // PRD: a page is pending until done — up to 3 attempts on a timeout or a server error.
     for (let attempt = 1; attempt <= 3; attempt++) {
       body = await readOnce(url, started);
+      body.attempts = attempt;
       if (!(body.status === "timeout" || body.status === "other")) break;
       if (attempt < 3) {
         log(`  retry ${attempt} after ${body.status} ${url}`);

@@ -165,11 +165,9 @@ export async function pdfToText(bytes: Uint8Array): Promise<string> {
   // Computed specifier: the Next bundler must not pull pdf.js into the app routes' client graph.
   const mod = "pdfjs-dist/legacy/build/pdf.mjs";
   const pdfjs = (await import(mod)) as PdfJs;
-  // Inside a bundled Next server the worker file cannot be found relative to the bundle: point at it by absolute path.
-  if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-    const { createRequire } = await import("node:module");
-    pdfjs.GlobalWorkerOptions.workerSrc = createRequire(`${process.cwd()}/package.json`).resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
-  }
+  // Inside a bundled Next server pdf.js points at a chunk-relative worker that does not exist: always use the absolute path.
+  const { createRequire } = await import("node:module");
+  pdfjs.GlobalWorkerOptions.workerSrc = createRequire(`${process.cwd()}/package.json`).resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
   const doc = await pdfjs.getDocument({ data: bytes, useSystemFonts: true, isEvalSupported: false }).promise;
   const out: string[] = [];
   const pages = Math.min(doc.numPages, 400);

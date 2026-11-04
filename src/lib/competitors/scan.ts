@@ -122,8 +122,9 @@ export class ScanLog {
 }
 
 /** Append one page the local lane posted: the route records the page and logs it here so the process half can read it back. */
-export async function appendHandedInPage(scanId: string, entry: PageLogEntry, linked: Iterable<string> = []): Promise<void> {
-  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, outcomes: true, linkedUrls: true } });
+export async function appendHandedInPage(scanId: string, entry: PageLogEntry, linked: Iterable<string> = [], lines: LogLine[] = []): Promise<void> {
+  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, outcomes: true, linkedUrls: true, log: true } });
+  const log = [...(Array.isArray(scan.log) ? (scan.log as unknown as LogLine[]) : []), ...lines];
   const all = Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : [];
   const earlier = all.find((p) => p.url === entry.url);
   const pages = all.filter((p) => p.url !== entry.url);
@@ -142,6 +143,7 @@ export async function appendHandedInPage(scanId: string, entry: PageLogEntry, li
       pages: pages as unknown as Prisma.InputJsonValue,
       outcomes: outcomes as unknown as Prisma.InputJsonValue,
       linkedUrls: [...linkedUrls] as unknown as Prisma.InputJsonValue,
+      ...(lines.length ? { log: log as unknown as Prisma.InputJsonValue } : {}),
       pagesFetched: pages.filter((p) => p.outcome === "new" || p.outcome === "changed" || p.outcome === "unchanged").length,
       pagesChanged: pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length,
     },

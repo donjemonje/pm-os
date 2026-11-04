@@ -78,6 +78,7 @@ export async function POST(req: Request, { params }: Params) {
   if (scan.status !== "running") await startLocalScan(id, null);
   const sourceLabel = C.profile.sourceTypes[scan.source.type] ?? scan.source.type;
   const ms = typeof body.ms === "number" && Number.isFinite(body.ms) ? Math.max(0, Math.round(body.ms)) : 0;
+  const attempts = typeof body.attempts === "number" && Number.isFinite(body.attempts) ? Math.max(1, Math.round(body.attempts)) : 1;
   const r = await recordPage(
     { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via: "handin", ms },
     sourceLabel,
@@ -94,6 +95,6 @@ export async function POST(req: Request, { params }: Params) {
     chars: r.chars,
     ms,
     via: "handin",
-  }, linked);
+  }, linked, attempts > 1 ? [{ at: new Date().toISOString(), level: "info", msg: `Station retried ${attempts - 1} time${attempts === 2 ? "" : "s"} before ${status === "ok" ? "reading the page" : `giving up (${status})`}`, url: r.url }] : []);
   return NextResponse.json({ url: r.url, outcome: r.outcome, state: r.state });
 }
