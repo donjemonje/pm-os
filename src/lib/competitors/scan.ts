@@ -632,10 +632,11 @@ export async function runScan(scanId: string): Promise<void> {
     await db.competitorScan.update({ where: { id: scanId }, data: { log: log.lines as unknown as Prisma.InputJsonValue } });
   }
 
-  // A freed slot is used at once: the next queued remote scan starts now, not at the next tick.
+  // A freed slot is used at once: a scan queued behind this one gets its lane, and the next queued remote scan starts now, not at the next tick.
   try {
-    const { startQueuedScans } = await import("./tick");
+    const { promoteQueued, startQueuedScans } = await import("./tick");
     const { launchScan } = await import("./run");
+    await promoteQueued(source.id);
     await startQueuedScans(launchScan);
   } catch (e) {
     console.error("[competitors] could not start the next queued scan", e);

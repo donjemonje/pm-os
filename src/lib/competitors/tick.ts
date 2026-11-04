@@ -43,6 +43,7 @@ export async function runTick(launch: Launcher, log: (msg: string) => void = () 
   const stale = await sweepStale(t);
   if (stale) log(`${stale} stale scan${stale === 1 ? "" : "s"}`);
   const due = await queueDueScans(t, settings.remoteScanEnabled, log);
+  await promoteQueued(null, settings.remoteScanEnabled);
   const started = await startQueuedScans(launch, log);
   const alerts = await alertOldRequests(appUrl());
   if (alerts) log(`${alerts} waiting-request alert${alerts === 1 ? "" : "s"} sent to support`);
@@ -114,13 +115,41 @@ export async function routeScan(scanId: string, remoteOn?: boolean): Promise<"qu
   const on = remoteOn ?? (await getGlobalScanSettings()).remoteScanEnabled;
   if (on) return "queued";
   if (!(await hasActiveScannerKey())) {
+    // Customer-facing text names no lane; the admin log says what is missing.
     const t = await now();
-    const scan = await db.competitorScan.update({ where: { id: scanId }, data: { status: "failed", finishedAt: t, errorKind: "other", error: "local scanning is not set up — add a station key in Administration" }, select: { sourceId: true } });
-    await db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "failed", lastError: "local scanning is not set up" } });
+    const scan = await db.competitorScan.update({ where: { id: scanId }, data: { status: "failed", finishedAt: t, errorKind: "other", error: "scanning is not set up yet for this site — PM-OS support has been notified", log: [{ at: t.toISOString(), level: "error", msg: "No local station key is enrolled (Administration → Competitors → Local stations); the scan could not be parked in the local lane." }] }, select: { sourceId: true } });
+    await db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "failed", lastError: "scanning is not set up yet for this site" } });
     return "no_station";
   }
   await createLocalRequest(scanId);
   return "pending_local";
+}
+
+/**
+ * A scan queued behind a running one of the same site gets its turn: routed to
+ * the lane that is on right now (remote stays "queued" for startQueuedScans,
+ * remote OFF parks it in the local lane). `sourceId` null = every source
+ * without an active scan (the tick's safety net).
+ */
+export async function promoteQueued(sourceId: string | null, remoteOn?: boolean): Promise<number> {
+  const on = remoteOn ?? (await getGlobalScanSettings()).remoteScanEnabled;
+  const queued = await db.competitorScan.findMany({
+    where: { status: "queued", lane: "remote", ...(sourceId ? { sourceId } : {}) },
+    orderBy: { startedAt: "asc" },
+    select: { id: true, sourceId: true },
+  });
+  const seen = new Set<string>();
+  let promoted = 0;
+  for (const q of queued) {
+    if (seen.has(q.sourceId)) continue;
+    seen.add(q.sourceId);
+    const busy = await db.competitorScan.findFirst({ where: { sourceId: q.sourceId, status: { in: ["running", "pending_local"] } }, select: { id: true } });
+    if (busy) continue;
+    if (on) continue; // stays queued; startQueuedScans launches it
+    await routeScan(q.id, false);
+    promoted++;
+  }
+  return promoted;
 }
 
 /**

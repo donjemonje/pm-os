@@ -4,9 +4,10 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { isPageKind } from "@/lib/competitors/config";
 import { pdfToText } from "@/lib/competitors/fetcher";
 import { startLocalScan, verifyScanToken } from "@/lib/competitors/local";
-import { categoryOf, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
+import { extractLinks } from "@/lib/competitors/html";
+import { categoryOf, markLinked, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
 import { appendHandedInPage } from "@/lib/competitors/scan";
-import { isInsideSite } from "@/lib/competitors/url";
+import { isInsideSite, pageKey } from "@/lib/competitors/url";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -81,6 +82,12 @@ export async function POST(req: Request, { params }: Params) {
     { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via: "handin", ms },
     sourceLabel,
   );
+  // The links on the page say what still points where (the "unlinked" state) — the same bookkeeping as the remote lane.
+  if (html) {
+    const linked = new Set<string>();
+    for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l));
+    if (linked.size) await markLinked(scan.sourceId, id, linked);
+  }
   await appendHandedInPage(id, {
     url: r.url,
     status: status === "ok" ? 200 : status === "notfound" ? 404 : status === "login" ? 401 : status === "blocked" ? 403 : 0,

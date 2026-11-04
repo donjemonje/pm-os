@@ -131,8 +131,8 @@ async function askUser(sites) {
 
 // ————— PM-OS API —————
 
-async function api(path, init = {}) {
-  const res = await fetch(`${APP_URL}${path}`, { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) }, signal: AbortSignal.timeout(120_000) });
+async function api(path, init = {}, timeoutMs = 120_000) {
+  const res = await fetch(`${APP_URL}${path}`, { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) }, signal: AbortSignal.timeout(timeoutMs) });
   const text = await res.text();
   let json = null;
   try {
@@ -330,7 +330,8 @@ async function runJob(job, runner) {
   await api(`/api/competitors/local/scans/${job.scanId}/start`, { method: "POST", headers: auth });
   const post = (body) => api(`/api/competitors/local/scans/${job.scanId}/pages`, { method: "POST", headers: auth, body: JSON.stringify(body) });
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
-  const done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) });
+  // PM-OS processes the pages inside this call (page states, PMOS AI); give it time.
+  const done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 20 * 60_000);
   log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }
 
