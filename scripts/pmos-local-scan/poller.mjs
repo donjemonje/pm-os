@@ -36,7 +36,8 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -280,24 +281,15 @@ async function runFetch(job, limits, post) {
 async function runClaude(job, limits, token) {
   const dir = join(tmpdir(), `pmos-local-scan-${job.scanId}`);
   mkdirSync(dir, { recursive: true });
+  // The scan token and route live in the scan folder; handin.sh (what Claude is allowed to run) calls handin.mjs with them.
+  writeFileSync(join(dir, "token"), token, { mode: 0o600 });
+  writeFileSync(join(dir, "api"), `${APP_URL}/api/competitors/local/scans/${job.scanId}/pages`, { mode: 0o600 });
   const handin = join(dir, "handin.sh");
-  writeFileSync(
-    handin,
-    `#!/bin/sh
-# handin.sh <url> <status> [file-with-html]
-URL="$1"; STATUS="$2"; FILE="$3"
-API="${APP_URL}/api/competitors/local/scans/${job.scanId}/pages"
-if [ -n "$FILE" ] && [ -f "$FILE" ]; then
-  # A PDF (by its %PDF header or .pdf name) is posted as bytes; everything else as HTML. The server extracts the text.
-  node -e 'const fs=require("fs");const [u,s,f]=process.argv.slice(1);const buf=fs.readFileSync(f);const isPdf=buf.subarray(0,5).toString("latin1")==="%PDF-"||/\.pdf$/i.test(f)||/\.pdf(\?|$)/i.test(u);process.stdout.write(JSON.stringify(isPdf?{url:u,status:s,pdfBase64:buf.toString("base64")}:{url:u,status:s,html:buf.toString("utf8")}))' "$URL" "$STATUS" "$FILE" > "$FILE.json"
-  curl -sS -X POST "$API" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" --data-binary @"$FILE.json"
-else
-  curl -sS -X POST "$API" -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d "{\\"url\\":\\"$URL\\",\\"status\\":\\"$STATUS\\"}"
-fi
-echo
-`,
-    { mode: 0o700 },
-  );
+  const handinJs = join(dirname(fileURLToPath(import.meta.url)), "handin.mjs");
+  writeFileSync(handin, `#!/bin/sh
+# handin.sh <url> <status> [file]
+exec "${process.execPath}" "${handinJs}" "${dir}" "$@"
+`, { mode: 0o700 });
   const known = (job.knownUrls ?? []).slice(0, 400).join("\n");
   const hostname = new URL(job.siteUrl).hostname;
   const prompt = `You are the PM-OS local scan station reading a competitor's public website in this Chrome, on behalf of the product manager who approved it. Read the site the way a person would and hand every page in.
@@ -330,7 +322,9 @@ Do not summarize or interpret the pages; PM-OS does that. When you are done, or 
       resolve({ code, stdout, stderr });
     });
   });
-  if (out.code !== 0) log(`claude exited ${out.code}: ${out.stderr.slice(0, 400)}`);
+  // Keep Claude's own account of the run in the station log (its final lines), whatever the exit code.
+  const tail = out.stdout.trim().split("\n").slice(-6).join(" | ").slice(0, 1200);
+  log(`claude exited ${out.code}${out.stderr.trim() ? ` (stderr: ${out.stderr.trim().slice(0, 300)})` : ""} — ${tail || "(no output)"}`);
   const m = out.stdout.match(/DONE\s+(\d+)/);
   return { notAttempted: m ? Number(m[1]) : 0 };
 }

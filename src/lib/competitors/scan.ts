@@ -587,7 +587,8 @@ export async function runScan(scanId: string): Promise<void> {
     if (homeFailed) {
       badge = refusedAtDoor ? "blocked" : "unreachable";
     } else if (count === 0) {
-      badge = col.denied > 0 ? "blocked" : "unreachable";
+      // Remote: the site did not answer (or refused everything). Local: the station handed in nothing — a station problem, not the site's.
+      badge = col.denied > 0 ? "blocked" : lane === "local" ? "incomplete" : "unreachable";
     } else if (col.denied > 0 && col.denied * 2 >= col.attempted) {
       badge = "blocked";
     } else if (!full) {
