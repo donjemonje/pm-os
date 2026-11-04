@@ -7,9 +7,9 @@ The local lane of competitor website scanning (Website Scanning PRD, 2026-11-04)
 1. Administration → Competitors → Local stations → **New station key**. Copy the key (shown once).
 2. On the Mac, from the PM-OS repo:
 
-       sh scripts/pmos-local-scan/install.sh https://app.pm-os.io <key>
+       sh scripts/pmos-local-scan/install.sh prod https://app.pm-os.io <key>
 
-   This writes `~/.pmos/station-key`, installs `~/Library/LaunchAgents/com.pm-os.local-scan.plist` (check-in every 15 minutes, also at login) and runs the first check-in.
+   This writes `~/.pmos/prod/station-key`, installs `~/Library/LaunchAgents/com.pm-os.local-scan.prod.plist` (check-in every 15 minutes, also at login) and runs the first check-in. One station per environment, side by side: `install.sh dev http://localhost:3000 <dev key>` for the dev server. Each environment has its own key, state folder and log.
 3. Keep the Mac on the charger with the lid open, "Prevent automatic sleeping when the display is off" on, Chrome open with the Claude extension, Chrome in Login Items. A sleeping Mac runs nothing; requests wait and PM-OS emails support after 24 hours.
 
 ## What happens
@@ -25,4 +25,4 @@ The local lane of competitor website scanning (Website Scanning PRD, 2026-11-04)
     node scripts/pmos-local-scan/poller.mjs --app-url http://localhost:3205 --key-file /tmp/key \
       --runner fetch --mac-state locked --answer approve --pause-ms 0 --max-pages 20
 
-`--mac-state active|locked` and `--answer approve|later` replace the real lock state and dialog; `--loop` keeps running instead of one check-in. Log: `~/.pmos/local-scan.log`.
+`--mac-state active|locked` and `--answer approve|later` replace the real lock state and dialog; `--loop` keeps running instead of one check-in. Log: `~/.pmos/<env>/local-scan.log`.
