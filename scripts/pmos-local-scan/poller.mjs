@@ -292,24 +292,28 @@ exec "${process.execPath}" "${handinJs}" "${dir}" "$@"
 `, { mode: 0o700 });
   const known = (job.knownUrls ?? []).slice(0, 400).join("\n");
   const hostname = new URL(job.siteUrl).hostname;
+  const site = siteOf(new URL(job.siteUrl));
   const prompt = `You are the PM-OS local scan station reading a competitor's public website in this Chrome, on behalf of the product manager who approved it. Read the site the way a person would and hand every page in.
 
 Site: ${job.siteUrl}
+Stay on this site only: ${site} (www.${site.replace(/:\d+$/, "")} is the same site). Any other subdomain (app., docs., support., …) and any other website is a separate source: do not open it, do not hand it in, do not count it. Never log in anywhere.
 Read at most ${limits.pages} pages and stop after ${Math.round(limits.ms / 60000)} minutes.
 Pages earlier scans know (read these first, then anything new you find in menus, footers, the sitemap and links):
 ${known || "(none yet)"}
 
 For EVERY page you read:
-1. Open it in Chrome. Same site only: never leave ${hostname} or its subdomains, never follow links to other sites, never log in anywhere.
-2. Get the full HTML with the javascript tool (document.documentElement.outerHTML) and save it to a file under ${dir}/ (one file per page, e.g. ${dir}/page-1.html).
+1. Open it in Chrome.
+2. Get the full HTML with the javascript tool (document.documentElement.outerHTML) and save it to a file under ${dir}/ (one file per page, e.g. ${dir}/page-1.html). If the tool truncates long output, take it in slices (outerHTML.slice(start, end)) and append them in order; the file must be the complete, unmodified HTML.
 3. Hand it in: ${handin} "<url>" ok ${dir}/page-N.html
-   If the page says it does not exist (a "not found" page): ${handin} "<url>" notfound
-   If it demands a login or a paywall: ${handin} "<url>" login
-   If the site refuses you (blocked, a captcha you cannot pass): ${handin} "<url>" blocked
-   If it never loads: ${handin} "<url>" timeout
-Hand each page in exactly once, as you go, not at the end. PDFs linked from product pages count as pages: download the file (keep its .pdf name) and hand it in with status ok the same way; do not paste PDF content as HTML.
-Do not summarize or interpret the pages; PM-OS does that. When you are done, or the limits are reached, print exactly one final line: DONE <number of discovered pages you did not read>`;
-  const allowed = ["mcp__claude-in-chrome__*", `Write(${dir}/*)`, `Bash(${handin}:*)`];
+   A PDF linked from a page: ${handin} "<pdf url>" pdf   (the station downloads it itself — do not try to download or open it)
+   A "not found" page (the site says the page does not exist): ${handin} "<url>" notfound
+   A login or paywall: ${handin} "<url>" login
+   The site refuses you (blocked, a captcha you cannot pass): ${handin} "<url>" blocked
+   Never loads: ${handin} "<url>" timeout
+Hand each page in exactly once, as you go, not at the end. Do not summarize or interpret the pages; PM-OS does that.
+When you are done, or the limits are reached, print exactly one final line: DONE <number of pages of this site you discovered but did not read>`;
+  // File rules are matched as Edit(path) (Claude Code's permission syntax); the browser tools and the hand-in script are the only other tools.
+  const allowed = ["mcp__claude-in-chrome__*", `Edit(${dir})`, `Edit(${dir}/*)`, `Edit(${dir}/**)`, `Bash(${handin}:*)`];
   const out = await new Promise((resolve) => {
     const child = spawn("claude", ["-p", "--chrome", "--allowedTools", ...allowed, "--output-format", "text", prompt], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env } });
     let stdout = "";

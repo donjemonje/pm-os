@@ -5,6 +5,7 @@
  * string: no escaping to get wrong.
  *
  *   node handin.mjs <scanDir> <url> <status> [file]
+ *   node handin.mjs <scanDir> <url> pdf            (downloads the PDF itself and hands the bytes in)
  *
  * The scan folder holds `api` (the hand-in route of this scan) and `token`
  * (its scan token, mode 0600) — Claude never sees the token in a command line.
@@ -23,8 +24,19 @@ if (!scanDir || !url || !status) {
 const api = readFileSync(join(scanDir, "api"), "utf8").trim();
 const token = readFileSync(join(scanDir, "token"), "utf8").trim();
 
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
 let body = { url, status };
-if (file) {
+if (status === "pdf") {
+  // A PDF link: the station downloads the file itself (Claude's browser cannot save downloads unattended) and hands the bytes in.
+  const res = await fetch(url, { headers: { "user-agent": BROWSER_UA, accept: "application/pdf,*/*;q=0.8" }, redirect: "follow", signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) {
+    console.log(`${res.status} download failed`);
+    process.exit(1);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  body = { url, status: "ok", pdfBase64: buf.toString("base64") };
+} else if (file) {
   const buf = readFileSync(file);
   const isPdf = buf.subarray(0, 5).toString("latin1") === "%PDF-" || /\.pdf$/i.test(file) || /\.pdf(\?|$)/i.test(url);
   body = isPdf ? { url, status, pdfBase64: buf.toString("base64") } : { url, status, html: buf.toString("utf8") };
