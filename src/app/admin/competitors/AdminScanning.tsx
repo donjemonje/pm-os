@@ -8,13 +8,13 @@ import type { ScannerKeyRow } from "@/lib/competitors/local";
 /**
  * Administration → Competitors → Scanning (Website Scanning PRD 2026-11-04).
  * The switches that are PM-OS's, never a customer's: the remote lane ON/OFF
- * (default OFF for now), page-text retention, the local stations' machine
- * keys (created once, rotated by the poller, revoked here), and every
- * source's scan frequency in days.
+ * (default OFF for now), the local stations' machine keys (created once,
+ * rotated by the poller, revoked here), and every source's scan frequency in
+ * days. No retention setting: a change replaces a page's text (PRD).
  */
 
 interface Payload {
-  settings: { remoteScanEnabled: boolean; retentionDays: number };
+  settings: { remoteScanEnabled: boolean };
   keys: ScannerKeyRow[];
   sources: AdminSourceRow[];
   testKnobs: boolean;
@@ -33,7 +33,6 @@ export function AdminScanning() {
   const [busy, setBusy] = useState(false);
   const [newSecret, setNewSecret] = useState<string | null>(null);
   const [label, setLabel] = useState("Daniel's Mac");
-  const [retention, setRetention] = useState("");
   const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
@@ -43,7 +42,6 @@ export function AdminScanning() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Request failed");
       setData(json);
-      setRetention(String(json.settings.retentionDays));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     }
@@ -71,10 +69,7 @@ export function AdminScanning() {
 
   async function patch(body: unknown) {
     const json = await call("PATCH", "/api/admin/competitors/settings", body);
-    if (json) {
-      setData(json as unknown as Payload);
-      setRetention(String((json as unknown as Payload).settings.retentionDays));
-    }
+    if (json) setData(json as unknown as Payload);
   }
 
   async function createKey() {
@@ -115,13 +110,6 @@ export function AdminScanning() {
               <span className="font-medium">Remote scan</span>
               <span className="ml-2 rounded-full bg-slate-100 px-2 py-px text-[11px] font-semibold text-slate-600">{data.settings.remoteScanEnabled ? "ON" : "OFF"}</span>
               <span className="block text-xs text-slate-500">Default OFF for now (Daniel, 2026-11-04). When off, every scan is parked for the local station.</span>
-            </span>
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Page text retention (days)</span>
-            <span className="flex items-center gap-2">
-              <input type="number" min={1} max={3650} value={retention} onChange={(e) => setRetention(e.target.value)} onBlur={() => { const n = Number(retention); if (Number.isFinite(n) && n !== data.settings.retentionDays) void patch({ retentionDays: n }); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); const n = Number(retention); if (Number.isFinite(n)) void patch({ retentionDays: n }); } }} className={`${INPUT} w-28`} disabled={busy} data-testid="admin-retention-days" />
-              <span className="text-xs text-slate-500">Superseded page texts older than this lose their text; hashes, titles and the current text stay.</span>
             </span>
           </label>
           {data.testKnobs && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800" title="COMPETITORS_TEST_KNOBS=on — the clock and the scheduler tick can be set from the tests. Never in production.">Test knobs on</span>}

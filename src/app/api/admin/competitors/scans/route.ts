@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
-import { getGlobalScanSettings } from "@/lib/competitors/settings";
 
 /**
  * Every organization's competitor scans, newest first — PM-OS Admin's view of
@@ -45,8 +44,8 @@ export interface AdminScanMetrics {
   /** Pages requested per day, last 14 days, all domains. */
   requestsPerDay: { day: string; requests: number }[];
   piiHitsTotal: number;
-  /** Page texts older than the retention window still holding text — should be 0 when cleanup runs. */
-  textsPastRetention: number;
+  /** Pages whose previous text is still held because the analysis of their change has not succeeded yet (should be ~0 between scans). */
+  pendingHandovers: number;
 }
 
 export async function GET(req: Request) {
@@ -116,13 +115,12 @@ async function metrics(): Promise<AdminScanMetrics> {
     piiHitsTotal += s.piiHits;
   }
   const cutoff = new Date(Date.now() - 14 * 86_400_000).toISOString().slice(0, 10);
-  // Superseded page texts past the retention window still holding text — should be 0 when the tick's retention ran.
-  const { retentionDays } = await getGlobalScanSettings();
-  const textsPastRetention = await db.sourcePageVersion.count({ where: { supersededAt: { lt: new Date(Date.now() - retentionDays * 86_400_000) }, text: { not: null } } });
+  // Previous texts still held: a change whose analysis has not run yet (no retention — the handover is the only old text we keep).
+  const pendingHandovers = await db.sourcePage.count({ where: { previousText: { not: null } } });
   return {
     domains: [...byHost.values()].sort((a, b) => b.blocked - a.blocked || b.scans - a.scans),
     requestsPerDay: [...byDay.entries()].filter(([d]) => d >= cutoff).sort(([a], [b]) => a.localeCompare(b)).map(([day, requests]) => ({ day, requests })),
     piiHitsTotal,
-    textsPastRetention,
+    pendingHandovers,
   };
 }

@@ -27,7 +27,7 @@ import { Frontier, readRobots, readSitemap } from "./crawl";
 import { acquireBrowser, browserAvailable, fetchPage, fetchPlain, isRetryable, outcomeCategoryOf, releaseBrowser, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
 import { ogImageOf } from "./html";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
-import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
+import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
 import { aiStepEnabled, getGlobalScanSettings, now } from "./settings";
 import { isPdfUrl } from "./url";
@@ -551,9 +551,11 @@ export async function runScan(scanId: string): Promise<void> {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
     } else if (!aiStepEnabled()) {
-      // Test knob: the scanning story is tested without the analysis step (deterministic, free).
+      // Test knob: the scanning story is tested without the analysis step (deterministic, free). Counts as analyzed.
       log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
+      const released = await releasePreviousTexts(source.id, scanId);
+      if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped (change handed to analysis)`);
     } else {
       // ——— PMOS AI ———
       // Nothing changed but the catalog grew: classify the new capabilities from the stored current texts.
@@ -571,6 +573,11 @@ export async function runScan(scanId: string): Promise<void> {
         finalStatus = "partial";
         errorKind = "ai";
         error = r.failed;
+        log.add("warn", "Previous page texts kept until a later analysis succeeds");
+      } else {
+        // No retention: the analysis has read old and new, the previous texts are dropped.
+        const released = await releasePreviousTexts(source.id, scanId);
+        if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped (change analyzed)`);
       }
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
     }

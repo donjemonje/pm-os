@@ -905,7 +905,6 @@ model CompetitorScan {
   log           Json             @default("[]")
 
   pageTexts    ScanPage[]
-  versions     SourcePageVersion[]
   localRequest LocalScanRequest?
   tokens       ScanToken[]
 
@@ -987,8 +986,8 @@ model ScanPage {
 /// A UI capture, image or clip of the competitor's product, stored in the
 /// media store (lib/competitors/media.ts) under `mediaPath`.
 /// The current state of one page of a source (Website Scanning PRD 2026-11-04).
-/// One row per URL, kept forever: hash, title, state. The current text lives
-/// here; superseded texts are SourcePageVersion rows (retention applies to those).
+/// One row per URL, kept while the competitor is tracked: hash, title, state and the
+/// current text. No retention: a change replaces the text (see previousText).
 model SourcePage {
   id          String           @id @default(uuid())
   workspaceId String
@@ -1019,35 +1018,17 @@ model SourcePage {
   /// Last scan in which an inbound link or sitemap entry pointed at the page.
   lastLinkedScanId String?
   removedAt   DateTime?
+  /// When the text last changed (hash moved).
+  changedAt   DateTime?
+  /// No retention (Daniel 2026-11-04): the text before the last change is held only until the analysis of that change has run,
+  /// then dropped. Set on the first change since the last successful analysis, kept across further changes until then.
+  previousText String?
+  previousHash String?
   updatedAt   DateTime         @updatedAt
-
-  versions SourcePageVersion[]
 
   @@unique([sourceId, url])
   @@index([workspaceId])
   @@index([sourceId, state])
-}
-
-/// A superseded text of a page: written when the hash changed, so "what
-/// changed" can show the sentences. Retention (Administration, default one
-/// year) nulls `text` of versions superseded before the window; the hash stays.
-model SourcePageVersion {
-  id           String         @id @default(uuid())
-  pageId       String
-  page         SourcePage     @relation(fields: [pageId], references: [id], onDelete: Cascade)
-  /// The scan that read this version.
-  scanId       String?
-  scan         CompetitorScan? @relation(fields: [scanId], references: [id], onDelete: SetNull)
-  hash         String
-  title        String?
-  text         String?
-  chars        Int            @default(0)
-  createdAt    DateTime       @default(now())
-  /// When a newer version replaced it (null = this is the current one, mirrored on SourcePage).
-  supersededAt DateTime?
-
-  @@index([pageId, createdAt])
-  @@index([supersededAt])
 }
 
 /// A scan waiting for, or running in, the local lane (a PM's browser on a
@@ -1103,7 +1084,7 @@ model ScanToken {
 }
 
 /// Global settings set in Administration (one row per key): competitors.remoteScanEnabled,
-/// competitors.retentionDays, and — in test environments only — the clock knob.
+/// and — in test environments only — the clock knob.
 model AppSetting {
   key       String   @id
   value     Json

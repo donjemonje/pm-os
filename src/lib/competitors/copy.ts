@@ -289,7 +289,7 @@ export const COMPETITORS_COPY = {
     edit: "Edit",
     remove: "Remove",
     removeTitle: (name: string) => `Remove ${name}?`,
-    removeBody: "Its matrix column and profile go. What its scans found is kept for a year, so adding it again brings the history back. Capabilities it suggested stay in the catalog.",
+    removeBody: "Its matrix column and profile go. What its scans found is kept, so adding it again brings the history back. Capabilities it suggested stay in the catalog.",
     removeConfirm: "Remove",
     scanNow: "Scan now",
     scanning: "Scanning…",

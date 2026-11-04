@@ -81,8 +81,6 @@ export const SCAN_TOKEN_GRACE_MS = 15 * 60_000;
 export const KEY_ROTATE_DAYS = 30;
 /** After a rotation the previous key still works for this long (a poller mid-rotation). */
 export const KEY_ROTATION_GRACE_MS = 10 * 60_000;
-/** Page text retention default, days (Administration setting). Hashes stay forever. */
-export const DEFAULT_RETENTION_DAYS = 365;
 /** A page is "removed" after this many consecutive not-found answers. */
 export const REMOVED_AFTER_NOT_FOUND = 2;
 /** Retries of a page that failed with a retryable error within one scan. */

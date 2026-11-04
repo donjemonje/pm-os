@@ -12,8 +12,8 @@ import { now } from "./settings";
  *   COMPETITORS_JOB (projects/P/locations/L/jobs/J) to run with `--scan <id>`;
  *   the job container has Chromium. Cloud Scheduler runs the same job with
  *   `--tick` once an hour: the job (same code, same database) decides what is
- *   due, sweeps stale scans, sends the 24-hour alerts and runs retention — no
- *   HTTP route, no new auth surface.
+ *   due, sweeps stale scans and sends the 24-hour alerts — no HTTP route, no
+ *   new auth surface.
  */
 
 export function runnerMode(): "inline" | "cloudrun" {
@@ -64,7 +64,7 @@ async function triggerCloudRunJob(args: string[]): Promise<void> {
  */
 export async function tick(log: (msg: string) => void = console.log): Promise<void> {
   const r = await runTick(launchScan, log);
-  log(`tick: ${r.stale} stale, ${r.due} due, ${r.started} started, ${r.alerts} alerts, ${r.purged} texts purged`);
+  log(`tick: ${r.stale} stale, ${r.due} due, ${r.started} started, ${r.alerts} alerts`);
 }
 
 /** Legacy name kept for the Scan-run code: scans that lost their runner are swept with the PRD rule (10 min without a heartbeat). */

@@ -2,7 +2,6 @@ import { db } from "../db";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { ACTIVE_SCAN_STATUSES, MAX_PARALLEL_REMOTE, STALE_MS } from "./config";
 import { alertOldRequests, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
-import { purgeRetention } from "./pages";
 import { getGlobalScanSettings, now } from "./settings";
 
 /**
@@ -19,9 +18,7 @@ import { getGlobalScanSettings, now } from "./settings";
  *   3. start queued     — remote scans start while fewer than 8 run, one per
  *                         site at a time;
  *   4. 24-hour alert    — waiting local requests older than a day email
- *                         support once;
- *   5. retention        — superseded page texts older than the window lose
- *                         their text (hashes stay).
+ *                         support once.
  *
  * A finishing scan calls startQueuedScans() itself, so a freed slot is used at
  * once, not at the next tick.
@@ -32,7 +29,6 @@ export interface TickResult {
   due: number;
   started: number;
   alerts: number;
-  purged: number;
 }
 
 export type Launcher = (scanId: string) => Promise<void>;
@@ -47,9 +43,7 @@ export async function runTick(launch: Launcher, log: (msg: string) => void = () 
   const started = await startQueuedScans(launch, log);
   const alerts = await alertOldRequests(appUrl());
   if (alerts) log(`${alerts} waiting-request alert${alerts === 1 ? "" : "s"} sent to support`);
-  const purged = await purgeRetention(settings.retentionDays, t);
-  if (purged) log(`retention: ${purged} superseded page text${purged === 1 ? "" : "s"} dropped (hashes kept)`);
-  return { stale, due, started, alerts, purged };
+  return { stale, due, started, alerts };
 }
 
 function appUrl(): string {
@@ -117,8 +111,8 @@ export async function routeScan(scanId: string, remoteOn?: boolean): Promise<"qu
   if (!(await hasActiveScannerKey())) {
     // Customer-facing text names no lane; the admin log says what is missing.
     const t = await now();
-    const scan = await db.competitorScan.update({ where: { id: scanId }, data: { status: "failed", finishedAt: t, errorKind: "other", error: "scanning is not set up yet for this site — PM-OS support has been notified", log: [{ at: t.toISOString(), level: "error", msg: "No local station key is enrolled (Administration → Competitors → Local stations); the scan could not be parked in the local lane." }] }, select: { sourceId: true } });
-    await db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "failed", lastError: "scanning is not set up yet for this site" } });
+    const scan = await db.competitorScan.update({ where: { id: scanId }, data: { status: "failed", finishedAt: t, errorKind: "other", error: "missing scanner configuration", log: [{ at: t.toISOString(), level: "error", msg: "No local station key is enrolled (Administration → Competitors → Local stations); the scan could not be parked in the local lane." }] }, select: { sourceId: true } });
+    await db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "failed", lastError: "missing scanner configuration" } });
     return "no_station";
   }
   await createLocalRequest(scanId);

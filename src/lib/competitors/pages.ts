@@ -13,12 +13,12 @@ import { pageKey } from "./url";
  * new / changed / unchanged / not read. Hashes are therefore comparable
  * across lanes and fetch modes.
  *
- *   SourcePage         — one row per URL of a source, forever: hash, title,
- *                        state (present / missing / removed / unlinked), the
- *                        current text.
- *   SourcePageVersion  — a superseded text, written when the hash changed, so
- *                        "what changed" can show the sentences; retention
- *                        nulls the text of old versions, never the hash.
+ *   SourcePage — one row per URL of a source while the competitor is tracked:
+ *                hash, title, state (present / missing / removed / unlinked),
+ *                the current text. No retention (Daniel 2026-11-04): a change
+ *                replaces the text; the previous text is held only until the
+ *                analysis of that change has run (releasePreviousTexts), so the
+ *                change insight can be computed, then dropped.
  *
  * Page states: a 404/410 (or a not-found page in the local lane) marks the
  * page "missing" once and "removed" on the second consecutive one; a page
@@ -136,7 +136,6 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
         lastReadScanId: input.scanId,
         lastAttemptScanId: input.scanId,
         lastLinkedScanId: input.via === "link" || input.via === "sitemap" ? input.scanId : null,
-        versions: { create: { scanId: input.scanId, hash, title, text: null, chars: rawText.length } },
       },
       select: { id: true },
     });
@@ -161,35 +160,41 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
     return { url: key, outcome: "unchanged", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", pageText, chars: rawText.length, hash };
   }
 
-  // Changed: the current text becomes a superseded version (it keeps its text for the retention window), the new one is current.
-  await db.$transaction([
-    db.sourcePageVersion.updateMany({ where: { pageId: existing.id, supersededAt: null }, data: { supersededAt: now, text: existing.text } }),
-    db.sourcePageVersion.create({ data: { pageId: existing.id, scanId: input.scanId, hash, title, text: null, chars: rawText.length } }),
-    db.sourcePage.update({
-      where: { id: existing.id },
-      data: {
-        hash,
-        title,
-        kind,
-        text: rawText,
-        chars: rawText.length,
-        state: existing.state === "unlinked" ? "unlinked" : "present",
-        notFoundStreak: 0,
-        removedAt: null,
-        lastReadAt: now,
-        lastReadScanId: input.scanId,
-        lastAttemptScanId: input.scanId,
-        ...(input.via === "link" || input.via === "sitemap" ? { lastLinkedScanId: input.scanId } : {}),
-      },
-    }),
-  ]);
+  // Changed: the new text replaces the old one. The old text is held (previousText) until the analysis of this
+  // change has run; the first unanalyzed previous text wins when the page changes again before that.
+  await db.sourcePage.update({
+    where: { id: existing.id },
+    data: {
+      hash,
+      title,
+      kind,
+      text: rawText,
+      chars: rawText.length,
+      changedAt: now,
+      previousText: existing.previousText ?? existing.text,
+      previousHash: existing.previousHash ?? existing.hash,
+      state: existing.state === "unlinked" ? "unlinked" : "present",
+      notFoundStreak: 0,
+      removedAt: null,
+      lastReadAt: now,
+      lastReadScanId: input.scanId,
+      lastAttemptScanId: input.scanId,
+      ...(input.via === "link" || input.via === "sitemap" ? { lastLinkedScanId: input.scanId } : {}),
+    },
+  });
   return { url: key, outcome: "changed", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", pageText, chars: rawText.length, hash };
 }
 
-/** The previous text of a changed page (the version superseded most recently) — for the text diff. */
+/** The text a changed page had before its last unanalyzed change — for the change insight. */
 export async function previousText(pageId: string): Promise<string | null> {
-  const v = await db.sourcePageVersion.findFirst({ where: { pageId, supersededAt: { not: null } }, orderBy: { supersededAt: "desc" }, select: { text: true } });
-  return v?.text ?? null;
+  const p = await db.sourcePage.findUnique({ where: { id: pageId }, select: { previousText: true } });
+  return p?.previousText ?? null;
+}
+
+/** The handover is done: the analysis of this scan's changes ran, the previous texts are dropped (hashes stay). */
+export async function releasePreviousTexts(sourceId: string, scanId: string): Promise<number> {
+  const r = await db.sourcePage.updateMany({ where: { sourceId, lastReadScanId: scanId, previousText: { not: null } }, data: { previousText: null, previousHash: null } });
+  return r.count;
 }
 
 export interface KnownPage {
@@ -248,13 +253,6 @@ export async function finalizePageStates(sourceId: string, scanId: string, full:
     db.sourcePage.findMany({ where: { sourceId, state: "removed", lastAttemptScanId: scanId, notFoundStreak: REMOVED_AFTER_NOT_FOUND }, select: { url: true }, take: 100 }),
   ]);
   return { missing, removed, unlinked, removedUrls: removedNow.map((r) => r.url) };
-}
-
-/** Retention: null the text of versions superseded before the window. Hashes, titles and the current text stay. */
-export async function purgeRetention(retentionDays: number, nowDate: Date): Promise<number> {
-  const cutoff = new Date(nowDate.getTime() - retentionDays * 86_400_000);
-  const r = await db.sourcePageVersion.updateMany({ where: { supersededAt: { lt: cutoff }, text: { not: null } }, data: { text: null } });
-  return r.count;
 }
 
 /** The pages PMOS AI reads when nothing changed but the catalog grew: every current text of the source. */

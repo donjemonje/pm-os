@@ -68,10 +68,10 @@ export function AdminScans() {
     {metrics && (
       <section className="rounded-xl border border-slate-200 bg-white p-5">
         <h2 className="text-sm font-bold">Scanner health — last 30 days</h2>
-        <p className="mb-3 mt-0.5 text-xs text-slate-500">Internal only: block rate per domain, requests per day, PII check hits (should stay at zero) and whether the page-text cleanup ran.</p>
+        <p className="mb-3 mt-0.5 text-xs text-slate-500">Internal only: block rate per domain, requests per day, PII check hits (should stay at zero) and changes whose analysis has not run yet.</p>
         <div className="mb-4 grid grid-cols-3 gap-3 text-sm">
           <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">PII hits</div><div className={`text-xl font-bold ${metrics.piiHitsTotal > 0 ? "text-amber-700" : ""}`}>{metrics.piiHitsTotal}</div></div>
-          <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">Page texts past retention</div><div className={`text-xl font-bold ${metrics.textsPastRetention > 0 ? "text-red-700" : ""}`}>{metrics.textsPastRetention}</div><div className="text-[11px] text-slate-500">{metrics.textsPastRetention === 0 ? "cleanup ran" : "cleanup did not run"}</div></div>
+          <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">Changes awaiting analysis</div><div className={`text-xl font-bold ${metrics.pendingHandovers > 0 ? "text-amber-700" : ""}`}>{metrics.pendingHandovers}</div><div className="text-[11px] text-slate-500">previous page texts held until their change is analyzed</div></div>
           <div className="rounded-lg border border-slate-200 p-3"><div className="text-[11px] uppercase tracking-wide text-slate-500">Requests per day (14 d)</div><div className="mt-1 flex h-8 items-end gap-px">{metrics.requestsPerDay.map((d) => { const max = Math.max(1, ...metrics.requestsPerDay.map((x) => x.requests)); return <span key={d.day} title={`${d.day}: ${d.requests}`} className="flex-1 rounded-sm bg-slate-300" style={{ height: `${Math.max(6, (d.requests / max) * 100)}%` }} />; })}</div></div>
         </div>
         {metrics.domains.length > 0 && (

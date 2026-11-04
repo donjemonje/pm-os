@@ -137,7 +137,6 @@ async function restoreOtherOrgs(db: PrismaClient): Promise<void> {
 async function resetGlobalKnobs(db: PrismaClient): Promise<void> {
   await db.appSetting.upsert({ where: { key: "competitors.clockOffsetMs" }, create: { key: "competitors.clockOffsetMs", value: 0 }, update: { value: 0 } });
   await db.appSetting.upsert({ where: { key: "competitors.remoteScanEnabled" }, create: { key: "competitors.remoteScanEnabled", value: false }, update: { value: false } });
-  await db.appSetting.deleteMany({ where: { key: "competitors.retentionDays" } });
 }
 
 // ————— API knobs —————
@@ -203,7 +202,7 @@ async function scanNow(api: APIRequestContext, competitorId: string) {
 // ————— DB reads —————
 const scanRow = (scanId: string) => withTestDb((db) => db.competitorScan.findUniqueOrThrow({ where: { id: scanId } }));
 const scansOf = (sourceId: string) => withTestDb((db) => db.competitorScan.findMany({ where: { sourceId }, orderBy: { startedAt: "asc" } }));
-const pagesOf = (sourceId: string) => withTestDb((db) => db.sourcePage.findMany({ where: { sourceId }, orderBy: { url: "asc" }, include: { versions: { orderBy: { createdAt: "asc" } } } }));
+const pagesOf = (sourceId: string) => withTestDb((db) => db.sourcePage.findMany({ where: { sourceId }, orderBy: { url: "asc" } }));
 const requestOf = (scanId: string) => withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId } }));
 const pathOf = (url: string) => url.replace(/^https?:\/\/[^/]+/, "") || "/";
 /** The remote scanner's page requests on the site itself: after its robots.txt read (the add route probes "/" first), without robots/sitemap. */
@@ -519,7 +518,7 @@ test.describe("Website Scanning rows", () => {
     expect(done.pagesChanged).toBe(0);
     const after = await pagesOf(c.sourceId);
     expect(after.map((p) => [pathOf(p.url), p.hash])).toEqual(before.map((p) => [pathOf(p.url), p.hash]));
-    for (const p of after) expect(p.versions.length, `${p.url} versions`).toBe(1);
+    for (const p of after) expect(p.changedAt, `${p.url} unchanged`).toBeNull();
 
     // The limit: a second manual scan today is refused for the PM, allowed for a PM-OS admin.
     const refused = await scanNow(pmApi, c.id);
@@ -535,7 +534,7 @@ test.describe("Website Scanning rows", () => {
     expect(((await allowed.json()) as { state: string }).state).toBe("pending_local");
   });
 
-  test("WS-08 re-scan with changes: pricing changed with both texts kept, new product page → 13 pages, home footer date only → unchanged", async () => {
+  test("WS-08 re-scan with changes: pricing changed (previous text handed to analysis, then dropped), new product page → 13 pages, home footer date only → unchanged", async () => {
     test.setTimeout(150_000);
     const c = await onboardLocal("QA-WS Theta");
     const before = Object.fromEntries((await pagesOf(c.sourceId)).map((p) => [pathOf(p.url), p.hash]));
@@ -557,19 +556,19 @@ test.describe("Website Scanning rows", () => {
     const pricing = byPath["/pricing"];
     expect(pricing.text).toContain("Starter $59 per month");
     expect(pricing.hash).not.toBe(before["/pricing"]);
-    expect(pricing.versions.length).toBe(2);
-    const superseded = pricing.versions.find((v) => v.supersededAt != null)!;
-    expect(superseded.text).toContain("Starter $49 per month"); // the previous text, kept for the diff
-    expect(superseded.hash).toBe(before["/pricing"]);
-    expect(pricing.versions.find((v) => v.supersededAt == null)!.hash).toBe(pricing.hash);
+    // No retention (PRD 2026-11-04): the previous text is held only until the analysis step ran on the change
+    // (the suite's AI-off knob counts as analyzed), then dropped; the page carries when it changed.
+    expect(pricing.previousText).toBeNull();
+    expect(pricing.previousHash).toBeNull();
+    expect(pricing.changedAt).not.toBeNull();
     expect(byPath["/product/new"].text).toContain("Acme Shield");
     expect(byPath["/product"].text).toContain("Acme Shield (new)");
-    expect(byPath["/product"].versions.length).toBe(2);
+    expect(byPath["/product"].changedAt).not.toBeNull();
     // Dates and tracking strings are normalized away: the footer date changed on every page, nothing else did.
     for (const path of PAGE_PATHS) {
       if (path === "/pricing" || path === "/product") continue;
       expect(byPath[path].hash, `${path} hash`).toBe(before[path]);
-      expect(byPath[path].versions.length, `${path} versions`).toBe(1);
+      expect(byPath[path].changedAt, `${path} unchanged`).toBeNull();
     }
     // (The footer is not part of the stored text — htmlToText drops <nav>/<footer> — so the date edit leaves text and hash alone.)
   });
@@ -1143,39 +1142,39 @@ test.describe("Website Scanning rows", () => {
     }
   });
 
-  test("WS-25 retention: one year and a day later the retention job drops superseded page texts; current texts, hashes, URLs, titles, states and scan history remain", async () => {
+  test("WS-25 no retention: a change replaces the page text; the previous text is held only until the analysis step ran, then dropped; hashes, URLs, titles, states and scan history stay", async () => {
     test.setTimeout(200_000);
     await setRemote(true);
     const c = await onboardRemote("QA-WS Keep");
-    // A superseded text to retain: change the pricing and scan again.
+    const before = await pagesOf(c.sourceId);
+    const pricingBefore = before.find((p) => pathOf(p.url) === "/pricing")!;
+    expect(pricingBefore.previousText).toBeNull();
     await c.site.control({ pricingText: "Starter $69 per month. Team $299 per month." });
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const second = (await scansOf(c.sourceId))[1];
-    expect((await waitForScanEnd(second.id)).pagesChanged).toBe(1);
-    const before = await pagesOf(c.sourceId);
-    const pricingBefore = before.find((p) => pathOf(p.url) === "/pricing")!;
-    expect(pricingBefore.versions.length).toBe(2);
-    expect(pricingBefore.versions.find((v) => v.supersededAt != null)!.text).toContain("$49");
-
-    await setClock(366 * DAY);
-    const lines = await tick();
-    expect(lines.join("\n")).toMatch(/retention: 1 superseded page text dropped \(hashes kept\)/);
+    const done = await waitForScanEnd(second.id);
+    expect(done.pagesChanged).toBe(1);
     const after = await pagesOf(c.sourceId);
     expect(after.length).toBe(12);
+    const pricingAfter = after.find((p) => pathOf(p.url) === "/pricing")!;
+    expect(pricingAfter.text).toContain("$69");
+    expect(pricingAfter.hash).not.toBe(pricingBefore.hash);
+    // The analysis step ran (AI-off knob counts as analyzed): the previous text was handed over and dropped, nothing older is kept.
+    expect(pricingAfter.previousText).toBeNull();
+    expect(pricingAfter.previousHash).toBeNull();
+    expect(pricingAfter.changedAt).not.toBeNull();
+    const scan = await withTestDb((db) => db.competitorScan.findUniqueOrThrow({ where: { id: second.id }, select: { log: true } }));
+    expect(JSON.stringify(scan.log)).toMatch(/1 previous page text dropped/);
     for (const p of after) {
+      if (pathOf(p.url) === "/pricing") continue;
       const was = before.find((b) => b.url === p.url)!;
       expect(p.hash, `${p.url} hash`).toBe(was.hash);
       expect(p.title, `${p.url} title`).toBe(was.title);
       expect(p.state, `${p.url} state`).toBe(was.state);
-      for (const v of p.versions) expect(v.hash, `${p.url} version hash`).toBeTruthy();
+      expect(p.text, `${p.url} current text`).toBe(was.text);
     }
-    const pricingAfter = after.find((p) => pathOf(p.url) === "/pricing")!;
-    expect(pricingAfter.versions.find((v) => v.supersededAt != null)!.text).toBeNull();
-    expect(pricingAfter.versions.find((v) => v.supersededAt != null)!.hash).toBe(pricingBefore.versions.find((v) => v.supersededAt != null)!.hash);
     expect((await scansOf(c.sourceId)).length).toBeGreaterThanOrEqual(2); // history stays
-    // PRD (2026-11-04): the current text of a page never expires; only superseded versions lose their text.
-    for (const p of after) expect(p.text, `${p.url} current text`).toBe(before.find((b) => b.url === p.url)!.text);
   });
 
   test("WS-26 remote concurrency: 10 sites due → at most 8 in progress, the other 2 start when a slot frees, never two per site; Scan now on a running site is queued behind it", async ({ browser }) => {

@@ -1,6 +1,5 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
-import { DEFAULT_RETENTION_DAYS } from "./config";
 
 /**
  * Global competitors settings, set in Administration (AppSetting rows):
@@ -8,8 +7,6 @@ import { DEFAULT_RETENTION_DAYS } from "./config";
  *   competitors.remoteScanEnabled  — the remote lane's ON/OFF switch, default
  *                                    OFF (Website Scanning PRD 2026-11-04: every
  *                                    scan goes to the local lane while off).
- *   competitors.retentionDays      — superseded page texts are nulled after
- *                                    this many days; hashes stay forever.
  *   competitors.clockOffsetMs      — TEST KNOB. Honoured only when
  *                                    COMPETITORS_TEST_KNOBS=on (never in
  *                                    production): shifts "now" for everything
@@ -21,15 +18,10 @@ import { DEFAULT_RETENTION_DAYS } from "./config";
 
 export interface GlobalScanSettings {
   remoteScanEnabled: boolean;
-  retentionDays: number;
 }
-
-export const MIN_RETENTION_DAYS = 1;
-export const MAX_RETENTION_DAYS = 3650;
 
 const KEYS = {
   remote: "competitors.remoteScanEnabled",
-  retention: "competitors.retentionDays",
   clock: "competitors.clockOffsetMs",
 } as const;
 
@@ -43,14 +35,12 @@ async function writeSetting(key: string, value: Prisma.InputJsonValue): Promise<
 }
 
 export async function getGlobalScanSettings(): Promise<GlobalScanSettings> {
-  const [remote, retention] = await Promise.all([readSetting(KEYS.remote), readSetting(KEYS.retention)]);
-  const days = typeof retention === "number" && Number.isFinite(retention) ? Math.min(MAX_RETENTION_DAYS, Math.max(MIN_RETENTION_DAYS, Math.round(retention))) : DEFAULT_RETENTION_DAYS;
-  return { remoteScanEnabled: remote === true, retentionDays: days };
+  const remote = await readSetting(KEYS.remote);
+  return { remoteScanEnabled: remote === true };
 }
 
 export async function setGlobalScanSettings(patch: Partial<GlobalScanSettings>): Promise<GlobalScanSettings> {
   if (patch.remoteScanEnabled !== undefined) await writeSetting(KEYS.remote, patch.remoteScanEnabled);
-  if (patch.retentionDays !== undefined) await writeSetting(KEYS.retention, Math.min(MAX_RETENTION_DAYS, Math.max(MIN_RETENTION_DAYS, Math.round(patch.retentionDays))));
   return getGlobalScanSettings();
 }
 

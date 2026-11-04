@@ -3,14 +3,14 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { MAX_SCAN_EVERY_DAYS, MIN_SCAN_EVERY_DAYS } from "@/lib/competitors/config";
 import { listScannerKeys } from "@/lib/competitors/local";
-import { getGlobalScanSettings, MAX_RETENTION_DAYS, MIN_RETENTION_DAYS, setGlobalScanSettings, testKnobsEnabled } from "@/lib/competitors/settings";
+import { getGlobalScanSettings, setGlobalScanSettings, testKnobsEnabled } from "@/lib/competitors/settings";
 
 /**
  * Administration → Competitors → Scanning (PM-OS admin only). The global
  * switches of the Website Scanning story and every source's frequency:
  *
- *   GET   → { settings: { remoteScanEnabled, retentionDays }, keys, sources, testKnobs }
- *   PATCH { remoteScanEnabled?, retentionDays? }           → the switches
+ *   GET   → { settings: { remoteScanEnabled }, keys, sources, testKnobs }
+ *   PATCH { remoteScanEnabled? }                           → the switch
  *   PATCH { sourceId, scanEveryDays }                      → one source's frequency (days)
  */
 export interface AdminSourceRow {
@@ -74,15 +74,10 @@ export async function PATCH(req: Request) {
     if (!r.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(await payload());
   }
-  const patch: { remoteScanEnabled?: boolean; retentionDays?: number } = {};
+  const patch: { remoteScanEnabled?: boolean } = {};
   if (body.remoteScanEnabled !== undefined) {
     if (typeof body.remoteScanEnabled !== "boolean") return NextResponse.json({ error: "remoteScanEnabled must be true or false" }, { status: 400 });
     patch.remoteScanEnabled = body.remoteScanEnabled;
-  }
-  if (body.retentionDays !== undefined) {
-    const n = typeof body.retentionDays === "number" ? Math.round(body.retentionDays) : NaN;
-    if (!Number.isFinite(n) || n < MIN_RETENTION_DAYS || n > MAX_RETENTION_DAYS) return NextResponse.json({ error: `Retention must be between ${MIN_RETENTION_DAYS} and ${MAX_RETENTION_DAYS} days.` }, { status: 400 });
-    patch.retentionDays = n;
   }
   await setGlobalScanSettings(patch);
   return NextResponse.json(await payload());
