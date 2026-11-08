@@ -35,7 +35,7 @@
  *   --chrome PATH        the Chrome binary (default: PMOS_CHROME, else the Mac's /Applications path)
  *   --mac-state auto|active|locked   (default auto — reads the real lock state)
  *   --answer ask|approve|later       (default ask — the real dialog)
- *   --pause-ms N         pause between pages in the fetch runner (default 1000)
+ *   --pause-ms N         pause between pages in the fetch runner (default 2000)
  *   --max-pages N        read at most N pages per scan (default: the server's ceiling)
  *   --max-minutes N      stop a scan after N minutes (default: the server's ceiling)
  *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
@@ -330,6 +330,8 @@ async function runFetch(job, limits, post) {
           body.html = rendered;
           body.rendered = true;
           log(`  rendered with Chrome ${url}`);
+        } else {
+          log(`  render attempt (no gain) ${url}`);
         }
       }
       for (const m of body.html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"'#]+)(?:#[^"']*)?["']/gi)) {

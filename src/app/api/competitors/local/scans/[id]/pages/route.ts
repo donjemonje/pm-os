@@ -95,6 +95,10 @@ export async function POST(req: Request, { params }: Params) {
     chars: r.chars,
     ms,
     via: "handin",
-  }, linked, attempts > 1 ? [{ at: new Date().toISOString(), level: "info", msg: `Station retried ${attempts - 1} time${attempts === 2 ? "" : "s"} before ${status === "ok" ? "reading the page" : `giving up (${status})`}`, url: r.url }] : []);
+  }, linked, [
+    ...(attempts > 1 ? [{ at: new Date().toISOString(), level: "info" as const, msg: `Station retried ${attempts - 1} time${attempts === 2 ? "" : "s"} before ${status === "ok" ? "reading the page" : `giving up (${status})`}`, url: r.url }] : []),
+    // Same words as the remote lane (scan.ts) so the scan log reads alike whichever lane ran.
+    ...(status === "slowdown" ? [{ at: new Date().toISOString(), level: "warn" as const, msg: "The site answered 429 Too Many Requests — stopping this scan; the next one continues from here", url: r.url }] : []),
+  ]);
   return NextResponse.json({ url: r.url, outcome: r.outcome, state: r.state });
 }
