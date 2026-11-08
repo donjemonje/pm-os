@@ -30,7 +30,7 @@ import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./l
 import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
 import { aiStepEnabled, getGlobalScanSettings, now } from "./settings";
-import { isPdfUrl } from "./url";
+import { isPdfUrl, isInsideSite } from "./url";
 
 /**
  * One scan of one source, end to end, in two halves (Website Scanning PRD
@@ -341,14 +341,14 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
     if (n > 0) await sleep(pauseMs);
     n++;
     out.attempted++;
-    let page = await fetchPage(cand.url, mode);
+    let page = await fetchPage(cand.url, mode, competitor.host);
     // Bot wall or JS-only page → switch the whole site to the browser, once (always on in production).
     if (page.needsBrowser && mode === "plain" && !isPdfUrl(cand.url)) {
       if (browserAvailable()) {
         mode = "browser";
         out.mode = mode;
         log.add("warn", page.error === "botwall" ? "Bot protection answered the plain fetch — switching to the browser" : "Page has no text without JavaScript — switching to the browser", cand.url);
-        page = await fetchPage(cand.url, mode);
+        page = await fetchPage(cand.url, mode, competitor.host);
       } else if (page.error === "botwall") {
         log.add("error", "Bot protection blocks the plain fetch and no browser is available in this environment", cand.url);
       }
@@ -357,7 +357,7 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
     for (let attempt = 0; attempt < PAGE_RETRIES && page.error && isRetryable(page.error); attempt++) {
       await sleep(pauseMs);
       log.add("info", `Retry ${attempt + 1} after ${page.errorDetail ?? page.error}`, cand.url);
-      page = await fetchPage(cand.url, mode);
+      page = await fetchPage(cand.url, mode, competitor.host);
     }
     if (page.error === "slowdown") {
       // The site said slow down: stop this scan, everything left is "not attempted", the next scan continues.
@@ -470,7 +470,7 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
   log.add("info", `${out.count} page${out.count === 1 ? "" : "s"} handed in from the station, ${out.attempted - out.count} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
   if (out.count === 0 && out.attempted === 0) {
     out.errorKind = "other";
-    out.error = "the station handed in no pages";
+    out.error = "no page could be read";
   }
   return out;
 }
@@ -487,6 +487,16 @@ export async function runScan(scanId: string): Promise<void> {
   const competitor = source.competitor;
   const workspaceId = scan.workspaceId;
   const lane: ScanLane = scan.fetchMode === "bundle" ? "bundle" : (scan.lane as ScanLane);
+  // Claim the scan atomically (Tomer's review): a finishing scan, the tick and a Scan run may all try to start the
+  // same queued scan; only the one that flips queued → running proceeds. The local lane's claim is its request row
+  // (running → done) so two /done calls cannot both process the handed-in pages.
+  if (lane === "local") {
+    const claimed = await db.localScanRequest.updateMany({ where: { scanId, state: "running" }, data: { state: "done", finishedAt: new Date() } });
+    if (!claimed.count) return;
+  } else {
+    const claimed = await db.competitorScan.updateMany({ where: { id: scanId, status: "queued" }, data: { status: "running", heartbeatAt: new Date() } });
+    if (!claimed.count) return;
+  }
   // The local lane logged its pages on the row already; everything else starts a fresh log.
   const log = lane === "local"
     ? new ScanLog(scanId, { lines: Array.isArray(scan.log) ? (scan.log as unknown as LogLine[]) : [], pages: Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : [], outcomes: (scan.outcomes ?? {}) as OutcomeCounts })
@@ -562,7 +572,7 @@ export async function runScan(scanId: string): Promise<void> {
       const catalogGrew = changedPages.length === 0;
       const pagesForAi = catalogGrew ? await currentPageTexts(source.id, sourceLabel) : changedPages;
       if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${pagesForAi.length} stored pages`);
-      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew });
+      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew, host: competitor.host });
       aiCalls = r.aiCalls;
       statusesChanged = r.statusesChanged;
       statusesSet = r.statusesSet;
@@ -749,7 +759,7 @@ async function aiStep(
   pages: PageText[],
   firstScan: boolean,
   log: ScanLog,
-  opts: { facts: boolean } = { facts: true },
+  opts: { facts: boolean; host: string },
 ): Promise<AiStepResult> {
   const res: AiStepResult = { aiCalls: 0, statusesSet: 0, statusesChanged: 0, factsChanged: 0, suggestions: 0, piiHits: 0, failed: null };
   /** Rule 6: a snippet that names a person is dropped, never stored. */
@@ -770,9 +780,15 @@ async function aiStep(
   const images = new Map<string, Promise<string | null>>();
   const previewImage = (url: string | null | undefined): Promise<string | null> => {
     if (!url) return Promise.resolve(null);
+    // The model names the page: only a page of this competitor's own site is fetched (no SSRF through a model answer).
+    try {
+      if (!isInsideSite(new URL(url), opts.host)) return Promise.resolve(null);
+    } catch {
+      return Promise.resolve(null);
+    }
     let p = images.get(url);
     if (!p) {
-      p = fetchPlain(url).then((r) => (r.html ? ogImageOf(r.html, r.finalUrl || url) || null : null)).catch(() => null);
+      p = fetchPlain(url, { host: opts.host }).then((r) => (r.html ? ogImageOf(r.html, r.finalUrl || url) || null : null)).catch(() => null);
       images.set(url, p);
     }
     return p;

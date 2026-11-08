@@ -47,6 +47,14 @@ export async function PATCH(req: Request, { params }: Params) {
   await db.competitor.update({ where: { id }, data });
   if (data.websiteUrl) {
     await db.competitorSource.updateMany({ where: { competitorId: id, type: "website" }, data: { url: data.websiteUrl } });
+    if (data.host && data.host !== existing.host) {
+      // A new site: the old site's pages are never read again, so they leave the current picture now (Tomer's review).
+      const t = new Date();
+      await db.sourcePage.updateMany({
+        where: { source: { competitorId: id, type: "website" }, state: { not: "removed" } },
+        data: { state: "removed", removedAt: t, previousText: null, previousHash: null },
+      });
+    }
   }
   return stateResponse(ctx);
 }

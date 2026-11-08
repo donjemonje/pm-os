@@ -70,7 +70,13 @@ export async function readSitemap(urls: string[], host: string): Promise<URL[]> 
     const smUrl = queue.shift()!;
     if (seen.has(smUrl)) continue;
     seen.add(smUrl);
-    const res = await fetchPlain(smUrl);
+    // robots.txt and a sitemap index are the competitor's files: a sitemap they name is fetched only when it is on this site.
+    try {
+      if (!isInsideSite(new URL(smUrl), host)) continue;
+    } catch {
+      continue;
+    }
+    const res = await fetchPlain(smUrl, { host });
     if (!res.html || res.status >= 400) continue;
     const isIndex = /<sitemapindex/i.test(res.html);
     for (const m of res.html.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {

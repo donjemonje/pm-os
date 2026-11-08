@@ -44,7 +44,8 @@ export async function GET(req: Request) {
       outcomes: s.outcomes,
       robotsDisallowed: s.robotsDisallowed,
       removedPages: s.removedPages,
-      pages: s.pages,
+      // How a page was reached (home / sitemap / link / handed in) is the engine's business, not the customer's.
+      pages: Array.isArray(s.pages) ? (s.pages as Record<string, unknown>[]).map(({ via: _via, ...p }) => p) : s.pages,
     })),
   });
 }

@@ -67,6 +67,8 @@ const RENDER = flag("render", "auto");
 const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 /** Headless renders per scan are bounded: home, hubs and empty pages only. */
 const MAX_RENDERS = 40;
+/** The render's own Chrome profile (never the PM's). */
+const CHROME_PROFILE = join(STATE_DIR, "chrome-profile");
 const MAC_STATE = flag("mac-state", "auto");
 const ANSWER = flag("answer", "ask");
 const MAX_PAGES_FLAG = Number(flag("max-pages", "0")) || 0;
@@ -75,6 +77,8 @@ const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 mkdirSync(STATE_DIR, { recursive: true });
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function log(msg) {
   const line = `${new Date().toISOString()} ${msg}`;
@@ -225,7 +229,8 @@ async function chromeAvailable() {
 /** Render a page with the installed Chrome, headless, and return the DOM after the page ran. null on failure. */
 async function renderWithChrome(url) {
   try {
-    const { stdout } = await run(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", `--user-agent=${BROWSER_UA}`, "--virtual-time-budget=6000", "--timeout=30000", "--dump-dom", url], { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 });
+    // Its own profile folder: without one Chrome hands the URL to the PM's running Chrome and prints nothing.
+    const { stdout } = await run(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", `--user-data-dir=${CHROME_PROFILE}`, `--user-agent=${BROWSER_UA}`, "--virtual-time-budget=6000", "--timeout=30000", "--dump-dom", url], { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 });
     return stdout && stdout.length > 100 ? stdout : null;
   } catch (e) {
     log(`  render failed ${url}: ${String(e).split("\n")[0].slice(0, 120)}`);
@@ -314,7 +319,7 @@ async function runFetch(job, limits, post) {
     }
     if (body.status === "slowdown") {
       // The site asked us to slow down: hand the signal in and stop this scan; the rest is "not attempted" and the next scan continues.
-      await post(body);
+      if ((await post(body)) === null) return { notAttempted: queue.length, ended: true };
       log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one`);
       return { notAttempted: queue.length };
     }
@@ -345,7 +350,12 @@ async function runFetch(job, limits, post) {
       delete body.rendered;
     }
     const r = await post(body);
-    log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);
+    if (r === null) {
+      // The scan ended on the server (cancelled, or already processed): nothing more to hand in.
+      log(`  scan ended on the server — stopping, ${queue.length} pages left`);
+      return { notAttempted: queue.length, ended: true };
+    }
+    log(`  ${r.refused ? `refused by PM-OS (${r.refused}) — page skipped` : body.status === "ok" ? r.outcome : body.status} ${url}`);
   }
   return { notAttempted: queue.length };
 }
@@ -414,19 +424,40 @@ When you are done, or the limits are reached, print exactly one final line: DONE
 
 // ————— One scan —————
 
-async function runJob(job, runner) {
+async function runJob(job, runner, key) {
   const limits = {
     pages: MAX_PAGES_FLAG || job.ceiling?.pages || 2000,
     ms: MAX_MINUTES_FLAG ? MAX_MINUTES_FLAG * 60_000 : job.ceiling?.ms || 3 * 3600_000,
   };
   const auth = { authorization: `Bearer ${job.token}` };
   log(`scan ${job.scanId} — ${job.competitorName} (${job.siteUrl}) via ${runner}, up to ${limits.pages} pages`);
-  await api(`/api/competitors/local/scans/${job.scanId}/start`, { method: "POST", headers: auth });
-  const post = (body) => api(`/api/competitors/local/scans/${job.scanId}/pages`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+  // The machine key names the station that took the scan (Administration); the scan token does the work.
+  await api(`/api/competitors/local/scans/${job.scanId}/start`, { method: "POST", headers: { ...auth, "x-pmos-station": `Bearer ${key}` } });
+  /**
+   * One page in. null = the scan is over on the server (409 ended, 410 cancelled): stop reading. A page PM-OS refuses
+   * (400/413/422: a bad URL, a body too large) is skipped and the scan goes on — one odd page must never cost the
+   * site (Tomer's review). Anything else (network, 5xx) is retried a few times, then skipped too.
+   */
+  const post = async (body) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await api(`/api/competitors/local/scans/${job.scanId}/pages`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+      } catch (e) {
+        const m = /→ (\d{3}) (.*)$/.exec(e instanceof Error ? e.message : String(e));
+        const status = m ? Number(m[1]) : 0;
+        if (status === 409 || status === 410) return null;
+        if (status >= 400 && status < 500) return { refused: `${status} ${m[2].slice(0, 100)}` };
+        if (attempt >= 3) return { refused: `${status || "network"} after ${attempt} attempts` };
+        await sleep(5_000 * attempt);
+      }
+    }
+  };
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
-  // PM-OS processes the pages inside this call (page states, PMOS AI); give it time.
+  if (result.ended) return;
+  // PM-OS processes the pages inside this call in local dev (page states, PMOS AI); in production it hands them to its own job.
   const done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 20 * 60_000);
-  log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
+  if (done.processing) log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS is processing the pages`);
+  else log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }
 
 async function once() {
@@ -454,7 +485,7 @@ async function once() {
   }
   for (const job of waiting) {
     try {
-      await runJob(job, runner);
+      await runJob(job, runner, key);
     } catch (e) {
       log(`scan ${job.scanId} failed on the station: ${e instanceof Error ? e.message : String(e)}`);
     }

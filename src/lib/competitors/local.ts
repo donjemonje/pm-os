@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { db } from "../db";
 import { sendEmail } from "../mailer";
 import { ACTIVE_SCAN_STATUSES, KEY_ROTATE_DAYS, KEY_ROTATION_GRACE_MS, LOCAL_ALERT_MS, SCAN_TOKEN_GRACE_MS } from "./config";
@@ -71,19 +71,22 @@ export async function verifyScannerKey(bearer: string | null | undefined): Promi
   if (!secret || !secret.startsWith("pmosk_")) return null;
   const h = sha(secret);
   const t = await now();
-  const key = await db.scannerKey.findFirst({ where: { revokedAt: null, OR: [{ keyHash: h }, { previousKeyHash: h, previousValidUntil: { gt: t } }] } });
+  const key = await db.scannerKey.findFirst({ where: { revokedAt: null, OR: [{ keyHash: h }, { previousKeyHash: h, OR: [{ previousValidUntil: null }, { previousValidUntil: { gt: t } }] }] } });
   if (!key) return null;
-  await db.scannerKey.update({ where: { id: key.id }, data: { lastUsedAt: t } });
+  // The previous key stays valid until the NEW key is first used; only then does its grace window start (Tomer's
+  // review: a rotation answer the poller never received must not lock the station out).
+  const firstUseOfNewKey = key.keyHash === h && key.previousKeyHash && key.previousValidUntil === null;
+  await db.scannerKey.update({ where: { id: key.id }, data: { lastUsedAt: t, ...(firstUseOfNewKey ? { previousValidUntil: new Date(t.getTime() + KEY_ROTATION_GRACE_MS) } : {}) } });
   const since = key.rotatedAt ?? key.createdAt;
   return { id: key.id, label: key.label, rotateDue: t.getTime() - since.getTime() > KEY_ROTATE_DAYS * 86_400_000 };
 }
 
-/** Rotate: a fresh secret replaces the key; the old one keeps working for a few minutes so a poller mid-rotation is not locked out. */
+/** Rotate: a fresh secret replaces the key; the old one keeps working until the new one is first used, then for a grace window. */
 export async function rotateScannerKey(id: string): Promise<{ secret: string }> {
   const t = await now();
   const key = await db.scannerKey.findUniqueOrThrow({ where: { id }, select: { keyHash: true } });
   const secret = newSecret("pmosk");
-  await db.scannerKey.update({ where: { id }, data: { keyHash: sha(secret), previousKeyHash: key.keyHash, previousValidUntil: new Date(t.getTime() + KEY_ROTATION_GRACE_MS), rotatedAt: t } });
+  await db.scannerKey.update({ where: { id }, data: { keyHash: sha(secret), previousKeyHash: key.keyHash, previousValidUntil: null, rotatedAt: t } });
   return { secret };
 }
 
@@ -94,10 +97,31 @@ export async function hasActiveScannerKey(): Promise<boolean> {
 
 // ————— Scan tokens —————
 
+function serverSecret(): string {
+  const s = process.env.SESSION_SECRET?.trim();
+  if (!s) throw new Error("SESSION_SECRET is not set");
+  return s;
+}
+
+/**
+ * One token per scan, the same at every check-in: derived from the request (HMAC with the server secret), so
+ * nothing secret is stored and a scan listed 96 times a day leaves one live token, not 96 (Tomer's review). It is
+ * valid while the scan is pending or running and for 15 minutes after it ended (PRD), whichever check-in issued it.
+ */
 export async function issueScanToken(scanId: string): Promise<string> {
-  const secret = newSecret("pmost");
-  await db.scanToken.create({ data: { scanId, tokenHash: sha(secret) } });
+  const req = await db.localScanRequest.findUnique({ where: { scanId }, select: { id: true, createdAt: true } });
+  const seed = req ? `${req.id}:${req.createdAt.getTime()}` : scanId;
+  const secret = `pmost_${createHmac("sha256", serverSecret()).update(seed).digest("base64url")}`;
+  const tokenHash = sha(secret);
+  await db.scanToken.upsert({ where: { tokenHash }, create: { scanId, tokenHash }, update: {} });
   return secret;
+}
+
+/** Tokens of scans that ended more than the grace window ago are deleted (hourly tick). */
+export async function cleanupScanTokens(t: Date): Promise<number> {
+  const cutoff = new Date(t.getTime() - SCAN_TOKEN_GRACE_MS);
+  const r = await db.scanToken.deleteMany({ where: { scan: { status: { notIn: [...ACTIVE_SCAN_STATUSES] }, finishedAt: { lt: cutoff } } } });
+  return r.count;
 }
 
 /** The scan a token may post into, or null: unknown token, or its scan ended more than the grace window ago. */
@@ -169,10 +193,10 @@ export async function listWaiting(ceilingValue: { pages: number; ms: number }): 
   return out;
 }
 
-/** The station starts reading: the scan is "running" from now on (heartbeats come with every page). */
+/** The station starts reading: the scan is "running" from now on (heartbeats come with every page). Only a WAITING request can be claimed: two overlapping check-ins never both run one scan. */
 export async function startLocalScan(scanId: string, keyId: string | null): Promise<boolean> {
   const t = await now();
-  const r = await db.localScanRequest.updateMany({ where: { scanId, state: { in: ["waiting", "running"] } }, data: { state: "running", startedAt: t, keyId } });
+  const r = await db.localScanRequest.updateMany({ where: { scanId, state: "waiting" }, data: { state: "running", startedAt: t, keyId } });
   if (!r.count) return false;
   await db.competitorScan.update({ where: { id: scanId }, data: { status: "running", lane: "local", startedAt: t, heartbeatAt: new Date() } });
   await db.competitorSource.update({ where: { id: (await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { sourceId: true } })).sourceId }, data: { lastStatus: "running" } });
@@ -229,7 +253,7 @@ export async function alertOldRequests(appUrl: string): Promise<number> {
           `Competitor:   ${r.source.competitor.name} — ${r.source.url}`,
           `Waiting since: ${r.createdAt.toISOString()}`,
           ``,
-          `What to do: make sure the local station is awake (charger, lid open, no sleep when the display is off), Chrome is open, and the poller is running (launchctl list | grep pm-os). The request keeps waiting; nothing is lost.`,
+          `What to do: make sure the local station is awake (charger, lid open, no sleep when the display is off) and the poller is running (launchctl list | grep pm-os). The request keeps waiting; nothing is lost.`,
           `Scan log: ${appUrl}/admin/competitors`,
         ].join("\n"),
       });

@@ -1,7 +1,7 @@
 import { db } from "../db";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { ACTIVE_SCAN_STATUSES, MAX_PARALLEL_REMOTE, STALE_MS } from "./config";
-import { alertOldRequests, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
+import { alertOldRequests, cleanupScanTokens, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
 import { getGlobalScanSettings, now } from "./settings";
 
 /**
@@ -43,6 +43,7 @@ export async function runTick(launch: Launcher, log: (msg: string) => void = () 
   const started = await startQueuedScans(launch, log);
   const alerts = await alertOldRequests(appUrl());
   if (alerts) log(`${alerts} waiting-request alert${alerts === 1 ? "" : "s"} sent to support`);
+  await cleanupScanTokens(t);
   return { stale, due, started, alerts };
 }
 
@@ -112,7 +113,8 @@ export async function routeScan(scanId: string, remoteOn?: boolean): Promise<"qu
     // Customer-facing text names no lane; the admin log says what is missing.
     const t = await now();
     const scan = await db.competitorScan.update({ where: { id: scanId }, data: { status: "failed", finishedAt: t, errorKind: "other", error: "missing scanner configuration", log: [{ at: t.toISOString(), level: "error", msg: "No local station key is enrolled (Administration → Competitors → Local stations); the scan could not be parked in the local lane." }] }, select: { sourceId: true } });
-    await db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "failed", lastError: "missing scanner configuration" } });
+    // Counts as the source's last scan: otherwise every hourly tick would create another failed scan (Tomer's review).
+    await db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "failed", lastError: "missing scanner configuration", lastScanAt: t } });
     return "no_station";
   }
   await createLocalRequest(scanId);
@@ -155,7 +157,8 @@ export async function startQueuedScans(launch: Launcher, log: (msg: string) => v
   const running = await db.competitorScan.count({ where: { status: "running", lane: "remote" } });
   let slots = MAX_PARALLEL_REMOTE - running;
   if (slots <= 0) return 0;
-  const queued = await db.competitorScan.findMany({ where: { status: "queued", lane: "remote" }, orderBy: { startedAt: "asc" }, select: { id: true, sourceId: true } });
+  // Scans of a Scan run are driven by executeRun, one after another: not ours to start.
+  const queued = await db.competitorScan.findMany({ where: { status: "queued", lane: "remote", runId: null }, orderBy: { startedAt: "asc" }, select: { id: true, sourceId: true } });
   const busySources = new Set((await db.competitorScan.findMany({ where: { status: "running" }, select: { sourceId: true } })).map((s) => s.sourceId));
   let started = 0;
   for (const q of queued) {

@@ -51,7 +51,7 @@ function privateHostsAllowed(): boolean {
   return v === "on" || v === "true" || v === "1";
 }
 
-function isPrivateHost(hostname: string): boolean {
+export function isPrivateHost(hostname: string): boolean {
   if (privateHostsAllowed()) return false;
   // URL keeps IPv6 literals in brackets ("[::1]").
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");

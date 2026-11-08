@@ -54,9 +54,9 @@ export default async function AdminCompetitorsPage() {
           <h2 className="text-sm font-bold">PMOS AI</h2>
           <dl className="mt-3 grid grid-cols-[140px_1fr] gap-y-1.5 text-sm">
             <dt className="text-slate-500">Model</dt>
-            <dd className="font-mono text-xs">{getCompetitorsModel()} <span className="font-sans text-slate-400">(COMPETITORS_MODEL → GEMINI_MODEL → gemini-4-argon; a gemini-* id runs on Gemini, anything else on Claude)</span></dd>
+            <dd className="font-mono text-xs">{getCompetitorsModel()} <span className="font-sans text-slate-400">(COMPETITORS_MODEL → GEMINI_MODEL → gemini-4-argon; a gemini-* id runs on Gemini, anything else on the Anthropic provider)</span></dd>
             <dt className="text-slate-500">Provider</dt>
-            <dd className="font-mono text-xs">{getCompetitorsProvider()} <span className="font-sans text-slate-400">{getCompetitorsProvider() === "gemini" ? "— structured output through a response schema" : "— forced tool use through the Vertex Anthropic client"}</span></dd>
+            <dd className="font-mono text-xs">{getCompetitorsProvider()} <span className="font-sans text-slate-400">{getCompetitorsProvider() === "gemini" ? "— structured output through a response schema" : "— forced tool use through the Vertex Anthropic provider"}</span></dd>
             <dt className="text-slate-500">Vertex region</dt>
             <dd className="font-mono text-xs">{getCompetitorsProvider() === "gemini" ? getCompetitorsGeminiLocation() : getCompetitorsVertexLocation()} <span className="font-sans text-slate-400">{getCompetitorsProvider() === "gemini" ? "(COMPETITORS_GEMINI_LOCATION → global; the newest Gemini models are served on the global endpoint only)" : "(COMPETITORS_VERTEX_LOCATION → IDEAS_VERTEX_LOCATION → eu)"}</span></dd>
             <dt className="text-slate-500">Prompt version</dt>

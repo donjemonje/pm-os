@@ -1,5 +1,18 @@
 import { htmlToText, looksEmptyWithoutJs, looksLikeBotWall } from "./html";
-import { isPdfUrl } from "./url";
+import { isInsideSite, isPdfUrl, isPrivateHost } from "./url";
+
+/** Redirect hops the plain fetch follows by hand (each target is checked before it is fetched). */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Is this redirect target ours to fetch? With a site host: inside that site only. Without one (sitemaps
+ * named by robots.txt, preview images): any public host, never a private address (SSRF, story checklist §12).
+ */
+function redirectAllowed(target: URL, host: string | undefined): boolean {
+  if (target.protocol !== "https:" && target.protocol !== "http:") return false;
+  if (host) return isInsideSite(target, host);
+  return !isPrivateHost(target.hostname);
+}
 
 /**
  * Fetching one page of a competitor's website — the REMOTE lane (Website
@@ -105,19 +118,40 @@ function failed(url: string, mode: FetchMode, t0: number, e: unknown): FetchedPa
   return { url, finalUrl: url, status: 0, html: "", text: "", kind: "page", mode, ms: Date.now() - t0, needsBrowser: false, error: timeout ? "timeout" : "other", errorDetail: msg.split("\n")[0].slice(0, 200) };
 }
 
-export async function fetchPlain(url: string): Promise<FetchedPage> {
+export async function fetchPlain(url: string, opts: { host?: string } = {}): Promise<FetchedPage> {
   const t0 = Date.now();
   try {
-    const res = await fetch(url, {
-      headers: {
-        "user-agent": USER_AGENT,
-        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.7",
-        "accept-language": "en-US,en;q=0.9",
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    const finalUrl = res.url || url;
+    // Redirects by hand: a competitor's page may 302 anywhere, and "anywhere" must not include our own network.
+    let current = url;
+    let res: Response | null = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      res = await fetch(current, {
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+        },
+        redirect: "manual",
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      const location = res.headers.get("location");
+      if (!(res.status >= 300 && res.status < 400 && location)) break;
+      let target: URL;
+      try {
+        target = new URL(location, current);
+      } catch {
+        return { url, finalUrl: current, status: res.status, html: "", text: "", kind: "page", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: `redirect to an invalid address` };
+      }
+      if (!redirectAllowed(target, opts.host)) {
+        return { url, finalUrl: current, status: res.status, html: "", text: "", kind: "page", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "notfound", errorDetail: `redirected outside the site (${target.hostname})` };
+      }
+      if (hop === MAX_REDIRECTS) {
+        return { url, finalUrl: current, status: res.status, html: "", text: "", kind: "page", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: "too many redirects" };
+      }
+      current = target.href;
+    }
+    if (!res) throw new Error("no response");
+    const finalUrl = current;
     const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
     const xRobots = (res.headers.get("x-robots-tag") ?? "").toLowerCase();
     const isPdf = res.ok && (contentType.includes("application/pdf") || (isPdfUrl(finalUrl) && !contentType.includes("text/html")));
@@ -238,7 +272,7 @@ export async function closeBrowser(): Promise<void> {
   await b?.close().catch(() => undefined);
 }
 
-export async function fetchWithBrowser(url: string): Promise<FetchedPage> {
+export async function fetchWithBrowser(url: string, host?: string): Promise<FetchedPage> {
   const t0 = Date.now();
   let page: PwPage | null = null;
   try {
@@ -256,9 +290,18 @@ export async function fetchWithBrowser(url: string): Promise<FetchedPage> {
       await page.waitForTimeout(2500);
       html = await page.content();
     }
+    const landed = page.url();
+    try {
+      const landedUrl = new URL(landed);
+      if (!redirectAllowed(landedUrl, host) && landedUrl.href !== url) {
+        return { url, finalUrl: landed, status, html: "", text: "", kind: "page", mode: "browser", ms: Date.now() - t0, needsBrowser: true, error: "notfound", errorDetail: `redirected outside the site (${landedUrl.hostname})` };
+      }
+    } catch {
+      // about:blank and the like: keep what the page gave
+    }
     const text = htmlToText(html);
     const c = classify(status, html, "");
-    return { url, finalUrl: page.url(), status, html, text, kind: "page", mode: "browser", ms: Date.now() - t0, needsBrowser: true, ...(c.error ? { error: c.error, errorDetail: c.errorDetail } : {}) };
+    return { url, finalUrl: landed, status, html, text, kind: "page", mode: "browser", ms: Date.now() - t0, needsBrowser: true, ...(c.error ? { error: c.error, errorDetail: c.errorDetail } : {}) };
   } catch (e) {
     return { ...failed(url, "browser", t0, e), needsBrowser: true };
   } finally {
@@ -267,8 +310,8 @@ export async function fetchWithBrowser(url: string): Promise<FetchedPage> {
 }
 
 /** Fetch in the given mode (PDFs are always fetched plain). */
-export function fetchPage(url: string, mode: FetchMode): Promise<FetchedPage> {
-  return mode === "browser" && !isPdfUrl(url) ? fetchWithBrowser(url) : fetchPlain(url);
+export function fetchPage(url: string, mode: FetchMode, host?: string): Promise<FetchedPage> {
+  return mode === "browser" && !isPdfUrl(url) ? fetchWithBrowser(url, host) : fetchPlain(url, { host });
 }
 
 export function sleep(ms: number): Promise<void> {

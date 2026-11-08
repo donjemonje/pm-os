@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { startLocalScan, verifyScanToken } from "@/lib/competitors/local";
+import { launchScan, runnerMode } from "@/lib/competitors/run";
 import { runScan } from "@/lib/competitors/scan";
 
 type Params = { params: Promise<{ id: string }> };
@@ -8,7 +9,9 @@ type Params = { params: Promise<{ id: string }> };
 /**
  * POST — the station finished reading (scan token as bearer). Body:
  *   { notAttempted?: number }   pages the station discovered but did not read (ceiling)
- * Runs the process half (page states, PMOS AI, badge) and answers with the
+ * The process half (page states, PMOS AI, badge) runs in the scanner job in
+ * production (cloudrun mode: a 2,000-page site takes minutes, longer than one
+ * HTTP request may live) and inline in local dev, where the answer carries the
  * result. A scan with no page handed in ends "failed".
  */
 export async function POST(req: Request, { params }: Params) {
@@ -31,6 +34,11 @@ export async function POST(req: Request, { params }: Params) {
   if (scan.status !== "running") await startLocalScan(id, null);
   const notAttempted = typeof body.notAttempted === "number" && Number.isFinite(body.notAttempted) ? Math.max(0, Math.round(body.notAttempted)) : 0;
   await db.competitorScan.update({ where: { id }, data: { pagesNotAttempted: notAttempted, heartbeatAt: new Date() } });
+  if (runnerMode() === "cloudrun") {
+    await launchScan(id);
+    const result = await db.competitorScan.findUnique({ where: { id }, select: { status: true, badge: true, pagesFetched: true, pagesChanged: true, pagesNotAttempted: true, error: true } });
+    return NextResponse.json({ scan: result, processing: true });
+  }
   await runScan(id);
   const result = await db.competitorScan.findUnique({ where: { id }, select: { status: true, badge: true, pagesFetched: true, pagesChanged: true, pagesNotAttempted: true, error: true } });
   return NextResponse.json({ scan: result });

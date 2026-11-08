@@ -25,7 +25,8 @@ sed -e "s#__LABEL__#$LABEL#g" -e "s#__NODE__#$NODE#g" -e "s#__REPO__#$REPO#g" -e
     -e "s#__STATE_DIR__#$STATE_DIR#g" -e "s#__HOME__#$HOME_DIR#g" \
   "$REPO/scripts/pmos-local-scan/com.pm-os.local-scan.plist" > "$PLIST"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-echo "installed: $PLIST (checks in every 15 min; log: $STATE_DIR/local-scan.log)"
+# First check-in BEFORE the agent loads: the agent runs at load too, and two check-ins at once must not race for one scan.
 echo "first check-in now:"
 "$NODE" "$REPO/scripts/pmos-local-scan/poller.mjs" --app-url "$APP_URL" --state-dir "$STATE_DIR"
+launchctl bootstrap "gui/$(id -u)" "$PLIST"
+echo "installed: $PLIST (checks in every 15 min; log: $STATE_DIR/local-scan.log)"
