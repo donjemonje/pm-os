@@ -332,7 +332,8 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
 
     // Timeline: only the dated facts — Founded (kind founded), the funding round, the milestone.
     const timeline = timelineOf(page);
-    await expect(timeline.getByText("2015 → today · not to scale · dated facts from the competitor's sources", { exact: true })).toBeVisible();
+    // Caption copy since dae2458 (timeline clusters, 2026-10-29): lib/competitors/copy.ts timeline.note.
+    await expect(timeline.getByText("2015 → today · dated facts from the competitor's sources · scroll sideways for earlier years", { exact: true })).toBeVisible();
     await expect(timeline.getByRole("button", { name: "All · 3" })).toHaveAttribute("aria-pressed", "true");
     await expect(timeline.getByRole("button", { name: "Company · 2" })).toBeVisible();
     await expect(timeline.getByRole("button", { name: "Funding · 1" })).toBeVisible();
@@ -341,8 +342,8 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     for (const title of ["Founded", FUNDING, MILESTONE]) await expect(timeline.getByText(title, { exact: true })).toBeVisible();
     await expect(timeline.getByText("+17 roles", { exact: true })).toHaveCount(0); // undated → not on the timeline
     // `has` is queried relative to the outer element — the inner locator must be page-rooted.
-    await expect(timeline.locator("span", { has: page.getByText(FUNDING, { exact: true }) }).last()).toContainText("2019 Mar · funding");
-    await expect(timeline.locator("span", { has: page.getByText("Founded", { exact: true }) }).last()).toContainText("2015 Jun · company");
+    await expect(timeline.locator("span", { has: page.getByText(FUNDING, { exact: true }) }).last()).toContainText("Mar 2019 · funding"); // ProfilePanel tlWhen: "Mon YYYY" since dae2458
+    await expect(timeline.locator("span", { has: page.getByText("Founded", { exact: true }) }).last()).toContainText("Jun 2015 · company");
     await expect(timeline.getByRole("link", { name: new RegExp(FUNDING.replace("$", "\\$")) })).toHaveAttribute("href", `https://${ALPHA.host}/press/series-b`);
 
     // Capabilities: grouped under the products the statuses name, the orphan under "No product named".
@@ -395,7 +396,14 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     await expect(gallery).toContainText("2 captures");
     await expect(gallery.getByRole("img", { name: "QA-CMP Alpha dashboard" })).toBeVisible();
     await expect(gallery).toContainText("QA-CMP Alpha dashboard · Trial");
-    await expect(gallery.getByRole("link", { name: /QA-CMP Alpha onboarding/ })).toHaveAttribute("href", `/api/competitors/media?p=${encodeURIComponent(`${MEDIA_SUBDIR}/onboarding.png`)}`);
+    // A capture is a button that opens the Lightbox; the media URL is the lightbox's link (ui/Lightbox.tsx).
+    await gallery.getByRole("button", { name: /QA-CMP Alpha onboarding/ }).click();
+    const lightbox = page.getByRole("dialog", { name: "QA-CMP Alpha onboarding" });
+    await expect(lightbox).toBeVisible();
+    await expect(lightbox).toContainText("QA-CMP Alpha onboarding · Help center");
+    await expect(lightbox.getByRole("link")).toHaveAttribute("href", `/api/competitors/media?p=${encodeURIComponent(`${MEDIA_SUBDIR}/onboarding.png`)}`);
+    await lightbox.getByRole("button", { name: "Close" }).click();
+    await expect(lightbox).toHaveCount(0);
     const sources = sideCard(page, "Sources");
     await expect(sources).toContainText("2 · last scan 3 h ago");
     await expect(sources).toContainText("Website · 12 pages");
