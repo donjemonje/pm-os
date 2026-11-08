@@ -15,11 +15,11 @@ type Params = { params: Promise<{ id: string }> };
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
-const STATUSES: PageReadStatus[] = ["ok", "notfound", "blocked", "login", "timeout", "other"];
+const STATUSES: PageReadStatus[] = ["ok", "notfound", "blocked", "login", "timeout", "slowdown", "other"];
 
 /**
  * POST one page the station read (scan token as bearer). Body:
- *   { url, status: "ok" | "notfound" | "blocked" | "login" | "timeout" | "other",
+ *   { url, status: "ok" | "notfound" | "blocked" | "login" | "timeout" | "slowdown" | "other",
  *     html?, text?, pdfBase64?, title?, kind?, ms? }
  * The server extracts the text (HTML → text, PDF → text), normalizes, hashes
  * and decides new / changed / unchanged / not read, exactly as for the remote
@@ -89,7 +89,7 @@ export async function POST(req: Request, { params }: Params) {
   if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l));
   await appendHandedInPage(id, {
     url: r.url,
-    status: status === "ok" ? 200 : status === "notfound" ? 404 : status === "login" ? 401 : status === "blocked" ? 403 : 0,
+    status: status === "ok" ? 200 : status === "notfound" ? 404 : status === "login" ? 401 : status === "blocked" ? 403 : status === "slowdown" ? 429 : 0,
     outcome: r.outcome,
     ...(r.outcome === "failed" ? { category: r.category ?? categoryOf(status as Exclude<PageReadStatus, "ok">), error: status } : {}),
     chars: r.chars,

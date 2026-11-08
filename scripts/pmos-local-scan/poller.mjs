@@ -12,12 +12,17 @@
  * rotates on its own every 30 days through the check-in call.
  *
  * Runners (how pages are read):
- *   claude  Claude Code with Claude in Chrome on this Mac — the PM's own
- *           browser, a person reading a public site with AI doing the reading.
- *           Claude gets only the browser tools and the hand-in script.
- *   fetch   plain HTTP from this machine (tests, and a fallback when Claude is
- *           not installed). Same hand-in route either way; the server extracts,
- *           normalizes and hashes.
+ *   fetch   DEFAULT (v1, Daniel 2026-11-08): the station reads the site itself
+ *           from this Mac with a browser identity — sitemap plus the links on
+ *           every page, same site only, no robots.txt (a person's intent), a
+ *           pause between pages, stop on 429. Pages that come back empty, and
+ *           the home / hub pages when their navigation is built by JavaScript,
+ *           are rendered with the installed Chrome in headless mode. PDFs are
+ *           downloaded and handed in as documents.
+ *   claude  Claude Code with Claude in Chrome — kept for later (judgment on odd
+ *           sites); it cannot export a real page's HTML unattended, so it is
+ *           not the default. --runner claude selects it.
+ *           Same hand-in route either way; the server extracts, normalizes and hashes.
  *
  * No dependencies. Node 20+.
  *
@@ -25,7 +30,9 @@
  *   node poller.mjs --loop                   keep running, check in every 15 min
  *   --app-url URL        PM-OS origin (default: PMOS_APP_URL or https://app.pm-os.io)
  *   --key-file PATH      machine key file (default: ~/.pmos/station-key)
- *   --runner claude|fetch (default: claude when `claude` is on PATH, else fetch)
+ *   --runner fetch|claude (default fetch)
+ *   --render auto|off    headless Chrome for empty pages and JS-built navigation (default auto; off = plain fetch only)
+ *   --chrome PATH        the Chrome binary (default: PMOS_CHROME, else the Mac's /Applications path)
  *   --mac-state auto|active|locked   (default auto — reads the real lock state)
  *   --answer ask|approve|later       (default ask — the real dialog)
  *   --pause-ms N         pause between pages in the fetch runner (default 1000)
@@ -34,7 +41,7 @@
  *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
  */
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,7 +62,11 @@ const SNOOZE_FILE = join(STATE_DIR, "snooze-until");
 const LOG_FILE = join(STATE_DIR, "local-scan.log");
 const POLL_MS = 15 * 60_000;
 const SNOOZE_MS = 2 * 3600_000;
-const PAUSE_MS = Number(flag("pause-ms", "1000"));
+const PAUSE_MS = Number(flag("pause-ms", "2000"));
+const RENDER = flag("render", "auto");
+const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+/** Headless renders per scan are bounded: home, hubs and empty pages only. */
+const MAX_RENDERS = 40;
 const MAC_STATE = flag("mac-state", "auto");
 const ANSWER = flag("answer", "ask");
 const MAX_PAGES_FLAG = Number(flag("max-pages", "0")) || 0;
@@ -85,13 +96,15 @@ function readKey() {
 
 async function whichRunner() {
   const want = flag("runner", "");
-  if (want === "fetch" || want === "claude") return want;
-  try {
-    await run("which", ["claude"]);
-    return "claude";
-  } catch {
-    return "fetch";
+  if (want === "claude") {
+    try {
+      await run("which", ["claude"]);
+      return "claude";
+    } catch {
+      log("--runner claude asked for but `claude` is not on PATH — using the fetch runner");
+    }
   }
+  return "fetch";
 }
 
 // ————— Mac state —————
@@ -178,6 +191,48 @@ function pageKey(u) {
 
 const NON_PAGE = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
 
+/** Hub pages whose navigation often needs JavaScript: home and the first-level sections. */
+function isHub(u) {
+  const parts = u.pathname.split("/").filter(Boolean);
+  return parts.length === 0 || (parts.length === 1 && /^(products?|platform|solutions?|pricing|plans|resources?|blog|news|docs|documentation|integrations?|partners?|customers?|company|about)$/i.test(parts[0]));
+}
+
+/** Rough visible-text size of an HTML document (the server decides for real; this only picks what to render). */
+function roughText(html) {
+  return html.replace(/<(script|style|noscript|svg)\b[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function inSiteLinks(html, base, host) {
+  let n = 0;
+  for (const m of html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"'#]+)(?:#[^"']*)?["']/gi)) {
+    try {
+      const u = new URL(m[1].trim(), base);
+      if (siteOf(u) === host) n++;
+    } catch {
+      // skip
+    }
+  }
+  return n;
+}
+
+let chromeChecked = null;
+async function chromeAvailable() {
+  if (RENDER === "off") return false;
+  if (chromeChecked == null) chromeChecked = existsSync(CHROME);
+  return chromeChecked;
+}
+
+/** Render a page with the installed Chrome, headless, and return the DOM after the page ran. null on failure. */
+async function renderWithChrome(url) {
+  try {
+    const { stdout } = await run(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", `--user-agent=${BROWSER_UA}`, "--virtual-time-budget=6000", "--timeout=30000", "--dump-dom", url], { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 });
+    return stdout && stdout.length > 100 ? stdout : null;
+  } catch (e) {
+    log(`  render failed ${url}: ${String(e).split("\n")[0].slice(0, 120)}`);
+    return null;
+  }
+}
+
 /** One attempt to read a page with this machine's own HTTP. */
 async function readOnce(url, started) {
   try {
@@ -186,7 +241,8 @@ async function readOnce(url, started) {
     const ms = Date.now() - started;
     if (res.status === 404 || res.status === 410) return { url, status: "notfound", ms };
     if (res.status === 401 || res.status === 402 || res.status === 407) return { url, status: "login", ms };
-    if (res.status === 403 || res.status === 429) return { url, status: "blocked", ms };
+    if (res.status === 429) return { url, status: "slowdown", ms };
+    if (res.status === 403) return { url, status: "blocked", ms };
     if (res.status >= 500) return { url, status: "other", ms };
     if (ct.includes("application/pdf") || /\.pdf$/i.test(new URL(res.url || url).pathname)) {
       const bytes = Buffer.from(await res.arrayBuffer());
@@ -238,6 +294,7 @@ async function runFetch(job, limits, post) {
   }
   const t0 = Date.now();
   let n = 0;
+  let renders = 0;
   while (queue.length) {
     if (n >= limits.pages || Date.now() - t0 > limits.ms) break;
     const url = queue.shift();
@@ -255,7 +312,26 @@ async function runFetch(job, limits, post) {
         await new Promise((r) => setTimeout(r, Math.max(PAUSE_MS, 500)));
       }
     }
+    if (body.status === "slowdown") {
+      // The site asked us to slow down: hand the signal in and stop this scan; the rest is "not attempted" and the next scan continues.
+      await post(body);
+      log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one`);
+      return { notAttempted: queue.length };
+    }
     if (body.status === "ok" && body.html) {
+      // Headless Chrome for what plain HTTP cannot show: a page with no text, or a home/hub page whose menus are built by JavaScript.
+      const u = new URL(url);
+      const links = inSiteLinks(body.html, body.finalUrl || url, host);
+      const empty = roughText(body.html).length < 200;
+      if (renders < MAX_RENDERS && (empty || (isHub(u) && links < 8)) && (await chromeAvailable())) {
+        renders++;
+        const rendered = await renderWithChrome(url);
+        if (rendered && (roughText(rendered).length > roughText(body.html).length || inSiteLinks(rendered, body.finalUrl || url, host) > links)) {
+          body.html = rendered;
+          body.rendered = true;
+          log(`  rendered with Chrome ${url}`);
+        }
+      }
       for (const m of body.html.matchAll(/<a\b[^>]*?href\s*=\s*["']([^"'#]+)(?:#[^"']*)?["']/gi)) {
         try {
           add(new URL(m[1].trim(), body.finalUrl || url));
@@ -264,6 +340,7 @@ async function runFetch(job, limits, post) {
         }
       }
       delete body.finalUrl;
+      delete body.rendered;
     }
     const r = await post(body);
     log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);

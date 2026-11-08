@@ -101,7 +101,7 @@ export function AdminScanning() {
       <section className="rounded-xl border border-slate-200 bg-white p-5" data-testid="admin-scanning-lanes">
         <h2 className="text-sm font-bold">Scanning</h2>
         <p className="mb-4 mt-0.5 text-xs text-slate-500">
-          Global, every organization. The remote lane is the scanner job in GCP, identified as PM-OS. While it is off every scan goes to a local station (a PM's browser). Customers never see lanes: their row says a scan is pending, in progress, or what it found.
+          Global, every organization. The remote lane is the scanner job in GCP, identified as PM-OS. While it is off every scan goes to a local station (a PM's Mac, reading the site with its own browser identity). Customers never see lanes: their row says a scan is pending, in progress, or what it found.
         </p>
         <div className="flex flex-wrap items-end gap-8">
           <label className="flex items-center gap-3 text-sm">
@@ -138,7 +138,7 @@ export function AdminScanning() {
               <button onClick={() => { void navigator.clipboard?.writeText(newSecret).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }} className={BTN}>{copied ? <Check size={13} /> : <Copy size={13} />} Copy</button>
               <button onClick={() => setNewSecret(null)} className={BTN}>Done</button>
             </div>
-            <div className="mt-2 text-xs text-emerald-900">On the station: <code className="rounded bg-white px-1 py-px font-mono">printf &apos;%s&apos; &lt;key&gt; &gt; ~/.pmos/station-key</code>, then install the poller (scripts/pmos-local-scan/README.md).</div>
+            <div className="mt-2 text-xs text-emerald-900">On the station: <code className="rounded bg-white px-1 py-px font-mono">sh scripts/pmos-local-scan/install.sh &lt;env&gt; &lt;app url&gt; &lt;key&gt;</code> (scripts/pmos-local-scan/README.md).</div>
           </div>
         )}
         {data.keys.length === 0 ? (
