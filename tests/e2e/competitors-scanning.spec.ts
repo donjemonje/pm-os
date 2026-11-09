@@ -1412,7 +1412,7 @@ test.describe("Website Scanning rows", () => {
     // the first page still fits (the store is below the limit when it lands), the second finds the store full.
     test.setTimeout(150_000);
     const site = await newSite();
-    const c = await addCompetitor(pmApi, site, "QA-WS Omega");
+    const c = await addCompetitor(pmApi, site, "QA-WS Storage");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
     const before = await storedTextChars();
     await setStorageLimit(before + 1);
