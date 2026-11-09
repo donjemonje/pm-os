@@ -83,8 +83,9 @@ export async function readSitemap(urls: string[], host: string): Promise<URL[]> 
       try {
         const u = new URL(m[1]);
         if (isIndex) {
-          // Page sitemaps first; skip image/video/news/tag/author feeds.
-          if (indexesFollowed < 12 && !/image|video|news|tag|author|category|attachment/i.test(u.pathname)) {
+          // Every child sitemap is read, none skipped by name: a site's "video" or "news" sitemap may be the one that
+          // lists its video or news pages (Flashpoint's video-sitemap.xml holds 2 real pages, 2026-11-09).
+          if (indexesFollowed < 60) {
             queue.push(u.href);
             indexesFollowed++;
           }
@@ -138,9 +139,13 @@ export class Frontier {
   /** Every URL that pointed somewhere this scan (inbound link or sitemap entry) — feeds "unlinked". */
   readonly linked = new Set<string>();
 
-  constructor(host: string, rules: RobotsRules) {
+  /** The source's website address: http/https and www/bare copies of the host are one page. */
+  private readonly siteUrl: string | null;
+
+  constructor(host: string, rules: RobotsRules, siteUrl: string | null = null) {
     this.host = host;
     this.rules = rules;
+    this.siteUrl = siteUrl;
   }
 
   private noteSkip(reason: SkipReason, u: URL) {
@@ -159,7 +164,7 @@ export class Frontier {
    */
   add(u: URL, via: string, opts: { first?: boolean } = {}): boolean {
     if (!isInsideSite(u, this.host) || !looksLikePage(u)) return false;
-    const key = pageKey(u);
+    const key = pageKey(u, this.siteUrl);
     if (via === "link" || via === "sitemap") this.linked.add(key);
     if (!isAllowed(u, this.rules)) {
       if (!this.seen.has(key)) {

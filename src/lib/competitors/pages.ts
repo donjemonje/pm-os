@@ -35,6 +35,8 @@ export interface RecordPageInput {
   sourceId: string;
   workspaceId: string;
   url: string;
+  /** The source's website address: http/https and www/bare copies of its host are one page (pageKey). */
+  siteUrl?: string | null;
   status: PageReadStatus;
   /** Raw HTML (the server extracts the text). */
   html?: string | null;
@@ -88,7 +90,7 @@ export const MAX_PAGE_CHARS = 200_000;
 
 /** Record what a lane read (or failed to read) for one URL. */
 export async function recordPage(input: RecordPageInput, sourceLabel: string): Promise<RecordPageResult> {
-  const key = pageKey(new URL(input.url));
+  const key = pageKey(new URL(input.url), input.siteUrl);
   const now = new Date();
   const existing = await db.sourcePage.findUnique({ where: { sourceId_url: { sourceId: input.sourceId, url: key } } });
 

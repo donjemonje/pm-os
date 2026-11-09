@@ -310,7 +310,7 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
   const rules = await readRobots(source.url);
   const pauseMs = rules.crawlDelaySec ? Math.min(CRAWL_DELAY_CAP_MS, Math.max(scanPauseMs(), rules.crawlDelaySec * 1000)) : scanPauseMs();
   log.add("info", `robots.txt: ${rules.disallow.length} disallow rule${rules.disallow.length === 1 ? "" : "s"}, ${rules.sitemaps.length} sitemap${rules.sitemaps.length === 1 ? "" : "s"}${rules.crawlDelaySec ? `, Crawl-delay ${rules.crawlDelaySec} s (pause ${pauseMs / 1000} s)` : ""}`);
-  const frontier = new Frontier(competitor.host, rules);
+  const frontier = new Frontier(competitor.host, rules, source.url);
   const known = await knownPages(source.id);
   let pendingFirst = 0;
   for (const k of known) {

@@ -43,6 +43,8 @@
  *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
  */
 import { execFile, spawn } from "node:child_process";
+import http from "node:http";
+import https from "node:https";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -151,6 +153,39 @@ async function askUser(sites) {
 
 // ————— PM-OS API —————
 
+/**
+ * A call whose answer can take many minutes (in local dev the server processes the whole scan inside the done call:
+ * 27 minutes for SpyCloud's 977 pages on 2026-11-09). Plain node:http(s): fetch gives up on a response whose headers
+ * take more than 5 minutes, whatever its signal says. `timeoutMs` is an idle limit — no byte from the server for that long.
+ */
+function apiLong(path, init = {}, timeoutMs = 20 * 60_000) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(`${APP_URL}${path}`);
+    const mod = u.protocol === "https:" ? https : http;
+    const body = init.body ?? null;
+    const headers = { "content-type": "application/json", ...(init.headers ?? {}), ...(body ? { "content-length": Buffer.byteLength(body) } : {}) };
+    const req = mod.request(u, { method: init.method ?? "POST", headers, timeout: timeoutMs }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (text += c));
+      res.on("end", () => {
+        let json = null;
+        try {
+          json = text ? JSON.parse(text) : null;
+        } catch {
+          json = { raw: text };
+        }
+        if (res.statusCode < 200 || res.statusCode >= 300) reject(new Error(`${path} → ${res.statusCode} ${json?.error ?? text.slice(0, 200)}`));
+        else resolve(json);
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error(`${path} → no answer for ${Math.round(timeoutMs / 60_000)} minutes`)));
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 async function api(path, init = {}, timeoutMs = 120_000) {
   const res = await fetch(`${APP_URL}${path}`, { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) }, signal: AbortSignal.timeout(timeoutMs) });
   const text = await res.text();
@@ -190,9 +225,15 @@ function siteOf(u) {
   return `${u.hostname.toLowerCase().replace(/^www\./, "")}${u.port ? `:${u.port}` : ""}`;
 }
 
-function pageKey(u) {
+/**
+ * Canonical page key (same rule as the server's pageKey): no trailing slash, no query or hash, and the http/https and
+ * www/bare copies of the site's own host collapse onto the site's address — one page, one row.
+ */
+function pageKey(u, siteUrl) {
   const path = u.pathname.replace(/\/+$/, "") || "/";
-  return `${u.protocol}//${u.host.toLowerCase()}${path}`;
+  const s = new URL(siteUrl);
+  const same = siteOf(u) === siteOf(s);
+  return `${same ? s.protocol : u.protocol}//${same ? s.host.toLowerCase() : u.host.toLowerCase()}${path}`;
 }
 
 const NON_PAGE = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
@@ -327,7 +368,7 @@ async function runFetch(job, limits, post) {
   const add = (u) => {
     if (!/^https?:$/.test(u.protocol) || siteOf(u) !== host || NON_PAGE.test(u.pathname)) return;
     if (/\/(wp-json|wp-admin|wp-content|feed|page\/\d+|cdn-cgi)\b/i.test(u.pathname)) return;
-    const k = pageKey(u);
+    const k = pageKey(u, job.siteUrl);
     if (seen.has(k)) return;
     seen.add(k);
     queue.push(k);
@@ -344,6 +385,9 @@ async function runFetch(job, limits, post) {
   const sitemaps = await discoverSitemaps(job.siteUrl, host);
   for (const u of sitemaps.pages) add(u);
   log(`  sitemaps: ${sitemaps.summary} · ${queue.length} URLs to start with`);
+  // The sitemap points at its pages: PM-OS must hear that, or a page only the sitemap lists ends "unlinked" (713 Flashpoint
+  // pages on 2026-11-09). Handed in with the first page PM-OS accepts.
+  let pendingLinked = sitemaps.pages.map((u) => pageKey(u, job.siteUrl));
   const t0 = Date.now();
   let n = 0;
   let renders = 0;
@@ -396,7 +440,9 @@ async function runFetch(job, limits, post) {
       delete body.finalUrl;
       delete body.rendered;
     }
+    if (pendingLinked.length) body.linked = pendingLinked;
     const r = await post(body);
+    if (r && !r.refused) pendingLinked = [];
     if (r === null) {
       // The scan ended on the server (cancelled, or already processed): nothing more to hand in.
       log(`  scan ended on the server — stopping, ${queue.length} pages left`);
@@ -502,7 +548,7 @@ async function runJob(job, runner, key) {
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
   if (result.ended) return;
   // PM-OS processes the pages inside this call in local dev (page states, PMOS AI); in production it hands them to its own job.
-  const done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 20 * 60_000);
+  const done = await apiLong(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 20 * 60_000);
   if (done.processing) log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS is processing the pages`);
   else log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }

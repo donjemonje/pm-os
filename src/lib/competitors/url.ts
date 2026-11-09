@@ -107,12 +107,24 @@ export function isInsideSite(candidate: URL, host: string): boolean {
 /**
  * Canonical page key: origin + path without trailing slash, no query/hash —
  * except a video id (youtube.com/watch?v=…), where the query is the page.
+ * With `site` (the source's website address), the http/https and www/bare
+ * copies of the site's own host collapse onto that address: one page, one
+ * row (PRD: "www.pm-os.io and pm-os.io are the same site"). Subdomains stay
+ * what they are.
  */
-export function pageKey(u: URL): string {
+export function pageKey(u: URL, site?: string | URL | null): string {
   const path = u.pathname.replace(/\/+$/, "") || "/";
-  const host = u.host.toLowerCase();
+  let host = u.host.toLowerCase();
+  let protocol = u.protocol;
+  if (site) {
+    const s = typeof site === "string" ? new URL(site) : site;
+    if (siteHost(u) === siteHost(s)) {
+      host = s.host.toLowerCase();
+      protocol = s.protocol;
+    }
+  }
   const video = /(^|\.)youtube\.com$/.test(host) && path === "/watch" ? u.searchParams.get("v") : null;
-  return `${u.protocol}//${host}${path}${video ? `?v=${video}` : ""}`;
+  return `${protocol}//${host}${path}${video ? `?v=${video}` : ""}`;
 }
 
 /** Assets that are never pages. PDFs ARE pages (Website Scanning PRD 2026-11-04: "the entire website, PDFs included"). */

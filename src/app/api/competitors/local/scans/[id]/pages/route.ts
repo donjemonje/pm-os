@@ -24,7 +24,8 @@ const STATUSES: PageReadStatus[] = ["ok", "notfound", "blocked", "login", "timeo
 /**
  * POST one page the station read (scan token as bearer). Body:
  *   { url, status: "ok" | "notfound" | "blocked" | "login" | "timeout" | "slowdown" | "other",
- *     html?, text?, pdfBase64?, title?, kind?, ms? }
+ *     html?, text?, pdfBase64?, title?, kind?, ms?, attempts?,
+ *     linked?: string[] }   URLs the station found pointing at pages (its sitemap entries) — feeds "unlinked"
  * The server extracts the text (HTML → text, PDF → text), normalizes, hashes
  * and decides new / changed / unchanged / not read, exactly as for the remote
  * lane. URLs outside the competitor's site are refused. Every post is a
@@ -43,7 +44,7 @@ export async function POST(req: Request, { params }: Params) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const scan = await db.competitorScan.findUnique({ where: { id }, select: { id: true, status: true, workspaceId: true, sourceId: true, source: { select: { type: true, competitor: { select: { host: true, deletedAt: true } } } } } });
+  const scan = await db.competitorScan.findUnique({ where: { id }, select: { id: true, status: true, workspaceId: true, sourceId: true, source: { select: { type: true, url: true, competitor: { select: { host: true, deletedAt: true } } } } } });
   if (!scan) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (scan.source.competitor.deletedAt || scan.status === "cancelled") return NextResponse.json({ error: "The scan was cancelled" }, { status: 410 });
   if (scan.status !== "running" && scan.status !== "pending_local" && scan.status !== "queued") return NextResponse.json({ error: "The scan already ended" }, { status: 409 });
@@ -98,13 +99,25 @@ export async function POST(req: Request, { params }: Params) {
   const ms = typeof body.ms === "number" && Number.isFinite(body.ms) ? Math.max(0, Math.round(body.ms)) : 0;
   const attempts = typeof body.attempts === "number" && Number.isFinite(body.attempts) ? Math.max(1, Math.round(body.attempts)) : 1;
   const r = await recordPage(
-    { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via: "handin", ms, errorDetail: readError },
+    { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, siteUrl: scan.source.url, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via: "handin", ms, errorDetail: readError },
     sourceLabel,
   );
   // The links on the page say what still points where (the "unlinked" state) — collected on the scan and applied when it is
   // processed, after every page row exists (the same bookkeeping as the remote lane).
   const linked = new Set<string>();
-  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l));
+  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l, scan.source.url));
+  // The station's own discoveries (its sitemap entries) point at pages too — handed in with a page, usually the first one.
+  if (Array.isArray(body.linked)) {
+    for (const raw of (body.linked as unknown[]).slice(0, 5000)) {
+      if (typeof raw !== "string") continue;
+      try {
+        const l = new URL(raw);
+        if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l, scan.source.url));
+      } catch {
+        // not a URL — ignored
+      }
+    }
+  }
   await appendHandedInPage(id, {
     url: r.url,
     status: status === "ok" ? 200 : status === "notfound" ? 404 : status === "login" ? 401 : status === "blocked" ? 403 : status === "slowdown" ? 429 : 0,
