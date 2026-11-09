@@ -147,6 +147,8 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
     await db.sourcePage.update({
       where: { id: existing.id },
       data: {
+        // A page removed by a website change keeps its hash but lost its text: same text again → put it back.
+        ...(existing.text == null ? { text: rawText, chars: rawText.length } : {}),
         state: existing.state === "unlinked" ? "unlinked" : "present",
         notFoundStreak: 0,
         removedAt: null,

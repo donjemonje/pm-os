@@ -1000,7 +1000,7 @@ model SourcePage {
   kind        String           @default("page")
   /// sha256 (32 hex) of the normalized text — "changed or not".
   hash        String
-  /// The current text, as complete as we could get it; null only before the first successful read.
+  /// The current text, as complete as we could get it; null before the first successful read, and on pages removed by a website change (hash kept).
   text        String?
   chars       Int              @default(0)
   /// "present" | "missing" (not found once) | "removed" (not found twice in a row) | "unlinked" (answers, but no inbound link)

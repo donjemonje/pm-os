@@ -5,10 +5,18 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { cancelLocalRequests } from "@/lib/competitors/local";
+import { createAndRouteScan } from "@/lib/competitors/scan";
 
 type Params = { params: Promise<{ id: string }> };
 
-/** PATCH: rename / new website / logo. DELETE: remove the competitor and everything under it. */
+/**
+ * PATCH: rename / new website / logo. DELETE: remove the competitor and everything under it.
+ *
+ * Changing the website removes the old site's pages (text dropped, hash kept) and queues a scan of the
+ * new site at once — the same create-and-route path as adding a competitor (trigger "onboarding"), so the
+ * one-scan-per-site rule holds (queued behind a running scan) and the daily manual-rescan limit does not
+ * apply: a new site is a first add, not a rescan.
+ */
 export async function PATCH(req: Request, { params }: Params) {
   const ctx = await competitorsGuard({ admin: true });
   if (ctx instanceof NextResponse) return ctx;
@@ -49,11 +57,14 @@ export async function PATCH(req: Request, { params }: Params) {
     await db.competitorSource.updateMany({ where: { competitorId: id, type: "website" }, data: { url: data.websiteUrl } });
     if (data.host && data.host !== existing.host) {
       // A new site: the old site's pages are never read again, so they leave the current picture now (Tomer's review).
+      // Their text goes too (the hash stays, so the page history still says what was there); nothing reads a removed page's text.
       const t = new Date();
       await db.sourcePage.updateMany({
         where: { source: { competitorId: id, type: "website" }, state: { not: "removed" } },
-        data: { state: "removed", removedAt: t, previousText: null, previousHash: null },
+        data: { state: "removed", removedAt: t, text: null, previousText: null, previousHash: null },
       });
+      // The source URL above already points at the new site, so this scan reads it. Same path as a first add.
+      await createAndRouteScan(ctx.workspaceId, id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] scan of the new website failed to start", e));
     }
   }
   return stateResponse(ctx);
