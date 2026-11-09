@@ -5,13 +5,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
-import { PAGE_PATHS, startFakeSite, type FakeSite } from "../fixtures/fake-site/fake-site";
+import { BIG_PAGE_MARKERS, PAGE_PATHS, startFakeSite, type FakeSite } from "../fixtures/fake-site/fake-site";
 import { acceptConfirm, hashPasswordLikeApp, loginWithTotp, seedQaOrgWithUser, withTestDb, type TotpCreds } from "./helpers";
 import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
 /**
  * Competitors — Website Scanning (feature/competitors_v1_finalization, QA rows
- * WS-01 … WS-27 of the story tab, 2026-11-04). The fake competitor site is
+ * WS-01 … WS-35 of the story tab, 2026-11-04; WS-28 … WS-35 added 2026-11-09). The fake competitor site is
  * tests/fixtures/fake-site (12 pages, variants through its control endpoint,
  * one server per port); the local lane runs the real poller
  * (scripts/pmos-local-scan/poller.mjs) once per row with the plain fetch
@@ -21,7 +21,8 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   clock    POST /api/admin/competitors/knobs {clockOffsetMs}  (COMPETITORS_TEST_KNOBS=on)
  *   tick     POST /api/admin/competitors/knobs {tick: true}     (the hourly scheduler, once)
  *   remote   PATCH /api/admin/competitors/settings {remoteScanEnabled}  (default OFF)
- *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-pages
+ *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-pages,
+ *            --done-delay-ms (WS-35 only: the done route holds its answer that long, COMPETITORS_TEST_KNOBS=on)
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
  *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on, COMPETITORS_CEILING_PAGES=20,
  *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
@@ -66,6 +67,7 @@ const SITE_HOST = "localtest.me";
 const POLLER = join(__dirname, "../../scripts/pmos-local-scan/poller.mjs");
 const SCRATCH = join(tmpdir(), "pmos-qa-ws");
 const SNAPSHOT = join(SCRATCH, "isolation-snapshot.json");
+const KEYS_SNAPSHOT = join(SCRATCH, "station-keys-snapshot.json");
 const FAR_FUTURE = new Date("2126-01-01T00:00:00Z");
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -132,6 +134,28 @@ async function restoreOtherOrgs(db: PrismaClient): Promise<void> {
   for (const s of snap.sources) await db.competitorSource.updateMany({ where: { id: s.id }, data: { lastScanAt: s.lastScanAt ? new Date(s.lastScanAt) : null } });
   for (const r of snap.requests) await db.localScanRequest.updateMany({ where: { id: r.id }, data: { state: r.state } });
   rmSync(SNAPSHOT, { force: true });
+}
+
+/**
+ * WS-31 needs "no station key": the station check (hasActiveScannerKey) is GLOBAL, so every enrolled key is parked
+ * (revokedAt set) for that one row and un-parked right after it (ids in the OS temp dir, re-applied at the next start
+ * if a run died). Nothing is deleted; a parked key works again the moment it is restored.
+ */
+async function parkStationKeys(): Promise<void> {
+  await withTestDb(async (db) => {
+    await restoreStationKeys(db);
+    const ids = (await db.scannerKey.findMany({ where: { revokedAt: null }, select: { id: true } })).map((k) => k.id);
+    mkdirSync(SCRATCH, { recursive: true });
+    writeFileSync(KEYS_SNAPSHOT, JSON.stringify(ids));
+    await db.scannerKey.updateMany({ where: { id: { in: ids } }, data: { revokedAt: new Date() } });
+  });
+}
+
+async function restoreStationKeys(db: PrismaClient): Promise<void> {
+  if (!existsSync(KEYS_SNAPSHOT)) return;
+  const ids = JSON.parse(readFileSync(KEYS_SNAPSHOT, "utf8")) as string[];
+  await db.scannerKey.updateMany({ where: { id: { in: ids } }, data: { revokedAt: null } });
+  rmSync(KEYS_SNAPSHOT, { force: true });
 }
 
 async function resetGlobalKnobs(db: PrismaClient): Promise<void> {
@@ -236,12 +260,15 @@ interface PollerOpts {
   pauseMs?: number;
   maxPages?: number;
   key?: string;
+  /** WS-35: the done route holds its answer this long (server-side knob, per request). */
+  doneDelayMs?: number;
 }
 function pollerArgs(o: PollerOpts): string[] {
   return [
     POLLER, "--app-url", LOCAL_BASE_URL, "--key-file", o.key ?? keyFile, "--state-dir", o.stateDir ?? freshStateDir(),
     "--runner", "fetch", "--mac-state", o.mac, "--answer", o.answer ?? "approve", "--pause-ms", String(o.pauseMs ?? 0),
     ...(o.maxPages ? ["--max-pages", String(o.maxPages)] : []),
+    ...(o.doneDelayMs ? ["--done-delay-ms", String(o.doneDelayMs)] : []),
   ];
 }
 function freshStateDir(): string {
@@ -296,6 +323,7 @@ test.describe("Website Scanning rows", () => {
     if (envProblems.length) return;
     test.setTimeout(240_000);
     await withTestDb(async (db) => {
+      await restoreStationKeys(db); // a previous run that died inside WS-31
       await deleteFixtures(db);
       await seedFixtures(db);
       await isolateOtherOrgs(db);
@@ -334,6 +362,7 @@ test.describe("Website Scanning rows", () => {
     if (envProblems.length) return;
     await withTestDb(async (db) => {
       await resetGlobalKnobs(db);
+      await restoreStationKeys(db);
       await restoreOtherOrgs(db);
       await deleteFixtures(db);
     });
@@ -858,6 +887,403 @@ test.describe("Website Scanning rows", () => {
     expect(states["/people"]).toBe("unlinked");
     for (const path of PAGE_PATHS) if (path !== "/people") expect(states[path], `${path} state`).toBe("present");
     expect(pages.find((p) => pathOf(p.url) === "/people")!.removedAt).toBeNull();
+  });
+
+  test("WS-28 page PM-OS cannot take: a 2.6 MB HTML page is read with its text cut at 2 MB; a .pdf that is not a PDF has no text and the scan log names the reason; every other page read; Incomplete, 1 not read (PRD 2026-11-09)", async () => {
+    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // scripted site pages (fake-site variants bigPage = /big, 2.6 MB of HTML, and bogusPdf = /files/report.pdf, plain text under a .pdf name).
+    test.setTimeout(150_000);
+    const site = await newSite();
+    await site.control({ bigPage: true, bogusPdf: true });
+    const c = await addCompetitor(pmApi, site, "QA-WS Odd");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const r = await runPoller({ mac: "locked" });
+    expect(r.code, r.stdout).toBe(0);
+    const done = await waitForScanEnd(pending.id);
+    const bigUrl = `${site.url}/big`;
+    const pdfUrl = `${site.url}/files/report.pdf`;
+    // The station really took both odd files from the site.
+    const served = (await site.requests()).filter((q) => q.host === site.host && q.status === 200).map((q) => q.path);
+    expect(served, "the station fetched /big").toContain("/big");
+    expect(served, "the station fetched /files/report.pdf").toContain("/files/report.pdf");
+
+    type PageEntry = { url: string; outcome: string; status?: number; category?: string; error?: string; chars?: number };
+    const entries = done.pages as PageEntry[];
+    const diag = `outcomes ${JSON.stringify(done.outcomes)}; failed ${JSON.stringify(entries.filter((p) => p.outcome === "failed"))}`;
+    expect(done.status, diag).toBe("ok");
+    expect(done.badge, `PRD WS-28: the scan reaches Incomplete, 1 page not read — ${diag}`).toBe("incomplete");
+    expect(done.pagesFetched, diag).toBe(13); // the 12 pages + /big; the bogus PDF is not read
+
+    // Every other page read: the 12 pages and /big, each with text.
+    const pages = await pagesOf(c.sourceId);
+    const read = pages.filter((p) => p.url !== pdfUrl);
+    expect(read.map((p) => pathOf(p.url)).sort()).toEqual([...PAGE_PATHS, "/big"].sort());
+    for (const p of read) {
+      expect(p.text, p.url).toBeTruthy();
+      expect(p.state, `${p.url} state`).toBe("present");
+      expect(p.hash, p.url).toMatch(/^[0-9a-f]{32}$/);
+    }
+    // The 2.6 MB page: its HTML is cut at 2 MB — the markers at the top and at ~1.9 MB are in the text, the one at ~2.3 MB is not.
+    const big = read.find((p) => p.url === bigUrl)!;
+    expect(big.text).toContain(BIG_PAGE_MARKERS.start);
+    expect(big.text).toContain(BIG_PAGE_MARKERS.beforeCut);
+    expect(big.text, "text past the 2 MB cut").not.toContain(BIG_PAGE_MARKERS.afterCut);
+
+    // The bogus PDF: a page row of the scan with status other (handed-in "other" → status 0), not read, no text.
+    const pdf = entries.find((p) => p.url === pdfUrl);
+    expect(pdf, `page row for ${pdfUrl} in ${JSON.stringify(entries.map((p) => p.url))}`).toBeTruthy();
+    expect(pdf!.outcome).toBe("failed");
+    expect(pdf!.status).toBe(0);
+    expect(pdf!.chars ?? 0).toBe(0);
+    expect(pdf!.error).toMatch(/^PDF could not be read/);
+    const pdfRow = pages.find((p) => p.url === pdfUrl);
+    if (pdfRow) expect(pdfRow.text, "the bogus PDF has no text").toBeNull();
+    // The scan log names the reason, on the PDF's URL.
+    const reason = (done.log as { msg: string; url?: string }[]).find((l) => /^PDF could not be read/.test(l.msg));
+    expect(reason, `log ${JSON.stringify((done.log as { msg: string }[]).map((l) => l.msg))}`).toBeTruthy();
+    expect(reason!.url).toBe(pdfUrl);
+  });
+
+  test("WS-29 one scan token per scan: two check-ins carry the same token; after the scan ended and the hourly tick at +1 h 16 min the token row is gone and a post is refused (401)", async () => {
+    // Knobs: clock (+1 h 16 min), scheduler tick (once), fetcher runner (the real poller, --runner fetch, finishes the scan).
+    test.setTimeout(150_000);
+    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Token");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const secret = readFileSync(keyFile, "utf8").trim();
+    const checkIn = async (): Promise<string> => {
+      const res = await pmApi.get("/api/competitors/local/waiting", { headers: { authorization: `Bearer ${secret}` } });
+      expect(res.status(), await res.text()).toBe(200);
+      const list = ((await res.json()) as { waiting: { scanId: string; token: string }[] }).waiting;
+      const w = list.find((x) => x.scanId === pending.id);
+      expect(w, `scan ${pending.id} in ${JSON.stringify(list.map((x) => x.scanId))}`).toBeTruthy();
+      return w!.token;
+    };
+    const first = await checkIn();
+    const second = await checkIn();
+    expect(first).toMatch(/^pmost_/);
+    expect(second, "both check-ins carry the same token").toBe(first);
+    const tokenRows = () => withTestDb((db) => db.scanToken.count({ where: { scanId: pending.id } }));
+    expect(await tokenRows(), "one token row for the scan").toBe(1);
+
+    // Finish the scan on the station (its own check-in issues the same token again).
+    const r = await runPoller({ mac: "locked" });
+    expect(r.code, r.stdout).toBe(0);
+    const done = await waitForScanEnd(pending.id);
+    expect(done.status).toBe("ok");
+    expect(await tokenRows(), "still one token row after the poller's check-in").toBe(1);
+
+    await setClock(HOUR + 16 * 60_000);
+    await tick();
+    expect(await tokenRows(), "the tick deleted the ended scan's token").toBe(0);
+    const res = await pmApi.post(`/api/competitors/local/scans/${pending.id}/pages`, {
+      headers: { authorization: `Bearer ${first}` },
+      data: { url: `${c.site.url}/`, status: "ok", html: "<html><head><title>Acme Fake</title></head><body><main><p>late hand-in probe</p></main></body></html>" },
+    });
+    expect(res.status()).toBe(401);
+  });
+
+  test("WS-30 key rotation grace: a key older than 30 days rotates on check-in; the old key still works a day later while the new one is unused; after the new key's first use the old key works 10 more minutes, then 401", async () => {
+    // Knobs: clock (+31 days → the key is older than 30 days; +32 days; +32 days 11 min).
+    const key = await createKey("QA-WS key WS-30");
+    const checkIn = (secret: string) => pmApi.get("/api/competitors/local/waiting", { headers: { authorization: `Bearer ${secret}` } });
+    const keyRow = () => withTestDb((db) => db.scannerKey.findUniqueOrThrow({ where: { id: key.id } }));
+    type CheckIn = { station: string; rotatedKey?: string };
+
+    // Check in with the old key: rotation happens, the answer carries the new key once.
+    await setClock(31 * DAY);
+    let res = await checkIn(key.secret);
+    expect(res.status(), await res.text()).toBe(200);
+    let json = (await res.json()) as CheckIn;
+    expect(json.station).toBe("QA-WS key WS-30");
+    expect(json.rotatedKey, "rotation returns a new key").toMatch(/^pmosk_/);
+    const newKey = json.rotatedKey!;
+    expect(newKey).not.toBe(key.secret);
+    let row = await keyRow();
+    expect(row.rotatedAt).not.toBeNull();
+    expect(row.previousValidUntil, "no grace clock before the new key is used").toBeNull();
+
+    // A day later the old key still works (the new one is unused), and does not rotate again.
+    await setClock(32 * DAY);
+    res = await checkIn(key.secret);
+    expect(res.status(), `old key a day after rotation, new key unused: ${await res.text()}`).toBe(200);
+    expect(((await res.json()) as CheckIn).rotatedKey).toBeUndefined();
+    expect((await keyRow()).previousValidUntil).toBeNull();
+
+    // The new key's first use starts the 10-minute grace of the old key.
+    res = await checkIn(newKey);
+    expect(res.status(), await res.text()).toBe(200);
+    json = (await res.json()) as CheckIn;
+    expect(json.rotatedKey).toBeUndefined();
+    row = await keyRow();
+    expect(row.previousValidUntil, "grace starts at the new key's first use").not.toBeNull();
+    expect(row.previousValidUntil!.getTime() - row.lastUsedAt!.getTime()).toBe(10 * 60_000);
+    res = await checkIn(key.secret);
+    expect(res.status(), "old key inside the 10 minutes").toBe(200);
+
+    // 11 minutes later: the old key is refused, the new one works.
+    await setClock(32 * DAY + 11 * 60_000);
+    res = await checkIn(key.secret);
+    expect(res.status(), "old key after the 10 minutes").toBe(401);
+    res = await checkIn(newKey);
+    expect(res.status(), await res.text()).toBe(200);
+  });
+
+  test("WS-31 no station: one failed scan per frequency — first tick fails with missing scanner configuration, a tick 1 h later adds nothing, a tick 2 days later adds one; two scans in total", async () => {
+    // Knobs: clock (+1 h, then +2 days 1 h), scheduler tick (three times). Setup: remote OFF; every station key parked for this row
+    // (the station check is global) and restored after it.
+    test.setTimeout(120_000);
+    const site = await newSite();
+    const name = "QA-WS NoStation";
+    // One competitor, frequency 2 days, never scanned (created the way the pipeline leaves it: adding through the API would start a scan at once).
+    const sourceId = await withTestDb(async (db) => {
+      const cmp = await db.competitor.create({
+        data: { workspaceId, name, websiteUrl: site.url, host: site.host, position: 0, sources: { create: { workspaceId, type: "website", url: site.url, scanEveryDays: 2 } } },
+        include: { sources: true },
+      });
+      return cmp.sources[0].id;
+    });
+    const dueLines = (lines: string[]) => lines.filter((l) => l.startsWith(`due: ${name} `)).length;
+    const expectMissingConfig = (scans: Awaited<ReturnType<typeof scansOf>>) => {
+      for (const s of scans) {
+        expect(s.status, s.id).toBe("failed");
+        expect(s.error, s.id).toBe("missing scanner configuration");
+        expect(s.trigger, s.id).toBe("scheduled");
+      }
+    };
+    await parkStationKeys();
+    try {
+      expect(await withTestDb((db) => db.scannerKey.count({ where: { revokedAt: null } })), "no station key enrolled").toBe(0);
+      expect(dueLines(await tick()), "first tick").toBe(1);
+      let scans = await scansOf(sourceId);
+      expect(scans.length).toBe(1);
+      expectMissingConfig(scans);
+      expect(await withTestDb((db) => db.localScanRequest.count({ where: { sourceId } })), "nothing parked in the local lane").toBe(0);
+
+      await setClock(HOUR);
+      expect(dueLines(await tick()), "second tick, 1 h later").toBe(0);
+      expect((await scansOf(sourceId)).length).toBe(1);
+
+      await setClock(HOUR + 2 * DAY);
+      expect(dueLines(await tick()), "third tick, 2 days later").toBe(1);
+      scans = await scansOf(sourceId);
+      expect(scans.length, "two scans in total").toBe(2);
+      expectMissingConfig(scans);
+    } finally {
+      await withTestDb((db) => restoreStationKeys(db));
+    }
+  });
+
+  test("WS-32 website address changed: after the edit all 12 site A pages are removed with no text; one poller run onboards site B as a whole and never requests a site A URL", async () => {
+    // Knobs: run-once (one poller check-in per scan), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // request log (both fake sites log every request with its host).
+    test.setTimeout(200_000);
+    const c = await onboardLocal("QA-WS Move"); // WS-01 done: 12 pages of site A
+    const siteA = c.site;
+    const siteB = await newSite();
+    expect(siteB.host).not.toBe(siteA.host);
+    const scansBefore = (await scansOf(c.sourceId)).length;
+    const aRequestsBefore = (await siteA.requests()).length;
+    const onSite = (rows: Awaited<ReturnType<typeof pagesOf>>, s: FakeSite) => rows.filter((p) => new URL(p.url).host === s.host);
+
+    // Edit the competitor: the website becomes site B.
+    const res = await pmApi.patch(`/api/competitors/${c.id}`, { data: { website: siteB.url } });
+    expect(res.status(), await res.text()).toBe(200);
+    const afterEdit = onSite(await pagesOf(c.sourceId), siteA);
+    expect(afterEdit.length).toBe(12);
+    for (const p of afterEdit) {
+      expect.soft(p.state, `${p.url} state right after the edit`).toBe("removed");
+      expect.soft(p.text, `${p.url} text right after the edit`).toBeNull();
+    }
+
+    // PRD: the next step is "Run poller once" — the edit itself queues site B's onboarding scan (nobody presses Scan now).
+    let next: Awaited<ReturnType<typeof scansOf>>[number] | undefined;
+    await expect.poll(async () => {
+      next = (await scansOf(c.sourceId)).slice(scansBefore).find((s) => s.status === "pending_local");
+      return next?.id ?? null;
+    }, { timeout: 30_000, intervals: [250, 500], message: "a website change queues the onboarding scan of the new site" }).not.toBeNull();
+    const r = await runPoller({ mac: "locked" });
+    expect(r.code, r.stdout).toBe(0);
+    const done = await waitForScanEnd(next!.id);
+    expect(done.status, done.error ?? "").toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+
+    // Site A: all 12 pages removed, no text left.
+    const all = await pagesOf(c.sourceId);
+    const onA = onSite(all, siteA);
+    expect(onA.map((p) => pathOf(p.url)).sort()).toEqual([...PAGE_PATHS].sort());
+    for (const p of onA) {
+      expect(p.state, `${p.url} state`).toBe("removed");
+      expect(p.removedAt, `${p.url} removedAt`).not.toBeNull();
+      expect(p.text, `${p.url} text`).toBeNull();
+      expect(p.previousText, `${p.url} previousText`).toBeNull();
+    }
+    // Site B onboarded as a whole: its 12 pages, present, with text.
+    const onB = onSite(all, siteB);
+    expect(onB.map((p) => pathOf(p.url)).sort()).toEqual([...PAGE_PATHS].sort());
+    for (const p of onB) {
+      expect(p.state, `${p.url} state`).toBe("present");
+      expect(p.text, p.url).toBeTruthy();
+      expect(p.hash, p.url).toMatch(/^[0-9a-f]{32}$/);
+    }
+    expect(all.length).toBe(24);
+
+    // Request log: nothing reached site A after the edit; site B answered every page.
+    const aAfter = (await siteA.requests()).slice(aRequestsBefore);
+    expect(aAfter.map((q) => `${q.host}${q.path}`), "site A requests after the edit").toEqual([]);
+    const bServed = new Set((await siteB.requests()).filter((q) => q.host === siteB.host && q.status === 200).map((q) => q.path));
+    for (const path of PAGE_PATHS) expect(bServed.has(path), `site B ${path} requested`).toBe(true);
+  });
+
+  test("WS-33 sitemap entry counts as a link: /whitepaper is listed only in /sitemap.xml and linked from no page → present, not unlinked; 13 pages, Full, no 'unlinked' log line", async () => {
+    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // scripted site (fake-site variant sitemapOnly = /whitepaper served and listed in /sitemap.xml, no <a> to it on any page).
+    test.setTimeout(150_000);
+    const site = await newSite();
+    await site.control({ sitemapOnly: true });
+    const whitepaper = `${site.url}/whitepaper`;
+    // The fixture's contract, checked rather than assumed: the sitemap lists it, the home page (the only page with extra links) does not.
+    expect(await (await fetch(`${site.url}/sitemap.xml`)).text()).toContain(`<loc>${whitepaper}</loc>`);
+    expect(await (await fetch(`${site.url}/`)).text()).not.toContain("/whitepaper");
+    const c = await addCompetitor(pmApi, site, "QA-WS Sitemap");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const r = await runPoller({ mac: "locked" });
+    expect(r.code, r.stdout).toBe(0);
+    // The station found the page in the sitemap: 13 URLs to start with (12 pages + /whitepaper).
+    expect(r.stdout).toMatch(/sitemaps: 1 sitemap file, 13 URLs/);
+    const done = await waitForScanEnd(pending.id);
+    const logMsgs = (done.log as { msg: string }[]).map((l) => l.msg);
+    expect(done.status, done.error ?? "").toBe("ok");
+    expect(done.badge, logMsgs.join("\n")).toBe("full");
+    expect(done.pagesFetched).toBe(13);
+    // The station handed its sitemap entries in as links: the scan's linkedUrls carry /whitepaper.
+    expect(done.linkedUrls as string[], "scan.linkedUrls").toContain(whitepaper);
+    const pages = await pagesOf(c.sourceId);
+    expect(pages.map((p) => pathOf(p.url)).sort()).toEqual([...PAGE_PATHS, "/whitepaper"].sort());
+    for (const p of pages) expect(p.state, `${p.url} state`).toBe("present");
+    const wp = pages.find((p) => p.url === whitepaper)!;
+    expect(wp.text).toContain("a whitepaper only the sitemap lists");
+    expect(wp.lastLinkedScanId, "the sitemap entry marked /whitepaper linked in this scan").toBe(done.id);
+    expect(wp.removedAt).toBeNull();
+    // No "N pages unlinked" line in the scan log.
+    expect(logMsgs.filter((m) => /unlinked/.test(m)), "unlinked log lines").toEqual([]);
+  });
+
+  test("WS-34 one page, one row (local lane): home links /pricing/ and /product/features/ with a trailing slash and /about under www.<host> → 12 rows, none ending with '/', no www row, 12 fetched, Full; a hand-in under a variant spelling lands on the existing row", async () => {
+    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // scripted site (fake-site variant variantLinks: home links the same pages under other spellings), request log (host per request).
+    test.setTimeout(200_000);
+    const site = await newSite();
+    await site.control({ variantLinks: true });
+    const wwwOrigin = `http://www.${SITE_HOST}:${site.port}`;
+    // The fixture really answers under the www. copy of its host (else the link would be a dead one, not a variant).
+    expect((await fetch(`${wwwOrigin}/about`)).status, `${wwwOrigin}/about reachable`).toBe(200);
+    const home = await (await fetch(`${site.url}/`)).text();
+    for (const href of [`${site.url}/pricing/`, `${site.url}/product/features/`, `${wwwOrigin}/about`]) expect(home, `home links ${href}`).toContain(`href="${href}"`);
+    const probed = (await site.requests()).length; // the checks above are the test's own requests, not the station's
+
+    const c = await addCompetitor(pmApi, site, "QA-WS OneRow");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const r = await runPoller({ mac: "locked" });
+    expect(r.code, r.stdout).toBe(0);
+    const done = await waitForScanEnd(pending.id);
+    expect(done.status, done.error ?? "").toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+    const oneRowPerPage = (rows: Awaited<ReturnType<typeof pagesOf>>) => {
+      const urls = rows.map((p) => p.url);
+      expect(urls.map(pathOf).sort(), "exactly the 12 pages").toEqual([...PAGE_PATHS].sort());
+      expect(new Set(urls).size, "no duplicate URL").toBe(urls.length);
+      for (const u of urls) {
+        expect(u === `${site.url}/` || !u.endsWith("/"), `${u} ends with a slash`).toBe(true);
+        expect(new URL(u).host, `${u} host`).toBe(site.host);
+      }
+    };
+    oneRowPerPage(await pagesOf(c.sourceId));
+    // The station fetched nothing under the www. host: the variants are one page to it too.
+    expect((await site.requests()).slice(probed).filter((q) => q.host.startsWith("www.")).map((q) => `${q.host}${q.path}`), "requests under www.").toEqual([]);
+
+    // Server side: a page handed in under a variant spelling (www. host, trailing slash) lands on the existing row.
+    const res = await scanNow(adminApi, c.id);
+    expect(res.status(), await res.text()).toBe(202);
+    const next = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const secret = readFileSync(keyFile, "utf8").trim();
+    const checkIn = await pmApi.get("/api/competitors/local/waiting", { headers: { authorization: `Bearer ${secret}` } });
+    expect(checkIn.status(), await checkIn.text()).toBe(200);
+    const job = ((await checkIn.json()) as { waiting: { scanId: string; token: string }[] }).waiting.find((w) => w.scanId === next.id);
+    expect(job, `scan ${next.id} waiting`).toBeTruthy();
+    const aboutHtml = await (await fetch(`${site.url}/about`)).text();
+    const handin = await pmApi.post(`/api/competitors/local/scans/${next.id}/pages`, {
+      headers: { authorization: `Bearer ${job!.token}` },
+      data: { url: `${wwwOrigin}/about/`, status: "ok", html: aboutHtml },
+    });
+    expect(handin.status(), await handin.text()).toBe(200);
+    const answer = (await handin.json()) as { url: string; outcome: string };
+    expect(answer.url, "stored under the site's own address, no trailing slash").toBe(`${site.url}/about`);
+    expect(answer.outcome, "the same text as the existing row").toBe("unchanged");
+    const finish = await pmApi.post(`/api/competitors/local/scans/${next.id}/done`, { headers: { authorization: `Bearer ${job!.token}` }, data: {} });
+    expect(finish.status(), await finish.text()).toBe(200);
+    await waitForScanEnd(next.id);
+    oneRowPerPage(await pagesOf(c.sourceId));
+  });
+
+  test("WS-34 one page, one row (remote lane): the crawler follows /pricing/, /product/features/ and www.<host>/about → 12 rows, none ending with '/', no www row, each page requested once, Full", async () => {
+    // Knobs: remote ON (PATCH settings), pause 0, scripted site (fake-site variant variantLinks), request log (host per request).
+    test.setTimeout(150_000);
+    await setRemote(true);
+    const site = await newSite();
+    await site.control({ variantLinks: true });
+    const wwwOrigin = `http://www.${SITE_HOST}:${site.port}`;
+    expect((await fetch(`${wwwOrigin}/about`)).status, `${wwwOrigin}/about reachable`).toBe(200);
+    const probed = (await site.requests()).length; // the check above is the test's own request, not the crawler's
+    const c = await addCompetitor(pmApi, site, "QA-WS OneRowRemote");
+    const scan = await waitForScanWithStatus(c.sourceId, "running", 30_000).catch(async () => (await scansOf(c.sourceId))[0]);
+    const done = await waitForScanEnd(scan.id);
+    expect(done.lane).toBe("remote");
+    expect(done.status, done.error ?? "").toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+    const urls = (await pagesOf(c.sourceId)).map((p) => p.url);
+    expect(urls.map(pathOf).sort(), "exactly the 12 pages").toEqual([...PAGE_PATHS].sort());
+    expect(new Set(urls).size, "no duplicate URL").toBe(urls.length);
+    for (const u of urls) {
+      expect(u === `${site.url}/` || !u.endsWith("/"), `${u} ends with a slash`).toBe(true);
+      expect(new URL(u).host, `${u} host`).toBe(site.host);
+    }
+    // The crawler asked for each variant target once, on the site's own host, never under www.
+    const all = (await site.requests()).slice(probed);
+    expect(all.filter((q) => q.host.startsWith("www.")).map((q) => `${q.host}${q.path}`), "requests under www.").toEqual([]);
+    const scanner = await scannerPageRequests(site);
+    const counts = Object.fromEntries(["/pricing", "/product/features", "/about"].map((p) => [p, scanner.filter((q) => q.path === p).length]));
+    expect(counts).toEqual({ "/pricing": 1, "/product/features": 1, "/about": 1 });
+  });
+
+  test("WS-35 station waits for a long processing step: the done answer is held 5 min 10 s (past fetch's 5-minute limit) → the station still reports the result, scan Full 12, nothing 'failed on the station'", async () => {
+    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // done delay (--done-delay-ms 310000 → body.testDelayMs on the done route, honoured only with COMPETITORS_TEST_KNOBS=on, this request only).
+    // Takes ~5.5 minutes by design.
+    test.setTimeout(600_000);
+    const delayMs = 310_000;
+    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Patient");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const t0 = Date.now();
+    const run = runPoller({ mac: "locked", doneDelayMs: delayMs }, 540_000);
+    // While the answer is held: every page is handed in, the scan is still running (being processed), nothing ended.
+    await expect.poll(async () => ((await scanRow(pending.id)).pages as unknown[]).length, { timeout: 60_000, intervals: [500] }).toBe(12);
+    await new Promise((r) => setTimeout(r, 20_000));
+    const mid = await scanRow(pending.id);
+    expect(mid.status, "still running while the done answer is held").toBe("running");
+    const r = await run;
+    const elapsed = Date.now() - t0;
+    expect(r.code, r.stdout).toBe(0);
+    expect(elapsed, `the station waited for the held answer (${Math.round(elapsed / 1000)} s)`).toBeGreaterThanOrEqual(delayMs);
+    expect(r.stdout).not.toMatch(/failed on the station/);
+    expect(r.stdout).toMatch(new RegExp(`scan ${pending.id} ok \\(full\\) · 12 pages, 12 changed, 0 not attempted`));
+    const done = await waitForScanEnd(pending.id);
+    expect(done.status).toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+    expect((await pagesOf(c.sourceId)).length).toBe(12);
   });
 
   // ————————————————————————————— Remote lane ON —————————————————————————————

@@ -12,6 +12,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  *             `linkPdf` variant), a captioned image on /about, and home links
  *             to app.<host>, another domain and linkedin.com. /login demands a
  *             login (reason "login") when the `loginPage` variant links it.
+ *             `bigPage` links /big (2.6 MB of HTML), `bogusPdf` links
+ *             /files/report.pdf (a .pdf that is not a PDF) — WS-28.
+ *             `sitemapOnly` serves /whitepaper, listed in /sitemap.xml and
+ *             linked from no page — WS-33. `variantLinks` makes home link
+ *             the same pages under other spellings (trailing slash, www.
+ *             host) — WS-34.
  *
  * Variants are toggled through the control endpoint (same server, never a
  * second site) and every request is logged:
@@ -62,6 +68,22 @@ export interface Variants {
   linkPdf: boolean;
   /** Every page answers after this many ms (WS-26: scans slow enough to watch the concurrency). 0 = at once. */
   delayMs: number;
+  /**
+   * Home links /big, a 2.6 MB HTML page (WS-28). Its visible text is three marker paragraphs separated by whitespace
+   * padding: BIG_PAGE_MARKERS.start at the top, .beforeCut at ~1.9 MB, .afterCut at ~2.3 MB — so a cut at 2 MB keeps
+   * the first two and drops the third, and the text stays far below the page store's character cap.
+   */
+  bigPage: boolean;
+  /** Home links /files/report.pdf: served as application/pdf, but the bytes are plain text, not a PDF (WS-28). */
+  bogusPdf: boolean;
+  /** /whitepaper answers and is listed in /sitemap.xml, but no page links to it (WS-33: a sitemap entry counts as "something points at the page"). */
+  sitemapOnly: boolean;
+  /**
+   * Home links the same pages under other spellings (WS-34: one page, one row): /pricing/ and /product/features/ with a
+   * trailing slash, and /about under the www. copy of the host (http://www.<host>:<port>/about — the fixture answers any Host
+   * header, and *.localtest.me resolves to 127.0.0.1).
+   */
+  variantLinks: boolean;
 }
 
 export const DEFAULT_VARIANTS: Variants = {
@@ -85,7 +107,46 @@ export const DEFAULT_VARIANTS: Variants = {
   down: false,
   linkPdf: false,
   delayMs: 0,
+  bigPage: false,
+  bogusPdf: false,
+  sitemapOnly: false,
+  variantLinks: false,
 };
+
+/** The marker paragraphs of the `bigPage` variant (byte offsets in the served HTML, ASCII only). */
+export const BIG_PAGE_MARKERS = {
+  start: "Big page start marker: the first paragraph of the long page.",
+  beforeCut: "Big page marker before the cut: this paragraph sits at about 1.9 MB.",
+  afterCut: "Big page marker after the cut: this paragraph sits at about 2.3 MB.",
+} as const;
+const MB = 1024 * 1024;
+/** Size of the `bigPage` HTML in bytes (2.6 MB). */
+export const BIG_PAGE_BYTES = Math.round(2.6 * MB);
+
+/** The 2.6 MB page: whitespace padding (no text, no tags) between the marker paragraphs, so where the cut lands is visible in the stored text. */
+function bigPageHtml(nav: string, footerDate: string): string {
+  const head = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Big page · Acme Fake</title></head><body>
+<nav>${nav}</nav>
+<main>
+<h1>Big page</h1>
+<p>${BIG_PAGE_MARKERS.start}</p>
+`;
+  const before = `<p>${BIG_PAGE_MARKERS.beforeCut}</p>\n`;
+  const after = `<p>${BIG_PAGE_MARKERS.afterCut}</p>\n`;
+  const tail = `<p>Acme Fake is a fictional vendor that exists only for the PM-OS test suite; nothing on this site describes a real company, product or person.</p>
+</main>
+<footer><p>Acme Fake Inc. ${footerDate}</p></footer>
+</body></html>`;
+  const pad = (n: number) => " ".repeat(Math.max(0, n));
+  let out = head;
+  out += pad(Math.round(1.9 * MB) - out.length) + before;
+  out += pad(Math.round(2.3 * MB) - out.length) + after;
+  out += pad(BIG_PAGE_BYTES - out.length - tail.length) + tail;
+  return out;
+}
+
+/** Not a PDF: what a misconfigured server hands out under a .pdf name. */
+const BOGUS_PDF = Buffer.from("This file is named report.pdf but it is plain text, not a PDF document.\n", "utf8");
 
 export interface RequestLogEntry {
   at: number;
@@ -243,13 +304,25 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
         return send(200, lines.join("\n") + "\n", "text/plain");
       }
       case "/sitemap.xml": {
-        const paths = [...PAGE_PATHS.filter((p) => !(variants.unlinkPeople && p === "/people")), ...(variants.newProductPage ? ["/product/new"] : [])];
+        const paths = [...PAGE_PATHS.filter((p) => !(variants.unlinkPeople && p === "/people")), ...(variants.newProductPage ? ["/product/new"] : []), ...(variants.sitemapOnly ? ["/whitepaper"] : [])];
         const xml = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map((p) => `<url><loc>${base}${p}</loc></url>`).join("")}</urlset>`;
         return send(200, xml, "application/xml");
       }
       case "/files/brochure.pdf":
         okPages++;
         return send(200, pdf, "application/pdf");
+      case "/files/report.pdf":
+        if (!variants.bogusPdf) break;
+        okPages++;
+        return send(200, BOGUS_PDF, "application/pdf");
+      case "/whitepaper":
+        if (!variants.sitemapOnly) break;
+        okPages++;
+        return send(200, page("Whitepaper", "<p>The state of threat intelligence: a whitepaper only the sitemap lists. Forty pages of findings from two hundred analysts.</p>", nav, footerDate));
+      case "/big":
+        if (!variants.bigPage) break;
+        okPages++;
+        return send(200, bigPageHtml(nav, footerDate));
       case "/img/office.png":
         return send(200, PNG, "image/png");
       case "/login":
@@ -258,7 +331,7 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
         okPages++;
         return send(200, page("Acme Fake", `<p>Threat intelligence for every analyst.</p>
 <p>Also see <a href="http://app.${hostName}:${port}/dashboard">the app</a>, <a href="https://other-domain.example/partner">our partner</a> and <a href="https://www.linkedin.com/company/acme-fake">LinkedIn</a>.</p>
-${variants.linkPdf ? `<p>Read the <a href="${base}/files/brochure.pdf">brochure (PDF)</a>.</p>` : ""}${variants.infiniteLinks ? `<p><a href="${base}/loop/1">An endless series</a></p>` : ""}`, nav, footerDate));
+${variants.linkPdf ? `<p>Read the <a href="${base}/files/brochure.pdf">brochure (PDF)</a>.</p>` : ""}${variants.bigPage ? `<p>The <a href="${base}/big">long page</a>.</p>` : ""}${variants.bogusPdf ? `<p>The <a href="${base}/files/report.pdf">annual report (PDF)</a>.</p>` : ""}${variants.infiniteLinks ? `<p><a href="${base}/loop/1">An endless series</a></p>` : ""}${variants.variantLinks ? `<p>Our <a href="${base}/pricing/">plans</a>, the <a href="${base}/product/features/">feature list</a> and <a href="http://www.${hostName}:${port}/about">who we are</a>.</p>` : ""}`, nav, footerDate));
       case "/product":
         okPages++;
         return send(200, page("Product", `<p>Acme Platform collects, correlates and alerts.</p><ul><li><a href="${base}/product/features">Features</a></li>${variants.newProductPage ? `<li><a href="${base}/product/new">Acme Shield (new)</a></li>` : ""}</ul>${variants.linkPdf ? `<p>Datasheet: <a href="${base}/files/brochure.pdf">brochure.pdf</a></p>` : ""}`, nav, footerDate));

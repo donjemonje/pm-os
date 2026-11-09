@@ -41,6 +41,7 @@
  *   --max-pages N        read at most N pages per scan (default: the server's ceiling)
  *   --max-minutes N      stop a scan after N minutes (default: the server's ceiling)
  *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
+ *   --done-delay-ms N    TEST KNOB (e2e WS-35, server honours it only with COMPETITORS_TEST_KNOBS=on): ask PM-OS to hold the done answer N ms
  */
 import { execFile, spawn } from "node:child_process";
 import http from "node:http";
@@ -77,6 +78,8 @@ const MAC_STATE = flag("mac-state", "auto");
 const ANSWER = flag("answer", "ask");
 const MAX_PAGES_FLAG = Number(flag("max-pages", "0")) || 0;
 const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
+/** TEST KNOB (WS-35): passed through to the done route as testDelayMs; 0 = absent. Never set by the LaunchAgent. */
+const DONE_DELAY_MS = Number(flag("done-delay-ms", "0")) || 0;
 /** A browser's own identity — this is a person's machine, not the PM-OS crawler. */
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -548,7 +551,7 @@ async function runJob(job, runner, key) {
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
   if (result.ended) return;
   // PM-OS processes the pages inside this call in local dev (page states, PMOS AI); in production it hands them to its own job.
-  const done = await apiLong(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 20 * 60_000);
+  const done = await apiLong(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted, ...(DONE_DELAY_MS ? { testDelayMs: DONE_DELAY_MS } : {}) }) }, 20 * 60_000);
   if (done.processing) log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS is processing the pages`);
   else log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }
