@@ -38,8 +38,7 @@
  *   --mac-state auto|active|locked   (default auto — reads the real lock state)
  *   --answer ask|approve|later       (default ask — the real dialog)
  *   --pause-ms N         pause between pages in the fetch runner (default 2000)
- *   --max-pages N        read at most N pages per scan (default: the server's ceiling)
- *   --max-minutes N      stop a scan after N minutes (default: the server's ceiling)
+ *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit)
  *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
  *   --done-delay-ms N    TEST KNOB (e2e WS-35, server honours it only with COMPETITORS_TEST_KNOBS=on): ask PM-OS to hold the done answer N ms
  */
@@ -76,7 +75,6 @@ const MAX_RENDERS = 40;
 const CHROME_PROFILE = join(STATE_DIR, "chrome-profile");
 const MAC_STATE = flag("mac-state", "auto");
 const ANSWER = flag("answer", "ask");
-const MAX_PAGES_FLAG = Number(flag("max-pages", "0")) || 0;
 const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
 /** TEST KNOB (WS-35): passed through to the done route as testDelayMs; 0 = absent. Never set by the LaunchAgent. */
 const DONE_DELAY_MS = Number(flag("done-delay-ms", "0")) || 0;
@@ -395,7 +393,7 @@ async function runFetch(job, limits, post) {
   let n = 0;
   let renders = 0;
   while (queue.length) {
-    if (n >= limits.pages || Date.now() - t0 > limits.ms) break;
+    if (Date.now() - t0 > limits.ms) break;
     const url = queue.shift();
     if (n > 0 && PAUSE_MS > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
     n++;
@@ -446,6 +444,11 @@ async function runFetch(job, limits, post) {
     if (pendingLinked.length) body.linked = pendingLinked;
     const r = await post(body);
     if (r && !r.refused) pendingLinked = [];
+    if (r && r.stop) {
+      // PM-OS's store is full: this page and everything left are "not attempted"; the server says so in the scan.
+      log(`  PM-OS stopped the scan (${r.stop}): ${r.error ?? ""} — ${queue.length + 1} pages left`);
+      return { notAttempted: queue.length + 1 };
+    }
     if (r === null) {
       // The scan ended on the server (cancelled, or already processed): nothing more to hand in.
       log(`  scan ended on the server — stopping, ${queue.length} pages left`);
@@ -482,7 +485,7 @@ exec "${process.execPath}" "${handinJs}" "${dir}" "$@"
 
 Site: ${job.siteUrl}
 Stay on this site only: ${site} (www.${site.replace(/:\d+$/, "")} is the same site). Any other subdomain (app., docs., support., …) and any other website is a separate source: do not open it, do not hand it in, do not count it. Never log in anywhere.
-Read at most ${limits.pages} pages and stop after ${Math.round(limits.ms / 60000)} minutes.
+Read every page; stop after ${Math.round(limits.ms / 60000)} minutes.
 Pages earlier scans know (read these first, then anything new you find in menus, footers, the sitemap and links):
 ${known || "(none yet)"}
 
@@ -521,12 +524,10 @@ When you are done, or the limits are reached, print exactly one final line: DONE
 // ————— One scan —————
 
 async function runJob(job, runner, key) {
-  const limits = {
-    pages: MAX_PAGES_FLAG || job.ceiling?.pages || 2000,
-    ms: MAX_MINUTES_FLAG ? MAX_MINUTES_FLAG * 60_000 : job.ceiling?.ms || 3 * 3600_000,
-  };
+  // No page limit (Daniel 2026-11-09): time is the station's only stop; the PM-OS store limit is the server's (it answers stop: "storage").
+  const limits = { ms: MAX_MINUTES_FLAG ? MAX_MINUTES_FLAG * 60_000 : job.ceiling?.ms || 8 * 3600_000 };
   const auth = { authorization: `Bearer ${job.token}` };
-  log(`scan ${job.scanId} — ${job.competitorName} (${job.siteUrl}) via ${runner}, up to ${limits.pages} pages`);
+  log(`scan ${job.scanId} — ${job.competitorName} (${job.siteUrl}) via ${runner}, up to ${Math.round(limits.ms / 60000)} minutes`);
   // The machine key names the station that took the scan (Administration); the scan token does the work.
   await api(`/api/competitors/local/scans/${job.scanId}/start`, { method: "POST", headers: { ...auth, "x-pmos-station": `Bearer ${key}` } });
   /**

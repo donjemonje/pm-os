@@ -14,7 +14,6 @@ import {
   CRAWL_DELAY_CAP_MS,
   HEARTBEAT_MS,
   PAGE_RETRIES,
-  ceiling,
   scanPauseMs,
   type OutcomeCategory,
   type ScanBadge,
@@ -29,7 +28,7 @@ import { ogImageOf } from "./html";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
 import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
-import { aiStepEnabled, getGlobalScanSettings, now } from "./settings";
+import { aiStepEnabled, getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
 import { isPdfUrl, isInsideSite } from "./url";
 
 /**
@@ -247,7 +246,7 @@ interface Collected {
   /** Home page could not be read; the kind says Blocked vs Unreachable. */
   homeFailed: FetchErrorKind | null;
   /** The scan stopped early: ceiling or slow down. */
-  stoppedBy: "cap" | "slowdown" | null;
+  stoppedBy: "cap" | "slowdown" | "storage" | null;
   mode: FetchMode | ScanLane;
   errorKind: string | null;
   error: string | null;
@@ -304,7 +303,7 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
   const { scanId, workspaceId, source, competitor, log, t0 } = ctx;
   const out = emptyCollected("plain");
   let mode: FetchMode = "plain";
-  const limits = ceiling();
+  const limits = { ms: await scanTimeLimitMs() };
 
   // ——— 1. Frontier: known pages (pending ones first), home, robots, sitemap ———
   const rules = await readRobots(source.url);
@@ -328,12 +327,13 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
   // ——— 2. Fetch loop ———
   let n = 0;
   while (true) {
-    if (out.attempted >= limits.pages) {
+    // No page limit (Daniel 2026-11-09): a site is read whole. Time and the PM-OS store are the only stops.
+    if (Date.now() - t0 > limits.ms) {
       out.stoppedBy = "cap";
       break;
     }
-    if (Date.now() - t0 > limits.ms) {
-      out.stoppedBy = "cap";
+    if (await storageFull()) {
+      out.stoppedBy = "storage";
       break;
     }
     const cand = frontier.next();
@@ -396,7 +396,10 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
     log.notAttempted = left.length;
     if (out.stoppedBy === "cap") {
       log.count("cap", left.length);
-      log.add("warn", `Ceiling reached (${limits.pages} pages / ${Math.round(limits.ms / 60000)} min) — ${left.length} discovered page${left.length === 1 ? "" : "s"} not attempted; the next run continues from them`);
+      log.add("warn", `Time limit reached (${timeLimitLabel(limits.ms)}) — ${left.length} discovered page${left.length === 1 ? "" : "s"} not attempted; the next run continues from them`);
+    } else if (out.stoppedBy === "storage") {
+      log.count("storage", left.length);
+      log.add("warn", `PM-OS storage limit reached (${await storageLimitLabel()} of page text, all organizations) — ${left.length} discovered page${left.length === 1 ? "" : "s"} not attempted; contact support@pm-os.io to raise it`);
     } else if (out.stoppedBy === "slowdown") {
       log.add("warn", `${left.length} discovered page${left.length === 1 ? "" : "s"} not attempted after the slow-down answer`);
     } else if (out.homeFailed) {
@@ -461,18 +464,43 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
     const rows = await db.sourcePage.findMany({ where: { sourceId: source.id, url: { in: changedUrls } }, select: { url: true, title: true, text: true, kind: true } });
     out.changedPages = rows.filter((r) => r.text).map((r) => ({ url: r.url, title: r.title ?? "", text: r.text ?? "", kind: r.kind, sourceLabel: ctx.sourceLabel }));
   }
-  const row = await db.competitorScan.findUnique({ where: { id: scanId }, select: { pagesNotAttempted: true, linkedUrls: true } });
+  const row = await db.competitorScan.findUnique({ where: { id: scanId }, select: { pagesNotAttempted: true, linkedUrls: true, errorKind: true } });
   // Now that every handed-in page has its row, apply the inbound links the station's pages carried (feeds "unlinked").
   const linked = Array.isArray(row?.linkedUrls) ? (row!.linkedUrls as string[]) : [];
   if (linked.length) await markLinked(source.id, scanId, linked);
   log.notAttempted = row?.pagesNotAttempted ?? 0;
-  if (log.notAttempted) out.stoppedBy = "cap";
+  if (row?.errorKind === "storage") {
+    // The hand-in route refused a page because the PM-OS store is full: the station stopped there.
+    out.stoppedBy = "storage";
+    out.errorKind = "storage";
+    out.error = "PM-OS storage limit reached";
+    if (log.notAttempted) log.count("storage", log.notAttempted);
+    log.add("warn", `PM-OS storage limit reached (${await storageLimitLabel()} of page text, all organizations) — ${log.notAttempted} discovered page${log.notAttempted === 1 ? "" : "s"} not attempted; contact support@pm-os.io to raise it`);
+  } else if (log.notAttempted) {
+    out.stoppedBy = "cap";
+    log.count("cap", log.notAttempted);
+  }
   log.add("info", `${out.count} page${out.count === 1 ? "" : "s"} handed in from the station, ${out.attempted - out.count} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
   if (out.count === 0 && out.attempted === 0) {
     out.errorKind = "other";
     out.error = "no page could be read";
   }
   return out;
+}
+
+/** "8 h", "45 min" or "20 s" for the scan log. */
+function timeLimitLabel(ms: number): string {
+  if (ms >= 3600_000 && ms % 3600_000 === 0) return `${ms / 3600_000} h`;
+  if (ms >= 60_000) return `${Math.round(ms / 60_000)} min`;
+  return `${Math.round(ms / 1000)} s`;
+}
+
+/** "10 GB" (or "48 KB" under a test knob) for the scan log. */
+async function storageLimitLabel(): Promise<string> {
+  const chars = await storageLimitChars();
+  if (chars >= 1024 ** 3) return `${Math.round(chars / 1024 ** 3)} GB`;
+  if (chars >= 1024 ** 2) return `${Math.round(chars / 1024 ** 2)} MB`;
+  return `${Math.round(chars / 1024)} KB`;
 }
 
 // ————— Run —————

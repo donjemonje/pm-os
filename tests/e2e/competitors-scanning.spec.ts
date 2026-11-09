@@ -11,7 +11,7 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
 /**
  * Competitors — Website Scanning (feature/competitors_v1_finalization, QA rows
- * WS-01 … WS-35 of the story tab, 2026-11-04; WS-28 … WS-35 added 2026-11-09). The fake competitor site is
+ * WS-01 … WS-36 of the story tab, 2026-11-04; WS-28 … WS-36 added 2026-11-09). The fake competitor site is
  * tests/fixtures/fake-site (12 pages, variants through its control endpoint,
  * one server per port); the local lane runs the real poller
  * (scripts/pmos-local-scan/poller.mjs) once per row with the plain fetch
@@ -21,10 +21,11 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   clock    POST /api/admin/competitors/knobs {clockOffsetMs}  (COMPETITORS_TEST_KNOBS=on)
  *   tick     POST /api/admin/competitors/knobs {tick: true}     (the hourly scheduler, once)
  *   remote   PATCH /api/admin/competitors/settings {remoteScanEnabled}  (default OFF)
- *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-pages,
+ *   limits   POST /api/admin/competitors/knobs {ceilingMs} | {storageLimitChars} (null = default) — WS-17, WS-36
+ *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-minutes,
  *            --done-delay-ms (WS-35 only: the done route holds its answer that long, COMPETITORS_TEST_KNOBS=on)
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
- *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on, COMPETITORS_CEILING_PAGES=20,
+ *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on,
  *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
  *            COMPETITORS_AI=off (the PMOS AI step is skipped; badges come from pages — analysis is the next story).
  *
@@ -80,7 +81,6 @@ for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_P
   if (RESOLVED_ENV[k]?.trim() !== want) envProblems.push(`${k} must be "${want}" in test-apphosting.yaml (got ${RESOLVED_ENV[k] ?? "<unset>"})`);
 }
 const BROWSER_ON = RESOLVED_ENV.COMPETITORS_BROWSER?.trim() === "on";
-const CEILING_20 = RESOLVED_ENV.COMPETITORS_CEILING_PAGES?.trim() === "20";
 
 // ————— Shared state —————
 let workspaceId: string;
@@ -170,6 +170,10 @@ async function knob(body: Record<string, unknown>): Promise<Record<string, unkno
   return (await res.json()) as Record<string, unknown>;
 }
 const setClock = (offsetMs: number) => knob({ clockOffsetMs: offsetMs });
+/** Limits knobs (Daniel 2026-11-09: no page limit; 8 h per scan; 10 GB of page text in all). null = back to the default. */
+const setCeilingMs = (ms: number | null) => knob({ ceilingMs: ms });
+const setStorageLimit = (chars: number | null) => knob({ storageLimitChars: chars });
+const storedTextChars = async () => Number((await (await adminApi.get("/api/admin/competitors/knobs")).json()).storedTextChars);
 /** One hourly tick; returns its log lines ("due: …", "start …", "N stale scans", …). */
 async function tick(): Promise<string[]> {
   return (await knob({ tick: true })).tick as string[];
@@ -258,7 +262,8 @@ interface PollerOpts {
   answer?: "approve" | "later";
   stateDir?: string;
   pauseMs?: number;
-  maxPages?: number;
+  /** Time knob: the station's own stop, in minutes (fractions allowed). */
+  maxMinutes?: number;
   key?: string;
   /** WS-35: the done route holds its answer this long (server-side knob, per request). */
   doneDelayMs?: number;
@@ -267,7 +272,7 @@ function pollerArgs(o: PollerOpts): string[] {
   return [
     POLLER, "--app-url", LOCAL_BASE_URL, "--key-file", o.key ?? keyFile, "--state-dir", o.stateDir ?? freshStateDir(),
     "--runner", "fetch", "--mac-state", o.mac, "--answer", o.answer ?? "approve", "--pause-ms", String(o.pauseMs ?? 0),
-    ...(o.maxPages ? ["--max-pages", String(o.maxPages)] : []),
+    ...(o.maxMinutes ? ["--max-minutes", String(o.maxMinutes)] : []),
     ...(o.doneDelayMs ? ["--done-delay-ms", String(o.doneDelayMs)] : []),
   ];
 }
@@ -1344,48 +1349,89 @@ test.describe("Website Scanning rows", () => {
     expect(pricing.text).toContain("Starter $49 per month. Team $199 per month.");
   });
 
-  test("WS-17 safety ceiling (local lane, --max-pages 20): stops at 20, Incomplete, the rest not attempted, plain message", async ({ browser }) => {
+  test("WS-17 time limit (local lane, --max-minutes 0.25): stops after 15 s, Incomplete, the rest not attempted, plain message — no page limit (Daniel 2026-11-09)", async ({ browser }) => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0, fake-site infiniteLinks, the station's own time stop at 15 s (the server's is 8 h).
     test.setTimeout(150_000);
     const site = await newSite();
     await site.control({ infiniteLinks: true });
     const c = await addCompetitor(pmApi, site, "QA-WS Upsilon");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked", maxPages: 20 });
+    const t0 = Date.now();
+    const r = await runPoller({ mac: "locked", maxMinutes: 0.25 });
     expect(r.code, r.stdout).toBe(0);
+    expect(Date.now() - t0, "the station stopped on time, not on a page count").toBeGreaterThanOrEqual(15_000);
     const done = await waitForScanEnd(pending.id);
     expect(done.badge).toBe("incomplete");
-    // "Stops at 20" = 20 attempts; read = attempts minus not-found answers (a followed link that 404s is attempted, not read).
     const attempts = (done.pages as { outcome: string; category?: string }[]).filter((p) => p.outcome !== "skipped");
-    expect(attempts.length, JSON.stringify(attempts)).toBe(20);
-    expect(done.pagesFetched).toBe(20 - attempts.filter((p) => p.category === "notfound").length);
+    // No page limit: in 15 s at pause 0 the station reads far more than the old 20-page cap would have allowed.
+    expect(attempts.length, JSON.stringify(attempts.length)).toBeGreaterThan(20);
+    expect(done.pagesFetched).toBe(attempts.length - attempts.filter((p) => p.category === "notfound").length);
     expect(done.pagesNotAttempted).toBeGreaterThanOrEqual(1);
+    expect((done.outcomes as Record<string, number>).cap).toBe(done.pagesNotAttempted);
     expect((await pagesOf(c.sourceId)).length).toBe(done.pagesFetched);
     const page = await newPage(browser, "pm");
     await openSettings(page, c.name);
     await expect(pill(page, c.name)).toHaveText("Incomplete");
+    await expect(competitorLine(page, c.name)).toContainText(/\d+ not attempted — scan time limit reached/);
     await competitorLine(page, c.name).getByRole("button", { name: "Scan log" }).click();
     await expect(page.getByText(new RegExp(`^${done.pagesNotAttempted} pages? not attempted — the next scan continues from them$`))).toBeVisible();
   });
 
-  test("WS-17 safety ceiling (remote lane, ceiling 20 pages): stops at 20, Incomplete, reason cap, plain message", async ({ browser }) => {
-    test.skip(!CEILING_20, "COMPETITORS_CEILING_PAGES=20 is not set in test-apphosting.yaml — the remote ceiling cannot be lowered per test");
+  test("WS-17 time limit (remote lane, ceilingMs knob 10 s): stops after 10 s, Incomplete, reason time limit, plain message", async ({ browser }) => {
+    // Knobs: remote ON, pause 0, fake-site infiniteLinks, per-test time limit 10 s through the knobs route (default 8 h).
     test.setTimeout(150_000);
     await setRemote(true);
+    await setCeilingMs(10_000);
+    try {
+      const site = await newSite();
+      await site.control({ infiniteLinks: true });
+      const c = await addCompetitor(pmApi, site, "QA-WS Phi");
+      const scan = await waitForScanWithStatus(c.sourceId, "running", 30_000).catch(async () => (await scansOf(c.sourceId))[0]);
+      const done = await waitForScanEnd(scan.id);
+      expect(done.badge).toBe("incomplete");
+      const attempts = (done.pages as { outcome: string; category?: string }[]).filter((p) => p.outcome !== "skipped");
+      expect(attempts.length, "no page limit: more than the old 20-page cap in 10 s").toBeGreaterThan(20);
+      expect(done.pagesFetched).toBe(attempts.length - attempts.filter((p) => p.category === "notfound").length);
+      expect((done.outcomes as Record<string, number>).cap).toBeGreaterThanOrEqual(1);
+      expect(done.pagesNotAttempted).toBeGreaterThanOrEqual(1);
+      expect((done.log as { msg: string }[]).some((l) => /^Time limit reached \(10 s\)/.test(l.msg)), JSON.stringify(done.log)).toBe(true);
+      const page = await newPage(browser, "pm");
+      await openSettings(page, c.name);
+      await expect(pill(page, c.name)).toHaveText("Incomplete");
+      await expect(competitorLine(page, c.name)).toContainText(/\d+ not attempted — scan time limit reached/);
+    } finally {
+      await setCeilingMs(null);
+    }
+  });
+
+  test("WS-36 storage limit (local lane, storageLimitChars knob): the store fills after the first page → the scan stops, Incomplete, 11 not attempted with the reason, support named in the log", async ({ browser }) => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0; PM-OS store limit set to what is stored now + 1 character (default 10 GB):
+    // the first page still fits (the store is below the limit when it lands), the second finds the store full.
+    test.setTimeout(150_000);
     const site = await newSite();
-    await site.control({ infiniteLinks: true });
-    const c = await addCompetitor(pmApi, site, "QA-WS Phi");
-    const scan = await waitForScanWithStatus(c.sourceId, "running", 30_000).catch(async () => (await scansOf(c.sourceId))[0]);
-    const done = await waitForScanEnd(scan.id);
-    expect(done.badge).toBe("incomplete");
-    const attempts = (done.pages as { outcome: string; category?: string }[]).filter((p) => p.outcome !== "skipped");
-    expect(attempts.length, JSON.stringify(attempts)).toBe(20); // the ceiling counts attempts
-    expect(done.pagesFetched).toBe(20 - attempts.filter((p) => p.category === "notfound").length);
-    expect((done.outcomes as Record<string, number>).cap).toBeGreaterThanOrEqual(1);
-    expect(done.pagesNotAttempted).toBeGreaterThanOrEqual(1);
-    const page = await newPage(browser, "pm");
-    await openSettings(page, c.name);
-    await expect(pill(page, c.name)).toHaveText("Incomplete");
-    await expect(competitorLine(page, c.name)).toContainText(/\d+ not attempted — scan ceiling reached/);
+    const c = await addCompetitor(pmApi, site, "QA-WS Omega");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const before = await storedTextChars();
+    await setStorageLimit(before + 1);
+    try {
+      const r = await runPoller({ mac: "locked" });
+      expect(r.code, r.stdout).toBe(0);
+      expect(r.stdout).toMatch(/PM-OS stopped the scan \(storage\)/);
+      const done = await waitForScanEnd(pending.id);
+      expect(done.badge).toBe("incomplete");
+      expect(done.errorKind).toBe("storage");
+      expect(done.pagesFetched, "the first page lands while the store is still below the limit").toBe(1);
+      expect(done.pagesNotAttempted, "the refused page and the 10 behind it").toBe(11);
+      expect((done.outcomes as Record<string, number>).storage).toBe(done.pagesNotAttempted);
+      expect((await pagesOf(c.sourceId)).length).toBe(done.pagesFetched);
+      expect((done.log as { msg: string }[]).some((l) => /^PM-OS storage limit reached \(\d+ [KMG]B of page text, all organizations\) — 11 discovered pages not attempted; contact support@pm-os.io/.test(l.msg)), JSON.stringify(done.log)).toBe(true);
+      const page = await newPage(browser, "pm");
+      await openSettings(page, c.name);
+      await expect(pill(page, c.name)).toHaveText("Incomplete");
+      await expect(competitorLine(page, c.name)).toContainText(/\d+ not attempted — PM-OS storage limit reached/);
+    } finally {
+      await setStorageLimit(null);
+    }
   });
 
   test("WS-18 site is down: Scan now → no pages, Unreachable, the previous 12 stand and nothing is missing; site back → next scheduled scan Full", async ({ browser }) => {

@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
+import { STORAGE_LIMIT_CHARS, ceilingMsFromEnv } from "./config";
 
 /**
  * Global competitors settings, set in Administration (AppSetting rows):
@@ -23,6 +24,9 @@ export interface GlobalScanSettings {
 const KEYS = {
   remote: "competitors.remoteScanEnabled",
   clock: "competitors.clockOffsetMs",
+  /** TEST KNOBS: a shorter time limit / a smaller storage limit for one test. Honoured only with COMPETITORS_TEST_KNOBS=on. */
+  ceilingMs: "competitors.test.ceilingMs",
+  storageLimit: "competitors.test.storageLimitChars",
 } as const;
 
 async function readSetting(key: string): Promise<unknown> {
@@ -92,5 +96,45 @@ export async function setClockOffsetMs(offset: number): Promise<boolean> {
   if (!testKnobsEnabled()) return false;
   await writeSetting(KEYS.clock, Math.round(offset));
   clockCache = null;
+  return true;
+}
+
+// ————— Limits (Daniel 2026-11-09: no page limit; 8 h per scan; 10 GB of page text in all) —————
+
+/** How long one scan may run. Test knob (knobs on): the AppSetting set through the knobs route, else COMPETITORS_CEILING_MS. */
+export async function scanTimeLimitMs(): Promise<number> {
+  if (testKnobsEnabled()) {
+    const v = await readSetting(KEYS.ceilingMs);
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+  }
+  return ceilingMsFromEnv();
+}
+
+/** The most competitor page text PM-OS keeps, all organizations together (characters). Test knob (knobs on): the AppSetting. */
+export async function storageLimitChars(): Promise<number> {
+  if (testKnobsEnabled()) {
+    const v = await readSetting(KEYS.storageLimit);
+    if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+  }
+  return STORAGE_LIMIT_CHARS;
+}
+
+/** Characters of page text stored right now, every source of every organization (SourcePage.chars; previous texts not counted). */
+export async function storedTextChars(): Promise<number> {
+  const r = await db.sourcePage.aggregate({ _sum: { chars: true }, where: { text: { not: null } } });
+  return r._sum.chars ?? 0;
+}
+
+/** True when the store is at or past its limit: the scan stops here, the rest is "not attempted — storage limit". */
+export async function storageFull(): Promise<boolean> {
+  const [used, limit] = await Promise.all([storedTextChars(), storageLimitChars()]);
+  return used >= limit;
+}
+
+/** Tests only: set or clear (null) the two limit knobs. Refused outside test environments. */
+export async function setLimitKnobs(patch: { ceilingMs?: number | null; storageLimitChars?: number | null }): Promise<boolean> {
+  if (!testKnobsEnabled()) return false;
+  if (patch.ceilingMs !== undefined) await writeSetting(KEYS.ceilingMs, patch.ceilingMs === null ? 0 : Math.round(patch.ceilingMs));
+  if (patch.storageLimitChars !== undefined) await writeSetting(KEYS.storageLimit, patch.storageLimitChars === null ? 0 : Math.round(patch.storageLimitChars));
   return true;
 }

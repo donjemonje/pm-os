@@ -5,7 +5,7 @@
  * rescan limit, the recipients and the news baseline; old keys are ignored.
  */
 import { describe, expect, it } from "vitest";
-import { CEILING_MS, CEILING_PAGES, DEFAULT_SCAN_EVERY_DAYS, mergeCompetitorsConfig, splitSuggestedQuote, STALE_MS } from "@/lib/competitors/config";
+import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, splitSuggestedQuote, STALE_MS } from "@/lib/competitors/config";
 import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
@@ -17,10 +17,10 @@ describe("mergeCompetitorsConfig", () => {
     expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
     expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
   });
-  it("carries the PRD's numbers: every 2 days, 2,000 pages or 3 h ceiling, stale after 10 min", () => {
+  it("carries the PRD's numbers: every 2 days, no page limit, 8 h per scan, 10 GB of page text, stale after 10 min (Daniel 2026-11-09)", () => {
     expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);
-    expect(CEILING_PAGES).toBe(2000);
-    expect(CEILING_MS).toBe(3 * 3600_000);
+    expect(CEILING_MS).toBe(8 * 3600_000);
+    expect(STORAGE_LIMIT_CHARS).toBe(10 * 1024 ** 3);
     expect(STALE_MS).toBe(10 * 60_000);
   });
 });

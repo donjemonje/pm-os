@@ -4,6 +4,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { isPageKind } from "@/lib/competitors/config";
 import { pdfToText } from "@/lib/competitors/fetcher";
 import { startLocalScan, verifyScanToken } from "@/lib/competitors/local";
+import { storageFull } from "@/lib/competitors/settings";
 import { extractLinks } from "@/lib/competitors/html";
 import { categoryOf, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
 import { appendHandedInPage } from "@/lib/competitors/scan";
@@ -29,7 +30,8 @@ const STATUSES: PageReadStatus[] = ["ok", "notfound", "blocked", "login", "timeo
  * The server extracts the text (HTML → text, PDF → text), normalizes, hashes
  * and decides new / changed / unchanged / not read, exactly as for the remote
  * lane. URLs outside the competitor's site are refused. Every post is a
- * heartbeat; the first one marks the scan running.
+ * heartbeat; the first one marks the scan running. When the PM-OS store is
+ * full the answer is { stop: "storage" } and the station stops the scan.
  */
 export async function POST(req: Request, { params }: Params) {
   const { id } = await params;
@@ -95,6 +97,12 @@ export async function POST(req: Request, { params }: Params) {
   if (status === "ok" && !html && !text) return NextResponse.json({ error: "an ok page needs html, text or pdfBase64" }, { status: 400 });
 
   if (scan.status !== "running") await startLocalScan(id, null);
+  // PM-OS keeps at most STORAGE_LIMIT_CHARS of page text in all (Daniel 2026-11-09). Full → this page is not taken, the scan is
+  // flagged and the station stops; everything left is "not attempted — storage limit" when the scan is processed.
+  if (status === "ok" && (await storageFull())) {
+    await db.competitorScan.update({ where: { id }, data: { errorKind: "storage", heartbeatAt: new Date() } });
+    return NextResponse.json({ url: url.href, outcome: "skipped", stop: "storage", error: "PM-OS storage limit reached — the scan stops here; contact support@pm-os.io" });
+  }
   const sourceLabel = C.profile.sourceTypes[scan.source.type] ?? scan.source.type;
   const ms = typeof body.ms === "number" && Number.isFinite(body.ms) ? Math.max(0, Math.round(body.ms)) : 0;
   const attempts = typeof body.attempts === "number" && Number.isFinite(body.attempts) ? Math.max(1, Math.round(body.attempts)) : 1;

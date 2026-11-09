@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { ceiling } from "@/lib/competitors/config";
 import { listWaiting, rotateScannerKey, verifyScannerKey } from "@/lib/competitors/local";
-import { now } from "@/lib/competitors/settings";
+import { now, scanTimeLimitMs } from "@/lib/competitors/settings";
 
 /**
  * The local station's check-in (Website Scanning PRD 2026-11-04). Machine
@@ -13,7 +12,7 @@ import { now } from "@/lib/competitors/settings";
 export async function GET(req: Request) {
   const key = await verifyScannerKey(req.headers.get("authorization"));
   if (!key) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const waiting = await listWaiting(ceiling());
+  const waiting = await listWaiting({ ms: await scanTimeLimitMs() });
   const rotated = key.rotateDue ? await rotateScannerKey(key.id) : null;
   return NextResponse.json({
     station: key.label,

@@ -56,16 +56,22 @@ function knobsOn(): boolean {
 }
 /** robots.txt Crawl-delay is honoured up to this (remote lane). */
 export const CRAWL_DELAY_CAP_MS = 10_000;
-/** Safety ceiling: a scan never reads more pages than this … */
-export const CEILING_PAGES = 2000;
-/** … or runs longer than this. Pages beyond are "not attempted" and the next run picks them up. */
-export const CEILING_MS = 3 * 3600_000;
-/** Test knob only (COMPETITORS_TEST_KNOBS=on): a lower ceiling so the fixture can hit it. */
-export function ceiling(): { pages: number; ms: number } {
-  if (!knobsOn()) return { pages: CEILING_PAGES, ms: CEILING_MS };
-  const pages = Number(process.env.COMPETITORS_CEILING_PAGES);
+/**
+ * Safety limits (Daniel 2026-11-09: no page limit — a site is read whole). A scan stops after this long;
+ * pages beyond are "not attempted" and the next run picks them up.
+ */
+export const CEILING_MS = 8 * 3600_000;
+/**
+ * PM-OS stores at most this much competitor page text, all organizations together (counted in characters of
+ * stored text — text only for now; revisit when more than text is stored). A scan that would pass it stops
+ * with the reason "storage limit"; support raises it.
+ */
+export const STORAGE_LIMIT_CHARS = 10 * 1024 * 1024 * 1024;
+/** Test knob only (COMPETITORS_TEST_KNOBS=on): COMPETITORS_CEILING_MS lowers the time limit for the whole run. */
+export function ceilingMsFromEnv(): number {
+  if (!knobsOn()) return CEILING_MS;
   const ms = Number(process.env.COMPETITORS_CEILING_MS);
-  return { pages: Number.isFinite(pages) && pages > 0 ? pages : CEILING_PAGES, ms: Number.isFinite(ms) && ms > 0 ? ms : CEILING_MS };
+  return Number.isFinite(ms) && ms > 0 ? ms : CEILING_MS;
 }
 /** A scan that stopped reporting for this long is stale; the next run resumes its pending pages. */
 export const STALE_MS = 10 * 60_000;
@@ -88,7 +94,7 @@ export const PAGE_RETRIES = 2;
 /** A fact not seen for this many scans of its site is stale (analysis story; here only the page states feed it). */
 export const STALE_AFTER_SCANS = 3;
 /** Why a page was not read — shown to users as counts. */
-export const OUTCOME_CATEGORIES = ["robots", "denied", "login", "notfound", "timeout", "cap", "slowdown"] as const;
+export const OUTCOME_CATEGORIES = ["robots", "denied", "login", "notfound", "timeout", "cap", "slowdown", "storage"] as const;
 export type OutcomeCategory = (typeof OUTCOME_CATEGORIES)[number];
 /** What the user sees per competitor after a scan. */
 export const SCAN_BADGES = ["full", "incomplete", "blocked", "unreachable", "stale"] as const;

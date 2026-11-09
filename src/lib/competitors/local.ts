@@ -158,8 +158,8 @@ export interface WaitingScan {
   workspaceId: string;
   /** Pages the previous scans know — a hint for the runner; the server decides new/changed/removed on hand-in. */
   knownUrls: string[];
-  /** The ceiling the runner must respect. */
-  ceiling: { pages: number; ms: number };
+  /** The time limit the runner must respect (no page limit, Daniel 2026-11-09). */
+  ceiling: { ms: number };
   waitingSince: string;
 }
 
@@ -168,7 +168,7 @@ export interface WaitingScan {
  * with a fresh scan token. Requests are not claimed here (the poller runs
  * them one at a time and may show a dialog first); `startLocalScan` claims.
  */
-export async function listWaiting(ceilingValue: { pages: number; ms: number }): Promise<WaitingScan[]> {
+export async function listWaiting(ceilingValue: { ms: number }): Promise<WaitingScan[]> {
   const reqs = await db.localScanRequest.findMany({
     where: { state: "waiting", scan: { status: "pending_local" } },
     orderBy: { createdAt: "asc" },
