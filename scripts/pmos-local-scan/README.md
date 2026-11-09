@@ -17,7 +17,7 @@ The local lane of competitor website scanning (Website Scanning PRD, 2026-11-04)
 - Screen locked → waiting scans run without asking.
 - Screen active → one dialog lists every waiting site: **Approve** runs them all, **Later** snoozes two hours. A locked screen runs them anyway.
 - One scan at a time. The station reads the site itself (v1, Daniel 2026-11-08): sitemap plus the links on every page, same site only, a browser identity, 2 s between pages, stop on 429. Pages with no text, and home/hub pages whose menus are built by JavaScript, are rendered with the installed Chrome headless. PDFs are downloaded and handed in as documents. Each page is handed in as it is read; PM-OS extracts the text, normalizes, hashes and decides new / changed / unchanged.
-- The local lane does not read robots.txt: it is a person's machine acting on a person's intent.
+- The local lane reads robots.txt only for its Sitemap lines (then /sitemap.xml and /sitemap_index.xml, indexes followed). Its crawl restrictions are never obeyed: it is a person's machine acting on a person's intent, and pages a site hides from bots are brought too.
 - `--runner claude` (Claude Code + Claude in Chrome) stays available for later judgment work; it cannot export a real page's HTML unattended, so it is not the default.
 
 ## Flags (tests and troubleshooting)

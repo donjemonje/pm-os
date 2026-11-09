@@ -13,8 +13,10 @@
  *
  * Runners (how pages are read):
  *   fetch   DEFAULT (v1, Daniel 2026-11-08): the station reads the site itself
- *           from this Mac with a browser identity — sitemap plus the links on
- *           every page, same site only, no robots.txt (a person's intent), a
+ *           from this Mac with a browser identity — sitemaps (robots.txt
+ *           Sitemap lines, /sitemap.xml, /sitemap_index.xml, indexes followed)
+ *           plus the links on every page, same site only; robots.txt rules are
+ *           read for discovery only, never obeyed (a person's intent), a
  *           pause between pages, stop on 429. Pages that come back empty, and
  *           the home / hub pages when their navigation is built by JavaScript,
  *           are rendered with the installed Chrome in headless mode. PDFs are
@@ -260,7 +262,64 @@ async function readOnce(url, started) {
   }
 }
 
-/** The fetch runner: this machine's own HTTP, no robots.txt (a person's browser acting on a person's intent). */
+/**
+ * Sitemap discovery (Daniel 2026-11-09): robots.txt is read for its Sitemap lines only — its
+ * Disallow rules are never obeyed, that is the point of the local lane. Then /sitemap.xml and
+ * /sitemap_index.xml. A sitemap index is followed into its child sitemaps (same site only).
+ * Returns the page URLs found and a short summary for the log.
+ */
+async function discoverSitemaps(siteUrl, host) {
+  const get = async (u) => {
+    try {
+      const res = await fetch(u, { headers: { "user-agent": BROWSER_UA }, signal: AbortSignal.timeout(15_000) });
+      return res.ok ? await res.text() : null;
+    } catch {
+      return null;
+    }
+  };
+  const sameSite = (raw) => {
+    try {
+      const u = new URL(raw);
+      return /^https?:$/.test(u.protocol) && siteOf(u) === host ? u : null;
+    } catch {
+      return null;
+    }
+  };
+  const candidates = [];
+  const robots = await get(new URL("/robots.txt", siteUrl));
+  for (const line of (robots ?? "").split(/\r?\n/)) {
+    const m = /^\s*sitemap\s*:\s*(\S+)/i.exec(line);
+    if (m && sameSite(m[1])) candidates.push(m[1]);
+  }
+  candidates.push(new URL("/sitemap.xml", siteUrl).href, new URL("/sitemap_index.xml", siteUrl).href);
+  const pages = [];
+  const fetched = new Set();
+  let files = 0;
+  const read = async (u, depth) => {
+    if (fetched.has(u) || fetched.size >= 60) return;
+    fetched.add(u);
+    const xml = await get(u);
+    if (!xml) return;
+    files++;
+    const locs = [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)].map((m) => m[1]);
+    if (/<sitemapindex/i.test(xml)) {
+      if (depth >= 2) return;
+      for (const l of locs) {
+        if (!sameSite(l) || /(image|video|news)[-_]?sitemap/i.test(l)) continue;
+        await read(l, depth + 1);
+      }
+      return;
+    }
+    for (const l of locs) {
+      const pu = sameSite(l);
+      if (pu && !/sitemap.*\.xml$/i.test(pu.pathname)) pages.push(pu);
+    }
+  };
+  for (const c of candidates) await read(c, 0);
+  return { pages, summary: `${files} sitemap file${files === 1 ? "" : "s"}, ${pages.length} URLs${robots ? ", robots.txt read for Sitemap lines only" : ""}` };
+}
+
+/** The fetch runner: this machine's own HTTP; robots.txt rules are not obeyed (a person's browser acting on a person's intent). */
 async function runFetch(job, limits, post) {
   const host = siteOf(new URL(job.siteUrl));
   const seen = new Set();
@@ -281,22 +340,10 @@ async function runFetch(job, limits, post) {
     }
   }
   add(new URL(job.siteUrl));
-  // The sitemap is a hint for discovery, never a reason to skip a page.
-  try {
-    const sm = await fetch(new URL("/sitemap.xml", job.siteUrl), { headers: { "user-agent": BROWSER_UA }, signal: AbortSignal.timeout(15_000) });
-    if (sm.ok) {
-      for (const m of (await sm.text()).matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/gi)) {
-        try {
-          const u = new URL(m[1]);
-          if (!/sitemap/i.test(u.pathname)) add(u);
-        } catch {
-          // skip
-        }
-      }
-    }
-  } catch {
-    // no sitemap
-  }
+  // Sitemaps are a hint for discovery, never a reason to skip a page.
+  const sitemaps = await discoverSitemaps(job.siteUrl, host);
+  for (const u of sitemaps.pages) add(u);
+  log(`  sitemaps: ${sitemaps.summary} · ${queue.length} URLs to start with`);
   const t0 = Date.now();
   let n = 0;
   let renders = 0;
