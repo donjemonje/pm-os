@@ -275,6 +275,8 @@ function statusOf(error: FetchErrorKind | undefined): PageReadStatus {
       return "slowdown";
     case "noindex":
       return "robots";
+    case "unreadable":
+      return "unreadable";
     case "timeout":
     case "http5xx":
       return "timeout";

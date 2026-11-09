@@ -40,10 +40,10 @@ const BROWSER_TIMEOUT_MS = 30_000;
 export const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
 export type FetchMode = "plain" | "browser";
-export type FetchErrorKind = "timeout" | "http4xx" | "http5xx" | "botwall" | "login" | "notfound" | "noindex" | "slowdown" | "other";
+export type FetchErrorKind = "timeout" | "http4xx" | "http5xx" | "botwall" | "login" | "notfound" | "noindex" | "slowdown" | "other" | "unreadable";
 
 /** The user-facing category of a page that was not read (the PRD's reasons list). */
-export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" | "login" | "notfound" | "timeout" | "robots" | "slowdown" {
+export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" | "login" | "notfound" | "timeout" | "robots" | "slowdown" | "unreadable" {
   switch (error) {
     case "botwall":
     case "http4xx":
@@ -57,6 +57,8 @@ export function outcomeCategoryOf(error: FetchErrorKind | undefined): "denied" |
       return "robots";
     case "slowdown":
       return "slowdown";
+    case "unreadable":
+      return "unreadable";
     case "timeout":
     case "http5xx":
     case "other":
@@ -158,13 +160,21 @@ export async function fetchPlain(url: string, opts: { host?: string } = {}): Pro
     if (isPdf) {
       const length = Number(res.headers.get("content-length") ?? 0);
       if (length > MAX_PDF_BYTES) {
-        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: `PDF too large (${Math.round(length / 1024 / 1024)} MB)` };
+        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "unreadable", errorDetail: `PDF larger than 20 MB (${Math.round(length / 1024 / 1024)} MB)` };
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.byteLength > MAX_PDF_BYTES) {
-        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: "PDF too large" };
+        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "unreadable", errorDetail: "PDF larger than 20 MB" };
       }
-      const text = await pdfToText(bytes);
+      let text: string;
+      try {
+        text = await pdfToText(bytes);
+      } catch (e) {
+        // PM-OS's own reader failed, not the site: the page is "could not be read" and the server log carries an error (Daniel 2026-11-09: fix the reader when it happens).
+        const detail = `PDF could not be read: ${(e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 160)}`;
+        console.error(`[competitors] page could not be read — ${url} — ${detail}`);
+        return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "unreadable", errorDetail: detail };
+      }
       return { url, finalUrl, status: res.status, html: "", text, kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false };
     }
     const html = await res.text();

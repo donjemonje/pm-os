@@ -315,6 +315,7 @@ export const COMPETITORS_COPY = {
       cap: "not attempted — scan time limit reached",
       slowdown: "not read — the site asked us to slow down",
       storage: "not attempted — PM-OS storage limit reached",
+      unreadable: "could not be read",
     } as Record<string, string>,
     scanPendingSince: (ago: string) => `Scan pending · since ${ago}`,
     scanInProgress: (pages: number) => `Scan in progress · ${pages} page${pages === 1 ? "" : "s"} so far`,

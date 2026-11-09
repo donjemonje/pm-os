@@ -89,9 +89,11 @@ export async function POST(req: Request, { params }: Params) {
       }
     }
     if (readError) {
-      // The page is recorded as not read this scan (its previous text stays), the scan goes on.
-      status = "other";
+      // The page is recorded as not read this scan (its previous text stays), the scan goes on. The reason is ours
+      // ("could not be read"), so the server log carries an error: when it happens in use, the reader gets fixed (Daniel 2026-11-09).
+      status = "unreadable";
       text = null;
+      console.error(`[competitors] page could not be read — scan ${id} — ${url.href} — ${readError}`);
     }
   }
   if (status === "ok" && !html && !text) return NextResponse.json({ error: "an ok page needs html, text or pdfBase64" }, { status: 400 });
@@ -138,7 +140,7 @@ export async function POST(req: Request, { params }: Params) {
     ...(attempts > 1 ? [{ at: new Date().toISOString(), level: "info" as const, msg: `Station retried ${attempts - 1} time${attempts === 2 ? "" : "s"} before ${status === "ok" ? "reading the page" : `giving up (${status})`}`, url: r.url }] : []),
     // Same words as the remote lane (scan.ts) so the scan log reads alike whichever lane ran.
     ...(status === "slowdown" ? [{ at: new Date().toISOString(), level: "warn" as const, msg: "The site answered 429 Too Many Requests — stopping this scan; the next one continues from here", url: r.url }] : []),
-    ...(readError ? [{ at: new Date().toISOString(), level: "warn" as const, msg: readError, url: r.url }] : []),
+    ...(readError ? [{ at: new Date().toISOString(), level: "error" as const, msg: readError, url: r.url }] : []),
   ]);
   return NextResponse.json({ url: r.url, outcome: r.outcome, state: r.state });
 }

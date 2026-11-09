@@ -94,7 +94,7 @@ export const PAGE_RETRIES = 2;
 /** A fact not seen for this many scans of its site is stale (analysis story; here only the page states feed it). */
 export const STALE_AFTER_SCANS = 3;
 /** Why a page was not read — shown to users as counts. */
-export const OUTCOME_CATEGORIES = ["robots", "denied", "login", "notfound", "timeout", "cap", "slowdown", "storage"] as const;
+export const OUTCOME_CATEGORIES = ["robots", "denied", "login", "notfound", "timeout", "cap", "slowdown", "storage", "unreadable"] as const;
 export type OutcomeCategory = (typeof OUTCOME_CATEGORIES)[number];
 /** What the user sees per competitor after a scan. */
 export const SCAN_BADGES = ["full", "incomplete", "blocked", "unreachable", "stale"] as const;

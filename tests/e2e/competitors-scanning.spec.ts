@@ -934,19 +934,22 @@ test.describe("Website Scanning rows", () => {
     expect(big.text).toContain(BIG_PAGE_MARKERS.beforeCut);
     expect(big.text, "text past the 2 MB cut").not.toContain(BIG_PAGE_MARKERS.afterCut);
 
-    // The bogus PDF: a page row of the scan with status other (handed-in "other" → status 0), not read, no text.
+    // The bogus PDF: a page row of the scan, not read, reason "could not be read" (ours, not the site's — Daniel 2026-11-09), no text.
     const pdf = entries.find((p) => p.url === pdfUrl);
     expect(pdf, `page row for ${pdfUrl} in ${JSON.stringify(entries.map((p) => p.url))}`).toBeTruthy();
     expect(pdf!.outcome).toBe("failed");
+    expect(pdf!.category).toBe("unreadable");
+    expect((done.outcomes as Record<string, number>).unreadable).toBe(1);
     expect(pdf!.status).toBe(0);
     expect(pdf!.chars ?? 0).toBe(0);
     expect(pdf!.error).toMatch(/^PDF could not be read/);
     const pdfRow = pages.find((p) => p.url === pdfUrl);
     if (pdfRow) expect(pdfRow.text, "the bogus PDF has no text").toBeNull();
     // The scan log names the reason, on the PDF's URL.
-    const reason = (done.log as { msg: string; url?: string }[]).find((l) => /^PDF could not be read/.test(l.msg));
+    const reason = (done.log as { msg: string; url?: string; level?: string }[]).find((l) => /^PDF could not be read/.test(l.msg));
     expect(reason, `log ${JSON.stringify((done.log as { msg: string }[]).map((l) => l.msg))}`).toBeTruthy();
     expect(reason!.url).toBe(pdfUrl);
+    expect(reason!.level, "ours, not the site's: an error, not a warning").toBe("error");
   });
 
   test("WS-29 one scan token per scan: two check-ins carry the same token; after the scan ended and the hourly tick at +1 h 16 min the token row is gone and a post is refused (401)", async () => {

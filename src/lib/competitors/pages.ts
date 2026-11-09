@@ -28,7 +28,8 @@ import { pageKey } from "./url";
  */
 
 /** What a lane says about one page it tried to read. */
-export type PageReadStatus = "ok" | "notfound" | "blocked" | "login" | "timeout" | "slowdown" | "robots" | "other";
+/** "unreadable" = PM-OS itself could not read a file it fetched (a broken or oversize PDF): our failure, not the site's — logged as an error. */
+export type PageReadStatus = "ok" | "notfound" | "blocked" | "login" | "timeout" | "slowdown" | "robots" | "other" | "unreadable";
 
 export interface RecordPageInput {
   scanId: string;
@@ -78,6 +79,8 @@ export function categoryOf(status: Exclude<PageReadStatus, "ok">): OutcomeCatego
       return "slowdown";
     case "robots":
       return "robots";
+    case "unreadable":
+      return "unreadable";
     case "timeout":
     case "other":
     default:
