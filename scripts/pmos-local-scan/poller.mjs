@@ -305,7 +305,7 @@ async function discoverSitemaps(siteUrl, host) {
     if (/<sitemapindex/i.test(xml)) {
       if (depth >= 2) return;
       for (const l of locs) {
-        if (!sameSite(l) || /(image|video|news)[-_]?sitemap/i.test(l)) continue;
+        if (!sameSite(l)) continue; // every child sitemap is read, image/video/news ones included: they list the pages that host the media (Daniel 2026-11-09)
         await read(l, depth + 1);
       }
       return;
