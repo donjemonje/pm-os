@@ -43,6 +43,7 @@ export async function POST(req: Request) {
         state: "active",
         removedAt: null,
         removedById: null,
+        ...(dup.state === "dismissed" ? { origin: "manual", suggestedById: null } : {}),
         position: await nextPosition("competitorDomain", ctx.workspaceId),
         ...(description !== undefined ? { description } : {}),
         ...(summary !== undefined ? { summary } : {}),

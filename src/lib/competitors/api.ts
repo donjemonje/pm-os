@@ -30,7 +30,7 @@ export async function competitorsGuard(opts: { admin?: boolean } = {}): Promise<
 }
 
 export async function stateResponse(ctx: CompetitorsApiContext, status = 200): Promise<NextResponse> {
-  const state: CompetitorsState = await getCompetitorsState(ctx.workspaceId, ctx.orgName, ctx.user.id);
+  const state: CompetitorsState = await getCompetitorsState(ctx.workspaceId, ctx.orgName, ctx.user.id, { withRemoved: canManageOrgSettings(ctx.user) });
   return NextResponse.json({ state }, { status });
 }
 

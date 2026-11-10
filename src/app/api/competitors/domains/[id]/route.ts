@@ -105,7 +105,7 @@ export async function PATCH(req: Request, { params }: Params) {
   }
   const renamed = Boolean(data.name && data.name !== existing.name);
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "domain", action: renamed ? "rename" : "update", entityId: id, field, from: renamed ? existing.name : null, to: renamed ? data.name ?? null : null, renamedReferences });
-  const state = await getCompetitorsState(ctx.workspaceId, ctx.orgName, ctx.user.id);
+  const state = await getCompetitorsState(ctx.workspaceId, ctx.orgName, ctx.user.id, { withRemoved: true });
   return NextResponse.json({ state, renamedReferences });
 }
 
@@ -132,7 +132,8 @@ export async function DELETE(req: Request, { params }: Params) {
     moveTo = target.id;
   }
   await db.$transaction([
-    ...(moveTo ? [db.capability.updateMany({ where: { id: { in: held.map((k) => k.id) } }, data: { domainId: moveTo } })] : []),
+    // By domain, not by the ids read above: a suggestion a running scan adds in between moves too.
+    ...(moveTo ? [db.capability.updateMany({ where: { workspaceId: ctx.workspaceId, domainId: id, state: { in: ["active", "suggested"] } }, data: { domainId: moveTo } })] : []),
     db.competitorDomain.update({ where: { id }, data: { state: "removed", removedAt: new Date(), removedById: ctx.user.id } }),
   ]);
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", {

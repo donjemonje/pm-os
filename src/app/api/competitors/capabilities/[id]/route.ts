@@ -41,7 +41,7 @@ export async function PATCH(req: Request, { params }: Params) {
     const target = await db.competitorDomain.findFirst({ where: { id: targetId, workspaceId: ctx.workspaceId, state: "active" }, select: { id: true } });
     if (!target) return bad(C.settings.activeDomainRequired);
     await db.capability.update({ where: { id }, data: { state: "active", removedAt: null, removedById: null, domainId: target.id, position: await nextActivePosition(ctx.workspaceId) } });
-    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: id, field: "state", from: "removed", to: "active", name: existing.name, via: "settings", domainChanged: target.id !== existing.domainId });
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: id, field: "state", from: "removed", to: "active", name: existing.name, via: "settings", fromDomainId: existing.domainId, toDomainId: target.id, domainChanged: target.id !== existing.domainId });
     return stateResponse(ctx);
   }
 
@@ -56,7 +56,9 @@ export async function PATCH(req: Request, { params }: Params) {
       where: { workspaceId: ctx.workspaceId, id: { not: id }, name: { equals: name, mode: "insensitive" } },
       select: { id: true, state: true },
     });
-    if (dup) return bad(dup.state === "removed" ? C.settings.nameRemovedCapability : "A capability with this name already exists.", 409);
+    if (dup && dup.state !== "dismissed") return bad(dup.state === "removed" ? C.settings.nameRemovedCapability : "A capability with this name already exists.", 409);
+    // A suggestion the team declined holds no name against the PM: his name wins and the declined row goes (the name stays known through this row).
+    if (dup) await db.capability.delete({ where: { id: dup.id } });
     if (name !== existing.name) {
       data.name = name;
       data.aliases = aliasesAfterRename(existing.aliases, existing.name, name) as unknown as Prisma.InputJsonValue;
@@ -112,6 +114,8 @@ export async function PATCH(req: Request, { params }: Params) {
         data.position = await nextActivePosition(ctx.workspaceId);
         // Accepting a capability inside a suggested domain accepts the domain with it.
         const domain = await db.competitorDomain.findUnique({ where: { id: (data.domainId as string | undefined) ?? existing.domainId }, select: { id: true, state: true } });
+        // A row enters the table only inside a domain that is in the table (or one accepted with it).
+        if (domain?.state !== "active" && domain?.state !== "suggested") return bad(C.settings.activeDomainRequired);
         if (domain?.state === "suggested") {
           const agg = await db.competitorDomain.aggregate({ where: { workspaceId: ctx.workspaceId, state: "active" }, _max: { position: true } });
           await db.competitorDomain.update({ where: { id: domain.id }, data: { state: "active", position: (agg._max.position ?? -1) + 1 } });
@@ -119,7 +123,10 @@ export async function PATCH(req: Request, { params }: Params) {
         }
       }
     } else if (body.state === "active" && existing.state === "dismissed") {
+      const domain = await db.competitorDomain.findUnique({ where: { id: (data.domainId as string | undefined) ?? existing.domainId }, select: { state: true } });
+      if (domain?.state !== "active") return bad(C.settings.activeDomainRequired);
       data.state = "active";
+      data.position = await nextActivePosition(ctx.workspaceId);
       decision = "accepted";
     }
   }
@@ -138,6 +145,8 @@ export async function PATCH(req: Request, { params }: Params) {
       await db.capabilityStatus.update({ where: { id: current.id }, data: evidence });
     }
   }
+  // A decision and the edits sent with it (a rename or a move while accepting) are each recorded.
+  for (const e of events) await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", entityId: id, ...e });
   if (decision) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_capability_suggestion", {
       capabilityId: id,
@@ -145,9 +154,7 @@ export async function PATCH(req: Request, { params }: Params) {
       decision,
       domainChanged: data.domainId !== undefined,
     });
-  } else if (events.length) {
-    for (const e of events) await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", entityId: id, ...e });
-  } else {
+  } else if (!events.length) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "update", entityId: id, field, from: null, to: null });
   }
   return stateResponse(ctx);

@@ -565,6 +565,8 @@ export async function runScan(scanId: string): Promise<void> {
   let error: string | null = null;
   let mode: Collected["mode"] = lane;
   let aiCalls = 0;
+  /** Test knob, read ONCE per scan: a value read for the gate below is the value the step runs on, so a knob cleared mid-scan can never send the step to a real model. */
+  let injected: TestAiAnswers | null = null;
   let statusesChanged = 0;
   let statusesSet = 0;
   let factsChanged = 0;
@@ -611,7 +613,7 @@ export async function runScan(scanId: string): Promise<void> {
     } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
-    } else if (!aiStepEnabled() && !(await testAiAnswers(competitor.id))) {
+    } else if (!aiStepEnabled() && !(injected = await testAiAnswers(competitor.id))) {
       // Test knob: the scanning story is tested without the analysis step (deterministic, free). Counts as analyzed.
       log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
@@ -624,7 +626,7 @@ export async function runScan(scanId: string): Promise<void> {
       const pagesForAi = catalogGrew ? await currentPageTexts(source.id, sourceLabel) : changedPages;
       if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${pagesForAi.length} stored pages`);
       // Test knob: a test may hand in the model's raw answers for this competitor; the step then runs on them and calls no model.
-      const injected = await testAiAnswers(competitor.id);
+      if (aiStepEnabled()) injected = await testAiAnswers(competitor.id);
       if (injected) log.add("warn", "PMOS AI answer injected (test knob) — no model is called");
       const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew, host: competitor.host, injected });
       aiCalls = r.aiCalls;
@@ -807,7 +809,8 @@ async function loadCatalog(workspaceId: string): Promise<{ forAi: CatalogForAi; 
 
 /** Active capabilities with no status row yet for this competitor (added since its last classification). */
 async function unclassifiedCapabilities(workspaceId: string, competitorId: string): Promise<number> {
-  return db.capability.count({ where: { workspaceId, state: "active", statuses: { none: { competitorId } } } });
+  // Rows in the table only: the same set loadCatalog classifies (an active row in a domain that is not active is never classified, so it must not count as waiting).
+  return db.capability.count({ where: { workspaceId, state: "active", domain: { state: "active" }, statuses: { none: { competitorId } } } });
 }
 
 async function aiStep(
@@ -918,7 +921,7 @@ async function aiStep(
         } else if (prev.value !== value) {
           // A source's FIRST scan that differs from what another source set is discovery, not news:
           // the site did not change, two sources described it differently. Only a rescan of the same
-          // source marks a change (the "New Changes" dot, the notification).
+          // source marks a change (the feed, the notification).
           await db.statusHistory.create({ data: { statusId: prev.id, value: prev.value, quote: prev.quote, sourceUrl: prev.sourceUrl, scanId: prev.scanId } });
           const summary = clean(ans?.summary, "status summary", sourceUrl ?? undefined);
           const imageUrl = !firstScan ? await previewImage(sourceUrl) : null;

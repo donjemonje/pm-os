@@ -146,7 +146,8 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
 
   const [moved, facts, suggestions] = await Promise.all([
     db.capabilityStatus.findMany({
-      where: { scanId: { in: scanIds }, changedAt: { gte: run.startedAt } },
+      // A capability a PM removed after its scan is not in the email either.
+      where: { scanId: { in: scanIds }, changedAt: { gte: run.startedAt }, capability: { state: "active" } },
       include: {
         capability: { select: { name: true, ourStatus: true, domainId: true, domain: { select: { name: true } } } },
         history: { where: { at: { gte: run.startedAt } }, orderBy: { at: "asc" }, take: 1 },

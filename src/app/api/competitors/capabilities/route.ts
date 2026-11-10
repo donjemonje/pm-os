@@ -67,6 +67,8 @@ export async function POST(req: Request) {
         state: "active",
         removedAt: null,
         removedById: null,
+        // A suggestion the team declined and a PM now adds himself is his row, not the scan's.
+        ...(dup.state === "dismissed" ? { origin: "manual", suggestedById: null, suggestedQuote: null } : {}),
         position: await nextPosition("capability", ctx.workspaceId),
         ...(description !== undefined ? { description } : {}),
         ...(ownProduct !== undefined ? { ownProduct } : {}),

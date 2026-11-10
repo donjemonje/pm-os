@@ -192,7 +192,7 @@ function asStringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
-export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null): Promise<CompetitorsState> {
+export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null, opts: { /** Settings → Removed is for admins: only they are sent the list. */ withRemoved?: boolean } = {}): Promise<CompetitorsState> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
@@ -382,7 +382,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         history: s.history.map((h) => ({ value: h.value as StatusValue, quote: h.quote, sourceUrl: h.sourceUrl, at: h.at.toISOString() })),
       };
     }),
-    removed: {
+    removed: !opts.withRemoved ? { domains: [], capabilities: [] } : {
       domains: removedDomains
         .map((d) => ({ id: d.id, name: d.name, removedAt: d.removedAt?.toISOString() ?? null, removedByName: userName(d.removedById) }))
         .sort((a, b) => (b.removedAt ?? "").localeCompare(a.removedAt ?? "")),
