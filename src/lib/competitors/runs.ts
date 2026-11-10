@@ -201,7 +201,8 @@ export async function undoDemoRuns(workspaceId: string): Promise<{ runs: number;
   }
   out.facts = (await db.profileFact.deleteMany({ where: { scanId: { in: scanIds } } })).count;
   out.suggestions = (await db.capability.deleteMany({ where: { workspaceId, origin: "ai", suggestedById: { in: competitorIds }, createdAt: { gte: minStart } } })).count;
-  await db.competitorDomain.deleteMany({ where: { workspaceId, origin: "ai", suggestedById: { in: competitorIds }, createdAt: { gte: minStart } } });
+  // Only the empty ones: a domain that still holds capabilities (a PM moved rows into it) is the team's now, and deleting it would cascade to them.
+  await db.competitorDomain.deleteMany({ where: { workspaceId, origin: "ai", suggestedById: { in: competitorIds }, createdAt: { gte: minStart }, capabilities: { none: {} } } });
   await db.competitorScan.deleteMany({ where: { id: { in: scanIds } } });
   await db.competitorScanRun.deleteMany({ where: { id: { in: runs.map((r) => r.id) } } });
   await db.competitorSource.updateMany({ where: { competitorId: { in: competitorIds }, lastStatus: { in: ["running", "failed"] } }, data: { lastStatus: "ok", lastError: null } });

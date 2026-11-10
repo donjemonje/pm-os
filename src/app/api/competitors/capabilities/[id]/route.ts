@@ -4,15 +4,24 @@ import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { isOwnStatus, MAX_OWN_PRODUCT, splitSuggestedQuote } from "@/lib/competitors/config";
-import { cleanProductLines } from "../route";
+import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
+import { aliasesAfterRename } from "@/lib/competitors/decisions";
+import { cleanProductLines, releaseCapabilityAlias } from "../route";
+
+type EventProps = Record<string, string | number | boolean | null>;
 
 type Params = { params: Promise<{ id: string }> };
 
 /**
  * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
  * org's own status (`ourStatus`: has / partial / missing — any member), or
- * decide a suggestion (`state`: "active" = accept, "dismissed" = dismiss).
- * DELETE: remove the row and every status on it.
+ * decide a suggestion (`state`: "active" = accept, "dismissed" = dismiss), or restore a removed row
+ * (`state`: "active", with an active `domainId` when its own domain is not in the table).
+ * DELETE: the PM removes the row. It is not erased: it leaves the table, its statuses are kept,
+ * scans never add it back, and it can be restored (Capability Analysis PRD, "PM and PMOS AI").
+ *
+ * A rename keeps the replaced name behind the row (aliases), so a scan that meets the old name
+ * recognises the row. Every change records who, what, the value before and the value after.
  */
 export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
@@ -25,19 +34,34 @@ export async function PATCH(req: Request, { params }: Params) {
   const existing = await db.capability.findFirst({ where: { id, workspaceId: ctx.workspaceId } });
   if (!existing) return bad("Not found", 404);
 
+  if (existing.state === "removed") {
+    // The only thing a removed row accepts is its restore.
+    if (body.state !== "active") return bad(C.settings.restoreFirst);
+    const targetId = typeof body.domainId === "string" ? body.domainId : existing.domainId;
+    const target = await db.competitorDomain.findFirst({ where: { id: targetId, workspaceId: ctx.workspaceId, state: "active" }, select: { id: true } });
+    if (!target) return bad(C.settings.activeDomainRequired);
+    await db.capability.update({ where: { id }, data: { state: "active", removedAt: null, removedById: null, domainId: target.id, position: await nextActivePosition(ctx.workspaceId) } });
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: id, field: "state", from: "removed", to: "active", name: existing.name, via: "settings", domainChanged: target.id !== existing.domainId });
+    return stateResponse(ctx);
+  }
+
   const data: Prisma.CapabilityUncheckedUpdateInput = {};
-  let action = "update";
+  /** One event per changed field, each with its own before and after. */
+  const events: EventProps[] = [];
   let field: string | null = null;
   if (body.name !== undefined) {
     const name = cleanName(body.name);
     if (!name) return bad("A name is required.");
     const dup = await db.capability.findFirst({
       where: { workspaceId: ctx.workspaceId, id: { not: id }, name: { equals: name, mode: "insensitive" } },
-      select: { id: true },
+      select: { id: true, state: true },
     });
-    if (dup) return bad("A capability with this name already exists.", 409);
-    data.name = name;
-    action = "rename";
+    if (dup) return bad(dup.state === "removed" ? C.settings.nameRemovedCapability : "A capability with this name already exists.", 409);
+    if (name !== existing.name) {
+      data.name = name;
+      data.aliases = aliasesAfterRename(existing.aliases, existing.name, name) as unknown as Prisma.InputJsonValue;
+      events.push({ action: "rename", field: "name", from: existing.name, to: name });
+    }
     field = "name";
   }
   const description = cleanText(body.description, MAX_DESCRIPTION);
@@ -51,28 +75,31 @@ export async function PATCH(req: Request, { params }: Params) {
     field = field ?? "ownProduct";
   }
   if (body.domainId !== undefined) {
+    // A row in the table moves between domains that are in the table; a suggestion may also sit in a suggested domain.
+    const domainStates = existing.state === "suggested" ? ["active", "suggested"] : ["active"];
     const domain = typeof body.domainId === "string"
-      ? await db.competitorDomain.findFirst({ where: { id: body.domainId, workspaceId: ctx.workspaceId }, select: { id: true } })
+      ? await db.competitorDomain.findFirst({ where: { id: body.domainId, workspaceId: ctx.workspaceId, state: { in: domainStates } }, select: { id: true, name: true } })
       : null;
     if (!domain) return bad("Pick a domain.");
     if (domain.id !== existing.domainId) {
+      const before = await db.competitorDomain.findUnique({ where: { id: existing.domainId }, select: { name: true } });
       data.domainId = domain.id;
-      action = "move";
-      field = "domain";
+      events.push({ action: "move", field: "domain", from: existing.domainId, to: domain.id, fromName: before?.name ?? null, toName: domain.name });
+      field = field ?? "domain";
     }
   }
   if (body.productLines !== undefined) {
     const lines = await cleanProductLines(ctx.workspaceId, body.productLines);
     data.productLines = lines as unknown as Prisma.InputJsonValue;
     const before = Array.isArray(existing.productLines) ? (existing.productLines as string[]) : [];
-    action = lines.length > before.length ? "attachProductLine" : lines.length < before.length ? "detachProductLine" : action;
+    events.push({ action: lines.length > before.length ? "attachProductLine" : lines.length < before.length ? "detachProductLine" : "update", field: "productLines", from: before.join(", "), to: lines.join(", ") });
     field = "productLines";
   }
   if (typeof body.position === "number" && Number.isFinite(body.position)) data.position = Math.max(0, Math.round(body.position));
   if (body.ourStatus !== undefined) {
     if (!isOwnStatus(body.ourStatus)) return bad("Pick has, partial or missing.");
     data.ourStatus = body.ourStatus;
-    action = "ourStatus";
+    if (body.ourStatus !== existing.ourStatus) events.push({ action: "ourStatus", field: "ourStatus", from: existing.ourStatus, to: body.ourStatus });
     field = "ourStatus";
   }
 
@@ -98,6 +125,7 @@ export async function PATCH(req: Request, { params }: Params) {
   }
 
   await db.capability.update({ where: { id }, data });
+  if (typeof data.name === "string") await releaseCapabilityAlias(ctx.workspaceId, data.name, id);
   if (decision === "accepted" && existing.suggestedById) {
     // The competitor whose scan proposed the row has it: write that cell from the
     // suggestion's evidence, unless a later scan already classified it.
@@ -117,8 +145,10 @@ export async function PATCH(req: Request, { params }: Params) {
       decision,
       domainChanged: data.domainId !== undefined,
     });
+  } else if (events.length) {
+    for (const e of events) await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", entityId: id, ...e });
   } else {
-    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action, entityId: id, field });
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "update", entityId: id, field, from: null, to: null });
   }
   return stateResponse(ctx);
 }
@@ -132,9 +162,12 @@ export async function DELETE(_req: Request, { params }: Params) {
   const ctx = await competitorsGuard({ admin: true });
   if (ctx instanceof NextResponse) return ctx;
   const { id } = await params;
-  const existing = await db.capability.findFirst({ where: { id, workspaceId: ctx.workspaceId }, select: { id: true } });
+  const existing = await db.capability.findFirst({ where: { id, workspaceId: ctx.workspaceId }, select: { id: true, name: true, state: true, domainId: true } });
   if (!existing) return bad("Not found", 404);
-  await db.capability.delete({ where: { id } });
-  await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "delete", entityId: id, field: null });
+  if (existing.state === "removed") return stateResponse(ctx);
+  if (existing.state !== "active") return bad(C.settings.suggestionNotRemovable);
+  // Not erased: the row, its statuses and idea links stay, so scans never add it back and a restore brings the evidence with it.
+  await db.capability.update({ where: { id }, data: { state: "removed", removedAt: new Date(), removedById: ctx.user.id } });
+  await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "remove", entityId: id, field: "state", from: "active", to: "removed", name: existing.name, domainId: existing.domainId });
   return stateResponse(ctx);
 }

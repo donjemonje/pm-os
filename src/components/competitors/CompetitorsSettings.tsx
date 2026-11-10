@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
@@ -9,14 +9,15 @@ import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
-import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
+import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
 import { scanSummaryLine } from "@/lib/competitors/summary";
-import { timeAgo, timeUntil } from "@/lib/competitors/time";
+import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 import { track } from "@/lib/analytics/track";
 import { cn } from "@/lib/utils";
 import { ScanLogDrawer } from "./ScanLogDrawer";
+import { MoveDomainDialog } from "./MoveDomainDialog";
 
 const INPUT =
   "w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)] disabled:opacity-60";
@@ -54,6 +55,8 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logFor, setLogFor] = useState<CompetitorRow | null>(null);
+  /** The domain being removed while it still holds capabilities: the PM is asked once where they go. */
+  const [movingOut, setMovingOut] = useState<{ domain: DomainRow; count: number } | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -197,8 +200,18 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
         }}
         onReorder={(order) => call("PUT", "/api/competitors/domains", { order })}
         onRemove={async (d) => {
-          const n = active.filter((k) => k.domainId === d.id).length;
-          if (!(await confirm({ title: C.settings.removeDomainTitle(d.name), message: C.settings.removeDomainBody(n), confirmLabel: C.settings.remove, tone: "danger" }))) return;
+          // Capabilities in the table and suggestions waiting in the domain both outlive it.
+          const n = state.capabilities.filter((k) => k.domainId === d.id && (k.state === "active" || k.state === "suggested")).length;
+          if (n > 0) {
+            if (activeDomains.length < 2) {
+              setError(C.settings.removeDomainLast);
+              return;
+            }
+            setError(null);
+            setMovingOut({ domain: d, count: n });
+            return;
+          }
+          if (!(await confirm({ title: C.settings.removeDomainTitle(d.name), message: C.settings.removeDomainBody, confirmLabel: C.settings.remove, tone: "danger" }))) return;
           await call("DELETE", `/api/competitors/domains/${d.id}`);
         }}
       />
@@ -213,6 +226,20 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
         }}
       />
 
+      {/* Removed by the team: scans never add these back; restorable */}
+      {canEdit && (state.removed.domains.length > 0 || state.removed.capabilities.length > 0) && (
+        <RemovedPanel removed={state.removed} domains={activeDomains} busy={busy}
+          onRestore={async (url, body) => {
+            setNote(null);
+            const ok = await call("PATCH", url, body);
+            if (ok) {
+              setNote(C.settings.restored);
+              setTimeout(() => setNote(null), 4000);
+            }
+          }}
+        />
+      )}
+
       {/* Schedule */}
       <SchedulePanel config={state.config} canEdit={canEdit} busy={busy} onSave={(body) => call("PATCH", "/api/competitors/settings", body)} />
 
@@ -220,6 +247,92 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
       <NotificationsPanel members={state.members} selected={state.config.notifyUserIds} canEdit={canEdit} busy={busy} onSave={(ids) => call("PATCH", "/api/competitors/settings", { notifyUserIds: ids })} />
 
       {logFor && <ScanLogDrawer competitorId={logFor.id} competitorName={logFor.name} onClose={() => setLogFor(null)} />}
+      {movingOut && (
+        <MoveDomainDialog domain={movingOut.domain} count={movingOut.count} targets={activeDomains.filter((d) => d.id !== movingOut.domain.id)} busy={busy}
+          onCancel={() => setMovingOut(null)}
+          onConfirm={async (moveTo) => {
+            const id = movingOut.domain.id;
+            setMovingOut(null);
+            await call("DELETE", `/api/competitors/domains/${id}?moveTo=${encodeURIComponent(moveTo)}`);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ————— Removed —————
+
+function RemovedPanel({ removed, domains, busy, onRestore }: {
+  removed: { domains: RemovedRow[]; capabilities: RemovedCapabilityRow[] };
+  /** The domains in the table — where a capability can return to. */
+  domains: DomainRow[];
+  busy: boolean;
+  onRestore: (url: string, body: unknown) => Promise<void>;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-removed">
+      <div className="border-b border-border px-5 py-4">
+        <div className="font-medium text-foreground">{C.settings.removedTitle}</div>
+        <p className="mt-1 text-sm text-muted">{C.settings.removedBlurb}</p>
+      </div>
+      {removed.domains.length > 0 && (
+        <div>
+          <div className="px-5 pt-3 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">{C.settings.removedDomains}</div>
+          {removed.domains.map((d) => (
+            <div key={d.id} className="flex items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0" data-testid="cmp-removed-domain" data-name={d.name}>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-foreground" title={d.name}>{d.name}</div>
+                <div className="text-[12px] text-fg-muted">{C.settings.removedBy(d.removedByName, shortDate(d.removedAt))}</div>
+              </div>
+              <button className={SMALL_BTN} disabled={busy} data-testid="cmp-restore" onClick={() => onRestore(`/api/competitors/domains/${d.id}`, { state: "active" })}>
+                <RotateCcw size={12} />{C.settings.restore}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {removed.capabilities.length > 0 && (
+        <div>
+          <div className="px-5 pt-3 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">{C.settings.removedCapabilities}</div>
+          {removed.capabilities.map((k) => <RemovedCapabilityLine key={k.id} k={k} domains={domains} busy={busy} onRestore={onRestore} />)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RemovedCapabilityLine({ k, domains, busy, onRestore }: {
+  k: RemovedCapabilityRow;
+  domains: DomainRow[];
+  busy: boolean;
+  onRestore: (url: string, body: unknown) => Promise<void>;
+}) {
+  // Its own domain is in the table: it returns there. Otherwise the PM picks where it returns to.
+  const [domainId, setDomainId] = useState("");
+  const needsDomain = !k.domainActive;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-2.5 last:border-b-0" data-testid="cmp-removed-capability" data-name={k.name}>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-foreground" title={k.name}>{k.name}</div>
+        <div className="text-[12px] text-fg-muted">
+          {k.domainName ? `${k.domainName} · ` : ""}{C.settings.removedBy(k.removedByName, shortDate(k.removedAt))}
+        </div>
+        {needsDomain && <div className="mt-0.5 text-[12px] text-[#8a5a00]">{C.settings.restoreDomainHint(k.domainName)}</div>}
+      </div>
+      {needsDomain && (
+        <label className="flex items-center gap-2 text-[12px] text-fg-muted">
+          {C.settings.restoreInto}
+          <select className={cn(SELECT, "h-8 w-44 py-1 text-[12.5px]")} value={domainId} disabled={busy} data-testid="cmp-restore-domain" onChange={(e) => setDomainId(e.target.value)}>
+            <option value="" disabled>{C.settings.removeDomainMovePlaceholder}</option>
+            {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </label>
+      )}
+      <button className={SMALL_BTN} disabled={busy || (needsDomain && !domainId)} data-testid="cmp-restore"
+        onClick={() => onRestore(`/api/competitors/capabilities/${k.id}`, needsDomain ? { state: "active", domainId } : { state: "active" })}>
+        <RotateCcw size={12} />{C.settings.restore}
+      </button>
     </div>
   );
 }

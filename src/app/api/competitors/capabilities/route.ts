@@ -6,6 +6,19 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { nextPosition } from "@/lib/competitors/store";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { isOwnStatus, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
+import { aliasesWithout, aliasList, nameKey } from "@/lib/competitors/decisions";
+
+/**
+ * A name a PM gives by hand wins over an alias: when a row takes `name`, every other
+ * capability that kept it as a replaced name lets it go.
+ */
+export async function releaseCapabilityAlias(workspaceId: string, name: string, exceptId: string | null): Promise<void> {
+  const rows = await db.capability.findMany({ where: { workspaceId, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true, aliases: true } });
+  for (const r of rows) {
+    if (!aliasList(r.aliases).some((a) => nameKey(a) === nameKey(name))) continue;
+    await db.capability.update({ where: { id: r.id }, data: { aliases: aliasesWithout(r.aliases, name) as unknown as Prisma.InputJsonValue } });
+  }
+}
 
 /** Only names from the org's product-line catalog survive. */
 export async function cleanProductLines(workspaceId: string, v: unknown): Promise<string[]> {
@@ -20,7 +33,11 @@ export async function cleanProductLines(workspaceId: string, v: unknown): Promis
   return out;
 }
 
-/** POST: add a capability by hand. */
+/**
+ * POST: add a capability by hand. A name the team removed (or dismissed as a suggestion) is not
+ * a duplicate: adding it by hand brings that row back and clears the recorded removal, with
+ * everything scans found for it.
+ */
 export async function POST(req: Request) {
   const ctx = await competitorsGuard({ admin: true });
   if (ctx instanceof NextResponse) return ctx;
@@ -29,14 +46,37 @@ export async function POST(req: Request) {
   const name = cleanName(body.name);
   if (!name) return bad("A name is required.");
   const domainId = typeof body.domainId === "string" ? body.domainId : "";
-  const domain = domainId ? await db.competitorDomain.findFirst({ where: { id: domainId, workspaceId: ctx.workspaceId }, select: { id: true } }) : null;
+  const domain = domainId ? await db.competitorDomain.findFirst({ where: { id: domainId, workspaceId: ctx.workspaceId, state: "active" }, select: { id: true } }) : null;
   if (!domain) return bad(C.settings.domainRequired);
   const dup = await db.capability.findFirst({
     where: { workspaceId: ctx.workspaceId, name: { equals: name, mode: "insensitive" } },
     select: { id: true, state: true },
   });
-  if (dup) return bad("A capability with this name already exists.", 409);
+  if (dup && (dup.state === "active" || dup.state === "suggested")) return bad("A capability with this name already exists.", 409);
   const productLines = await cleanProductLines(ctx.workspaceId, body.productLines);
+  await releaseCapabilityAlias(ctx.workspaceId, name, dup?.id ?? null);
+  if (dup) {
+    // Removed or dismissed earlier: the PM's own add wins, and the recorded decision is cleared.
+    const description = cleanText(body.description, MAX_DESCRIPTION);
+    const ownProduct = cleanText(body.ownProduct, MAX_OWN_PRODUCT);
+    await db.capability.update({
+      where: { id: dup.id },
+      data: {
+        name,
+        domainId: domain.id,
+        state: "active",
+        removedAt: null,
+        removedById: null,
+        position: await nextPosition("capability", ctx.workspaceId),
+        ...(description !== undefined ? { description } : {}),
+        ...(ownProduct !== undefined ? { ownProduct } : {}),
+        ...(body.productLines !== undefined ? { productLines: productLines as unknown as Prisma.InputJsonValue } : {}),
+        ...(isOwnStatus(body.ourStatus) ? { ourStatus: body.ourStatus } : {}),
+      },
+    });
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: dup.id, field: "state", from: dup.state, to: "active", name, via: "add" });
+    return stateResponse(ctx, 201);
+  }
   const cap = await db.capability.create({
     data: {
       workspaceId: ctx.workspaceId,
@@ -52,6 +92,6 @@ export async function POST(req: Request) {
     },
     select: { id: true },
   });
-  await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "create", entityId: cap.id, field: null });
+  await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "create", entityId: cap.id, field: null, from: null, to: name, name });
   return stateResponse(ctx, 201);
 }
