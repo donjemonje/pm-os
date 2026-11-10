@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isPublicWebsite } from "@/lib/competitors/netguard";
+import { rewriteSourceOrigin } from "@/lib/competitors/pages";
 import { db } from "@/lib/db";
 import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
@@ -35,6 +37,8 @@ export async function POST(req: Request) {
   }
   const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true, deletedAt: true } });
   if (dupHost && !dupHost.deletedAt) return bad(C.settings.duplicateHost, 409);
+  // Name AND addresses must be public before the app server fetches anything from it (story checklist §12).
+  if (!(await isPublicWebsite(site.url))) return bad(C.settings.privateHost);
 
   const probe = await fetchPlain(site.url);
   if (probe.status === 0) return bad(C.settings.unreachable, 422);
@@ -42,8 +46,10 @@ export async function POST(req: Request) {
   if (dupHost?.deletedAt) {
     // Re-adding a removed competitor restores it with its pages, hashes and scan history (PRD: retention, not deletion).
     await db.competitor.update({ where: { id: dupHost.id }, data: { deletedAt: null, websiteUrl: site.url, position: await nextPosition("competitor", ctx.workspaceId) } });
+    const source = await db.competitorSource.findFirst({ where: { competitorId: dupHost.id, type: "website" }, select: { id: true, url: true } });
     await db.competitorSource.updateMany({ where: { competitorId: dupHost.id, type: "website" }, data: { url: site.url, lastStatus: "never" } });
-    const source = await db.competitorSource.findFirst({ where: { competitorId: dupHost.id, type: "website" }, select: { id: true } });
+    // Restored under another spelling of the same site (www., https): its pages follow the new address.
+    if (source && source.url !== site.url) await rewriteSourceOrigin([source.id], source.url, site.url);
     if (!source) await db.competitorSource.create({ data: { workspaceId: ctx.workspaceId, competitorId: dupHost.id, type: "website", url: site.url } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_added", { competitorId: dupHost.id, source: "settings", restored: true });
     await createAndRouteScan(ctx.workspaceId, dupHost.id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));

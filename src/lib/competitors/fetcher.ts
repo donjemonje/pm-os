@@ -1,5 +1,6 @@
 import { htmlToText, looksEmptyWithoutJs, looksLikeBotWall } from "./html";
-import { isInsideSite, isPdfUrl, isPrivateHost } from "./url";
+import { resolvesToPrivate } from "./netguard";
+import { isInsideSite, isPdfUrl } from "./url";
 
 /** Redirect hops the plain fetch follows by hand (each target is checked before it is fetched). */
 const MAX_REDIRECTS = 5;
@@ -8,10 +9,11 @@ const MAX_REDIRECTS = 5;
  * Is this redirect target ours to fetch? With a site host: inside that site only. Without one (sitemaps
  * named by robots.txt, preview images): any public host, never a private address (SSRF, story checklist §12).
  */
-function redirectAllowed(target: URL, host: string | undefined): boolean {
+async function redirectAllowed(target: URL, host: string | undefined): Promise<boolean> {
   if (target.protocol !== "https:" && target.protocol !== "http:") return false;
-  if (host) return isInsideSite(target, host);
-  return !isPrivateHost(target.hostname);
+  if (host && !isInsideSite(target, host)) return false;
+  // Name and addresses: a public-looking name that resolves into our network is refused too.
+  return !(await resolvesToPrivate(target.hostname));
 }
 
 /**
@@ -86,6 +88,8 @@ export interface FetchedPage {
   ms: number;
   /** True when the site needs the browser: bot wall or no text without JS. */
   needsBrowser: boolean;
+  /** The answer was a download (installer, archive, office file), not a page: skipped by the crawl, counted for nothing. */
+  binary?: boolean;
   error?: FetchErrorKind;
   errorDetail?: string;
 }
@@ -144,7 +148,7 @@ export async function fetchPlain(url: string, opts: { host?: string } = {}): Pro
       } catch {
         return { url, finalUrl: current, status: res.status, html: "", text: "", kind: "page", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "other", errorDetail: `redirect to an invalid address` };
       }
-      if (!redirectAllowed(target, opts.host)) {
+      if (!(await redirectAllowed(target, opts.host))) {
         return { url, finalUrl: current, status: res.status, html: "", text: "", kind: "page", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "notfound", errorDetail: `redirected outside the site (${target.hostname})` };
       }
       if (hop === MAX_REDIRECTS) {
@@ -176,6 +180,11 @@ export async function fetchPlain(url: string, opts: { host?: string } = {}): Pro
         return { url, finalUrl, status: res.status, html: "", text: "", kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false, error: "unreadable", errorDetail: detail };
       }
       return { url, finalUrl, status: res.status, html: "", text, kind: "document", mode: "plain", ms: Date.now() - t0, needsBrowser: false };
+    }
+    // A download is not a page: its bytes must never be decoded, hashed and stored as text (Tomer's review 2026-11-10).
+    // Text of any kind stays readable — HTML pages, and the XML/plain files the crawl reads for discovery (sitemaps, robots.txt).
+    if (res.ok && contentType && !/^(text\/|application\/(xhtml\+xml|xml|rss\+xml|atom\+xml|json))/.test(contentType.trim())) {
+      return { url, finalUrl, status: res.status, html: "", text: "", kind: "page", mode: "plain", ms: Date.now() - t0, needsBrowser: false, binary: true, errorDetail: contentType.split(";")[0].trim() };
     }
     const html = await res.text();
     const text = htmlToText(html);

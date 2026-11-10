@@ -16,6 +16,16 @@ import { now } from "./settings";
  *   new auth surface.
  */
 
+/** Inline launches in flight — the scanner job awaits them before it exits (settleInline), so a scan a finishing scan started is never killed with the process. */
+const inflight = new Set<Promise<void>>();
+function track(p: Promise<void>): void {
+  inflight.add(p);
+  void p.finally(() => inflight.delete(p));
+}
+export async function settleInline(): Promise<void> {
+  while (inflight.size) await Promise.allSettled([...inflight]);
+}
+
 export function runnerMode(): "inline" | "cloudrun" {
   return process.env.COMPETITORS_RUNNER?.trim().toLowerCase() === "cloudrun" ? "cloudrun" : "inline";
 }
@@ -25,9 +35,9 @@ export async function launchScan(scanId: string): Promise<void> {
     await triggerCloudRunJob(["--scan", scanId]);
     return;
   }
-  void runScan(scanId).catch((e) => {
+  track(runScan(scanId).catch((e) => {
     console.error("[competitors] scan failed", scanId, e);
-  });
+  }));
 }
 
 /** Same runner choice for a Scan run (lib/competitors/runs.ts): the job gets `--run <id>`, local dev runs it in-process. */
@@ -37,9 +47,9 @@ export async function launchRun(runId: string): Promise<void> {
     return;
   }
   const { executeRun } = await import("./runs");
-  void executeRun(runId).catch((e) => {
+  track(executeRun(runId).catch((e) => {
     console.error("[competitors] run failed", runId, e);
-  });
+  }));
 }
 
 async function triggerCloudRunJob(args: string[]): Promise<void> {

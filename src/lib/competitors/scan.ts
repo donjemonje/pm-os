@@ -29,7 +29,7 @@ import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./l
 import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
 import { aiStepEnabled, getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
-import { isPdfUrl, isInsideSite } from "./url";
+import { isPdfUrl, isInsideSite, pageKey } from "./url";
 
 /**
  * One scan of one source, end to end, in two halves (Website Scanning PRD
@@ -122,7 +122,7 @@ export class ScanLog {
 
 /** Append one page the local lane posted: the route records the page and logs it here so the process half can read it back. */
 export async function appendHandedInPage(scanId: string, entry: PageLogEntry, linked: Iterable<string> = [], lines: LogLine[] = []): Promise<void> {
-  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, outcomes: true, linkedUrls: true, log: true } });
+  const scan = await db.competitorScan.findUniqueOrThrow({ where: { id: scanId }, select: { pages: true, linkedUrls: true, log: true } });
   const log = [...(Array.isArray(scan.log) ? (scan.log as unknown as LogLine[]) : []), ...lines];
   const all = Array.isArray(scan.pages) ? (scan.pages as unknown as PageLogEntry[]) : [];
   const earlier = all.find((p) => p.url === entry.url);
@@ -132,9 +132,10 @@ export async function appendHandedInPage(scanId: string, entry: PageLogEntry, li
   if (earlier && entry.outcome === "unchanged" && (earlier.outcome === "new" || earlier.outcome === "changed")) entry = { ...entry, outcome: earlier.outcome };
   pages.push(entry);
   const linkedUrls = new Set<string>(Array.isArray(scan.linkedUrls) ? (scan.linkedUrls as string[]) : []);
-  for (const l of linked) if (linkedUrls.size < 5000) linkedUrls.add(l);
-  const outcomes = (scan.outcomes && typeof scan.outcomes === "object" && !Array.isArray(scan.outcomes) ? { ...(scan.outcomes as OutcomeCounts) } : {}) as OutcomeCounts;
-  if (entry.outcome === "failed" && entry.category) outcomes[entry.category] = (outcomes[entry.category] ?? 0) + 1;
+  for (const l of linked) linkedUrls.add(l);
+  // Counted from the page list, which is deduped by URL — a page handed in twice is one page (Tomer's review 2026-11-10).
+  const outcomes: OutcomeCounts = {};
+  for (const p of pages) if (p.outcome === "failed" && p.category) outcomes[p.category] = (outcomes[p.category] ?? 0) + 1;
   await db.competitorScan.update({
     where: { id: scanId },
     data: {
@@ -329,21 +330,30 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
   // ——— 2. Fetch loop ———
   let n = 0;
   while (true) {
-    // No page limit (Daniel 2026-11-09): a site is read whole. Time and the PM-OS store are the only stops.
+    const cand = frontier.next();
+    if (!cand) break;
+    // No page limit (Daniel 2026-11-09): a site is read whole. Time and the PM-OS store are the only stops — checked only
+    // while a page is left, so a limit met right after the last page never reports a stop with nothing not attempted.
     if (Date.now() - t0 > limits.ms) {
+      frontier.putBack(cand);
       out.stoppedBy = "cap";
       break;
     }
     if (await storageFull()) {
+      frontier.putBack(cand);
       out.stoppedBy = "storage";
       break;
     }
-    const cand = frontier.next();
-    if (!cand) break;
     if (n > 0) await sleep(pauseMs);
     n++;
     out.attempted++;
     let page = await fetchPage(cand.url, mode, competitor.host);
+    if (page.binary) {
+      // A download (installer, archive, office file): not a page of the site — skipped, counted for nothing.
+      out.attempted--;
+      log.add("info", `Not a web page (${page.errorDetail ?? "binary content"}) — skipped`, cand.url);
+      continue;
+    }
     // Bot wall or JS-only page → switch the whole site to the browser, once (always on in production).
     if (page.needsBrowser && mode === "plain" && !isPdfUrl(cand.url)) {
       if (browserAvailable()) {
@@ -487,7 +497,7 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
     log.count("cap", log.notAttempted);
   }
   log.add("info", `${out.count} page${out.count === 1 ? "" : "s"} handed in from the station, ${out.attempted - out.count} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
-  if (out.count === 0 && out.attempted === 0) {
+  if (out.count === 0 && out.attempted === 0 && !out.errorKind) {
     out.errorKind = "other";
     out.error = "no page could be read";
   }
@@ -523,9 +533,9 @@ export async function runScan(scanId: string): Promise<void> {
   const lane: ScanLane = scan.fetchMode === "bundle" ? "bundle" : (scan.lane as ScanLane);
   // Claim the scan atomically (Tomer's review): a finishing scan, the tick and a Scan run may all try to start the
   // same queued scan; only the one that flips queued → running proceeds. The local lane's claim is its request row
-  // (running → done) so two /done calls cannot both process the handed-in pages.
+  // (handed_in → done) so two /done calls, or the stale sweep's relaunch and a late job, cannot both process the pages.
   if (lane === "local") {
-    const claimed = await db.localScanRequest.updateMany({ where: { scanId, state: "running" }, data: { state: "done", finishedAt: new Date() } });
+    const claimed = await db.localScanRequest.updateMany({ where: { scanId, state: "handed_in" }, data: { state: "done", finishedAt: new Date() } });
     if (!claimed.count) return;
   } else {
     const claimed = await db.competitorScan.updateMany({ where: { id: scanId, status: "queued" }, data: { status: "running", heartbeatAt: new Date() } });
@@ -564,7 +574,7 @@ export async function runScan(scanId: string): Promise<void> {
   let handToLocal = false;
 
   try {
-    const firstScan = (await db.sourcePage.count({ where: { sourceId: source.id, lastReadScanId: { not: scanId } } })) === 0;
+    const firstScan = (await db.sourcePage.count({ where: { sourceId: source.id, lastReadScanId: { not: scanId }, state: { not: "removed" } } })) === 0;
     const ctx: CollectContext = { scanId, workspaceId, source, competitor, sourceLabel, log, t0, resumedFromId: staleBefore?.id ?? null };
     const col = lane === "bundle" ? await collectBundle(ctx) : lane === "local" ? await collectLocal(ctx) : await collectWebsite(ctx);
     mode = col.mode;
@@ -587,17 +597,23 @@ export async function runScan(scanId: string): Promise<void> {
     if (homeFailed) {
       finalStatus = "failed";
       log.add("error", `The home page could not be read — scan failed (${error})`);
+    } else if (count === 0 && stoppedBy === "storage") {
+      // The PM-OS store was full before the first page: nothing was read, but the site is fine.
+      finalStatus = "partial";
+      errorKind = "storage";
+      error = error ?? "PM-OS storage limit reached — no page was read; contact support@pm-os.io to raise it";
+      log.add("warn", error);
     } else if (count === 0) {
       finalStatus = "failed";
       errorKind = errorKind ?? "other";
       error = error ?? "no page could be read";
     } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
-      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
+      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
     } else if (!aiStepEnabled()) {
       // Test knob: the scanning story is tested without the analysis step (deterministic, free). Counts as analyzed.
       log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");
-      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
+      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
       const released = await releasePreviousTexts(source.id, scanId);
       if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped (change handed to analysis)`);
     } else {
@@ -623,14 +639,14 @@ export async function runScan(scanId: string): Promise<void> {
         const released = await releasePreviousTexts(source.id, scanId);
         if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped (change analyzed)`);
       }
-      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log);
+      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
     }
 
     // ——— Badge (PRD): Blocked = the site refused us on most pages or at the door; Unreachable = no answer at all ———
     const refusedAtDoor = homeFailed === "botwall" || homeFailed === "http4xx" || homeFailed === "login";
     if (homeFailed) {
       badge = refusedAtDoor ? "blocked" : "unreachable";
-    } else if (count === 0) {
+    } else if (count === 0 && col.stoppedBy !== "storage") {
       // Remote: the site did not answer (or refused everything). Local: the station handed in nothing — a station problem, not the site's.
       badge = col.denied > 0 ? "blocked" : lane === "local" ? "incomplete" : "unreachable";
     } else if (col.denied > 0 && col.denied * 2 >= col.attempted) {
@@ -725,13 +741,19 @@ export async function remoteLaneOn(): Promise<boolean> {
  * failed or disappeared become "source no longer reachable" (cleared when
  * seen again). Staleness (3 scans unseen) is derived at read time, per source.
  */
-async function markFactsSeen(competitorId: string, scanId: string, seenUrls: Set<string>, removedPages: string[], log: ScanLog): Promise<void> {
+async function markFactsSeen(competitorId: string, scanId: string, seenUrls: Set<string>, removedPages: string[], log: ScanLog, siteUrl: string): Promise<void> {
   const facts = await db.profileFact.findMany({ where: { competitorId, manual: false, dismissedAt: null }, select: { id: true, sourceUrl: true, unreachableAt: true } });
   const removed = new Set(removedPages);
   const failed = new Set(log.pages.filter((p) => p.outcome === "failed").map((p) => p.url));
   let gone = 0;
   for (const f of facts) {
-    const url = f.sourceUrl ? f.sourceUrl.replace(/[?#].*$/, "").replace(/\/+$/, "") : null;
+    // The same key the page store uses (the home page is "https://site/" with its slash) — a bare-stripped URL never matched it.
+    let url: string | null = null;
+    try {
+      url = f.sourceUrl ? pageKey(new URL(f.sourceUrl), siteUrl) : null;
+    } catch {
+      url = null;
+    }
     if (url && seenUrls.has(url)) {
       await db.profileFact.update({ where: { id: f.id }, data: { lastSeenScanId: scanId, unreachableAt: null } });
     } else if (url && (removed.has(url) || failed.has(url)) && !f.unreachableAt) {

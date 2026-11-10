@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
-import { ACTIVE_SCAN_STATUSES, MAX_PARALLEL_REMOTE, STALE_MS } from "./config";
+import { ACTIVE_SCAN_STATUSES, MAX_PARALLEL_REMOTE, MAX_PROCESS_ATTEMPTS, STALE_MS } from "./config";
 import { alertOldRequests, cleanupScanTokens, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
 import { getGlobalScanSettings, now } from "./settings";
 
@@ -11,7 +11,11 @@ import { getGlobalScanSettings, now } from "./settings";
  *
  *   1. stale sweep      — scans with no heartbeat for 10 minutes: remote ones
  *                         are marked stale (the next run resumes their pending
- *                         pages), local ones go back to waiting;
+ *                         pages); a local one whose station died goes back to
+ *                         waiting, one whose PROCESSING died (pages handed in,
+ *                         the runner stopped) is processed again, three times at
+ *                         most, then failed — the station never re-reads a site
+ *                         it already handed in (Tomer's review 2026-11-10);
  *   2. due sources      — every website source whose last scan is older than
  *                         its own frequency gets a scan: remote ON → queued for
  *                         the remote lane, remote OFF → parked in the local lane;
@@ -61,6 +65,23 @@ export async function sweepStale(t: Date): Promise<number> {
   const stale = await db.competitorScan.findMany({ where: { status: "running", heartbeatAt: { lt: cutoff } }, select: { id: true, sourceId: true, lane: true } });
   for (const s of stale) {
     if (s.lane === "local") {
+      const req = await db.localScanRequest.findUnique({ where: { scanId: s.id }, select: { state: true, processAttempts: true } });
+      if (req && (req.state === "handed_in" || req.state === "done")) {
+        // Every page is already in PM-OS; the processing half died (runner crash, dev server restart, a launch that never
+        // happened). Process again — never send the station back to read a site it handed in. Three tries, then failed.
+        if (req.processAttempts >= MAX_PROCESS_ATTEMPTS) {
+          await db.localScanRequest.updateMany({ where: { scanId: s.id }, data: { state: "failed", finishedAt: t } });
+          await db.competitorScan.update({ where: { id: s.id }, data: { status: "failed", badge: "incomplete", finishedAt: t, errorKind: "other", error: `processing failed ${MAX_PROCESS_ATTEMPTS} times after the station handed the pages in — contact support@pm-os.io` } });
+          await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "processing failed after the hand-in" } });
+          console.error(`[competitors] scan ${s.id}: processing failed ${MAX_PROCESS_ATTEMPTS} times after the hand-in`);
+          continue;
+        }
+        await db.localScanRequest.updateMany({ where: { scanId: s.id }, data: { state: "handed_in", processAttempts: { increment: 1 } } });
+        await db.competitorScan.update({ where: { id: s.id }, data: { heartbeatAt: t } });
+        const { launchScan } = await import("./run");
+        await launchScan(s.id).catch((e) => console.error("[competitors] relaunch after a stale hand-in failed", s.id, e));
+        continue;
+      }
       // The station died mid-scan: back to waiting, the next poll resumes it (read pages stay).
       await requeueLocalScan(s.id);
       continue;

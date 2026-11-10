@@ -1,8 +1,9 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "../db";
 import type { PageText } from "./ai";
 import { REMOVED_AFTER_NOT_FOUND, type OutcomeCategory, type PageKind, type PageState } from "./config";
 import { contentHash, htmlToText, titleOf } from "./html";
+import { noteStoredChars } from "./settings";
 import { pageKey } from "./url";
 
 /**
@@ -144,6 +145,7 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
       },
       select: { id: true },
     });
+    noteStoredChars(rawText.length);
     return { url: key, outcome: "new", pageId: created.id, state: "present", pageText, chars: rawText.length, hash };
   }
 
@@ -164,6 +166,7 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
         ...(input.via === "link" || input.via === "sitemap" ? { lastLinkedScanId: input.scanId } : {}),
       },
     });
+    if (existing.text == null) noteStoredChars(rawText.length);
     return { url: key, outcome: "unchanged", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", pageText, chars: rawText.length, hash };
   }
 
@@ -189,7 +192,21 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
       ...(input.via === "link" || input.via === "sitemap" ? { lastLinkedScanId: input.scanId } : {}),
     },
   });
+  noteStoredChars(rawText.length - (existing.text == null ? 0 : existing.chars));
   return { url: key, outcome: "changed", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", pageText, chars: rawText.length, hash };
+}
+
+/**
+ * The website address changed within the same site (acme.com → www.acme.com, http → https): every stored page keeps its
+ * identity under the new address — page keys carry the source's origin (pageKey), so without this the next scan would
+ * create every page again as "new" and the old rows would stay "present" forever (Tomer's review 2026-11-10).
+ * A change to another host is a different story (the old pages are removed) and does not come here.
+ */
+export async function rewriteSourceOrigin(sourceIds: string[], oldUrl: string, newUrl: string): Promise<number> {
+  const from = oldUrl.replace(/\/+$/, "");
+  const to = newUrl.replace(/\/+$/, "");
+  if (!sourceIds.length || from === to) return 0;
+  return db.$executeRaw`UPDATE "SourcePage" SET url = ${to} || substr(url, ${from.length + 1}) WHERE "sourceId" IN (${Prisma.join(sourceIds)}) AND (url = ${from} OR url LIKE ${from + "/%"})`;
 }
 
 /** The text a changed page had before its last unanalyzed change — for the change insight. */

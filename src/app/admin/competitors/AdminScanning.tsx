@@ -191,7 +191,7 @@ export function AdminScanning() {
                       </select>
                     </td>
                     <td className="px-3 py-2">{when(s.lastScanAt)}</td>
-                    <td className="px-3 py-2">{s.pendingSince ? <span className="text-slate-600">pending for the station since {when(s.pendingSince)}</span> : s.lastStatus}</td>
+                    <td className="px-3 py-2">{s.lastStatus === "running" ? <span className="text-slate-600">the station is reading{s.pendingSince ? ` (waited since ${when(s.pendingSince)})` : ""}</span> : s.pendingSince ? <span className="text-slate-600">pending for the station since {when(s.pendingSince)}</span> : s.lastStatus}</td>
                   </tr>
                 ))}
               </tbody>

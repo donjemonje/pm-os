@@ -119,10 +119,23 @@ export async function storageLimitChars(): Promise<number> {
   return STORAGE_LIMIT_CHARS;
 }
 
-/** Characters of page text stored right now, every source of every organization (SourcePage.chars; previous texts not counted). */
+/**
+ * Characters of page text stored right now, every source of every organization (SourcePage.chars; previous texts not counted).
+ * The full-table SUM runs at most once a minute per process; the page store reports what it writes in between
+ * (noteStoredChars), so a scan sees its own pages count at once. Another process's writes show within the minute.
+ */
+const STORED_CACHE_MS = 60_000;
+let storedCache: { at: number; value: number } | null = null;
 export async function storedTextChars(): Promise<number> {
+  if (storedCache && Date.now() - storedCache.at < STORED_CACHE_MS) return storedCache.value;
   const r = await db.sourcePage.aggregate({ _sum: { chars: true }, where: { text: { not: null } } });
-  return r._sum.chars ?? 0;
+  storedCache = { at: Date.now(), value: r._sum.chars ?? 0 };
+  return storedCache.value;
+}
+
+/** The page store wrote `delta` characters of text (negative when text was dropped): keeps the cached sum current. */
+export function noteStoredChars(delta: number): void {
+  if (storedCache) storedCache.value = Math.max(0, storedCache.value + delta);
 }
 
 /** True when the store is at or past its limit: the scan stops here, the rest is "not attempted — storage limit". */

@@ -75,6 +75,8 @@ export function ceilingMsFromEnv(): number {
 }
 /** A scan that stopped reporting for this long is stale; the next run resumes its pending pages. */
 export const STALE_MS = 10 * 60_000;
+/** A handed-in local scan whose processing stops reporting is processed again this many times, then failed (the station is never sent back). */
+export const MAX_PROCESS_ATTEMPTS = 3;
 /** Scans heartbeat this often. */
 export const HEARTBEAT_MS = 30_000;
 /** Remote scans in progress at once, all workspaces (global). */

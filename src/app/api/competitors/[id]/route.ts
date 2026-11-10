@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isPublicWebsite } from "@/lib/competitors/netguard";
+import { rewriteSourceOrigin } from "@/lib/competitors/pages";
 import { db } from "@/lib/db";
 import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
@@ -43,6 +45,8 @@ export async function PATCH(req: Request, { params }: Params) {
       const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true } });
       // A removed competitor still holds the host (its history stays); say so rather than fail on the unique index.
       if (dup) return bad(C.settings.duplicateHost, 409);
+      // Name AND addresses must be public: a public-looking name that resolves into our network is refused (story checklist §12).
+      if (!(await isPublicWebsite(site.url))) return bad(C.settings.privateHost);
       data.websiteUrl = site.url;
       data.host = site.host;
     } catch (e) {
@@ -54,7 +58,12 @@ export async function PATCH(req: Request, { params }: Params) {
   }
   await db.competitor.update({ where: { id }, data });
   if (data.websiteUrl) {
+    const websiteSources = await db.competitorSource.findMany({ where: { competitorId: id, type: "website" }, select: { id: true, url: true } });
     await db.competitorSource.updateMany({ where: { competitorId: id, type: "website" }, data: { url: data.websiteUrl } });
+    if (data.host === existing.host) {
+      // Same site, another spelling (www., https): the stored pages move to the new address — no re-add, no duplicates.
+      for (const src of websiteSources) if (src.url !== data.websiteUrl) await rewriteSourceOrigin([src.id], src.url, data.websiteUrl);
+    }
     if (data.host && data.host !== existing.host) {
       // A new site: the old site's pages are never read again, so they leave the current picture now (Tomer's review).
       // Their text goes too (the hash stays, so the page history still says what was there); nothing reads a removed page's text.

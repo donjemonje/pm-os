@@ -69,7 +69,7 @@ export default async function AdminCompetitorsPage() {
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-sm font-bold">AI prompts</h2>
           <p className="mb-4 mt-0.5 text-xs text-slate-500">
-            The system prompt of each of the two calls and the structured answer it is forced to return (a schema — Gemini's response schema or Claude's tool input; the model cannot answer in free text). Read-only; changing them is a code change and bumps the prompt version.
+            The system prompt of each of the two calls and the structured answer it is forced to return (a schema PMOS AI is held to; the model cannot answer in free text). Read-only; changing them is a code change and bumps the prompt version.
           </p>
           <div className="space-y-2">
             {prompts.map((p) => (

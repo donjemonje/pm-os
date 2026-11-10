@@ -193,9 +193,14 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   const [unreadOnly, setUnreadOnly] = useState(false);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/competitors");
-    const data = await res.json();
-    if (res.ok) setState(data.state);
+    // One failed refresh (a dev restart, a 502) must not end the polling that tells the user the scan finished.
+    try {
+      const res = await fetch("/api/competitors");
+      const data = await res.json();
+      if (res.ok) setState(data.state);
+    } catch {
+      // try again on the next tick
+    }
   }, []);
 
   // While a scan runs, learn when it ends; results land in one go.

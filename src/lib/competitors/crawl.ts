@@ -16,20 +16,31 @@ export interface RobotsRules {
 }
 
 export async function readRobots(origin: string): Promise<RobotsRules> {
-  const rules: RobotsRules = { disallow: [], sitemaps: [], crawlDelaySec: null };
   const res = await fetchPlain(new URL("/robots.txt", origin).href);
-  if (!res.html || res.status >= 400) return rules;
+  if (!res.html || res.status >= 400) return { disallow: [], sitemaps: [], crawlDelaySec: null };
+  return parseRobots(res.html);
+}
+
+/** The rules of a robots.txt text for our user-agent group ("*" or anything naming pm-os), plus every Sitemap line. */
+export function parseRobots(text: string): RobotsRules {
+  const rules: RobotsRules = { disallow: [], sitemaps: [], crawlDelaySec: null };
   let applies = false;
-  for (const raw of res.html.split(/\r?\n/)) {
+  // Consecutive User-agent lines open ONE group (RFC 9309): "User-agent: *" followed by "User-agent: Googlebot" shares its rules.
+  let openingGroup = false;
+  for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/#.*$/, "").trim();
     if (!line) continue;
     const [k, ...rest] = line.split(":");
     const key = k.trim().toLowerCase();
     const value = rest.join(":").trim();
     if (key === "user-agent") {
-      // Our UA names PM-OS; honour "*" and anything naming pm-os.
-      applies = value === "*" || /pm-os/i.test(value);
-    } else if (key === "disallow" && applies && value) {
+      const ours = value === "*" || /pm-os/i.test(value);
+      applies = openingGroup ? applies || ours : ours;
+      openingGroup = true;
+      continue;
+    }
+    openingGroup = false;
+    if (key === "disallow" && applies && value) {
       rules.disallow.push(value);
     } else if (key === "crawl-delay" && applies) {
       const n = Number(value);
@@ -39,6 +50,41 @@ export async function readRobots(origin: string): Promise<RobotsRules> {
     }
   }
   return rules;
+}
+
+/**
+ * One robots.txt rule against a path: a prefix match where "*" stands for any run of characters and a final "$"
+ * anchors the end. Two pointers with a single backtrack point per "*" — linear, never a regex a hostile rule
+ * with many stars could stall the scan on.
+ */
+export function robotsRuleMatches(rule: string, path: string): boolean {
+  const anchored = rule.endsWith("$");
+  const pattern = anchored ? rule.slice(0, -1) : rule;
+  let pi = 0;
+  let si = 0;
+  let starPi = -1;
+  let starSi = -1;
+  for (;;) {
+    if (pi === pattern.length) {
+      // The pattern is spent: a prefix rule matched; an anchored one only when the path is spent too.
+      if (!anchored || si === path.length) return true;
+    } else if (pattern[pi] === "*") {
+      starPi = pi++;
+      starSi = si;
+      continue;
+    } else if (si < path.length && pattern[pi] === path[si]) {
+      pi++;
+      si++;
+      continue;
+    }
+    // Mismatch: let the last "*" swallow one more character, if there is one.
+    if (starPi >= 0 && starSi < path.length) {
+      pi = starPi + 1;
+      si = ++starSi;
+      continue;
+    }
+    return false;
+  }
 }
 
 /** robots.txt Disallow matching: prefix rules with "*" and "$" wildcards. */
@@ -52,21 +98,18 @@ export function isAllowed(u: URL, rules: RobotsRules): boolean {
     } catch {
       // keep as-is
     }
-    const re = new RegExp("^" + r.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*").replace(/\\\$$/, "$"));
-    if (re.test(path)) return false;
+    if (robotsRuleMatches(r, path)) return false;
   }
   return true;
 }
 
-const SITEMAP_CAP = 2000;
-
-/** URLs listed in a sitemap (or sitemap index, one level deep). */
+/** URLs listed in a sitemap (or sitemap index, one level deep). No cap: there is no page limit (Daniel 2026-11-09). */
 export async function readSitemap(urls: string[], host: string): Promise<URL[]> {
   const out: URL[] = [];
   const seen = new Set<string>();
   const queue = [...urls];
   let indexesFollowed = 0;
-  while (queue.length && out.length < SITEMAP_CAP) {
+  while (queue.length) {
     const smUrl = queue.shift()!;
     if (seen.has(smUrl)) continue;
     seen.add(smUrl);
@@ -196,6 +239,11 @@ export class Frontier {
     if (!this.pending.length) return undefined;
     this.pending = orderCandidates(this.pending);
     return this.pending.shift();
+  }
+
+  /** A candidate taken with next() but not fetched (the scan stopped on a limit): back to the front, so it counts as not attempted. */
+  putBack(cand: PageCandidate): void {
+    this.pending.unshift(cand);
   }
 
   get remaining(): number {

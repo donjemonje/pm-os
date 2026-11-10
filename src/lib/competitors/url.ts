@@ -93,6 +93,9 @@ export function normalizeWebsite(input: string): { url: string; host: string } {
   if (!u.hostname || (!u.hostname.includes(".") && !privateHostsAllowed() && !isPrivateHost(u.hostname))) throw new InvalidUrlError("invalid");
   if (isPrivateHost(u.hostname)) throw new InvalidUrlError("private");
   if (u.username || u.password) throw new InvalidUrlError("invalid");
+  // A website answers on 80/443. Any other port would turn the add-competitor probe into a port scan of a host the
+  // customer names (Tomer's review 2026-11-10); the fixture sites' ports are allowed by the private-hosts knob only.
+  if (u.port && u.port !== "80" && u.port !== "443" && !privateHostsAllowed()) throw new InvalidUrlError("invalid");
   const url = `${u.protocol}//${u.hostname.toLowerCase()}${u.port ? `:${u.port}` : ""}`;
   return { url, host: siteHost(u) };
 }
@@ -128,7 +131,7 @@ export function pageKey(u: URL, site?: string | URL | null): string {
 }
 
 /** Assets that are never pages. PDFs ARE pages (Website Scanning PRD 2026-11-04: "the entire website, PDFs included"). */
-const NON_PAGE_EXT = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
+const NON_PAGE_EXT = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|tgz|bz2|7z|rar|tar|dmg|exe|msi|pkg|apk|iso|bin|docx?|pptx?|xlsx?|mp4|mp3|m4a|wav|ogg|mov|avi|webm|woff2?|ttf|eot|txt|csv)$/i;
 
 export function looksLikePage(u: URL): boolean {
   return !NON_PAGE_EXT.test(u.pathname);

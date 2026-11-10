@@ -28,7 +28,7 @@
 import { db } from "../src/lib/db";
 import { readBundleManifest } from "../src/lib/competitors/bundle";
 import { importPages } from "../src/lib/competitors/import";
-import { failStaleScans, tick } from "../src/lib/competitors/run";
+import { failStaleScans, settleInline, tick } from "../src/lib/competitors/run";
 import { executeRun } from "../src/lib/competitors/runs";
 import { runScan } from "../src/lib/competitors/scan";
 
@@ -62,8 +62,12 @@ async function main() {
   const scanIdx = args.indexOf("--scan");
   const importIdx = args.indexOf("--import");
   const runIdx = args.indexOf("--run");
-  const stale = await failStaleScans();
-  if (stale) console.log(`[scanner] ${stale} stale scan${stale === 1 ? "" : "s"} swept`);
+  // The sweep belongs to the tick and the runs. A job started for one scan does not sweep: were it to start late, it would
+  // mark the very scan it came to process as stale and relaunch it (Tomer's review 2026-11-10).
+  if (scanIdx < 0) {
+    const stale = await failStaleScans();
+    if (stale) console.log(`[scanner] ${stale} stale scan${stale === 1 ? "" : "s"} swept`);
+  }
   if (scanIdx >= 0 && args[scanIdx + 1]) {
     const id = args[scanIdx + 1];
     console.log(`[scanner] running scan ${id}`);
@@ -87,4 +91,6 @@ main()
     console.error("[scanner] failed", e);
     process.exitCode = 1;
   })
+  // A finishing scan may have started the next queued one in this process (inline runner): let it end before the job does.
+  .then(() => settleInline())
   .finally(() => process.exit());

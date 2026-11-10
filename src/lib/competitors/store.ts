@@ -201,10 +201,12 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       orderBy: { startedAt: "asc" },
     }),
     // Finished scans, newest first — the badge, the staleness horizon and today's manual count come from here.
+    // Never the page log: it is one row per page of every scan ever, and this query runs every 3 s while a scan is active
+    // (Tomer's review 2026-11-10). The counts the cards need are in `outcomes`.
     db.competitorScan.findMany({
       where: { workspaceId, status: { in: ["ok", "partial", "failed", "stale"] } },
       orderBy: { startedAt: "desc" },
-      select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, pages: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
+      select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
     }),
   ]);
   const scansBySource = new Map<string, typeof recentScans>();
@@ -296,13 +298,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
           }),
         lastScan: last
           ? (() => {
-              const pages = Array.isArray(last.pages) ? (last.pages as { outcome?: string }[]) : [];
               return {
                 id: last.id,
                 badge: (last.badge as ScanBadge | null) ?? null,
                 startedAt: last.startedAt.toISOString(),
                 pagesFetched: last.pagesFetched,
-                pagesSkipped: pages.filter((p) => p.outcome === "failed" || p.outcome === "skipped").length + Object.entries(asRecord(last.outcomes)).filter(([k]) => k === "robots" || k === "cap").reduce((n, [, v]) => n + v, 0),
+                // Every page not read, whatever the reason (not read by category, robots, time limit, storage): the outcome counts.
+                pagesSkipped: Object.values(asRecord(last.outcomes)).reduce((n, v) => n + v, 0),
                 outcomes: asRecord(last.outcomes),
                 robotsDisallowed: asStringArray(last.robotsDisallowed),
                 removedPages: asStringArray(last.removedPages).length,

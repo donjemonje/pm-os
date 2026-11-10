@@ -13,3 +13,12 @@ env:
     value: eu
     availability:
       - RUNTIME
+
+  # --- Competitors scanner (EU) ---
+  # The EU backend inherits COMPETITORS_RUNNER=cloudrun and COMPETITORS_JOB from apphosting.yaml — the US job,
+  # which writes to the US database. Before Competitors is enabled for any EU organization, an EU scanner job
+  # (europe-west4, same image, the EU database) is created and named here; until then the feature stays off.
+  # - variable: COMPETITORS_JOB
+  #   value: "projects/pm-os-9d992/locations/europe-west4/jobs/pmos-competitors-scanner"
+  #   availability:
+  #     - RUNTIME

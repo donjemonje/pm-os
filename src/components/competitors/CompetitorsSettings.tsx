@@ -57,9 +57,14 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/competitors");
-    const data = await res.json();
-    if (res.ok) setState(data.state);
+    // One failed refresh (a dev restart, a 502) must not end the polling that tells the user the scan finished.
+    try {
+      const res = await fetch("/api/competitors");
+      const data = await res.json();
+      if (res.ok) setState(data.state);
+    } catch {
+      // try again on the next tick
+    }
   }, []);
 
   const [note, setNote] = useState<string | null>(null);
@@ -103,14 +108,19 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
 
   async function scanNow(c: CompetitorRow) {
     setError(null);
-    const res = await fetch("/api/competitors/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ competitorId: c.id }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error ?? C.errors.scanFailed);
+    try {
+      const res = await fetch("/api/competitors/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ competitorId: c.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? C.errors.scanFailed);
+        return;
+      }
+    } catch {
+      setError(C.errors.scanFailed);
       return;
     }
     await refresh();

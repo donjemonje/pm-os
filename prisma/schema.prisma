@@ -874,7 +874,7 @@ model CompetitorScan {
   resumedFromId String?
   /// Pages discovered but never attempted because the scan stopped early (ceiling, slow down, stale).
   pagesNotAttempted Int          @default(0)
-  /// Local lane: page keys the handed-in pages linked to (deduped, first 5,000) — applied to the page store when the scan is processed,
+  /// Local lane: page keys the handed-in pages linked to (deduped) — applied to the page store when the scan is processed,
   /// so "unlinked" is decided after every page row exists.
   linkedUrls    Json             @default("[]")
   /// "plain" | "browser" (browser after a bot wall) | "bundle" (pages were handed in, nothing fetched).
@@ -1040,8 +1040,10 @@ model LocalScanRequest {
   scan        CompetitorScan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
   sourceId    String
   source      CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  /// "waiting" | "running" | "done" | "cancelled"
+  /// "waiting" | "running" | "handed_in" (every page is in, PM-OS processes) | "done" | "failed" | "cancelled"
   state       String           @default("waiting")
+  /// Times the stale sweep relaunched processing after the hand-in (MAX_PROCESS_ATTEMPTS, then "failed").
+  processAttempts Int          @default(0)
   createdAt   DateTime         @default(now())
   startedAt   DateTime?
   finishedAt  DateTime?

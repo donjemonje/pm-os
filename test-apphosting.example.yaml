@@ -69,12 +69,13 @@ env:
     availability:
       - RUNTIME
   # Website Scanning (2026-11-04, tests/e2e/competitors-scanning.spec.ts) — test-only knobs, never in
-  # production (every one is also guarded by NODE_ENV): the clock offset and the scheduler tick can be set
-  # from the tests; the pause between pages is real only where a row checks it (robots Crawl-delay); the
-  # fixture site lives on localhost; the manual-rescan limit is on (a production rule the spec checks); the
-  # headless browser is on (JavaScript-only page row); the page ceiling is 20 (infinite-link row — every
-  # other fixture site has at most 13 pages). In the CI build path Next inlines NODE_ENV=production, so the
-  # spec skips itself there.
+  # production. The ONE switch is COMPETITORS_TEST_KNOBS: every other knob is read only while it is "on", and
+  # the production yaml never sets it. There is deliberately no NODE_ENV guard (next build inlines
+  # NODE_ENV=production into the CI e2e build too — see src/lib/competitors/settings.ts). The clock offset,
+  # the scheduler tick and the time/storage limits are set from the tests through /api/admin/competitors/knobs;
+  # the pause between pages is real only where a row checks it (robots Crawl-delay); the fixture site lives on
+  # localhost; the manual-rescan limit is on (a production rule the spec checks); the headless browser is on
+  # (JavaScript-only page row). No page limit since 2026-11-09.
   - variable: COMPETITORS_TEST_KNOBS
     value: "on"
   - variable: COMPETITORS_PAUSE_MS
@@ -85,8 +86,6 @@ env:
     value: "on"
   - variable: COMPETITORS_BROWSER
     value: "on"
-  - variable: COMPETITORS_CEILING_PAGES
-    value: "20"
 
   # --- 2FA (mandatory) ---
   # Fixed synthetic key for encrypting the seeded test TOTP secret. Keep this

@@ -1287,6 +1287,47 @@ test.describe("Website Scanning rows", () => {
     expect(stationMs, `the station held the line for ${Math.round(stationMs / 1000)} s`).toBeLessThan(60_000);
   });
 
+  test("WS-37 processing dies after the hand-in: the request is handed_in with no heartbeat → the tick processes it again (the station gets nothing to re-read); after 3 attempts the scan is failed with support named", async () => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0, tick (scheduler, once). The failure is injected as its end state: the
+    // request put back to handed_in and the scan's heartbeat aged past 10 minutes — exactly what a runner crash or a dev-server
+    // restart leaves behind. Tomer's review 2026-11-10 (item 1): before, the sweep sent the station back to re-read the whole site.
+    test.setTimeout(200_000);
+    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Relaunch");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    expect((await runPoller({ mac: "locked" })).code).toBe(0);
+    const first = await waitForScanEnd(pending.id);
+    expect(first.status).toBe("ok");
+    const stale = new Date(Date.now() - 11 * 60_000);
+    // 1. Processing died once: the tick relaunches it, the scan ends ok again, the station is never asked.
+    await withTestDb(async (db) => {
+      await db.localScanRequest.update({ where: { scanId: pending.id }, data: { state: "handed_in", processAttempts: 0 } });
+      await db.competitorScan.update({ where: { id: pending.id }, data: { status: "running", finishedAt: null, heartbeatAt: stale } });
+    });
+    await knob({ tick: true });
+    const again = await waitForScanEnd(pending.id);
+    expect(again.status).toBe("ok");
+    expect(again.badge).toBe("full");
+    expect(again.pagesFetched).toBe(12);
+    const req = await withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId: pending.id } }));
+    expect(req.state).toBe("done");
+    expect(req.processAttempts).toBe(1);
+    const idle = await runPoller({ mac: "locked" });
+    expect(idle.stdout).toMatch(/nothing waiting/);
+    expect((await pagesOf(c.sourceId)).length, "no page was read twice into a new row").toBe(12);
+    // 2. Processing died for the fourth time: the scan is failed, support is named, the station still gets nothing.
+    await withTestDb(async (db) => {
+      await db.localScanRequest.update({ where: { scanId: pending.id }, data: { state: "handed_in", processAttempts: 3 } });
+      await db.competitorScan.update({ where: { id: pending.id }, data: { status: "running", finishedAt: null, heartbeatAt: stale } });
+    });
+    await knob({ tick: true });
+    const failed = await scanRow(pending.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.badge).toBe("incomplete");
+    expect(failed.error).toMatch(/processing failed 3 times after the station handed the pages in — contact support@pm-os.io/);
+    expect((await withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId: pending.id } }))).state).toBe("failed");
+    expect((await runPoller({ mac: "locked" })).stdout).toMatch(/nothing waiting/);
+  });
+
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
     // Knobs: run-once, Mac locked, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
     // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".

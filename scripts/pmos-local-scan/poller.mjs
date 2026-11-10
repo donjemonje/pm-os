@@ -199,7 +199,9 @@ function pageKey(u, siteUrl) {
   return `${same ? s.protocol : u.protocol}//${same ? s.host.toLowerCase() : u.host.toLowerCase()}${path}`;
 }
 
-const NON_PAGE = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|mp4|mp3|webm|woff2?|ttf|eot|txt|csv)$/i;
+const NON_PAGE = /\.(css|js|mjs|json|xml|rss|atom|png|jpe?g|gif|svg|webp|avif|ico|zip|gz|tgz|bz2|7z|rar|tar|dmg|exe|msi|pkg|apk|iso|bin|docx?|pptx?|xlsx?|mp4|mp3|m4a|wav|ogg|mov|avi|webm|woff2?|ttf|eot|txt|csv)$/i;
+/** PDFs bigger than this are not read — the same limit as PM-OS's hand-in route (a 300-page brochure is not a product page). */
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
 /** Hub pages whose navigation often needs JavaScript: home and the first-level sections. */
 function isHub(u) {
@@ -244,23 +246,33 @@ async function renderWithChrome(url) {
   }
 }
 
-/** One attempt to read a page with this machine's own HTTP. */
-async function readOnce(url, started) {
+/**
+ * One attempt to read a page with this machine's own HTTP. The same rules as the remote lane (fetcher.ts): a redirect
+ * that leaves the site is "not found" (one domain per source — and nothing a competitor's page points at on this Mac's
+ * own network is ever read); a download (installer, archive, office file) is not a page; a PDF over 20 MB is not read.
+ */
+async function readOnce(url, started, host) {
   try {
     const res = await fetch(url, { headers: { "user-agent": BROWSER_UA, accept: "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8", "accept-language": "en-US,en;q=0.9" }, redirect: "follow", signal: AbortSignal.timeout(20_000) });
     const ct = (res.headers.get("content-type") ?? "").toLowerCase();
     const ms = Date.now() - started;
+    const finalUrl = new URL(res.url || url);
+    if (siteOf(finalUrl) !== host) return { url, status: "notfound", ms, error: `redirected outside the site (${finalUrl.hostname})` };
     if (res.status === 404 || res.status === 410) return { url, status: "notfound", ms };
     if (res.status === 401 || res.status === 402 || res.status === 407) return { url, status: "login", ms };
     if (res.status === 429) return { url, status: "slowdown", ms };
     if (res.status === 403) return { url, status: "blocked", ms };
     if (res.status >= 500) return { url, status: "other", ms };
-    if (ct.includes("application/pdf") || /\.pdf$/i.test(new URL(res.url || url).pathname)) {
+    if (ct.includes("application/pdf") || /\.pdf$/i.test(finalUrl.pathname)) {
+      const declared = Number(res.headers.get("content-length") ?? 0);
+      if (declared > MAX_PDF_BYTES) return { url, status: "unreadable", ms, error: `PDF larger than 20 MB (${Math.round(declared / 1024 / 1024)} MB)` };
       const bytes = Buffer.from(await res.arrayBuffer());
+      if (bytes.byteLength > MAX_PDF_BYTES) return { url, status: "unreadable", ms, error: `PDF larger than 20 MB (${Math.round(bytes.byteLength / 1024 / 1024)} MB)` };
       return { url, status: "ok", pdfBase64: bytes.toString("base64"), ms };
     }
+    if (ct && !/^(text\/|application\/(xhtml\+xml|xml|rss\+xml|atom\+xml|json))/.test(ct.trim())) return { url, status: "binary", ms, contentType: ct.split(";")[0].trim() };
     const html = await res.text();
-    return { url, status: "ok", html, ms, finalUrl: res.url || url };
+    return { url, status: "ok", html, ms, finalUrl: finalUrl.href };
   } catch (e) {
     return { url, status: /abort|timeout/i.test(String(e)) ? "timeout" : "other", ms: Date.now() - started };
   }
@@ -354,6 +366,8 @@ async function runFetch(job, limits, post) {
   const t0 = Date.now();
   let n = 0;
   let renders = 0;
+  /** Pages read but lost on the way in: PM-OS refused the page AND the not-read note for it. Reported with done as not attempted. */
+  let lost = 0;
   while (queue.length) {
     if (Date.now() - t0 > limits.ms) break;
     const url = queue.shift();
@@ -363,13 +377,18 @@ async function runFetch(job, limits, post) {
     let body;
     // PRD: a page is pending until done — up to 3 attempts on a timeout or a server error.
     for (let attempt = 1; attempt <= 3; attempt++) {
-      body = await readOnce(url, started);
+      body = await readOnce(url, started, host);
       body.attempts = attempt;
       if (!(body.status === "timeout" || body.status === "other")) break;
       if (attempt < 3) {
         log(`  retry ${attempt} after ${body.status} ${url}`);
         await new Promise((r) => setTimeout(r, Math.max(PAUSE_MS, 500)));
       }
+    }
+    if (body.status === "binary") {
+      // A download, not a page: skipped, counted for nothing (the same rule as the remote lane).
+      log(`  not a web page (${body.contentType}) — skipped ${url}`);
+      continue;
     }
     if (body.status === "slowdown") {
       // The site asked us to slow down: hand the signal in and stop this scan; the rest is "not attempted" and the next scan continues.
@@ -416,9 +435,21 @@ async function runFetch(job, limits, post) {
       log(`  scan ended on the server — stopping, ${queue.length} pages left`);
       return { notAttempted: queue.length, ended: true };
     }
-    log(`  ${r.refused ? `refused by PM-OS (${r.refused}) — page skipped` : body.status === "ok" ? r.outcome : body.status} ${url}`);
+    if (r && r.refused) {
+      // PM-OS would not take the page (too large, a bad post, three failed attempts): it is recorded as not read with the
+      // reason instead of vanishing from the scan (Tomer's review 2026-11-10). A note PM-OS refuses too is counted in done.
+      const note = body.status === "unreadable" ? r : await post({ url, status: "unreadable", error: `PM-OS refused the page: ${r.refused}`, ms: body.ms, attempts: body.attempts });
+      if (note === null) {
+        log(`  scan ended on the server — stopping, ${queue.length} pages left`);
+        return { notAttempted: queue.length, ended: true };
+      }
+      if (!note || note.refused) lost++;
+      log(`  refused by PM-OS (${r.refused}) — ${!note || note.refused ? "page lost, reported with done" : "recorded as not read"} ${url}`);
+      continue;
+    }
+    log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);
   }
-  return { notAttempted: queue.length };
+  return { notAttempted: queue.length + lost };
 }
 
 /**
@@ -514,8 +545,25 @@ async function runJob(job, runner, key) {
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
   if (result.ended) return;
   // PM-OS answers "received" at once, in every environment, and processes the pages (hash compare, page states, badge) in its
-  // own runner — a Cloud Run job in production, a background task in local dev. No answer within 5 minutes is a real failure.
-  const done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 5 * 60_000);
+  // own runner — a Cloud Run job in production, a background task in local dev. A network blip or a 5xx is retried three
+  // times (the pages are in; only this call is missing); no answer within 5 minutes each time is a real failure.
+  let done;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 5 * 60_000);
+      break;
+    } catch (e) {
+      const m = /→ (\d{3}) /.exec(e instanceof Error ? e.message : String(e));
+      const status = m ? Number(m[1]) : 0;
+      if (status === 409 || status === 410) {
+        log(`scan ${job.scanId} ended on the server before the hand-in call (${status})`);
+        return;
+      }
+      if ((status >= 400 && status < 500) || attempt >= 3) throw e;
+      log(`  done call failed (${status || "network"}) — retry ${attempt} in ${5 * 2 ** (attempt - 1)} s`);
+      await sleep(5_000 * 2 ** (attempt - 1));
+    }
+  }
   if (done.processing) log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS is processing the pages`);
   else log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }

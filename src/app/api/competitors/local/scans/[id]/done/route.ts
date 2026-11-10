@@ -12,6 +12,9 @@ type Params = { params: Promise<{ id: string }> };
  * then the PMOS AI step of the next story) to the runner: a Cloud Run job in production, a background task in
  * this Node process in local dev (lib/competitors/run.ts). The station never waits for processing; the result
  * shows in Settings → Competitors. A scan with no page handed in ends "failed".
+ *
+ * The request is "handed_in" from here on: should processing die (runner crash, dev server restart, a launch that
+ * throws), the hourly stale sweep processes it again — it never sends the station back to re-read the site.
  */
 export async function POST(req: Request, { params }: Params) {
   const { id } = await params;
@@ -33,7 +36,14 @@ export async function POST(req: Request, { params }: Params) {
   if (scan.status !== "running") await startLocalScan(id, null);
   const notAttempted = typeof body.notAttempted === "number" && Number.isFinite(body.notAttempted) ? Math.max(0, Math.round(body.notAttempted)) : 0;
   await db.competitorScan.update({ where: { id }, data: { pagesNotAttempted: notAttempted, heartbeatAt: new Date() } });
-  await launchScan(id);
+  await db.localScanRequest.updateMany({ where: { scanId: id, state: "running" }, data: { state: "handed_in" } });
+  try {
+    await launchScan(id);
+  } catch (e) {
+    // The pages are in; the launch is what failed (a job trigger without rights, say). Answer "received" all the same —
+    // the stale sweep relaunches processing in 10 minutes, and the server log says why it did not start now.
+    console.error(`[competitors] scan ${id}: processing did not start after the hand-in`, e);
+  }
   const result = await db.competitorScan.findUnique({ where: { id }, select: { status: true, badge: true, pagesFetched: true, pagesChanged: true, pagesNotAttempted: true, error: true } });
   return NextResponse.json({ scan: result, processing: true });
 }
