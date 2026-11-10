@@ -35,14 +35,14 @@ export async function POST(req: Request) {
   return stateResponse(ctx, 201);
 }
 
-/** PUT {order: [ids]}: the manual order of the domains (matrix groups and filters follow it). */
+/** PUT {order: [ids]}: the manual order of the active domains (matrix groups and filters follow it). Suggested, dismissed and removed domains have no place in the order. */
 export async function PUT(req: Request) {
   const ctx = await competitorsGuard({ admin: true });
   if (ctx instanceof NextResponse) return ctx;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
   const order = Array.isArray(body.order) ? body.order.filter((x): x is string => typeof x === "string") : [];
-  const rows = await db.competitorDomain.findMany({ where: { workspaceId: ctx.workspaceId }, select: { id: true } });
+  const rows = await db.competitorDomain.findMany({ where: { workspaceId: ctx.workspaceId, state: "active" }, select: { id: true } });
   const known = new Set(rows.map((r) => r.id));
   if (order.length !== rows.length || new Set(order).size !== rows.length || !order.every((id) => known.has(id))) {
     return bad("The order must list every domain exactly once.");

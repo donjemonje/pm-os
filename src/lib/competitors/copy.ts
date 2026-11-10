@@ -59,7 +59,6 @@ export const COMPETITORS_COPY = {
     competitor: "Competitor",
     status: "Status",
     gapsOnly: "Gaps only",
-    newChanges: "New Changes",
     noDomains: "No domains yet",
     noProductLines: "No product lines yet",
     noCompetitors: "No competitors yet",

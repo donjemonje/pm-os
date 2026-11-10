@@ -400,13 +400,13 @@ export async function saveCompetitorsConfig(workspaceId: string, config: Competi
   await db.workspace.update({ where: { id: workspaceId }, data: { competitorsConfig: config as unknown as Prisma.InputJsonValue } });
 }
 
-/** Next free position at the end of a list. */
+/** Next free position at the end of a list. Domains and capabilities count active rows only: suggestions are parked at 9999 until a PM decides. */
 export async function nextPosition(model: "competitor" | "competitorDomain" | "capability", workspaceId: string): Promise<number> {
   const agg =
     model === "competitor"
       ? await db.competitor.aggregate({ where: { workspaceId }, _max: { position: true } })
       : model === "competitorDomain"
-        ? await db.competitorDomain.aggregate({ where: { workspaceId }, _max: { position: true } })
-        : await db.capability.aggregate({ where: { workspaceId }, _max: { position: true } });
+        ? await db.competitorDomain.aggregate({ where: { workspaceId, state: "active" }, _max: { position: true } })
+        : await db.capability.aggregate({ where: { workspaceId, state: "active" }, _max: { position: true } });
   return (agg._max.position ?? -1) + 1;
 }

@@ -30,8 +30,6 @@ const TABS: { key: Tab; label: string }[] = [
 const STATUS_OPTIONS = STATUS_VALUES.map((v) => C.values[v]);
 const IMPACTS = ["High", "Medium", "Low"];
 const POLL_MS = 3000;
-/** A cell counts as "new change" when it changed within this window before the competitor's last scan. */
-const NEW_CHANGE_WINDOW_MS = 2 * 3600_000;
 
 function chipClass(active: boolean): string {
   return active
@@ -183,7 +181,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   const [competitorFilter, setCompetitorFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [gapsOnly, setGapsOnly] = useState(false);
-  const [newChanges, setNewChanges] = useState(false);
 
   // News feed filters (story 4 fills them)
   const [signalQuery, setSignalQuery] = useState("");
@@ -263,13 +260,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   const cellOf = (competitorId: string | null | undefined, capabilityId: string) => (competitorId ? cellMap.get(`${competitorId}|${capabilityId}`) : undefined);
   /** The org's own cell is the capability's ourStatus — set by PMs, never scanned. */
   const ownOf = (k: CapabilityRow): StatusValue => k.ourStatus;
-  const lastScanOf = new Map(state.competitors.map((c) => [c.id, c.source?.lastScanAt ? new Date(c.source.lastScanAt).getTime() : null]));
-  const isNewChange = (cell: CellRow | undefined) => {
-    if (!cell?.changedAt) return false;
-    const last = lastScanOf.get(cell.competitorId);
-    if (!last) return false;
-    return new Date(cell.changedAt).getTime() >= last - NEW_CHANGE_WINDOW_MS;
-  };
   /** Gap = own missing while any competitor has it; only-us = own has while no competitor has/partial. */
   const rowKind = (k: CapabilityRow): "gap" | "partial" | "only" | "level" | "none" => {
     const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "unknown");
@@ -317,11 +307,10 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
     if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
     if (gapsOnly && rowKind(k) !== "gap" && rowKind(k) !== "partial") return false;
-    if (newChanges && !shownCompetitors.some((c) => isNewChange(cellOf(c.id, k.id)))) return false;
     return matchesStatus(k);
   });
   // Suggested rows follow the search, domain and competitor filters; status/gap/product-line filters do not apply to them.
-  const visibleSuggested = gapsOnly || newChanges || productFilter.length || statusFilter.length ? [] : suggestedCaps.filter((k) => {
+  const visibleSuggested = gapsOnly || productFilter.length || statusFilter.length ? [] : suggestedCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
     if (competitorFilter.length && !shownCompetitors.some((c) => c.id === k.suggestedById)) return false;
@@ -383,12 +372,11 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
         capabilities: activeCaps.length,
         filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilter.length && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
         gapsOnly,
-        newChanges,
       });
     }, 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, domainFilter, productFilter, competitorFilter, statusFilter, gapsOnly, newChanges]);
+  }, [tab, domainFilter, productFilter, competitorFilter, statusFilter, gapsOnly]);
 
   // ——— Corrections ———
   /** POST without a body: a create action whose answer is the new state. */
@@ -529,9 +517,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
               <button aria-pressed={gapsOnly} onClick={() => setGapsOnly((v) => !v)} className={chipClass(gapsOnly)}>
                 {C.filters.gapsOnly}{gapsOnly && <Check size={12} strokeWidth={3} />}
               </button>
-              <button aria-pressed={newChanges} onClick={() => setNewChanges((v) => !v)} className={chipClass(newChanges)}>
-                {C.filters.newChanges}{newChanges && <Check size={12} strokeWidth={3} />}
-              </button>
               {suggestedCaps.length > 0 && (
                 <button aria-pressed={suggestionsOnly} onClick={() => setSuggestionsOnly((v) => !v)} className={cn(chipClass(suggestionsOnly), !suggestionsOnly && "border-dashed")} data-testid="cmp-suggestions-chip">
                   {C.matrix.suggestionsOnly}
@@ -618,7 +603,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     const cell = cellOf(c.id, k.id);
                                     return (
                                       <td key={c.id} className="text-center">
-                                        <Cell cell={cell} competitorId={c.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} isNew={isNewChange(cell)} notScanned={!c.source?.lastScanAt} />
+                                        <Cell cell={cell} competitorId={c.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} notScanned={!c.source?.lastScanAt} />
                                       </td>
                                     );
                                   })}
@@ -1185,7 +1170,7 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, s
 
 // ————— One cell with its evidence / correction popover —————
 
-function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfile, isNew, notScanned }: {
+function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfile, notScanned }: {
   cell: CellRow | undefined;
   competitorId: string;
   capability: CapabilityRow;
@@ -1193,7 +1178,6 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
   setOpen: (v: { competitorId: string; capabilityId: string } | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
   onProfile: (() => void) | null;
-  isNew: boolean;
   notScanned?: boolean;
 }) {
   const isOpen = open?.competitorId === competitorId && open.capabilityId === capability.id;
@@ -1250,7 +1234,6 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
       >
         <CellValue cell={cell} />
         {cell?.override && <Pencil size={9} className="absolute right-0.5 top-0.5 text-[#8a5a00]" aria-label={C.matrix.edited} />}
-        {isNew && !cell?.override && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary" aria-label="Changed in the last scan" />}
       </button>
       {isOpen && cell && (
         <>
