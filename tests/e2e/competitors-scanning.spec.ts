@@ -23,8 +23,6 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   remote   PATCH /api/admin/competitors/settings {remoteScanEnabled}  (default OFF)
  *   limits   POST /api/admin/competitors/knobs {ceilingMs} | {storageLimitChars} (null = default) — WS-17, WS-36
  *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-minutes,
- *            --done-delay-ms (WS-35 only: the done route holds its answer that long, COMPETITORS_TEST_KNOBS=on)
- *            --done-wait-minutes (WS-35 V2: how long the station waits for the done answer; default 20)
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
  *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on,
  *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
@@ -266,18 +264,12 @@ interface PollerOpts {
   /** Time knob: the station's own stop, in minutes (fractions allowed). */
   maxMinutes?: number;
   key?: string;
-  /** WS-35: the done route holds its answer this long (server-side knob, per request). */
-  doneDelayMs?: number;
-  /** WS-35 V2: how long the station waits for the done answer (default 20 min). */
-  doneWaitMinutes?: number;
 }
 function pollerArgs(o: PollerOpts): string[] {
   return [
     POLLER, "--app-url", LOCAL_BASE_URL, "--key-file", o.key ?? keyFile, "--state-dir", o.stateDir ?? freshStateDir(),
     "--runner", "fetch", "--mac-state", o.mac, "--answer", o.answer ?? "approve", "--pause-ms", String(o.pauseMs ?? 0),
     ...(o.maxMinutes ? ["--max-minutes", String(o.maxMinutes)] : []),
-    ...(o.doneDelayMs ? ["--done-delay-ms", String(o.doneDelayMs)] : []),
-    ...(o.doneWaitMinutes ? ["--done-wait-minutes", String(o.doneWaitMinutes)] : []),
   ];
 }
 function freshStateDir(): string {
@@ -457,11 +449,14 @@ test.describe("Website Scanning rows", () => {
       expect(s.badge, s.id).toBe("full");
       expect(s.pagesFetched, s.id).toBe(12);
     }
-    // Serial: the next scan starts after the previous one finished; order = the order the requests were made.
+    // Serial on the station: the next site is read only after the previous one's last page was handed in; order = the order
+    // the requests were made. PM-OS processes a handed-in scan in its own runner while the station already reads the next
+    // site (the hand-in is acknowledged at once, WS-35), so finishedAt is not the bound — the last page read is.
     const order = r.stdout.match(/scan [0-9a-f-]+ — (QA-WS \w+)/g)!.map((m) => m.replace(/.* — /, ""));
     expect(order).toEqual(names);
     for (let i = 1; i < scans.length; i++) {
-      expect(scans[i].startedAt.getTime(), `${names[i]} started before ${names[i - 1]} finished`).toBeGreaterThanOrEqual(scans[i - 1].finishedAt!.getTime());
+      const lastRead = Math.max(...(await pagesOf(cmps[i - 1].sourceId)).map((pg) => pg.lastReadAt!.getTime()));
+      expect(scans[i].startedAt.getTime(), `${names[i]} started before ${names[i - 1]}'s last page was read`).toBeGreaterThanOrEqual(lastRead);
     }
   });
 
@@ -1270,49 +1265,26 @@ test.describe("Website Scanning rows", () => {
     expect(counts).toEqual({ "/pricing": 1, "/product/features": 1, "/about": 1 });
   });
 
-  test("WS-35 station waits for a long processing step: the done answer is held 5 min 10 s (past fetch's 5-minute limit) → the station still reports the result, scan Full 12, nothing 'failed on the station'", async () => {
-    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
-    // done delay (--done-delay-ms 310000 → body.testDelayMs on the done route, honoured only with COMPETITORS_TEST_KNOBS=on, this request only).
-    // Takes ~5.5 minutes by design.
-    test.setTimeout(600_000);
-    const delayMs = 310_000;
+  test("WS-35 hand-in acknowledged at once: the station's done call is answered before processing, in every environment → the station exits saying PM-OS is processing, nothing 'failed on the station', and the scan ends Full 12 on its own", async () => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0. No server knob: the done route has one path (answer, then launch the
+    // runner) in dev and prod alike. Round 2 (2026-11-09): dev processed ZeroFox's 1,717 pages inside the call for 31 min and
+    // the station gave up at 20 — Daniel 2026-11-10: dev and prod behave the same, the server answers first.
+    test.setTimeout(150_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Patient");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
     const t0 = Date.now();
-    const run = runPoller({ mac: "locked", doneDelayMs: delayMs }, 540_000);
-    // While the answer is held: every page is handed in, the scan is still running (being processed), nothing ended.
-    await expect.poll(async () => ((await scanRow(pending.id)).pages as unknown[]).length, { timeout: 60_000, intervals: [500] }).toBe(12);
-    await new Promise((r) => setTimeout(r, 20_000));
-    const mid = await scanRow(pending.id);
-    expect(mid.status, "still running while the done answer is held").toBe("running");
-    const r = await run;
-    const elapsed = Date.now() - t0;
+    const r = await runPoller({ mac: "locked" });
+    const stationMs = Date.now() - t0;
     expect(r.code, r.stdout).toBe(0);
-    expect(elapsed, `the station waited for the held answer (${Math.round(elapsed / 1000)} s)`).toBeGreaterThanOrEqual(delayMs);
     expect(r.stdout).not.toMatch(/failed on the station/);
-    expect(r.stdout).toMatch(new RegExp(`scan ${pending.id} ok \\(full\\) · 12 pages, 12 changed, 0 not attempted`));
+    // "PM-OS is processing the pages" is printed only on a `processing: true` answer — the server acknowledged before it ran the scan.
+    expect(r.stdout).toMatch(new RegExp(`scan ${pending.id} handed in · 0 not attempted · PM-OS is processing the pages`));
     const done = await waitForScanEnd(pending.id);
     expect(done.status).toBe("ok");
     expect(done.badge).toBe("full");
     expect(done.pagesFetched).toBe(12);
     expect((await pagesOf(c.sourceId)).length).toBe(12);
-  });
-
-  test("WS-35 V2 PM-OS outlasts the station's wait: the done answer is held 15 s, the station waits 6 s → it says PM-OS is still processing (nothing 'failed on the station'), moves on, and the scan still ends Full 12", async () => {
-    // Knobs: run-once, Mac locked, fetch runner, pause 0, done delay 15 s (server knob, COMPETITORS_TEST_KNOBS=on), station wait 0.1 min (--done-wait-minutes).
-    // Round 2 (2026-11-09): local dev processed ZeroFox's 1,717 pages inside the done call for 31 min; the station gave up at 20 and said "failed" about a scan that went on fine.
-    test.setTimeout(150_000);
-    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Patient Two");
-    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked", doneDelayMs: 15_000, doneWaitMinutes: 0.1 });
-    expect(r.code, r.stdout).toBe(0);
-    expect(r.stdout).not.toMatch(/failed on the station/);
-    expect(r.stdout).toMatch(new RegExp(`scan ${pending.id} handed in · 0 not attempted · PM-OS has not answered for 0 minutes — it is still processing the pages; the result shows in Settings → Competitors`));
-    const done = await waitForScanEnd(pending.id);
-    expect(done.status).toBe("ok");
-    expect(done.badge).toBe("full");
-    expect(done.pagesFetched).toBe(12);
-    expect((await pagesOf(c.sourceId)).length).toBe(12);
+    expect(stationMs, `the station held the line for ${Math.round(stationMs / 1000)} s`).toBeLessThan(60_000);
   });
 
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
