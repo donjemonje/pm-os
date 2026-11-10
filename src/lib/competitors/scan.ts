@@ -28,7 +28,8 @@ import { ogImageOf } from "./html";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
 import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { checkPii } from "./pii";
-import { aiStepEnabled, getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
+import { aiStepEnabled, getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars, testAiAnswers, type TestAiAnswers } from "./settings";
+import { judgeCapabilitySuggestion, judgeDomainSuggestion, NameIndex } from "./decisions";
 import { isPdfUrl, isInsideSite, pageKey } from "./url";
 
 /**
@@ -610,7 +611,7 @@ export async function runScan(scanId: string): Promise<void> {
     } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
-    } else if (!aiStepEnabled()) {
+    } else if (!aiStepEnabled() && !(await testAiAnswers(competitor.id))) {
       // Test knob: the scanning story is tested without the analysis step (deterministic, free). Counts as analyzed.
       log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
@@ -622,7 +623,10 @@ export async function runScan(scanId: string): Promise<void> {
       const catalogGrew = changedPages.length === 0;
       const pagesForAi = catalogGrew ? await currentPageTexts(source.id, sourceLabel) : changedPages;
       if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${pagesForAi.length} stored pages`);
-      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew, host: competitor.host });
+      // Test knob: a test may hand in the model's raw answers for this competitor; the step then runs on them and calls no model.
+      const injected = await testAiAnswers(competitor.id);
+      if (injected) log.add("warn", "PMOS AI answer injected (test knob) — no model is called");
+      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew, host: competitor.host, injected });
       aiCalls = r.aiCalls;
       statusesChanged = r.statusesChanged;
       statusesSet = r.statusesSet;
@@ -815,7 +819,7 @@ async function aiStep(
   pages: PageText[],
   firstScan: boolean,
   log: ScanLog,
-  opts: { facts: boolean; host: string },
+  opts: { facts: boolean; host: string; injected?: TestAiAnswers | null },
 ): Promise<AiStepResult> {
   const res: AiStepResult = { aiCalls: 0, statusesSet: 0, statusesChanged: 0, factsChanged: 0, suggestions: 0, piiHits: 0, failed: null };
   /** Rule 6: a snippet that names a person is dropped, never stored. */
@@ -855,7 +859,7 @@ async function aiStep(
     const extPromise = opts.facts
       ? (async () => {
           const knownFacts = await db.profileFact.findMany({ where: { competitorId, dismissedAt: null }, select: { kind: true, value: true }, orderBy: { createdAt: "asc" } });
-          return extractFacts(competitorName, knownFacts, pages, (d, t) => void progress("Facts")(d, t));
+          return extractFacts(competitorName, knownFacts, pages, (d, t) => void progress("Facts")(d, t), opts.injected?.facts);
         })()
       : null;
     // A rejection must not surface before it is awaited below.
@@ -877,7 +881,7 @@ async function aiStep(
       const RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
       log.add("info", `Classifying ${catalog.byName.size} capabilities from ${pages.length} ${firstScan ? "" : "changed "}pages`);
       const pendingSuggestions = (await db.capability.findMany({ where: { workspaceId, origin: "ai", state: "suggested" }, select: { name: true } })).map((c) => c.name);
-      const cls = await classifyCapabilities(competitorName, catalog.forAi, previous, pendingSuggestions, pages, (d, t) => void progress("Classification")(d, t));
+      const cls = await classifyCapabilities(competitorName, catalog.forAi, previous, pendingSuggestions, pages, (d, t) => void progress("Classification")(d, t), opts.injected?.classify);
       res.aiCalls += cls.calls;
       const now = new Date();
       const prevByCap = new Map(prevRows.map((p) => [p.capabilityId, p]));
@@ -929,40 +933,62 @@ async function aiStep(
           await db.capabilityStatus.update({ where: { id: prev.id }, data: { product } });
         }
       }
-      // Suggestions
+      // Suggestions. A scan never reopens a PM's decision (decisions.ts): a name is resolved by what the row is —
+      // its name today or a name a PM replaced — and what the team removed or dismissed is never added back.
+      const [domainRows, capabilityRows] = await Promise.all([
+        db.competitorDomain.findMany({ where: { workspaceId }, select: { id: true, name: true, aliases: true, state: true } }),
+        db.capability.findMany({ where: { workspaceId }, select: { id: true, name: true, aliases: true, state: true } }),
+      ]);
+      const domainIndex = new NameIndex(domainRows);
+      const capabilityIndex = new NameIndex(capabilityRows);
+      const respected = (entity: "capability" | "domain", row: { id: string; name: string }, reason: string, found: string) =>
+        recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity, entityId: row.id, name: row.name, found, reason, competitorId, scanId });
       for (const s of cls.value.suggestions) {
-        let domainId = catalog.domainIdByName.get(s.domain);
-        let newDomain = false;
-        if (!domainId) {
-          // No catalog domain fits: the domain itself is suggested (a dashed group in the matrix).
-          // A domain the team dismissed is never proposed again; one awaiting review is reused.
-          const sameName = await db.competitorDomain.findFirst({ where: { workspaceId, name: { equals: s.domain, mode: "insensitive" } }, select: { id: true, state: true } });
-          if (sameName?.state === "dismissed") {
-            log.add("info", `Suggestion skipped: ${s.name} — its domain "${s.domain}" was dismissed earlier`, s.url || undefined);
-            continue;
+        // The capability first: a name the catalog already knows never creates a domain for itself.
+        const capability = judgeCapabilitySuggestion(capabilityIndex, s.name);
+        if (capability.action === "skip") {
+          if (capability.reason === "removed") {
+            log.add("info", `Suggestion skipped: ${s.name} — your team removed this capability`, s.url || undefined);
+            await respected("capability", capability.row, "removed", s.name);
+          } else if (capability.reason === "renamed") {
+            log.add("info", `Suggestion skipped: ${s.name} — your team renamed this capability to "${capability.row.name}"`, s.url || undefined);
+            await respected("capability", capability.row, "renamed", s.name);
+          } else if (capability.reason === "dismissed") {
+            await respected("capability", capability.row, "dismissed", s.name);
           }
-          if (sameName) {
-            domainId = sameName.id;
-          } else if (s.domain) {
-            const created = await db.competitorDomain.create({
-              data: { workspaceId, name: s.domain, description: clean(s.newDomain?.description, "domain definition", s.url) ?? "", position: 9999, origin: "ai", state: "suggested", suggestedById: competitorId },
-              select: { id: true },
-            });
-            domainId = created.id;
-            newDomain = true;
-            catalog.domainIdByName.set(s.domain, created.id);
-            log.add("info", `Suggested new domain: ${s.domain}`, s.url || undefined);
-          } else {
-            continue;
-          }
+          continue;
         }
-        const exists = await db.capability.findFirst({ where: { workspaceId, name: { equals: s.name, mode: "insensitive" } }, select: { id: true } });
-        if (exists) continue;
+        const domain = judgeDomainSuggestion(domainIndex, s.domain);
+        let domainId: string;
+        let newDomain = false;
+        if (domain.action === "use") {
+          // A domain in the table, or one awaiting review — also when the scan used a name a PM replaced.
+          domainId = domain.row.id;
+        } else if (domain.action === "skip") {
+          // A domain the team removed or dismissed is never proposed again.
+          log.add("info", `Suggestion skipped: ${s.name} — its domain "${s.domain}" was ${domain.reason === "removed" ? "removed by your team" : "dismissed earlier"}`, s.url || undefined);
+          await respected("domain", domain.row, domain.reason, s.domain);
+          continue;
+        } else if (s.domain) {
+          // No catalog domain fits: the domain itself is suggested (a dashed group in the matrix).
+          const created = await db.competitorDomain.create({
+            data: { workspaceId, name: s.domain, description: clean(s.newDomain?.description, "domain definition", s.url) ?? "", position: 9999, origin: "ai", state: "suggested", suggestedById: competitorId },
+            select: { id: true },
+          });
+          domainId = created.id;
+          newDomain = true;
+          domainIndex.add({ id: created.id, name: s.domain, aliases: [], state: "suggested" });
+          log.add("info", `Suggested new domain: ${s.domain}`, s.url || undefined);
+        } else {
+          continue;
+        }
         const quote = clean(s.quote, "suggestion quote", s.url);
         // A capability a competitor has and the catalog lacks: if accepted it is a gap by default.
-        await db.capability.create({
+        const createdCapability = await db.capability.create({
           data: { workspaceId, domainId, name: s.name, position: 9999, origin: "ai", state: "suggested", ourStatus: "missing", suggestedById: competitorId, suggestedQuote: quote ? `${quote} — ${s.url}` : null },
+          select: { id: true },
         });
+        capabilityIndex.add({ id: createdCapability.id, name: s.name, aliases: [], state: "suggested" });
         res.suggestions++;
         log.add("info", `Suggested new capability: ${s.name} (${s.domain}${newDomain ? ", new domain" : ""})`, s.url || undefined);
       }

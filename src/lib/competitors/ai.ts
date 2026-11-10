@@ -134,7 +134,19 @@ export interface AiResult<T> {
   calls: number;
 }
 
-async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number): Promise<AiResult<T>> {
+/**
+ * `injected` is the TEST KNOB at the model boundary (settings.ts testAiAnswers, COMPETITORS_TEST_KNOBS=on only): the raw
+ * JSON text the model would have answered. It replaces the model call and nothing else — chunking, parsing, name
+ * matching and everything the scan does with the answer run unchanged. With an injected answer no model is ever called.
+ */
+async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number, injected?: string): Promise<AiResult<T>> {
+  if (injected !== undefined) {
+    try {
+      return { value: JSON.parse(injected) as T, usage: null, calls: 1 };
+    } catch {
+      throw new Error(`PMOS AI test answer is not valid JSON (${injected.length} chars)`);
+    }
+  }
   const model = getCompetitorsModel();
   if (getCompetitorsProvider(model) === "gemini") {
     const response = await getGemini().models.generateContent({
@@ -297,6 +309,8 @@ export async function classifyCapabilities(
   alreadySuggested: string[],
   pages: PageText[],
   onChunk?: (done: number, total: number) => void,
+  /** TEST KNOB: the model's raw answer, see callTool. */
+  injected?: string,
 ): Promise<AiResult<Classification>> {
   const shared = `CAPABILITY CATALOG:\n\n${renderCatalog(catalog)}`;
   const names = new Map<string, string>();
@@ -320,7 +334,7 @@ export async function classifyCapabilities(
       ? `ALREADY SUGGESTED (awaiting the team's review — do not suggest these again, nor rewordings, narrower or broader versions of them):\n${pending.map((n) => `- ${n}`).join("\n")}\n\n`
       : "";
     const tail = `COMPETITOR: ${competitorName}\n\n${prev}${sug}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
-    const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000);
+    const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000, injected);
     calls += r.calls;
     usage = r.usage;
     const seen = new Set<string>();
@@ -424,7 +438,7 @@ export interface KnownFact { kind: string; value: string }
 /** Known facts shown to the model so restatements keep their wording (and merge on upsert). */
 export const MAX_KNOWN_FACTS = 1500;
 
-export async function extractFacts(competitorName: string, known: KnownFact[], pages: PageText[], onChunk?: (done: number, total: number) => void): Promise<AiResult<ExtractedFact[]>> {
+export async function extractFacts(competitorName: string, known: KnownFact[], pages: PageText[], onChunk?: (done: number, total: number) => void, injected?: string): Promise<AiResult<ExtractedFact[]>> {
   const shared = `Extract facts for the competitor profile.`;
   const knownBlock = known.length ? `KNOWN FACTS (already on the profile):\n${known.slice(0, MAX_KNOWN_FACTS).map((f) => `- ${f.kind}: ${f.value}`).join("\n")}\n\n` : "";
   const seen = new Set<string>();
@@ -434,7 +448,7 @@ export async function extractFacts(competitorName: string, known: KnownFact[], p
   let usage: unknown = null;
   for (const [i, chunk] of chunks.entries()) {
     const tail = `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
-    const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 6000);
+    const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 6000, injected);
     calls += r.calls;
     usage = r.usage;
     for (const f of arr(r.value.facts)) {
