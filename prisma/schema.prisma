@@ -654,9 +654,15 @@ model CompetitorDomain {
   /// "manual" | "ai" (a competitor scan proposed it when no catalog domain fit)
   origin      String    @default("manual")
   /// "active" | "suggested" (dashed group in the matrix, waits for a PM) | "dismissed" (never suggested again)
+  /// | "removed" (a PM removed it: kept as a record so scans never bring it back; restorable from Settings)
   state       String    @default("active")
   /// Which competitor's scan suggested it (null for manual domains).
   suggestedById String?
+  /// Names a PM replaced by renaming — a scan that meets one of them recognises this domain instead of proposing a new one.
+  aliases     Json      @default("[]")
+  removedAt   DateTime?
+  /// The PM who removed it (plain id, no relation: the record outlives the user).
+  removedById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -690,11 +696,17 @@ model Capability {
   position       Int              @default(0)
   /// "manual" | "ai"
   origin         String           @default("manual")
-  /// "active" | "suggested" | "dismissed"
+  /// "active" | "suggested" | "dismissed" | "removed" (a PM removed it: the row, its statuses and idea links are kept
+  /// so scans never add it back and a restore brings the evidence with it)
   state          String           @default("active")
   /// Which competitor's scan suggested it (null for manual rows).
   suggestedById  String?
   suggestedQuote String?
+  /// Names a PM replaced by renaming — a scan that meets one of them recognises this row instead of proposing a new one.
+  aliases        Json             @default("[]")
+  removedAt      DateTime?
+  /// The PM who removed it (plain id, no relation: the record outlives the user).
+  removedById    String?
   /// Ideas this roadmap row is linked to: created from the row, or matched to an existing idea.
   ideas          CapabilityIdea[]
   createdAt      DateTime         @default(now())

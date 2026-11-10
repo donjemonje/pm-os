@@ -865,7 +865,8 @@ async function aiStep(
       log.add("warn", "The capability catalog is empty — add domains and capabilities in Settings → Competitors; this scan only collects profile facts");
     } else {
       // Statuses
-      const prevRows = await db.capabilityStatus.findMany({ where: { competitorId }, include: { capability: { select: { name: true } } } });
+      // Only capabilities in the table: a removed row's old statuses are not "previous statuses" for PMOS AI.
+      const prevRows = await db.capabilityStatus.findMany({ where: { competitorId, capability: { state: "active" } }, include: { capability: { select: { name: true } } } });
       const previous: PreviousStatus[] = prevRows.map((p) => ({ capability: p.capability.name, value: p.value as StatusValue, confidence: p.confidence }));
       // Which source set each previous value: a source may lower only what it
       // set itself. Absence in a datasheet is not evidence that the website

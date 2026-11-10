@@ -81,9 +81,23 @@ export interface DomainRow {
   position: number;
   /** "manual" | "ai" */
   origin: string;
-  /** "active" | "suggested" | "dismissed" */
+  /** "active" | "suggested" | "dismissed" — removed domains are not in this list, see `removed`. */
   state: string;
   suggestedById: string | null;
+}
+
+/** A domain or capability a PM removed: kept so scans never add it back, restorable from Settings. */
+export interface RemovedRow {
+  id: string;
+  name: string;
+  removedAt: string | null;
+  removedByName: string | null;
+}
+export interface RemovedCapabilityRow extends RemovedRow {
+  domainId: string;
+  domainName: string;
+  /** False when its domain is removed too (or was never accepted): a restore must pick an active domain. */
+  domainActive: boolean;
 }
 
 export interface CapabilityRow {
@@ -150,9 +164,14 @@ export interface CompetitorsState {
   config: CompetitorsConfig;
   productLines: string[];
   competitors: CompetitorRow[];
+  /** Active, suggested and dismissed domains — never the removed ones. */
   domains: DomainRow[];
+  /** Active, suggested and dismissed capabilities — never the removed ones. */
   capabilities: CapabilityRow[];
+  /** Cells of the capabilities above. */
   cells: CellRow[];
+  /** What PMs removed (Settings → Removed). */
+  removed: { domains: RemovedRow[]; capabilities: RemovedCapabilityRow[] };
   facts: FactRow[];
   /** Most recent finished scan across the workspace (header "scanned X ago"). */
   lastScanAt: string | null;
@@ -176,7 +195,7 @@ function asStringArray(v: unknown): string[] {
 export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null): Promise<CompetitorsState> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
-  const [workspace, productLines, competitors, domains, capabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
+  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
     db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
@@ -193,7 +212,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       orderBy: [{ position: "asc" }, { name: "asc" }],
       include: { ideas: { orderBy: { createdAt: "asc" }, select: { origin: true, idea: { select: { id: true, title: true, batchStatus: true, sources: { where: { kind: "jira" }, select: { jiraKey: true }, take: 1 } } } } } },
     }),
-    db.capabilityStatus.findMany({ where: { workspaceId }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
+    db.capabilityStatus.findMany({ where: { workspaceId, capability: { state: { not: "removed" } } }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
     db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
     db.competitorScan.findMany({
       where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } },
@@ -219,7 +238,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
   }
   const asRecord = (v: unknown): Record<string, number> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, number>) : {});
 
+  // Removed rows leave every list the product reads; they are served apart, for Settings → Removed.
+  const domains = allDomains.filter((d) => d.state !== "removed");
+  const capabilities = allCapabilities.filter((k) => k.state !== "removed");
+  const removedDomains = allDomains.filter((d) => d.state === "removed");
+  const removedCapabilities = allCapabilities.filter((k) => k.state === "removed");
   const userIds = new Set<string>();
+  for (const r of [...removedDomains, ...removedCapabilities]) if (r.removedById) userIds.add(r.removedById);
   for (const s of statuses) if (s.overrideUserId) userIds.add(s.overrideUserId);
   for (const f of facts) if (f.overrideUserId) userIds.add(f.overrideUserId);
   const users = userIds.size
@@ -357,6 +382,17 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         history: s.history.map((h) => ({ value: h.value as StatusValue, quote: h.quote, sourceUrl: h.sourceUrl, at: h.at.toISOString() })),
       };
     }),
+    removed: {
+      domains: removedDomains
+        .map((d) => ({ id: d.id, name: d.name, removedAt: d.removedAt?.toISOString() ?? null, removedByName: userName(d.removedById) }))
+        .sort((a, b) => (b.removedAt ?? "").localeCompare(a.removedAt ?? "")),
+      capabilities: removedCapabilities
+        .map((k) => {
+          const domain = allDomains.find((d) => d.id === k.domainId);
+          return { id: k.id, name: k.name, removedAt: k.removedAt?.toISOString() ?? null, removedByName: userName(k.removedById), domainId: k.domainId, domainName: domain?.name ?? "", domainActive: domain?.state === "active" };
+        })
+        .sort((a, b) => (b.removedAt ?? "").localeCompare(a.removedAt ?? "")),
+    },
     facts: facts.map((f) => {
       // Stale = the last STALE_AFTER_SCANS finished scans of the fact's own source all missed it.
       const sourceId = f.scanId ? sourceOfScan.get(f.scanId) : undefined;

@@ -103,7 +103,8 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
   const after = since ? { gt: since } : { not: null as unknown as Date };
   const [statuses, facts, suggestions, competitors, reads] = await Promise.all([
     db.capabilityStatus.findMany({
-      where: { workspaceId, changedAt: since ? { gt: since } : { not: null } },
+      // A capability a PM removed leaves the feed with the table.
+      where: { workspaceId, capability: { state: { not: "removed" } }, changedAt: since ? { gt: since } : { not: null } },
       orderBy: { changedAt: "desc" },
       take: FEED_LIMIT,
       include: {
@@ -117,7 +118,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       take: FEED_LIMIT,
     }),
     db.capability.findMany({
-      where: { workspaceId, origin: "ai", suggestedById: { not: null }, ...(since ? { createdAt: { gt: since } } : {}) },
+      where: { workspaceId, origin: "ai", state: { not: "removed" }, suggestedById: { not: null }, ...(since ? { createdAt: { gt: since } } : {}) },
       orderBy: { createdAt: "desc" },
       take: FEED_LIMIT,
       include: { domain: { select: { name: true, state: true } } },
