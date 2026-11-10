@@ -17,6 +17,9 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  * What a PM decides about the catalog — remove, restore, rename, move, order,
  * the org's own cell, a corrected cell — is recorded and a scan never reopens it.
  *
+ * Round 2 (same night, after the code-review fixes of 7d1964e): rows CA-25 … CA-28 and added assertions in
+ * CA-03, CA-17 and CA-24. Each one fails on the code before that commit.
+ *
  * Common setup (every row): one QA org (QA-CA Org) with a PM-OS admin (knobs,
  * Scan now without the daily limit), an org admin PM (every catalog change —
  * "the admin" of the rows) and a member. Two competitors, Alpha and Beta, each
@@ -286,6 +289,15 @@ async function ok(res: APIResponse, status = 200): Promise<void> {
 }
 const removeCapability = async (id: string) => ok(await pmApi.delete(`/api/competitors/capabilities/${id}`));
 const removeDomain = async (id: string, moveTo?: string) => ok(await pmApi.delete(`/api/competitors/domains/${id}${moveTo ? `?moveTo=${moveTo}` : ""}`));
+/** Decline a suggestion (the × of a suggested row / a suggested domain): PATCH {state: "dismissed"}. */
+const declineCapability = async (id: string) => ok(await pmApi.patch(`/api/competitors/capabilities/${id}`, { data: { state: "dismissed" } }));
+const declineDomain = async (id: string) => ok(await pmApi.patch(`/api/competitors/domains/${id}`, { data: { state: "dismissed" } }));
+/** The one row of a workspace with this name (a suggestion a scan just left, in a row's setup). */
+async function capabilityNamed(name: string) {
+  const rows = await capabilitiesNamed(name);
+  expect(rows, `rows named ${name}`).toHaveLength(1);
+  return rows[0];
+}
 
 // ————— UI —————
 /** lib/competitors/time.ts shortDate — "Nov 10" this year. */
@@ -305,6 +317,8 @@ const settingsDomainOrder = (page: Page) => domainsSection(page).locator("div.ro
 /** A capability's line in Settings → Capabilities (view mode: name, own status, move select, edit, remove). */
 const capLine = (page: Page, name: string) => page.locator("div.items-start.px-5.py-3", { has: page.getByText(name, { exact: true }) });
 const removedPanel = (page: Page) => page.getByTestId("cmp-removed");
+/** Settings → "Suggested by scans": one line per waiting suggestion (name field, domain select, Dismiss, Accept). */
+const suggestionsPanel = (page: Page) => page.locator("section", { has: page.getByText("Suggested by scans", { exact: true }) });
 const removedCapability = (page: Page, name: string) => removedPanel(page).locator(`[data-testid="cmp-removed-capability"][data-name="${name}"]`);
 const removedDomain = (page: Page, name: string) => removedPanel(page).locator(`[data-testid="cmp-removed-domain"][data-name="${name}"]`);
 
@@ -579,7 +593,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     await expect(admin.getByText("Suggestion skipped: dashboards — your team removed this capability")).toBeVisible();
   });
 
-  test("CA-03 restore a capability: back in the matrix under Reporting with the same cells, quotes and links; the Removed panel is gone; event restore via settings [knobs: none]", async ({ browser }) => {
+  test("CA-03 restore a capability: back in the matrix under Reporting with the same cells, quotes and links; the Removed panel is gone; event restore via settings with the domain it left and the domain it returns to [knobs: none]", async ({ browser }) => {
     const cellsBefore = await cellsOf(cap.Dashboards);
     await removeCapability(cap.Dashboards);
     const page = await open(browser, "pm");
@@ -603,6 +617,8 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     const [event] = await events("cmp_catalog_edited", { action: "restore" });
     expect(event, "cmp_catalog_edited restore").toBeTruthy();
     expect(propsOf(event)).toMatchObject({ entity: "capability", action: "restore", entityId: cap.Dashboards, from: "removed", to: "active", name: "Dashboards", via: "settings" });
+    // Round 2 (review finding 1): the event says which domain the row left and which it returned to — here the same one.
+    expect(propsOf(event)).toMatchObject({ fromDomainId: dom.Reporting, toDomainId: dom.Reporting, domainChanged: false });
     expect(event.userId).toBe(pmId);
   });
 
@@ -1038,7 +1054,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
 
   // ————————————————————————————— Roles, organizations —————————————————————————————
 
-  test("CA-17 (proposed) roles: the member sees no remove, restore, rename or move control and no Removed panel; every direct call to the remove, restore, rename, move, add and reorder routes answers 403 and nothing changes [knobs: none]", async ({ browser }) => {
+  test("CA-17 (proposed) roles: the member sees no remove, restore, rename or move control and no Removed panel; every direct call to the remove, restore, rename, move, add and reorder routes answers 403 and nothing changes; the state sent to the member carries no removed items while the admin's lists them [knobs: none]", async ({ browser }) => {
     // Something is removed, so an admin would see the Removed panel.
     await removeCapability(cap.Dashboards);
     await withTestDb((db) => db.competitorDomain.create({ data: { workspaceId, name: "QA Removed Domain", position: 7, state: "removed", removedAt: new Date(), removedById: pmId } }));
@@ -1063,6 +1079,21 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     await openSettings(pm);
     await expect(removedPanel(pm)).toBeVisible();
     await expect(capLine(pm, "Roadmap").getByRole("button", { name: "Remove" })).toHaveCount(1);
+
+    // Round 2 (review finding 7): the removed names and who removed them are sent to organization admins only —
+    // by the state route and inside the Settings page itself (the hidden panel is not just hidden).
+    type Removed = { domains: { name: string; removedByName: string | null }[]; capabilities: { name: string; removedByName: string | null }[] };
+    const removedOf = async (api: APIRequestContext): Promise<Removed> => {
+      const res = await api.get("/api/competitors");
+      await ok(res);
+      return ((await res.json()) as { state: { removed: Removed } }).state.removed;
+    };
+    const forAdmin = await removedOf(pmApi);
+    expect(forAdmin.capabilities.map((k) => [k.name, k.removedByName]), "the admin's state lists the removed capability").toEqual([["Dashboards", PM.name]]);
+    expect(forAdmin.domains.map((d) => [d.name, d.removedByName]), "the admin's state lists the removed domain").toEqual([["QA Removed Domain", PM.name]]);
+    expect(await removedOf(memberApi), "the member's state").toEqual({ domains: [], capabilities: [] });
+    expect(await pm.content(), "the admin's Settings page carries the removed domain's name").toContain("QA Removed Domain");
+    expect(await page.content(), "the member's Settings page does not carry it").not.toContain("QA Removed Domain");
 
     const order = [dom.Reporting, dom.Planning, dom.Feedback];
     const calls: [string, () => Promise<APIResponse>][] = [
@@ -1293,7 +1324,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     expect((await matrixGroups(page)).map((g) => g.domain)).toEqual(["Planning", "Feedback", "Reporting"]);
   });
 
-  test("CA-24 (proposed) restoring a capability whose domain is not in the table asks where it returns: Restore disabled until a domain is picked, the line says its domain is not in the table; pick Planning → Dashboards under Planning with its earlier cells; Reporting stays removed [knobs: none]", async ({ browser }) => {
+  test("CA-24 (proposed) restoring a capability whose domain is not in the table asks where it returns: Restore disabled until a domain is picked, the line says its domain is not in the table; pick Planning → Dashboards under Planning with its earlier cells; Reporting stays removed; event restore from Reporting to Planning [knobs: none]", async ({ browser }) => {
     const cellsBefore = await cellsOf(cap.Dashboards);
     await removeCapability(cap.Dashboards);
     await removeDomain(dom.Reporting); // it holds nothing else: no move question
@@ -1325,5 +1356,226 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     await expectSeededCell(page, "Dashboards", beta);
     const [event] = await events("cmp_catalog_edited", { action: "restore", via: "settings" });
     expect(propsOf(event)).toMatchObject({ entity: "capability", entityId: cap.Dashboards, name: "Dashboards", domainChanged: true });
+    // Round 2 (review finding 1): the value before and the value after of the move that came with the restore.
+    expect(propsOf(event)).toMatchObject({ fromDomainId: dom.Reporting, toDomainId: dom.Planning });
+    expect(event.userId).toBe(pmId);
+  });
+
+  // ————————————————————————————— Round 2: the code-review fixes (7d1964e) —————————————————————————————
+
+  test("CA-25 accepting a suggestion with a new name and another domain records each change: one request {state, name, domainId}; the row is Report scheduling under Planning with Alpha's cell; events rename (from, to), move (from, to) and cmp_capability_suggestion accepted [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const scan = await injectedScan(alpha, { suggestions: [{ name: "Scheduled reports", domain: "Reporting" }] });
+    expect(scan.suggestions).toBe(1);
+    const suggestion = await capabilityNamed("Scheduled reports");
+    expect([suggestion.state, suggestion.domainId, suggestion.suggestedById]).toEqual(["suggested", dom.Reporting, alpha.id]);
+
+    const page = await open(browser, "pm");
+    await openSettings(page);
+    const panel = suggestionsPanel(page);
+    await expect(panel.getByLabel("Capability name")).toHaveValue("Scheduled reports");
+    await panel.getByLabel("Capability name").fill("Report scheduling");
+    await panel.getByLabel("Domain").selectOption({ label: "Planning" });
+    const sent = page.waitForRequest((r) => r.method() === "PATCH" && new URL(r.url()).pathname === `/api/competitors/capabilities/${suggestion.id}`);
+    await panel.getByRole("button", { name: "Accept", exact: true }).click();
+    const request = await sent;
+    expect(request.postDataJSON(), "the decision, the rename and the move travel in one request").toEqual({ state: "active", name: "Report scheduling", domainId: dom.Planning });
+    expect((await request.response())?.status()).toBe(200);
+    await expect(page.getByText("Suggested by scans", { exact: true })).toHaveCount(0);
+    await expect(capLine(page, "Report scheduling")).toHaveCount(1);
+    // The accepted row is still the scan's find (CA-27 asserts the opposite for a name a PM adds by hand).
+    await expect(capLine(page, "Report scheduling")).toContainText("PMOS AI");
+
+    const row = await capabilityRow(suggestion.id);
+    expect([row.name, row.state, row.domainId, row.origin]).toEqual(["Report scheduling", "active", dom.Planning, "ai"]);
+    expect(row.aliases, "the replaced name is kept behind the row").toEqual(["Scheduled reports"]);
+    expect(await capabilitiesNamed("Scheduled reports"), "no row keeps the suggested name").toHaveLength(0);
+
+    // Each change is recorded with who, the value before and the value after — beside the decision itself.
+    const renames = await events("cmp_catalog_edited", { action: "rename" });
+    expect(renames, "cmp_catalog_edited rename").toHaveLength(1);
+    expect(propsOf(renames[0])).toMatchObject({ entity: "capability", action: "rename", entityId: suggestion.id, field: "name", from: "Scheduled reports", to: "Report scheduling" });
+    expect(renames[0].userId).toBe(pmId);
+    const moves = await events("cmp_catalog_edited", { action: "move" });
+    expect(moves, "cmp_catalog_edited move").toHaveLength(1);
+    expect(propsOf(moves[0])).toMatchObject({ entity: "capability", action: "move", entityId: suggestion.id, field: "domain", from: dom.Reporting, to: dom.Planning, fromName: "Reporting", toName: "Planning" });
+    expect(moves[0].userId).toBe(pmId);
+    const decisions = await events("cmp_capability_suggestion");
+    expect(decisions, "cmp_capability_suggestion").toHaveLength(1);
+    expect(propsOf(decisions[0])).toMatchObject({ capabilityId: suggestion.id, competitorId: alpha.id, decision: "accepted", domainChanged: true });
+    expect(decisions[0].userId).toBe(pmId);
+    expect(await events("cmp_catalog_edited"), "the rename and the move, nothing else").toHaveLength(2);
+
+    await openMatrix(page);
+    await expectControl(page, alpha);
+    const groups = await matrixGroups(page);
+    expect(groupOf(groups, "Report scheduling")).toBe("Planning");
+    expect(allRows(groups)).not.toContain("Scheduled reports");
+    await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(0);
+    await expectCell(page, "Report scheduling", ALPHA, "has");
+  });
+
+  test("CA-26 (proposed) a capability enters the table only inside a domain that is in the table: accepting a declined suggestion whose domain is declined or removed answers 400 and nothing changes; with a domain of the table picked it is accepted, last in the order; a suggestion waiting in a removed domain moves with its capabilities [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const message = "Pick a domain that is in the table.";
+    const scan = await injectedScan(alpha, { suggestions: [
+      { name: "Invoices", domain: "Billing", newDomainDescription: "Invoices and payments." },
+      { name: "Scheduled reports", domain: "Reporting" },
+      { name: "Report builder", domain: "Reporting" },
+    ] });
+    expect(scan.suggestions).toBe(3);
+    const invoices = await capabilityNamed("Invoices");
+    const scheduled = await capabilityNamed("Scheduled reports");
+    const builder = await capabilityNamed("Report builder");
+    const [billing] = await domainsNamed("Billing");
+    expect([billing.state, invoices.state, invoices.domainId], "the scan suggested the domain with its capability").toEqual(["suggested", "suggested", billing.id]);
+
+    // The PM declines the suggested domain (its suggestion goes with it), declines Scheduled reports, then removes
+    // Reporting: Dashboards and the suggestion still waiting there move to Planning, the declined one stays behind.
+    await declineDomain(billing.id);
+    expect([(await domainRow(billing.id)).state, (await capabilityRow(invoices.id)).state]).toEqual(["dismissed", "dismissed"]);
+    await declineCapability(scheduled.id);
+    await removeDomain(dom.Reporting, dom.Planning);
+    expect((await domainRow(dom.Reporting)).state).toBe("removed");
+    for (const [id, state, what] of [[cap.Dashboards, "active", "Dashboards"], [builder.id, "suggested", "Report builder"]] as const) {
+      const moved = await capabilityRow(id);
+      expect([moved.domainId, moved.state], `${what} moved with the removal`).toEqual([dom.Planning, state]);
+    }
+    const [removal] = await events("cmp_catalog_edited", { action: "remove" });
+    expect(propsOf(removal)).toMatchObject({ entity: "domain", entityId: dom.Reporting, movedCapabilities: 2, moveTo: dom.Planning });
+    expect([(await capabilityRow(scheduled.id)).domainId, (await capabilityRow(scheduled.id)).state], "the declined suggestion stays in the removed domain").toEqual([dom.Reporting, "dismissed"]);
+
+    // Accepting either declined suggestion now would put a row of the table inside a domain that is not in it.
+    const before = await catalogOf();
+    const lastPosition = Math.max(...before.capabilities.filter((k) => k.state === "active").map((k) => k.position));
+    for (const [id, what] of [[invoices.id, "Invoices (its domain was declined)"], [scheduled.id, "Scheduled reports (its domain was removed)"]] as const) {
+      const res = await pmApi.patch(`/api/competitors/capabilities/${id}`, { data: { state: "active" } });
+      expect(res.status(), what).toBe(400);
+      expect(((await res.json()) as { error: string }).error, what).toBe(message);
+      expect(await cellsOf(id), `${what}: no cell is written`).toHaveLength(0);
+    }
+    expect(await catalogOf(), "nothing changes").toEqual(before);
+    expect(await events("cmp_capability_suggestion", { decision: "accepted" }), "no acceptance is recorded").toHaveLength(0);
+
+    // With a domain of the table picked the same row is accepted: it gets the next place in the order and Alpha's cell.
+    await ok(await pmApi.patch(`/api/competitors/capabilities/${scheduled.id}`, { data: { state: "active", domainId: dom.Planning } }));
+    const accepted = await capabilityRow(scheduled.id);
+    expect([accepted.state, accepted.domainId, accepted.position]).toEqual(["active", dom.Planning, lastPosition + 1]);
+    expect((await cellsOf(scheduled.id)).map((s) => [s.competitorId, s.value])).toEqual([[alpha.id, "has"]]);
+    const [decision] = await events("cmp_capability_suggestion", { decision: "accepted" });
+    expect(propsOf(decision)).toMatchObject({ capabilityId: scheduled.id, competitorId: alpha.id, decision: "accepted", domainChanged: true });
+    expect((await capabilityRow(invoices.id)).state, "Invoices stays declined").toBe("dismissed");
+
+    const page = await open(browser, "pm");
+    await openMatrix(page);
+    await expectControl(page, alpha);
+    const groups = await matrixGroups(page);
+    expect(groups.map((g) => g.domain)).toEqual(["Planning", "Feedback"]);
+    expect(groups[0]).toEqual({ domain: "Planning", suggestedDomain: false, rows: ["Roadmap", "Prioritization scoring", "Dashboards", "Scheduled reports"], suggested: ["Report builder"] });
+    expect(allRows(groups)).not.toContain("Invoices");
+    await expectCell(page, "Scheduled reports", ALPHA, "has");
+  });
+
+  test("CA-27 (proposed) a declined suggestion a PM adds by hand is his row: Scheduled reports → the same row, active, origin manual, no suggesting competitor and no suggestion quote, no PMOS AI mark, no longer a suggestion in the feed; Billing → the same domain, active, origin manual, empty; events restore via add from dismissed [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const scan = await injectedScan(alpha, { suggestions: [
+      { name: "Scheduled reports", domain: "Reporting" },
+      { name: "Invoices", domain: "Billing", newDomainDescription: "Invoices and payments." },
+    ] });
+    expect(scan.suggestions).toBe(2);
+    const scheduled = await capabilityNamed("Scheduled reports");
+    const invoices = await capabilityNamed("Invoices");
+    const [billing] = await domainsNamed("Billing");
+    expect([scheduled.origin, scheduled.suggestedById, billing.origin, billing.suggestedById]).toEqual(["ai", alpha.id, "ai", alpha.id]);
+    expect(scheduled.suggestedQuote, "the suggestion carries the scan's quote").toContain("Listed on the pricing page.");
+    await declineCapability(scheduled.id);
+    await declineDomain(billing.id);
+
+    const page = await open(browser, "pm");
+    // Positive control: the declined suggestion is a feed item before the PM adds the name himself.
+    await openMatrix(page);
+    await openFeed(page);
+    await expect(feedItems(page, "Scheduled reports")).toHaveCount(1);
+
+    await openSettings(page);
+    await expect(page.getByText("Suggested by scans", { exact: true })).toHaveCount(0);
+    const posted = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/competitors/capabilities");
+    await addCapabilityInSettings(page, "Scheduled reports", "Planning");
+    expect((await posted).status(), "no 409 for a declined name").toBe(201);
+    await expect(capLine(page, "Scheduled reports")).toHaveCount(1);
+    await expect(capLine(page, "Scheduled reports")).not.toContainText("PMOS AI");
+
+    const rows = await capabilitiesNamed("Scheduled reports");
+    expect(rows.map((r) => [r.id, r.state, r.domainId]), "one row with the name: the declined one, now in the table").toEqual([[scheduled.id, "active", dom.Planning]]);
+    expect([rows[0].origin, rows[0].suggestedById, rows[0].suggestedQuote], "it is the PM's row, not the scan's").toEqual(["manual", null, null]);
+    const [restored] = await events("cmp_catalog_edited", { action: "restore", entity: "capability" });
+    expect(restored, "cmp_catalog_edited restore (capability)").toBeTruthy();
+    expect(propsOf(restored)).toMatchObject({ entityId: scheduled.id, from: "dismissed", to: "active", name: "Scheduled reports", via: "add" });
+    expect(restored.userId).toBe(pmId);
+
+    // The same for a declined domain.
+    await page.getByRole("button", { name: "Add domain" }).click();
+    await domainsSection(page).getByLabel("Name").fill("Billing");
+    await domainsSection(page).getByRole("button", { name: "Add domain" }).click();
+    await expect(domainCard(page, "Billing")).toHaveCount(1);
+    await expect(domainCard(page, "Billing")).toContainText("0 capabilities");
+    const domains = await domainsNamed("Billing");
+    expect(domains.map((d) => [d.id, d.state, d.origin, d.suggestedById]), "one Billing domain: the declined one, now the PM's").toEqual([[billing.id, "active", "manual", null]]);
+    expect((await capabilityRow(invoices.id)).state, "the suggestion declined with the domain stays declined").toBe("dismissed");
+    const [restoredDomain] = await events("cmp_catalog_edited", { action: "restore", entity: "domain" });
+    expect(restoredDomain, "cmp_catalog_edited restore (domain)").toBeTruthy();
+    expect(propsOf(restoredDomain)).toMatchObject({ entityId: billing.id, from: "dismissed", to: "active", name: "Billing", via: "add" });
+    expect(await events("cmp_catalog_edited", { action: "create" }), "two restores, no second row").toHaveLength(0);
+
+    await openMatrix(page);
+    await expectControl(page, alpha);
+    const groups = await matrixGroups(page);
+    expect(groupOf(groups, "Scheduled reports")).toBe("Planning");
+    await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(0);
+    await expect(page.getByTestId("cmp-suggested-domain")).toHaveCount(0);
+    await openFeed(page);
+    await expect(feedItems(page, "Scheduled reports"), "a row the PM added is not a suggestion in the feed").toHaveCount(0);
+  });
+
+  test("CA-28 (proposed) renaming a capability to a declined suggestion's name succeeds: Dashboards becomes Scheduled reports with no 'already exists' error; one row has the name, the declined row is gone; the cells stay; event rename [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
+    test.setTimeout(180_000);
+    const scan = await injectedScan(alpha, { suggestions: [{ name: "Scheduled reports", domain: "Reporting" }] });
+    expect(scan.suggestions).toBe(1);
+    const declined = await capabilityNamed("Scheduled reports");
+    await declineCapability(declined.id);
+    expect((await capabilityRow(declined.id)).state).toBe("dismissed");
+    const cellsBefore = await cellsOf(cap.Dashboards);
+
+    const page = await open(browser, "pm");
+    await openSettings(page);
+    await capLine(page, "Dashboards").getByRole("button", { name: "Edit" }).click();
+    const name = page.getByPlaceholder("The capability name");
+    await expect(name).toHaveValue("Dashboards");
+    await name.fill("Scheduled reports");
+    const patched = page.waitForResponse((r) => r.request().method() === "PATCH" && new URL(r.url()).pathname === `/api/competitors/capabilities/${cap.Dashboards}`);
+    await name.press("Enter");
+    expect((await patched).status(), "no 409 for a declined name").toBe(200);
+    await expect(capLine(page, "Scheduled reports")).toHaveCount(1);
+    await expect(capLine(page, "Dashboards")).toHaveCount(0);
+    await expect(page.getByText("A capability with this name already exists.")).toHaveCount(0);
+
+    const rows = await capabilitiesNamed("Scheduled reports");
+    expect(rows.map((r) => [r.id, r.state, r.domainId]), "one row with the name: the renamed capability").toEqual([[cap.Dashboards, "active", dom.Reporting]]);
+    expect(rows[0].aliases, "the replaced name is kept behind the row").toEqual(["Dashboards"]);
+    expect(await withTestDb((db) => db.capability.findUnique({ where: { id: declined.id } })), "the declined row is gone").toBeNull();
+    expect(await capabilitiesNamed("Dashboards")).toHaveLength(0);
+    expect(await cellsOf(cap.Dashboards), "the cells of the renamed capability").toEqual(cellsBefore);
+    const [rename] = await events("cmp_catalog_edited", { action: "rename" });
+    expect(rename, "cmp_catalog_edited rename").toBeTruthy();
+    expect(propsOf(rename)).toMatchObject({ entity: "capability", action: "rename", entityId: cap.Dashboards, from: "Dashboards", to: "Scheduled reports" });
+    expect(rename.userId).toBe(pmId);
+
+    await openMatrix(page);
+    await expectControl(page, alpha);
+    const groups = await matrixGroups(page);
+    expect(groupOf(groups, "Scheduled reports")).toBe("Reporting");
+    expect(allRows(groups).filter((n) => n === "Scheduled reports")).toHaveLength(1);
+    await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(0);
+    await expectCell(page, "Scheduled reports", ALPHA, "has");
   });
 });
