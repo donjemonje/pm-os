@@ -26,6 +26,18 @@ describe("htmlToText", () => {
     expect(text).not.toContain("Pricing"); // nav is chrome
     expect(text).not.toContain("© 2026");
   });
+  it("keeps the text inside a form (a use-case description in a checkbox label), drops its controls", () => {
+    // ZeroFox's pricing page (round-2 check, 2026-11-10): the copy that matters sits in <label><p>…</p></label> inside a <form>.
+    const html = `<main><form><div>Select all use cases that apply.</div><label><input id="f2" type="checkbox"/><div>Domain Protection</div>
+<p>Lookalike domains and hijacks impersonate us, steal credentials, and harm our brand.</p></label>
+<select><option>Pick one</option></select><textarea>draft</textarea><button type="submit">Send request</button></form></main>`;
+    const text = htmlToText(html);
+    expect(text).toContain("Lookalike domains and hijacks impersonate us, steal credentials, and harm our brand.");
+    expect(text).toContain("Domain Protection");
+    expect(text).not.toContain("Pick one");
+    expect(text).not.toContain("draft");
+    expect(text).not.toContain("Send request");
+  });
   it("decodes entities in title and description", () => {
     expect(titleOf(PAGE)).toBe("Acme & Co — Platform");
     expect(metaDescription(PAGE)).toBe('Threat intel for "everyone"');

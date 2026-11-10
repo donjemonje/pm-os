@@ -24,6 +24,7 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   limits   POST /api/admin/competitors/knobs {ceilingMs} | {storageLimitChars} (null = default) — WS-17, WS-36
  *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-minutes,
  *            --done-delay-ms (WS-35 only: the done route holds its answer that long, COMPETITORS_TEST_KNOBS=on)
+ *            --done-wait-minutes (WS-35 V2: how long the station waits for the done answer; default 20)
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
  *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on,
  *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
@@ -267,6 +268,8 @@ interface PollerOpts {
   key?: string;
   /** WS-35: the done route holds its answer this long (server-side knob, per request). */
   doneDelayMs?: number;
+  /** WS-35 V2: how long the station waits for the done answer (default 20 min). */
+  doneWaitMinutes?: number;
 }
 function pollerArgs(o: PollerOpts): string[] {
   return [
@@ -274,6 +277,7 @@ function pollerArgs(o: PollerOpts): string[] {
     "--runner", "fetch", "--mac-state", o.mac, "--answer", o.answer ?? "approve", "--pause-ms", String(o.pauseMs ?? 0),
     ...(o.maxMinutes ? ["--max-minutes", String(o.maxMinutes)] : []),
     ...(o.doneDelayMs ? ["--done-delay-ms", String(o.doneDelayMs)] : []),
+    ...(o.doneWaitMinutes ? ["--done-wait-minutes", String(o.doneWaitMinutes)] : []),
   ];
 }
 function freshStateDir(): string {
@@ -1291,6 +1295,67 @@ test.describe("Website Scanning rows", () => {
     expect(done.status).toBe("ok");
     expect(done.badge).toBe("full");
     expect(done.pagesFetched).toBe(12);
+    expect((await pagesOf(c.sourceId)).length).toBe(12);
+  });
+
+  test("WS-35 V2 PM-OS outlasts the station's wait: the done answer is held 15 s, the station waits 6 s → it says PM-OS is still processing (nothing 'failed on the station'), moves on, and the scan still ends Full 12", async () => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0, done delay 15 s (server knob, COMPETITORS_TEST_KNOBS=on), station wait 0.1 min (--done-wait-minutes).
+    // Round 2 (2026-11-09): local dev processed ZeroFox's 1,717 pages inside the done call for 31 min; the station gave up at 20 and said "failed" about a scan that went on fine.
+    test.setTimeout(150_000);
+    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Patient Two");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const r = await runPoller({ mac: "locked", doneDelayMs: 15_000, doneWaitMinutes: 0.1 });
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).not.toMatch(/failed on the station/);
+    expect(r.stdout).toMatch(new RegExp(`scan ${pending.id} handed in · 0 not attempted · PM-OS has not answered for 0 minutes — it is still processing the pages; the result shows in Settings → Competitors`));
+    const done = await waitForScanEnd(pending.id);
+    expect(done.status).toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+    expect((await pagesOf(c.sourceId)).length).toBe(12);
+  });
+
+  test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
+    // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".
+    test.setTimeout(200_000);
+    const site = await newSite();
+    await site.control({ slowdownAfter: 5 });
+    const c = await addCompetitor(pmApi, site, "QA-WS Omega Local");
+    const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const r = await runPoller({ mac: "locked" });
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).toMatch(/slow down \(429\) \S+ — stopping this scan, \d+ pages left for the next one/);
+    const done = await waitForScanEnd(pending.id);
+    expect(done.badge).toBe("incomplete");
+    const outcomes = done.outcomes as Record<string, number>;
+    expect(outcomes.slowdown).toBe(1);
+    expect(outcomes.cap, "a slow-down stop is not a time-limit stop").toBeUndefined();
+    expect(done.pagesNotAttempted).toBeGreaterThanOrEqual(1);
+    expect(done.pagesFetched).toBeGreaterThanOrEqual(1);
+    expect(done.pagesFetched).toBeLessThan(12);
+    const log = (done.log as { msg: string }[]).map((l) => l.msg);
+    expect(log, log.join("\n")).toContain(`${done.pagesNotAttempted} discovered page${done.pagesNotAttempted === 1 ? "" : "s"} not attempted after the slow-down answer`);
+    expect(log.some((m) => /time limit/i.test(m)), log.join("\n")).toBe(false);
+    const page = await newPage(browser, "pm");
+    await openSettings(page, c.name);
+    await expect(pill(page, c.name)).toHaveText("Incomplete");
+    await expect(competitorLine(page, c.name)).not.toContainText("time limit");
+    await competitorLine(page, c.name).getByRole("button", { name: "Scan log" }).click();
+    const drawer = page.locator("div.fixed.right-0");
+    await expect(drawer.getByText("1 not read — the site asked us to slow down")).toBeVisible();
+    await expect(drawer.getByText(new RegExp(`^${done.pagesNotAttempted} pages? not attempted — the next scan continues from them$`))).toBeVisible();
+    await page.close();
+    // The site relents: the next scan (Scan now) reads the whole site.
+    await site.control({ slowdownAfter: 0 });
+    const res = await scanNow(adminApi, c.id);
+    expect(res.status(), await res.text()).toBe(202);
+    const next = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const r2 = await runPoller({ mac: "locked" });
+    expect(r2.code, r2.stdout).toBe(0);
+    const done2 = await waitForScanEnd(next.id);
+    expect(done2.badge).toBe("full");
+    expect(done2.pagesFetched).toBe(12);
     expect((await pagesOf(c.sourceId)).length).toBe(12);
   });
 

@@ -478,6 +478,10 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
     out.error = "PM-OS storage limit reached";
     if (log.notAttempted) log.count("storage", log.notAttempted);
     log.add("warn", `PM-OS storage limit reached (${await storageLimitLabel()} of page text, all organizations) — ${log.notAttempted} discovered page${log.notAttempted === 1 ? "" : "s"} not attempted; contact support@pm-os.io to raise it`);
+  } else if (log.pages.some((p) => p.category === "slowdown")) {
+    // The site answered 429: the station handed the signal in and stopped; what it had left is not a time-limit stop.
+    out.stoppedBy = "slowdown";
+    if (log.notAttempted) log.add("warn", `${log.notAttempted} discovered page${log.notAttempted === 1 ? "" : "s"} not attempted after the slow-down answer`);
   } else if (log.notAttempted) {
     out.stoppedBy = "cap";
     log.count("cap", log.notAttempted);

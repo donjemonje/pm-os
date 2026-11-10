@@ -41,6 +41,7 @@
  *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit)
  *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
  *   --done-delay-ms N    TEST KNOB (e2e WS-35, server honours it only with COMPETITORS_TEST_KNOBS=on): ask PM-OS to hold the done answer N ms
+ *   --done-wait-minutes N  TEST KNOB (e2e WS-35 V2): how long the station waits for the done answer before moving on (default 20)
  */
 import { execFile, spawn } from "node:child_process";
 import http from "node:http";
@@ -78,6 +79,12 @@ const ANSWER = flag("answer", "ask");
 const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
 /** TEST KNOB (WS-35): passed through to the done route as testDelayMs; 0 = absent. Never set by the LaunchAgent. */
 const DONE_DELAY_MS = Number(flag("done-delay-ms", "0")) || 0;
+/**
+ * How long the station waits for the done answer. Production answers at once (PM-OS processes the pages in its own job);
+ * local dev processes them inside the call — 20 minutes was not enough for ZeroFox's 1,717 pages on 2026-11-09, and the
+ * station then said "failed" about a scan that went on fine. TEST KNOB --done-wait-minutes (WS-35 V2) shortens it.
+ */
+const DONE_WAIT_MS = Math.max(1_000, (Number(flag("done-wait-minutes", "20")) || 20) * 60_000);
 /** A browser's own identity — this is a person's machine, not the PM-OS crawler. */
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -156,7 +163,7 @@ async function askUser(sites) {
 
 /**
  * A call whose answer can take many minutes (in local dev the server processes the whole scan inside the done call:
- * 27 minutes for SpyCloud's 977 pages on 2026-11-09). Plain node:http(s): fetch gives up on a response whose headers
+ * 27 minutes for SpyCloud's 977 pages, 31 for ZeroFox's 1,717 on 2026-11-09). Plain node:http(s): fetch gives up on a response whose headers
  * take more than 5 minutes, whatever its signal says. `timeoutMs` is an idle limit — no byte from the server for that long.
  */
 function apiLong(path, init = {}, timeoutMs = 20 * 60_000) {
@@ -552,7 +559,16 @@ async function runJob(job, runner, key) {
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
   if (result.ended) return;
   // PM-OS processes the pages inside this call in local dev (page states, PMOS AI); in production it hands them to its own job.
-  const done = await apiLong(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted, ...(DONE_DELAY_MS ? { testDelayMs: DONE_DELAY_MS } : {}) }) }, 20 * 60_000);
+  let done;
+  try {
+    done = await apiLong(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted, ...(DONE_DELAY_MS ? { testDelayMs: DONE_DELAY_MS } : {}) }) }, DONE_WAIT_MS);
+  } catch (e) {
+    if (!(e instanceof Error && /no answer for/.test(e.message))) throw e;
+    // Every page is handed in; PM-OS is still processing them (local dev does that inside this call). Nothing failed —
+    // the scan ends on the server and its result shows in Settings → Competitors. The station moves on.
+    log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS has not answered for ${Math.round(DONE_WAIT_MS / 60_000)} minutes — it is still processing the pages; the result shows in Settings → Competitors`);
+    return;
+  }
   if (done.processing) log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS is processing the pages`);
   else log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }
