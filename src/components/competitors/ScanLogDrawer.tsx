@@ -122,7 +122,7 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                   <span className="text-fg-muted" title={new Date(s.startedAt).toLocaleString()}>{timeAgo(s.startedAt)}</span>
                   <span className="text-fg-muted">· {C.log.trigger[s.trigger] ?? s.trigger}</span>
                   <span className="ml-auto font-mono text-[11px] text-fg-muted">
-                    {C.log.summary(s.pagesFetched, s.pagesChanged, s.statusesChanged, s.factsChanged, s.suggestions)}
+                    {C.log.summary(s.pagesFetched, s.pagesChanged)}
                   </span>
                 </button>
                 {isOpen && (

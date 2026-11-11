@@ -5,11 +5,12 @@ import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, I
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
+import { EvidenceCard, EvidenceList } from "./EvidenceCard";
 import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
 import { rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
@@ -199,9 +200,15 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     }
   }, []);
 
-  // While a scan runs, learn when it ends; results land in one go.
+  // ——— Scan (every competitor, one notification) ———
+  const [runNote, setRunNote] = useState<string | null>(null);
+  /** The run this page saw start: its note is shown when its summary arrives — after the analyses, which write it. */
+  const [watchedRun, setWatchedRun] = useState<string | null>(null);
+  const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors !== "number";
+
+  // While a scan or an analysis runs (or a run's summary is still to come), learn when it ends; results land in one go.
   useEffect(() => {
-    if (!state.scanning) return;
+    if (!state.scanning && !state.analyzing && !awaitingSummary) return;
     const tick = async () => {
       await refresh();
       pollRef.current = setTimeout(tick, POLL_MS);
@@ -210,24 +217,22 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [state.scanning, refresh]);
+  }, [state.scanning, state.analyzing, awaitingSummary, refresh]);
 
-  // ——— Scan (every competitor, one notification) ———
-  const [runNote, setRunNote] = useState<string | null>(null);
-  const watchedRun = useRef<string | null>(null);
   useEffect(() => {
     if (state.activeRun) {
-      watchedRun.current = state.activeRun.id;
+      setWatchedRun(state.activeRun.id);
       return;
     }
-    if (watchedRun.current && state.lastRun?.id === watchedRun.current) {
-      watchedRun.current = null;
+    // The summary is written when the last analysis of the run's scans is done, not when the scans end.
+    if (watchedRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors === "number") {
+      setWatchedRun(null);
       const s = state.lastRun.summary;
       const changed = typeof s.competitors === "number" ? s.competitors : 0;
       const recipients = typeof s.recipients === "number" ? s.recipients : 0;
       setRunNote(`${C.run.finished(changed)}${changed > 0 ? ` ${recipients > 0 ? C.run.notified(recipients) : C.run.noRecipients}` : ""}`);
     }
-  }, [state.activeRun, state.lastRun]);
+  }, [state.activeRun, state.lastRun, watchedRun]);
 
   async function scanAll() {
     setError(null);
@@ -413,7 +418,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   }
 
   const sourcesCount = state.competitors.filter((c) => c.source).length;
-  const headerScan = state.scanning ? C.header.scanning : state.lastScanAt ? C.header.scanned(timeAgo(state.lastScanAt)) : C.header.neverScanned;
+  const headerScan = state.scanning ? C.header.scanning : state.analyzing ? C.header.analyzing : state.lastScanAt ? C.header.scanned(timeAgo(state.lastScanAt)) : C.header.neverScanned;
 
   return (
     <div className="app-canvas font-title min-h-full">
@@ -543,6 +548,16 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                             {(c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable") && (
                               <span className="rounded-full bg-[rgba(239,90,138,.15)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#c23767]">{C.settings.badges[c.lastScan.badge]}{c.lastGoodScanAt ? ` · ${shortDate(c.lastGoodScanAt)}` : ""}</span>
                             )}
+                            {c.analysis && isAnalysisActive(c.analysis.status) && (
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#2a5fd0]"
+                                title={c.analysis.status === "waiting" ? C.matrix.analysisWaiting : c.analysis.status === "queued" ? C.settings.analysisQueued : c.analysis.step === "research" && c.analysis.pagesTotal > 0 ? C.settings.analyzingPages(c.analysis.pagesDone, c.analysis.pagesTotal) : C.settings.analysisStep[c.analysis.step] ?? C.matrix.analyzing}
+                                data-testid="cmp-analyzing-chip"
+                              >
+                                <Loader2 size={9} className="animate-spin" />
+                                {c.analysis.status === "waiting" ? C.matrix.analysisWaiting : C.matrix.analyzing}
+                              </span>
+                            )}
                           </button>
                         </th>
                       ))}
@@ -597,7 +612,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     const cell = cellOf(c.id, k.id);
                                     return (
                                       <td key={c.id} className="text-center">
-                                        <Cell cell={cell} competitorId={c.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} notScanned={!c.source?.lastScanAt} />
+                                        <Cell cell={cell} competitorId={c.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
                                       </td>
                                     );
                                   })}
@@ -1158,7 +1173,14 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, s
 
 // ————— One cell with its evidence / correction popover —————
 
-function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfile, notScanned }: {
+/** Cells whose evidence was shown on hover in this page view (the event is recorded once per cell). */
+const hoverShown = new Set<string>();
+/** The pointer rests this long on a cell before its evidence shows. */
+const HOVER_OPEN_MS = 250;
+/** The card stays this long after the pointer leaves, so it can cross the gap to the card and click the link. */
+const HOVER_CLOSE_MS = 150;
+
+function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfile, notScanned, analyzing }: {
   cell: CellRow | undefined;
   competitorId: string;
   capability: CapabilityRow;
@@ -1167,8 +1189,35 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
   onPatch: (url: string, body: unknown) => Promise<boolean>;
   onProfile: (() => void) | null;
   notScanned?: boolean;
+  /** The competitor's analysis run is queued or in progress. */
+  analyzing?: boolean;
 }) {
   const isOpen = open?.competitorId === competitorId && open.capabilityId === capability.id;
+  // Hover: the evidence, read-only, from the cell data already in the state — no fetch, nothing to wait for.
+  const [hover, setHover] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTo = (next: boolean, ms: number) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHover(next), ms);
+  };
+  useEffect(() => () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
+  const showHover = hover && !isOpen && Boolean(cell) && (Boolean(cell?.quote) || cell?.value === "not_found");
+  useEffect(() => {
+    if (!showHover || !cell) return;
+    const key = `${competitorId}|${capability.id}`;
+    if (!hoverShown.has(key)) {
+      hoverShown.add(key);
+      track("cmp_cell_evidence_shown", { competitorId, rowKind: "capability", rowId: capability.id, value: cell.value, via: "hover", hasEvidence: Boolean(cell.quote) });
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHover(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHover]);
   const [editing, setEditing] = useState(false);
   // A PM corrects to found or not found; "low confidence" is a value only the analysis sets.
   const correctable = (v: StatusValue | undefined): OwnStatus => (v === "not_found" || v === undefined ? "not_found" : "found");
@@ -1183,6 +1232,7 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
     } else {
       setValue(correctable(cell?.value));
       track("cmp_cell_opened", { competitorId, capabilityId: capability.id, value: cell?.value ?? "not_found", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
+      track("cmp_cell_evidence_shown", { competitorId, rowKind: "capability", rowId: capability.id, value: cell?.value ?? "not_found", via: "click", hasEvidence: Boolean(cell?.quote) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -1196,8 +1246,9 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
 
-  if (notScanned && !cell) {
-    return <span className="text-[11px] text-fg-faint">{C.matrix.notScanned}</span>;
+  if (!cell && (notScanned || analyzing)) {
+    // No cell yet: the site was never scanned, or its first analysis is still filling the table.
+    return <span className="text-[11px] text-fg-faint">{analyzing ? C.matrix.analyzingCell : C.matrix.notScanned}</span>;
   }
 
   async function save() {
@@ -1215,9 +1266,9 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
   }
 
   return (
-    <span className="relative inline-flex items-center justify-center">
+    <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
       <button
-        onClick={() => setOpen(isOpen ? null : { competitorId, capabilityId: capability.id })}
+        onClick={() => { setHover(false); setOpen(isOpen ? null : { competitorId, capabilityId: capability.id }); }}
         className={cn("relative inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
         aria-label={`${capability.name}: ${C.values[cell?.value ?? "not_found"]}`}
         aria-expanded={isOpen}
@@ -1225,6 +1276,11 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
         <CellValue cell={cell} />
         {cell?.override && <Pencil size={9} className="absolute right-0.5 top-0.5 text-[#8a5a00]" aria-label={C.matrix.edited} />}
       </button>
+      {showHover && cell && (
+        <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
+          <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} count={cell.evidenceCount} empty={C.cell.notFoundHint} />
+        </div>
+      )}
       {isOpen && cell && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
@@ -1249,12 +1305,8 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
             {!editing && (
               <div className="text-[12.5px] text-fg-2">
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
-                {cell.quote ? <blockquote className="border-l-2 border-border pl-2.5 italic leading-relaxed">“{cell.quote}”</blockquote> : <div className="text-fg-faint">{C.cell.noEvidence}</div>}
-                {cell.sourceUrl && (
-                  <a href={cell.sourceUrl} target="_blank" rel="noreferrer" title={cell.sourceUrl} className="mt-1.5 flex max-w-full items-center gap-1 text-[12px] text-primary hover:underline">
-                    <ExternalLink size={11} className="shrink-0" /> <span className="min-w-0 truncate">{cell.sourceUrl.replace(/^https?:\/\//, "")}</span>
-                  </a>
-                )}
+                <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} count={cell.evidenceCount} empty={cell.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
+                {cell.evidenceCount > 1 && <EvidenceList cellId={cell.id} kind="capability" competitorId={competitorId} rowId={capability.id} count={cell.evidenceCount} />}
               </div>
             )}
             {editing && (
@@ -1310,7 +1362,7 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, quote: null, sourceUrl: null, changedAt: null, override: null, product: null, history: [] };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, featureId: null, value: capability.ourStatus, scannedValue: capability.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
   async function set(v: OwnStatus) {
     if (v === capability.ourStatus) return;
     setBusy(true);

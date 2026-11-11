@@ -7,7 +7,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES } from "@/lib/competitors/config";
+import { isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -97,8 +97,9 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
 
   // ——— Scan now + polling until the scan leaves queued/running ———
   const scanning = state.scanning;
+  const analyzing = state.analyzing;
   useEffect(() => {
-    if (!scanning) return;
+    if (!scanning && !analyzing) return;
     const tick = async () => {
       await refresh();
       pollRef.current = setTimeout(tick, POLL_MS);
@@ -107,7 +108,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [scanning, refresh]);
+  }, [scanning, analyzing, refresh]);
 
   async function scanNow(c: CompetitorRow) {
     setError(null);
@@ -360,10 +361,21 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
   // Customers see one thing, a scan: pending, in progress, or the last result. Never how it ran.
   const pendingLate = c.pending ? Date.now() - new Date(c.pending.since).getTime() > PENDING_LATE_MS : false;
   const status = c.running ? "running" : c.pending ? (pendingLate ? "pendingLate" : "pending") : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
+  // After the pages are stored the analysis reads them: its own step, shown in the same place.
+  const analysis = !c.running && !c.pending && c.analysis && isAnalysisActive(c.analysis.status) ? c.analysis : null;
+  const analysisFailed = !c.running && !c.pending && c.analysis?.status === "failed" ? c.analysis : null;
   const pillText = c.running
     ? C.settings.scanInProgress(c.running.pagesSoFar)
     : c.pending
       ? C.settings.scanPendingSince(timeAgo(c.pending.since))
+      : analysis
+        ? analysis.status === "queued"
+          ? C.settings.analysisQueued
+          : analysis.status === "waiting"
+            ? C.settings.analysisWaiting(analysis.resumeAt ? timeUntil(analysis.resumeAt) : "")
+            : analysis.step === "research" && analysis.pagesTotal > 0
+              ? C.settings.analyzingPages(analysis.pagesDone, analysis.pagesTotal)
+              : C.settings.analysisStep[analysis.step] ?? C.matrix.analyzing
       : status === "never"
         ? C.settings.neverScanned
         : C.settings.badges[status] ?? status;
@@ -393,7 +405,7 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[14px] font-medium">{c.name}</span>
-            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status === "pendingLate" ? "pending" : status]} data-testid="cmp-scan-status">
+            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", analysis ? STATUS_PILL.running : STATUS_PILL[status] ?? STATUS_PILL.never)} title={analysis ? undefined : C.settings.badgeHint[status === "pendingLate" ? "pending" : status]} data-testid="cmp-scan-status">
               {pillText}
             </span>
           </div>
@@ -403,6 +415,7 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
             {nextScanAt && !c.running && !c.pending && <span>· {C.settings.nextScan(timeUntil(nextScanAt))}</span>}
           </div>
           {summary && <div className={cn("mt-1 text-[12px]", status === "unreachable" ? "text-[#c23767]" : "text-fg-3")}>{summary}</div>}
+          {analysisFailed && <div className="mt-1 text-[12px] text-[#8a5a00]" data-testid="cmp-analysis-failed">{analysisFailed.error ? C.settings.analysisFailed(analysisFailed.error) : C.settings.analysisFailedNoReason}</div>}
         </div>
       )}
       {!editing && (

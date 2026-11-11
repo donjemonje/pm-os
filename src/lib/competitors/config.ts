@@ -118,6 +118,10 @@ export const ACTIVE_SCAN_STATUSES: readonly ScanStatus[] = ["queued", "pending_l
 /** States of one page of a source. */
 export const PAGE_STATES = ["present", "missing", "removed", "unlinked"] as const;
 export type PageState = (typeof PAGE_STATES)[number];
+/** An analysis run that is still to come or in progress (analysis/engine.ts). */
+export function isAnalysisActive(status: string | null | undefined): boolean {
+  return status === "queued" || status === "running" || status === "waiting";
+}
 /** Where pages came from. */
 export const SCAN_LANES = ["remote", "local", "bundle"] as const;
 export type ScanLane = (typeof SCAN_LANES)[number];

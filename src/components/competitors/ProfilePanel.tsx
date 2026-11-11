@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, ExternalLink, Flag, Lightbulb, Minus, Pencil, Plus, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { initialsOf } from "@/components/ui/Avatar";
+import { EvidenceCard } from "./EvidenceCard";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, OWN_STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import { track } from "@/lib/analytics/track";
@@ -621,14 +622,7 @@ function DeepDive({ org, k, cell, onPatchStatus, indent }: {
       {/* Evidence: the quote the scan kept, and where it is */}
       <div className="flex flex-col gap-1.5">
         <span className="flex items-baseline gap-2"><span className={EB}>Evidence</span><span className="text-[10.5px] text-fg-faint">{cell?.sourceUrl ? "quoted from the competitor's pages" : ""}</span></span>
-        {cell?.quote ? (
-          <>
-            <blockquote className="m-0 border-l-2 border-border pl-2.5 text-[13px] italic leading-[1.55] text-[#1f2f47]">“{cell.quote}”</blockquote>
-            {cell.sourceUrl && <a href={cell.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] text-primary hover:underline"><ExternalLink size={11} /> {host(cell.sourceUrl)}</a>}
-          </>
-        ) : (
-          <span className="text-[12.5px] text-fg-faint">{C.cell.noEvidence}</span>
-        )}
+        <EvidenceCard quote={cell?.quote ?? null} url={cell?.sourceUrl ?? null} reasoning={cell?.reasoning ?? null} wording={cell?.wording ?? null} count={cell?.evidenceCount ?? 0} empty={cell?.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
       </div>
       {cell && (cell.product || cell.override) && (
         <div className="flex flex-wrap gap-2.5">

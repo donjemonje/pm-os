@@ -65,8 +65,26 @@ export interface CompetitorRow {
   manualScansToday: number;
   /** Scan currently queued or running, if any. */
   activeScanId: string | null;
+  /** The competitor's analysis run: the active one (queued, running, waiting) when there is one, else its latest finished one. */
+  analysis: AnalysisRow | null;
   media: MediaRow[];
 }
+
+/** An analysis run as the pages show it (never its log). */
+export interface AnalysisRow {
+  id: string;
+  /** "queued" | "running" | "waiting" | "done" | "failed" | "cancelled" */
+  status: string;
+  /** "research" | "merge" | "match" | "second_look" | "apply" | "facts" | "done" */
+  step: string;
+  pagesDone: number;
+  pagesTotal: number;
+  /** While waiting for PMOS AI: when it continues. */
+  resumeAt: string | null;
+  error: string | null;
+  finishedAt: string | null;
+}
+
 
 export interface MediaRow { id: string; label: string; kind: string | null; mediaPath: string; sourceLabel: string | null; capturedAt: string | null }
 
@@ -119,21 +137,40 @@ export interface CapabilityRow {
   ideas: { id: string; title: string; batchStatus: string; origin: string; jiraKey: string | null; jiraStatus: string | null }[];
 }
 
+/** One cell — of a capability row or of a feature row (same shape; exactly one of the two ids is set). */
 export interface CellRow {
   id: string;
   competitorId: string;
-  capabilityId: string;
+  capabilityId: string | null;
+  featureId: string | null;
   /** Effective value: override when set, else scanned. */
   value: StatusValue;
   scannedValue: StatusValue;
+  /** The top-ranked evidence: the quote, its page, why it means they offer it, and the competitor's own name for it. */
   quote: string | null;
   sourceUrl: string | null;
+  reasoning: string | null;
+  wording: string | null;
+  /** Distinct pages that carry evidence for the cell. */
+  evidenceCount: number;
   changedAt: string | null;
   override: { value: StatusValue; note: string | null; userName: string | null; at: string } | null;
   /** The competitor's product/module that ships this capability, as the pages name it. */
   product: string | null;
-  /** Earlier values of the cell, newest first. */
+  /** Earlier values of the cell, newest first ([] for a feature cell: features carry no history). */
   history: { value: StatusValue; quote: string | null; sourceUrl: string | null; at: string }[];
+}
+
+/** A feature: the level under a capability. */
+export interface FeatureRow {
+  id: string;
+  capabilityId: string;
+  name: string;
+  description: string;
+  /** The org's own mark: found | not_found. */
+  ourStatus: OwnStatus;
+  position: number;
+  origin: string;
 }
 
 export interface FactRow {
@@ -168,12 +205,17 @@ export interface CompetitorsState {
   capabilities: CapabilityRow[];
   /** Cells of the capabilities above. */
   cells: CellRow[];
+  /** Active features of the capabilities above, and their cells. */
+  features: FeatureRow[];
+  featureCells: CellRow[];
   /** What PMs removed (Settings → Removed). */
   removed: { domains: RemovedRow[]; capabilities: RemovedCapabilityRow[] };
   facts: FactRow[];
   /** Most recent finished scan across the workspace (header "scanned X ago"). */
   lastScanAt: string | null;
   scanning: boolean;
+  /** An analysis run of the workspace is queued or in progress: the table is still being filled. */
+  analyzing: boolean;
   /** False in local dev: Scan now is never limited there. */
   rescanLimitEnforced: boolean;
   /** Active users of the organization — the notification recipients list. */
@@ -193,7 +235,7 @@ function asStringArray(v: unknown): string[] {
 export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null, opts: { /** Settings → Removed is for admins: only they are sent the list. */ withRemoved?: boolean } = {}): Promise<CompetitorsState> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
-  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
+  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans, features, featureStatuses, activeAnalyses, finishedAnalyses] = await Promise.all([
     db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
@@ -225,7 +267,28 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       orderBy: { startedAt: "desc" },
       select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
     }),
+    db.feature.findMany({ where: { workspaceId, state: "active", capability: { state: { not: "removed" } } }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
+    db.featureStatus.findMany({ where: { workspaceId, feature: { state: "active", capability: { state: { not: "removed" } } } } }),
+    // Analysis runs — never their log (this query runs every 3 s while one is active).
+    db.competitorAnalysis.findMany({
+      where: { workspaceId, status: { in: ["queued", "running", "waiting"] } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, competitorId: true, status: true, step: true, pagesDone: true, pagesTotal: true, resumeAt: true, error: true, finishedAt: true },
+    }),
+    db.competitorAnalysis.findMany({
+      where: { workspaceId, status: { in: ["done", "failed", "cancelled"] } },
+      orderBy: { createdAt: "desc" },
+      distinct: ["competitorId"],
+      select: { id: true, competitorId: true, status: true, step: true, pagesDone: true, pagesTotal: true, resumeAt: true, error: true, finishedAt: true },
+    }),
   ]);
+  const analysisRow = (a: (typeof activeAnalyses)[number]): AnalysisRow => ({ id: a.id, status: a.status, step: a.step, pagesDone: a.pagesDone, pagesTotal: a.pagesTotal, resumeAt: a.resumeAt?.toISOString() ?? null, error: a.error, finishedAt: a.finishedAt?.toISOString() ?? null });
+  const analysisOf = (competitorId: string): AnalysisRow | null => {
+    // The run that is working wins over one that waits its turn; with none active, the latest finished one.
+    const active = activeAnalyses.filter((a) => a.competitorId === competitorId);
+    const a = active.find((x) => x.status !== "queued") ?? active[0] ?? finishedAnalyses.find((x) => x.competitorId === competitorId);
+    return a ? analysisRow(a) : null;
+  };
   const scansBySource = new Map<string, typeof recentScans>();
   const sourceOfScan = new Map<string, string>();
   for (const s of recentScans) {
@@ -244,6 +307,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
   const userIds = new Set<string>();
   for (const r of [...removedDomains, ...removedCapabilities]) if (r.removedById) userIds.add(r.removedById);
   for (const s of statuses) if (s.overrideUserId) userIds.add(s.overrideUserId);
+  for (const s of featureStatuses) if (s.overrideUserId) userIds.add(s.overrideUserId);
   for (const f of facts) if (f.overrideUserId) userIds.add(f.overrideUserId);
   const users = userIds.size
     ? await db.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, name: true, email: true } })
@@ -339,6 +403,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         lastAnyScanAt: lastAny?.toISOString() ?? null,
         manualScansToday: website ? websiteScans.filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(website.id) ? 1 : 0) : 0,
         activeScanId: website ? activeBySource.get(website.id)?.id ?? null : null,
+        analysis: analysisOf(c.id),
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
     }),
@@ -368,14 +433,40 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         id: s.id,
         competitorId: s.competitorId,
         capabilityId: s.capabilityId,
+        featureId: null,
         value: ov ?? scanned,
         scannedValue: scanned,
         quote: s.quote,
         sourceUrl: s.sourceUrl,
+        reasoning: s.reasoning,
+        wording: s.wording,
+        evidenceCount: s.evidenceCount,
         changedAt: s.changedAt?.toISOString() ?? null,
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
         product: s.product,
         history: s.history.map((h) => ({ value: h.value as StatusValue, quote: h.quote, sourceUrl: h.sourceUrl, at: h.at.toISOString() })),
+      };
+    }),
+    features: features.map((f) => ({ id: f.id, capabilityId: f.capabilityId, name: f.name, description: f.description, ourStatus: (f.ourStatus === "found" ? "found" : "not_found") as OwnStatus, position: f.position, origin: f.origin })),
+    featureCells: featureStatuses.map((s) => {
+      const scanned = s.value as StatusValue;
+      const ov = s.overrideValue as StatusValue | null;
+      return {
+        id: s.id,
+        competitorId: s.competitorId,
+        capabilityId: null,
+        featureId: s.featureId,
+        value: ov ?? scanned,
+        scannedValue: scanned,
+        quote: s.quote,
+        sourceUrl: s.sourceUrl,
+        reasoning: s.reasoning,
+        wording: s.wording,
+        evidenceCount: s.evidenceCount,
+        changedAt: s.changedAt?.toISOString() ?? null,
+        override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
+        product: null,
+        history: [],
       };
     }),
     removed: !opts.withRemoved ? { domains: [], capabilities: [] } : {
@@ -412,6 +503,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     }),
     lastScanAt: lastScanAt?.toISOString() ?? null,
     scanning: activeScans.length > 0 || activeRun != null,
+    analyzing: activeAnalyses.length > 0,
     rescanLimitEnforced: rescanLimitEnforced(),
     members,
     activeRun,
