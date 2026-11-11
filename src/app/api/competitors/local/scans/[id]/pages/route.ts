@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { isPageKind } from "@/lib/competitors/config";
 import { pdfToText } from "@/lib/competitors/fetcher";
 import { startLocalScan, verifyScanToken } from "@/lib/competitors/local";
@@ -110,14 +109,12 @@ export async function POST(req: Request, { params }: Params) {
     await db.competitorScan.update({ where: { id }, data: { errorKind: "storage", heartbeatAt: new Date() } });
     return NextResponse.json({ url: url.href, outcome: "skipped", stop: "storage", error: "PM-OS storage limit reached — the scan stops here; contact support@pm-os.io" });
   }
-  const sourceLabel = C.profile.sourceTypes[scan.source.type] ?? scan.source.type;
   const ms = typeof body.ms === "number" && Number.isFinite(body.ms) ? Math.max(0, Math.round(body.ms)) : 0;
   const attempts = typeof body.attempts === "number" && Number.isFinite(body.attempts) ? Math.max(1, Math.round(body.attempts)) : 1;
   // The home page is "home" whichever lane read it: nothing has to link to it for it to stay linked.
   const via = pageKey(url, scan.source.url) === pageKey(new URL(scan.source.url), scan.source.url) ? "home" : "handin";
   const r = await recordPage(
     { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, siteUrl: scan.source.url, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via, ms, errorDetail: readError },
-    sourceLabel,
   );
   // The links on the page say what still points where (the "unlinked" state) — collected on the scan and applied when it is
   // processed, after every page row exists (the same bookkeeping as the remote lane).

@@ -52,8 +52,8 @@ async function runImport(manifestPath: string): Promise<void> {
     }
     console.log(`[scanner] ${src.type}: ${imported.pages} pages stored${imported.dropped ? `, ${imported.dropped} dropped` : ""} — scan ${imported.scanId}`);
     await runScan(imported.scanId);
-    const scan = await db.competitorScan.findUnique({ where: { id: imported.scanId }, select: { status: true, badge: true, pagesChanged: true, statusesChanged: true, factsChanged: true, suggestions: true, aiCalls: true, error: true } });
-    console.log(`[scanner] ${src.type}: ${scan?.status} (${scan?.badge}) in ${Math.round((Date.now() - t0) / 1000)} s · ${scan?.pagesChanged} pages new/changed · ${scan?.aiCalls} AI calls · ${scan?.statusesChanged} status changes · ${scan?.factsChanged} new facts · ${scan?.suggestions} suggestions${scan?.error ? ` · ${scan.error}` : ""}`);
+    const scan = await db.competitorScan.findUnique({ where: { id: imported.scanId }, select: { status: true, badge: true, pagesChanged: true, error: true } });
+    console.log(`[scanner] ${src.type}: ${scan?.status} (${scan?.badge}) in ${Math.round((Date.now() - t0) / 1000)} s · ${scan?.pagesChanged} pages new/changed${scan?.error ? ` · ${scan.error}` : ""}`);
   }
 }
 

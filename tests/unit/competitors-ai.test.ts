@@ -1,10 +1,10 @@
 /**
  * Story 5 (competitors) — the pure parts of the AI step over many pages:
- * chunking by size, merging statuses across chunks, the dates facts state,
+ * chunking by size, the dates facts state,
  * and the page key that keeps a video id.
  */
 import { describe, expect, it } from "vitest";
-import { chunkPages, cut, factDateOf, mergeStatus, packPages, tidy, type ClassifiedStatus, type PageText } from "@/lib/competitors/ai";
+import { chunkPages, cut, factDateOf, packPages, tidy, type PageText } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
 
 const page = (i: number, chars: number, extra: Partial<PageText> = {}): PageText => ({ url: `https://e.com/p${i}`, title: `P${i}`, text: "x".repeat(chars), ...extra });
@@ -30,25 +30,6 @@ describe("chunkPages", () => {
     const packed = packPages([page(1, 10, { kind: "article", sourceLabel: "Help center", observedAt: "2026-09-29T13:56:20Z" })]);
     expect(packed).toContain("### PAGE https://e.com/p1");
     expect(packed).toContain("Source: article · Help center · dated 2026-09-29");
-  });
-});
-
-describe("mergeStatus", () => {
-  const s = (value: ClassifiedStatus["value"], confidence: number, product = ""): ClassifiedStatus => ({ capability: "A", value, confidence, quote: value === "unknown" ? "" : `q-${value}`, url: value === "unknown" ? "" : `https://e.com/${value}`, product, summary: "" });
-  it("presence beats absence whatever the confidence", () => {
-    expect(mergeStatus(s("missing", 0.95), s("has", 0.6)).value).toBe("has");
-    expect(mergeStatus(s("partial", 0.9), s("missing", 0.99)).value).toBe("partial");
-    expect(mergeStatus(s("has", 0.5), s("partial", 0.9)).value).toBe("has");
-  });
-  it("unknown never wins over a value", () => {
-    expect(mergeStatus(s("unknown", 1), s("missing", 0.3)).value).toBe("missing");
-    expect(mergeStatus(s("has", 0.4), s("unknown", 1)).value).toBe("has");
-  });
-  it("same value: the more confident answer wins, and a product name survives from either side", () => {
-    const m = mergeStatus(s("has", 0.6, ""), s("has", 0.9, "Core"));
-    expect(m.confidence).toBe(0.9);
-    expect(m.product).toBe("Core");
-    expect(mergeStatus(s("has", 0.9, "Edge"), s("has", 0.6, "")).product).toBe("Edge");
   });
 });
 

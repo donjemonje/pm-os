@@ -27,8 +27,6 @@ const KEYS = {
   /** TEST KNOBS: a shorter time limit / a smaller storage limit for one test. Honoured only with COMPETITORS_TEST_KNOBS=on. */
   ceilingMs: "competitors.test.ceilingMs",
   storageLimit: "competitors.test.storageLimitChars",
-  /** TEST KNOB: the model's raw answers for one competitor's next scans, { competitorId: { classify, facts } }. */
-  aiAnswers: "competitors.test.aiAnswers",
 } as const;
 
 async function readSetting(key: string): Promise<unknown> {
@@ -144,41 +142,6 @@ export function noteStoredChars(delta: number): void {
 export async function storageFull(): Promise<boolean> {
   const [used, limit] = await Promise.all([storedTextChars(), storageLimitChars()]);
   return used >= limit;
-}
-
-/** The raw model answers a test injected for one competitor (TEST KNOB, see ai.ts callTool). */
-export interface TestAiAnswers {
-  /** The classification answer: {statuses: [...], suggestions: [...]} as JSON text. */
-  classify: string;
-  /** The facts answer as JSON text; '{"facts":[]}' when the test gave none. */
-  facts: string;
-}
-
-/**
- * TEST KNOB: the answers injected for this competitor, or null. Keyed by competitor, so one test's answer never
- * reaches another test, another organization or another scan. Null whenever the knobs are off — production never
- * reads the setting.
- */
-export async function testAiAnswers(competitorId: string): Promise<TestAiAnswers | null> {
-  if (!testKnobsEnabled()) return null;
-  const all = await readSetting(KEYS.aiAnswers);
-  if (!all || typeof all !== "object" || Array.isArray(all)) return null;
-  const entry = (all as Record<string, unknown>)[competitorId];
-  if (!entry || typeof entry !== "object") return null;
-  const e = entry as Record<string, unknown>;
-  if (typeof e.classify !== "string") return null;
-  return { classify: e.classify, facts: typeof e.facts === "string" ? e.facts : '{"facts":[]}' };
-}
-
-/** Tests only: set or clear (null) the injected answers of one competitor. Refused outside test environments. */
-export async function setTestAiAnswers(competitorId: string, answers: { classify: string; facts?: string } | null): Promise<boolean> {
-  if (!testKnobsEnabled()) return false;
-  const all = await readSetting(KEYS.aiAnswers);
-  const next: Record<string, unknown> = all && typeof all === "object" && !Array.isArray(all) ? { ...(all as Record<string, unknown>) } : {};
-  if (answers === null) delete next[competitorId];
-  else next[competitorId] = { classify: answers.classify, ...(answers.facts !== undefined ? { facts: answers.facts } : {}) };
-  await writeSetting(KEYS.aiAnswers, next as Prisma.InputJsonValue);
-  return true;
 }
 
 /** Tests only: set or clear (null) the two limit knobs. Refused outside test environments. */

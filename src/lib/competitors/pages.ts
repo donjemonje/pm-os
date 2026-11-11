@@ -1,6 +1,5 @@
 import { Prisma } from "@prisma/client";
 import { db } from "../db";
-import type { PageText } from "./ai";
 import { REMOVED_AFTER_NOT_FOUND, type OutcomeCategory, type PageKind, type PageState } from "./config";
 import { contentHash, htmlToText, titleOf } from "./html";
 import { noteStoredChars } from "./settings";
@@ -62,8 +61,6 @@ export interface RecordPageResult {
   category?: OutcomeCategory;
   pageId: string | null;
   state: PageState | null;
-  /** The page as PMOS AI reads it (only when read). */
-  pageText: PageText | null;
   chars: number;
   hash: string | null;
 }
@@ -89,11 +86,11 @@ export function categoryOf(status: Exclude<PageReadStatus, "ok">): OutcomeCatego
   }
 }
 
-/** Longer texts (a 200-page PDF) are cut; the AI step truncates far below this anyway. */
+/** Longer texts (a 200-page PDF) are cut; the research step of the analysis reads the whole stored text. */
 export const MAX_PAGE_CHARS = 200_000;
 
 /** Record what a lane read (or failed to read) for one URL. */
-export async function recordPage(input: RecordPageInput, sourceLabel: string): Promise<RecordPageResult> {
+export async function recordPage(input: RecordPageInput): Promise<RecordPageResult> {
   const key = pageKey(new URL(input.url), input.siteUrl);
   const now = new Date();
   const existing = await db.sourcePage.findUnique({ where: { sourceId_url: { sourceId: input.sourceId, url: key } } });
@@ -102,7 +99,7 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
     const category = categoryOf(input.status);
     if (!existing) {
       // A URL we never read and cannot read now (a stale sitemap entry, say) is not a page of the site.
-      return { url: key, outcome: "failed", category, pageId: null, state: null, pageText: null, chars: 0, hash: null };
+      return { url: key, outcome: "failed", category, pageId: null, state: null, chars: 0, hash: null };
     }
     if (input.status === "notfound") {
       const streak = existing.notFoundStreak + 1;
@@ -111,18 +108,17 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
         where: { id: existing.id },
         data: { notFoundStreak: streak, state, lastAttemptScanId: input.scanId, removedAt: state === "removed" ? existing.removedAt ?? now : null },
       });
-      return { url: key, outcome: "failed", category, pageId: existing.id, state, pageText: null, chars: 0, hash: existing.hash };
+      return { url: key, outcome: "failed", category, pageId: existing.id, state, chars: 0, hash: existing.hash };
     }
     // Timeout, block, login, slow down: "not read", counts for nothing.
     await db.sourcePage.update({ where: { id: existing.id }, data: { lastAttemptScanId: input.scanId } });
-    return { url: key, outcome: "failed", category, pageId: existing.id, state: existing.state as PageState, pageText: null, chars: 0, hash: existing.hash };
+    return { url: key, outcome: "failed", category, pageId: existing.id, state: existing.state as PageState, chars: 0, hash: existing.hash };
   }
 
   const rawText = (input.text ?? (input.html ? htmlToText(input.html) : "")).replace(/\r\n?/g, "\n").trim().slice(0, MAX_PAGE_CHARS);
   const title = (input.title ?? (input.html ? titleOf(input.html) : "")).trim().slice(0, 300) || null;
   const kind: PageKind = input.kind ?? "page";
   const hash = contentHash(rawText);
-  const pageText: PageText = { url: key, title: title ?? "", text: rawText, kind, sourceLabel };
 
   if (!existing) {
     const created = await db.sourcePage.create({
@@ -146,7 +142,7 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
       select: { id: true },
     });
     noteStoredChars(rawText.length);
-    return { url: key, outcome: "new", pageId: created.id, state: "present", pageText, chars: rawText.length, hash };
+    return { url: key, outcome: "new", pageId: created.id, state: "present", chars: rawText.length, hash };
   }
 
   const unchanged = existing.hash === hash;
@@ -167,7 +163,7 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
       },
     });
     if (existing.text == null) noteStoredChars(rawText.length);
-    return { url: key, outcome: "unchanged", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", pageText, chars: rawText.length, hash };
+    return { url: key, outcome: "unchanged", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", chars: rawText.length, hash };
   }
 
   // Changed: the new text replaces the old one. The old text is held (previousText) until the analysis of this
@@ -193,7 +189,7 @@ export async function recordPage(input: RecordPageInput, sourceLabel: string): P
     },
   });
   noteStoredChars(rawText.length - (existing.text == null ? 0 : existing.chars));
-  return { url: key, outcome: "changed", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", pageText, chars: rawText.length, hash };
+  return { url: key, outcome: "changed", pageId: existing.id, state: existing.state === "unlinked" ? "unlinked" : "present", chars: rawText.length, hash };
 }
 
 /**
@@ -207,12 +203,6 @@ export async function rewriteSourceOrigin(sourceIds: string[], oldUrl: string, n
   const to = newUrl.replace(/\/+$/, "");
   if (!sourceIds.length || from === to) return 0;
   return db.$executeRaw`UPDATE "SourcePage" SET url = ${to} || substr(url, ${from.length + 1}) WHERE "sourceId" IN (${Prisma.join(sourceIds)}) AND (url = ${from} OR url LIKE ${from + "/%"})`;
-}
-
-/** The text a changed page had before its last unanalyzed change — for the change insight. */
-export async function previousText(pageId: string): Promise<string | null> {
-  const p = await db.sourcePage.findUnique({ where: { id: pageId }, select: { previousText: true } });
-  return p?.previousText ?? null;
 }
 
 /** The handover is done: the analysis of this scan's changes ran, the previous texts are dropped (hashes stay). */
@@ -277,12 +267,6 @@ export async function finalizePageStates(sourceId: string, scanId: string, full:
     db.sourcePage.findMany({ where: { sourceId, state: "removed", lastAttemptScanId: scanId, notFoundStreak: REMOVED_AFTER_NOT_FOUND }, select: { url: true }, take: 100 }),
   ]);
   return { missing, removed, unlinked, removedUrls: removedNow.map((r) => r.url) };
-}
-
-/** The pages PMOS AI reads when nothing changed but the catalog grew: every current text of the source. */
-export async function currentPageTexts(sourceId: string, sourceLabel: string): Promise<PageText[]> {
-  const rows = await db.sourcePage.findMany({ where: { sourceId, state: { in: ["present", "unlinked"] }, text: { not: null } }, select: { url: true, title: true, text: true, kind: true } });
-  return rows.map((r) => ({ url: r.url, title: r.title ?? "", text: r.text ?? "", kind: r.kind, sourceLabel }));
 }
 
 export type PageStateFilter = Prisma.SourcePageWhereInput;

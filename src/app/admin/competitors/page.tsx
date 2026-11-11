@@ -1,8 +1,6 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { getAdminOrg } from "@/lib/admin-org";
 import {
-  CLASSIFY_SYSTEM_PROMPT,
-  CLASSIFY_TOOL,
   COMPETITORS_PROMPT_VERSION,
   FACTS_SYSTEM_PROMPT,
   FACTS_TOOL,
@@ -26,13 +24,6 @@ export default async function AdminCompetitorsPage() {
   const admin = await requireAdminPage("/admin/competitors");
   const org = await getAdminOrg(admin.organizationId);
   const prompts = [
-    {
-      id: "classify",
-      title: `Capability statuses — one call per competitor scan (${COMPETITORS_PROMPT_VERSION})`,
-      note: "Gets the catalog with each domain's definition text (cached prefix), the previous statuses and the pages that changed since the last scan. Returns has / partial / missing / unknown per capability with confidence, quote and URL, plus up to 8 capabilities the catalog lacks (suggestions). An 'unknown' answer never downgrades a status earlier pages established.",
-      text: CLASSIFY_SYSTEM_PROMPT,
-      tool: CLASSIFY_TOOL,
-    },
     {
       id: "facts",
       title: `Profile facts — one call per competitor scan (${COMPETITORS_PROMPT_VERSION})`,
