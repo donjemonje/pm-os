@@ -15,12 +15,11 @@
  *   }
  *
  * `file` paths are relative to the manifest. The CLI `--import` reads one
- * manifest; a Scan run in bundle mode reads COMPETITORS_BUNDLE_DIR/<host>/
- * manifest.json for each competitor. pm-os never keeps a bundle: it stores
- * the pages and runs the same pipeline as a website crawl.
+ * manifest. pm-os never keeps a bundle: it stores the pages and runs the same
+ * pipeline as a website crawl.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { isSourceType, type SourceType } from "./config";
 import type { CollectedPage } from "./import";
 
@@ -76,25 +75,4 @@ export function readBundleManifest(manifestPath: string): Bundle {
     });
   }
   return { host, workspace: manifest.workspace?.trim() || null, sources, skipped };
-}
-
-/** The folder a Scan run in bundle mode reads from (COMPETITORS_BUNDLE_DIR), or null when unset. */
-export function bundleDir(): string | null {
-  const v = process.env.COMPETITORS_BUNDLE_DIR?.trim();
-  return v ? resolve(v) : null;
-}
-
-/** The bundle prepared for a competitor's host under the bundle folder, or null when there is none. */
-export function bundleForHost(host: string): Bundle | null {
-  const dir = bundleDir();
-  if (!dir) return null;
-  const manifest = join(dir, host.trim().toLowerCase(), "manifest.json");
-  if (!existsSync(manifest)) return null;
-  return readBundleManifest(manifest);
-}
-
-/** True when a bundle folder holds a manifest for this host (no read — used to plan a run). */
-export function hasBundleForHost(host: string): boolean {
-  const dir = bundleDir();
-  return Boolean(dir && existsSync(join(dir, host.trim().toLowerCase(), "manifest.json")));
 }

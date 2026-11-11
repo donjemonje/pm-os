@@ -948,8 +948,6 @@ model CompetitorScanRun {
   /// "manual" | "scheduled"
   trigger     String
   startedById String?
-  /// "live" (the scanner crawls each website) | "bundle" (pages handed in by a collector)
-  mode        String    @default("live")
   /// "running" | "ok" | "failed"
   status      String    @default("running")
   total       Int       @default(0)

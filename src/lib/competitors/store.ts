@@ -181,7 +181,7 @@ export interface CompetitorsState {
   /** Active users of the organization — the notification recipients list. */
   members: { id: string; name: string; email: string }[];
   /** The Scan run in progress (header progress), if any. */
-  activeRun: { id: string; total: number; done: number; current: string | null; mode: string } | null;
+  activeRun: { id: string; total: number; done: number; current: string | null } | null;
   /** The last finished run and what its notification said. */
   lastRun: { id: string; finishedAt: string | null; status: string; summary: Record<string, unknown> } | null;
   /** News feed items since the baseline, newest first, with the signed-in user's read marks. */
@@ -269,7 +269,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     workspace
       ? db.user.findMany({ where: { organizationId: workspace.organizationId, deactivatedAt: null }, orderBy: [{ name: "asc" }, { email: "asc" }], select: { id: true, name: true, email: true } })
       : [],
-    db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, orderBy: { startedAt: "desc" }, select: { id: true, total: true, done: true, current: true, mode: true } }),
+    db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, orderBy: { startedAt: "desc" }, select: { id: true, total: true, done: true, current: true } }),
     db.competitorScanRun.findFirst({ where: { workspaceId, status: { in: ["ok", "failed"] } }, orderBy: { startedAt: "desc" }, select: { id: true, finishedAt: true, status: true, summary: true } }),
     collectFeed(workspaceId, config.baselineUntil, userId),
   ]);

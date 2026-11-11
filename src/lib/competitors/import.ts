@@ -45,10 +45,6 @@ export async function importPages(opts: {
   sourceUrl?: string | null;
   pages: CollectedPage[];
   startedById: string | null;
-  /** The Scan run this hand-in belongs to (bundle mode), if any. */
-  runId?: string | null;
-  /** How the scan row is labelled; "import" for the CLI, "manual" when a Scan press reads a bundle. */
-  trigger?: "manual" | "scheduled" | "import";
 }): Promise<ImportResult> {
   const competitor = await db.competitor.findFirst({ where: { id: opts.competitorId, workspaceId: opts.workspaceId }, select: { id: true, websiteUrl: true } });
   if (!competitor) return { error: "no_competitor" };
@@ -97,7 +93,7 @@ export async function importPages(opts: {
     select: { id: true },
   });
   const scan = await db.competitorScan.create({
-    data: { workspaceId: opts.workspaceId, sourceId: source.id, trigger: opts.trigger ?? "import", fetchMode: "bundle", startedById: opts.startedById, status: "queued", runId: opts.runId ?? null },
+    data: { workspaceId: opts.workspaceId, sourceId: source.id, trigger: "import", fetchMode: "bundle", startedById: opts.startedById, status: "queued" },
     select: { id: true },
   });
   // In batches: a help center is hundreds of rows.

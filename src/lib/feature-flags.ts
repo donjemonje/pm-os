@@ -95,19 +95,6 @@ export function isCompetitorsEnabled(): boolean {
   return value === "true" || value === "1";
 }
 
-/**
- * Demo news for the Competitors Scan button — env default, off when unset.
- * On, a Scan run reads each competitor's pages from the collector bundle in
- * COMPETITORS_BUNDLE_DIR instead of crawling its website (per org in Admin →
- * Enablements; a showcase setting, to be removed after it).
- */
-export function isCompetitorsDemoNewsDefault(): boolean {
-  const raw = process.env.COMPETITORS_DEMO_NEWS;
-  if (!raw?.trim()) return false;
-  const value = raw.trim().toLowerCase();
-  return value === "true" || value === "1";
-}
-
 // ————— Per-organization feature overrides —————
 //
 // Organization.features is a JSON object like {"ideas": true}. Resolution
@@ -121,7 +108,6 @@ export const ORG_FEATURE_KEYS = [
   "chat",
   "dashboard",
   "competitors",
-  "competitorsDemoNews",
   "ideasUndo",
   "myProductLines",
   "jira",
@@ -142,8 +128,6 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDashboardEnabled();
     case "competitors":
       return isCompetitorsEnabled();
-    case "competitorsDemoNews":
-      return isCompetitorsDemoNewsDefault();
     case "ideasUndo":
       return isIdeasUndoEnabled();
     case "myProductLines":
