@@ -4,7 +4,7 @@
  * (one competitor / several / nothing to send).
  */
 import { describe, expect, it } from "vitest";
-import { bottomLine, classifyChange, isDomainEntrance, renderRunEmail, summarize, type CompetitorChanges, type RunNotification } from "@/lib/competitors/notify";
+import { bottomLine, classifyChange, isDomainEntrance, renderRunEmail, runEmailDue, summarize, type CompetitorChanges, type RunNotification } from "@/lib/competitors/notify";
 
 const base = (over: Partial<CompetitorChanges> = {}): CompetitorChanges => ({
   competitorId: "c1",
@@ -112,5 +112,28 @@ describe("bottomLine", () => {
     expect(bottomLine("Payment Fraud monitors card shops. Teams search by BIN.")).toBe("Payment Fraud monitors card shops.");
     expect(bottomLine("x".repeat(10) + " word ".repeat(40), 60)!.endsWith("…")).toBe(true);
     expect(bottomLine("  ")).toBeNull();
+  });
+});
+
+describe("runEmailDue — when a Scan run's one email goes out", () => {
+  const run = (over: Partial<Parameters<typeof runEmailDue>[0]> = {}) => ({ runStatus: "ok", summarized: false, scanStatuses: ["ok", "partial"], analysesUnfinished: 0, ...over });
+  it("the run ended, its scans were read and their analyses are done: due", () => {
+    expect(runEmailDue(run())).toBe(true);
+    expect(runEmailDue(run({ scanStatuses: [] }))).toBe(true);
+  });
+  it("never twice, and never while the run is still starting its scans", () => {
+    expect(runEmailDue(run({ summarized: true }))).toBe(false);
+    expect(runEmailDue(run({ runStatus: "running" }))).toBe(false);
+  });
+  it("LOCAL LANE: the run ended but a scan is parked for the station (or being read) — the email waits for it", () => {
+    expect(runEmailDue(run({ scanStatuses: ["ok", "pending_local"] }))).toBe(false);
+    expect(runEmailDue(run({ scanStatuses: ["running"] }))).toBe(false);
+    expect(runEmailDue(run({ scanStatuses: ["queued"] }))).toBe(false);
+  });
+  it("it waits for the analyses the scans queued", () => {
+    expect(runEmailDue(run({ analysesUnfinished: 1 }))).toBe(false);
+  });
+  it("a scan that ended badly does not hold the email back", () => {
+    expect(runEmailDue(run({ scanStatuses: ["failed", "stale", "cancelled", "ok"] }))).toBe(true);
   });
 });

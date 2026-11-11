@@ -10,7 +10,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { recordCompetitorEvent } from "./analytics";
 import { rescanLimitEnforced } from "./config";
-import { notifyRun } from "./notify";
+import { notifyRun, runEmailDue } from "./notify";
 import { failStaleScans } from "./run";
 import { createScan, manualScansToday, runScan } from "./scan";
 import { getCompetitorsConfig } from "./store";
@@ -121,20 +121,33 @@ export async function executeRun(runId: string): Promise<void> {
 }
 
 /**
- * The run's one notification, sent once, after the analyses its scans queued: the scans only store pages, what
- * changed in the table is known when the analyses are done. Called at the end of the run and at the end of every
- * analysis; `summarizedAt` is the claim that makes it happen once.
+ * The run's one notification, sent once, after its scans were read and the analyses they queued are done: the scans
+ * only store pages, what changed in the table is known when the analyses are done. In the local lane the run ends
+ * as soon as its scans are parked — the email waits for them (notify.ts runEmailDue). Called at the end of the run,
+ * at the end of every scan of a run and at the end of every analysis; `summarizedAt` is the claim that makes it
+ * happen once.
  */
 export async function notifyRunWhenAnalyzed(runId: string): Promise<void> {
-  const run = await db.competitorScanRun.findUnique({ where: { id: runId }, select: { status: true, summarizedAt: true, scans: { select: { id: true } } } });
-  // While the run is still scanning, an analysis that ends early must not send the email: later scans queue more.
-  if (!run || run.summarizedAt || run.status === "running") return;
+  const run = await db.competitorScanRun.findUnique({ where: { id: runId }, select: { status: true, summarizedAt: true, scans: { select: { id: true, status: true } } } });
+  if (!run) return;
   const scanIds = run.scans.map((s) => s.id);
-  if (scanIds.length) {
-    const pending = await db.competitorAnalysis.count({ where: { scanId: { in: scanIds }, status: { in: ["queued", "running", "waiting"] } } });
-    if (pending > 0) return;
-  }
+  const analysesUnfinished = scanIds.length ? await db.competitorAnalysis.count({ where: { scanId: { in: scanIds }, status: { in: ["queued", "running", "waiting"] } } }) : 0;
+  if (!runEmailDue({ runStatus: run.status, summarized: Boolean(run.summarizedAt), scanStatuses: run.scans.map((s) => s.status), analysesUnfinished })) return;
   const claimed = await db.competitorScanRun.updateMany({ where: { id: runId, summarizedAt: null }, data: { summarizedAt: new Date() } });
   if (claimed.count !== 1) return;
   await notifyRun(runId);
+}
+
+/**
+ * Scans reached their end (read, failed, stale, cancelled): the email of the Scan run they belong to may be due now.
+ * Scans outside a run (scheduled ones, "Scan now" on one site) have no email. Never throws.
+ */
+export async function notifyRunsOfScans(scanIds: string[]): Promise<void> {
+  if (!scanIds.length) return;
+  try {
+    const scans = await db.competitorScan.findMany({ where: { id: { in: scanIds }, runId: { not: null } }, select: { runId: true } });
+    for (const runId of new Set(scans.map((s) => s.runId!))) await notifyRunWhenAnalyzed(runId);
+  } catch (e) {
+    console.error("[competitors] run notification after a scan failed", scanIds, e);
+  }
 }

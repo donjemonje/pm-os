@@ -672,6 +672,12 @@ export async function runScan(scanId: string): Promise<void> {
     await db.competitorScan.update({ where: { id: scanId }, data: { log: log.lines as unknown as Prisma.InputJsonValue } });
   }
 
+  // A scan of a Scan run that ended: the run's one email may be due now (a parked local scan ends long after its run).
+  if (scan.runId) {
+    const { notifyRunsOfScans } = await import("./runs");
+    await notifyRunsOfScans([scanId]);
+  }
+
   // A freed slot is used at once: a scan queued behind this one gets its lane, and the next queued remote scan starts now, not at the next tick.
   try {
     const { promoteQueued, startQueuedScans } = await import("./tick");

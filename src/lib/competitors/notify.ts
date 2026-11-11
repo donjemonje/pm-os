@@ -17,6 +17,17 @@ import { getCompetitorsConfig } from "./store";
 
 const RANK: Record<StatusValue, number> = { found: 3, low: 2, not_found: 1 };
 
+/**
+ * Is a Scan run's one email due? Not while the run is still starting its scans; not while one of its scans is still
+ * to be read — in the local lane a scan is parked and the run itself ends at once, its pages arrive when the station
+ * reads the site; not while an analysis one of its scans queued is still to finish. Sent once.
+ */
+export function runEmailDue(r: { runStatus: string; summarized: boolean; scanStatuses: string[]; analysesUnfinished: number }): boolean {
+  if (r.summarized || r.runStatus === "running") return false;
+  if (r.scanStatuses.some((s) => s === "queued" || s === "pending_local" || s === "running")) return false;
+  return r.analysesUnfinished === 0;
+}
+
 export type ChangeKind = "gap" | "raised" | "lowered";
 
 /** How a cell's move reads for the org: a gap when they now offer what the org lacks, else raised or lowered. */

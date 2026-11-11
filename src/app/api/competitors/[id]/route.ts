@@ -7,6 +7,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { cancelLocalRequests } from "@/lib/competitors/local";
+import { notifyRunsOfScans } from "@/lib/competitors/runs";
 import { createAndRouteScan } from "@/lib/competitors/scan";
 
 type Params = { params: Promise<{ id: string }> };
@@ -94,9 +95,12 @@ export async function DELETE(_req: Request, { params }: Params) {
   });
   if (running) return bad(C.settings.scanRunning, 409);
   // Soft delete (PRD): pages, hashes and scan history stay for the retention period; a waiting local-scan request is cancelled.
+  // The scans this ends, read before they are ended: the email of their Scan run may be due once they are cancelled.
+  const waitingScans = await db.competitorScan.findMany({ where: { source: { competitorId: id }, status: { in: ["queued", "pending_local"] }, runId: { not: null } }, select: { id: true } });
   const cancelled = await cancelLocalRequests(existing.sources.map((s) => s.id));
   await db.competitorScan.updateMany({ where: { source: { competitorId: id }, status: "queued" }, data: { status: "cancelled", finishedAt: new Date(), error: "the competitor was removed" } });
   await db.competitor.update({ where: { id }, data: { deletedAt: new Date() } });
+  await notifyRunsOfScans(waitingScans.map((s) => s.id));
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_removed", {
     competitorId: id,
     hadScans: existing.sources.some((s) => s.lastScanAt != null),
