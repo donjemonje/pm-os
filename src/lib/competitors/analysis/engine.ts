@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "../../db";
 import { AnswerError, callTool, CapacityError, getCompetitorsModel, type CallOptions } from "../ai";
@@ -19,7 +20,8 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  *
  *   queued ──claim (it is the head of the queue)──▶ running
  *   running ──capacity answer──▶ waiting (resumeAt; the same process sleeps) ──sleep over──▶ running
- *   running | waiting ──no heartbeat for 10 min──▶ queued (staleCount + 1; at 3 → failed "stale")
+ *   running | waiting ──no heartbeat for 10 min──▶ queued (staleCount + 1; at 3 → failed "stale"); the worker that
+ *                      held it, if it is still alive, finds it is no longer the owner and stops without writing
  *   running ──all six steps done──▶ done
  *   running ──an unusable answer in merge / match, too many failed pages, 24 h of waiting, any other error──▶ failed
  *   queued | running | waiting ──the competitor was removed──▶ cancelled
@@ -52,6 +54,13 @@ export class AnalysisError extends Error {
 
 /** The competitor was removed while the run was working: it ends as cancelled. */
 class RunCancelled extends Error {}
+
+/**
+ * This worker no longer owns the run: it was swept as stale and put back in the queue (or failed) while this process
+ * was still alive — the Mac slept, the database was away for 10 minutes. The run now belongs to whoever claims it
+ * next; this worker stops and writes nothing more.
+ */
+class RunLost extends Error {}
 
 /** Everything a run counts. Stored on the run (counters) and sent with cmp_analysis_finished. */
 export interface Counters {
@@ -234,8 +243,8 @@ export async function sweepStaleAnalyses(t: Date): Promise<number> {
     const r = await db.competitorAnalysis.updateMany({
       where: { id: s.id, status: { in: ["running", "waiting"] }, heartbeatAt: { lt: cutoff } },
       data: gaveUp
-        ? { status: "failed", staleCount: s.staleCount + 1, resumeAt: null, finishedAt: new Date(), errorKind: "stale", error: `the runner stopped reporting ${MAX_STALE} times` }
-        : { status: "queued", staleCount: s.staleCount + 1, resumeAt: null },
+        ? { status: "failed", staleCount: s.staleCount + 1, resumeAt: null, ownerToken: null, finishedAt: new Date(), errorKind: "stale", error: `the runner stopped reporting ${MAX_STALE} times` }
+        : { status: "queued", staleCount: s.staleCount + 1, resumeAt: null, ownerToken: null },
     });
     if (!r.count) continue;
     swept++;
@@ -266,12 +275,14 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 export async function runAnalysis(id: string): Promise<void> {
   const model = getCompetitorsModel();
+  // The claim's owner token: every later write of this worker carries it in its `where`.
+  const token = randomUUID();
   // The claim: only the head of the queue can be claimed, and only once — so two runs never execute together.
   const claimed = await db.$transaction(async (tx) => {
     const head = await tx.competitorAnalysis.findFirst({ where: activeQueue(), orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, startedAt: true } });
     if (!head || head.id !== id) return null;
     const t = new Date();
-    const r = await tx.competitorAnalysis.updateMany({ where: { id, status: "queued" }, data: { status: "running", startedAt: head.startedAt ?? t, heartbeatAt: t, resumeAt: null, model } });
+    const r = await tx.competitorAnalysis.updateMany({ where: { id, status: "queued" }, data: { status: "running", startedAt: head.startedAt ?? t, heartbeatAt: t, resumeAt: null, model, ownerToken: token } });
     return r.count ? { resumed: head.startedAt != null } : null;
   });
   if (!claimed) return;
@@ -286,18 +297,21 @@ export async function runAnalysis(id: string): Promise<void> {
     lines.push({ at: new Date().toISOString(), level, msg, ...(url ? { url } : {}) });
   };
   let step: AnalysisStepName = "research";
+  let lost = false;
+  /** Every write to the run row goes through here: it names the claim, and zero rows means the run is no longer this worker's. */
+  const own = async (data: Prisma.CompetitorAnalysisUpdateManyMutationInput): Promise<boolean> => {
+    const r = await db.competitorAnalysis.updateMany({ where: { id, ownerToken: token }, data });
+    if (!r.count) lost = true;
+    return r.count > 0;
+  };
   const flush = async () => {
-    await db.competitorAnalysis
-      .updateMany({
-        where: { id },
-        data: { heartbeatAt: new Date(), counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone },
-      })
-      .catch(() => undefined);
+    // A database error is not a lost claim: it is ignored here, and the next heartbeat tries again.
+    await own({ heartbeatAt: new Date(), counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone }).catch(() => undefined);
   };
   const heartbeat = setInterval(() => void flush(), HEARTBEAT_MS);
   const setStep = async (s: AnalysisStepName) => {
     step = s;
-    await db.competitorAnalysis.updateMany({ where: { id }, data: { step: s, heartbeatAt: new Date() } });
+    if (!(await own({ step: s, heartbeatAt: new Date() }))) throw new RunLost();
   };
 
   let outcome: "done" | "failed" | "cancelled" = "done";
@@ -314,11 +328,16 @@ export async function runAnalysis(id: string): Promise<void> {
     let stopCheckedAt = 0;
     let stop = Boolean(row.competitor.deletedAt);
     const shouldStop = async () => {
+      if (lost) return true;
       if (stop || Date.now() - stopCheckedAt < 10_000) return stop;
       stopCheckedAt = Date.now();
-      const c = await db.competitor.findUnique({ where: { id: row.competitorId }, select: { deletedAt: true } });
+      const [c, mine] = await Promise.all([
+        db.competitor.findUnique({ where: { id: row.competitorId }, select: { deletedAt: true } }),
+        db.competitorAnalysis.findUnique({ where: { id }, select: { ownerToken: true } }),
+      ]);
+      if (mine?.ownerToken !== token) lost = true;
       stop = !c || Boolean(c.deletedAt);
-      return stop;
+      return stop || lost;
     };
     const cursor = row.cursor && typeof row.cursor === "object" && !Array.isArray(row.cursor) ? { ...(row.cursor as Record<string, unknown>) } : {};
     const ctx: RunContext = {
@@ -332,6 +351,8 @@ export async function runAnalysis(id: string): Promise<void> {
       log,
       progress,
       call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => {
+        // A worker that lost the run spends nothing more.
+        if (lost) throw new RunLost();
         if (answers && opts.injected === undefined) throw new AnalysisError("other", "this run takes injected answers (test knob) and a step asked for a model call");
         if (answers?.rateLimit && okCalls >= answers.rateLimit.afterCalls && refused < answers.rateLimit.times) {
           refused++;
@@ -365,21 +386,22 @@ export async function runAnalysis(id: string): Promise<void> {
             counters.waits++;
             counters.waitedMs += ms;
             log("warn", `PMOS AI has no capacity — waiting ${Math.round(ms / 1000)} s, then continuing from where it stopped (wait ${attempt} in a row)`);
-            await db.competitorAnalysis.updateMany({ where: { id }, data: { status: "waiting", resumeAt } });
+            await own({ status: "waiting", resumeAt });
             await flush();
             await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: row.competitorId, step, waitMs: ms, attempt });
           },
           onResume: async () => {
-            await db.competitorAnalysis.updateMany({ where: { id, status: "waiting" }, data: { status: "running", resumeAt: null, heartbeatAt: new Date() } });
+            if (!(await own({ status: "running", resumeAt: null, heartbeatAt: new Date() }))) throw new RunLost();
             log("info", "Continuing");
           },
         });
+        if (lost) throw new RunLost();
         if (r.stopped) throw new RunCancelled();
         return r;
       },
       saveCursor: async (patch) => {
         Object.assign(cursor, patch);
-        await db.competitorAnalysis.updateMany({ where: { id }, data: { cursor: cursor as Prisma.InputJsonValue } });
+        if (!(await own({ cursor: cursor as Prisma.InputJsonValue }))) throw new RunLost();
       },
       flush,
     };
@@ -405,7 +427,9 @@ export async function runAnalysis(id: string): Promise<void> {
     await factsStep(ctx);
     log("info", `Analysis done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);
   } catch (e) {
-    if (e instanceof RunCancelled) {
+    if (lost || e instanceof RunLost) {
+      lost = true;
+    } else if (e instanceof RunCancelled) {
       outcome = "cancelled";
       log("warn", "The competitor was removed — analysis cancelled");
     } else {
@@ -417,20 +441,27 @@ export async function runAnalysis(id: string): Promise<void> {
     }
   } finally {
     clearInterval(heartbeat);
-    const finishedAt = new Date();
-    await db.competitorAnalysis
-      .updateMany({
-        where: { id },
-        data: {
-          status: outcome, step: outcome === "done" ? "done" : step, finishedAt, heartbeatAt: finishedAt, resumeAt: null, errorKind: errorKind ?? "none", error,
-          counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
-        },
-      })
-      .catch((e) => console.error("[competitors] could not close the analysis run", id, e));
-    await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, errorKind: errorKind ?? "none", error,
-    });
-    await notifyScanRun(row.scanId);
-    await kickAnalyses();
   }
+
+  // The close carries the owner token too: a worker that lost the run never overwrites the status the other worker set.
+  if (!lost) {
+    const finishedAt = new Date();
+    try {
+      await own({
+        status: outcome, step: outcome === "done" ? "done" : step, finishedAt, heartbeatAt: finishedAt, resumeAt: null, ownerToken: null, errorKind: errorKind ?? "none", error,
+        counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
+      });
+    } catch (e) {
+      console.error("[competitors] could not close the analysis run", id, e);
+    }
+  }
+  if (lost) {
+    console.warn(`[competitors] analysis ${id}: this worker no longer owns the run (it was put back in the queue while this process was alive) — stopped in the ${step} step without writing; the run continues from the tables when it is claimed again`);
+    return;
+  }
+  await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
+    analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, errorKind: errorKind ?? "none", error,
+  });
+  await notifyScanRun(row.scanId);
+  await kickAnalyses();
 }

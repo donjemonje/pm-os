@@ -825,6 +825,10 @@ model CompetitorAnalysis {
   resumeAt     DateTime?
   /// Times the run was put back in the queue because its runner stopped reporting (3 → failed).
   staleCount   Int        @default(0)
+  /// Set by the claim, cleared when the run is put back in the queue or ends: the one worker that executes the run.
+  /// Every write of that worker names it, so a worker whose run was swept as stale (its process slept, the database
+  /// was away) and claimed again finds zero rows and stops.
+  ownerToken   String?
   /// TEST KNOB: the run takes injected answers and may never call a model.
   injected     Boolean    @default(false)
   model        String?
