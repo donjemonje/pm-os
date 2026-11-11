@@ -7,6 +7,8 @@
  *   npm run competitors:scan -- --tick                 the hourly tick: stale sweep, due sources, queued starts,
  *                                                      24-hour alerts, retention (Cloud Scheduler runs this; --due is an alias)
  *   npm run competitors:scan -- --import <manifest>    hand a collector's pages to the pipeline
+ *   npm run competitors:scan -- --analysis <id>        one queued analysis run (what the app asks the job for)
+ *   npm run competitors:scan -- --analyze <competitorId>   queue an analysis of a competitor's stored pages now and run it
  *
  * --import reads a manifest and runs one scan per source, in order:
  *   {
@@ -28,6 +30,8 @@
 import { db } from "../src/lib/db";
 import { readBundleManifest } from "../src/lib/competitors/bundle";
 import { importPages } from "../src/lib/competitors/import";
+import { queueAnalysis, runAnalysis } from "../src/lib/competitors/analysis/engine";
+import { recordCompetitorEvent } from "../src/lib/competitors/analytics";
 import { failStaleScans, settleInline, tick } from "../src/lib/competitors/run";
 import { executeRun } from "../src/lib/competitors/runs";
 import { runScan } from "../src/lib/competitors/scan";
@@ -62,9 +66,11 @@ async function main() {
   const scanIdx = args.indexOf("--scan");
   const importIdx = args.indexOf("--import");
   const runIdx = args.indexOf("--run");
+  const analysisIdx = args.indexOf("--analysis");
+  const analyzeIdx = args.indexOf("--analyze");
   // The sweep belongs to the tick and the runs. A job started for one scan does not sweep: were it to start late, it would
   // mark the very scan it came to process as stale and relaunch it (Tomer's review 2026-11-10).
-  if (scanIdx < 0) {
+  if (scanIdx < 0 && analysisIdx < 0) {
     const stale = await failStaleScans();
     if (stale) console.log(`[scanner] ${stale} stale scan${stale === 1 ? "" : "s"} swept`);
   }
@@ -78,10 +84,20 @@ async function main() {
     await executeRun(id);
   } else if (importIdx >= 0 && args[importIdx + 1]) {
     await runImport(args[importIdx + 1]);
+  } else if (analysisIdx >= 0 && args[analysisIdx + 1]) {
+    const id = args[analysisIdx + 1];
+    console.log(`[scanner] running analysis ${id}`);
+    await runAnalysis(id);
+  } else if (analyzeIdx >= 0 && args[analyzeIdx + 1]) {
+    const competitor = await db.competitor.findUnique({ where: { id: args[analyzeIdx + 1] }, select: { id: true, name: true, workspaceId: true, deletedAt: true } });
+    if (!competitor || competitor.deletedAt) throw new Error(`no competitor with the id ${args[analyzeIdx + 1]}`);
+    await recordCompetitorEvent(competitor.workspaceId, null, "cmp_analysis_requested", { competitorId: competitor.id, via: "cli" });
+    const q = await queueAnalysis(competitor.workspaceId, competitor.id, "manual");
+    console.log("skipped" in q ? "[scanner] analysis not queued: COMPETITORS_AI=off (test knob) and no injected answers" : `[scanner] analysis ${q.id} ${q.created ? "queued" : "was already queued"} for ${competitor.name}`);
   } else if (args.includes("--tick") || args.includes("--due")) {
     await tick((m) => console.log(`[scanner] ${m}`));
   } else {
-    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json>");
+    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId>");
     process.exitCode = 2;
   }
 }

@@ -27,6 +27,8 @@ const KEYS = {
   /** TEST KNOBS: a shorter time limit / a smaller storage limit for one test. Honoured only with COMPETITORS_TEST_KNOBS=on. */
   ceilingMs: "competitors.test.ceilingMs",
   storageLimit: "competitors.test.storageLimitChars",
+  /** TEST KNOB: the model's raw answers for one competitor's analysis runs, { competitorId: TestAiAnswers }. */
+  aiAnswers: "competitors.test.aiAnswers",
 } as const;
 
 async function readSetting(key: string): Promise<unknown> {
@@ -67,7 +69,7 @@ export function testKnobsEnabled(): boolean {
   return on;
 }
 
-/** Test knob: COMPETITORS_AI=off skips the PMOS AI step (badge from pages only, "PMOS AI skipped" in the log). */
+/** Test knob: COMPETITORS_AI=off queues no analysis after a scan (unless a test injected answers for the competitor). */
 export function aiStepEnabled(): boolean {
   if (!testKnobsEnabled()) return true;
   const v = process.env.COMPETITORS_AI?.trim().toLowerCase();
@@ -142,6 +144,93 @@ export function noteStoredChars(delta: number): void {
 export async function storageFull(): Promise<boolean> {
   const [used, limit] = await Promise.all([storedTextChars(), storageLimitChars()]);
   return used >= limit;
+}
+
+/**
+ * The raw model answers a test injected for one competitor's analysis runs (TEST KNOB, see ai.ts callTool).
+ * Every value is the JSON text the model would have answered; it goes through callTool's `injected` parameter, so
+ * the parser, the quote check, the merge, the placement through decisions.ts, the cell rules and every write run
+ * unchanged. Nothing but the model call is replaced.
+ */
+export interface TestAiAnswers {
+  /** Research: the answer for a page, by its address; "*" = every page not listed. A page with no answer gets {"capabilities": []}. */
+  research?: Record<string, string>;
+  /** Merge: the answer of the n-th merge call of a run. Missing → {"groups": []}. */
+  merge?: string[];
+  /** Match: the answer of the n-th match call of a run. Missing while items still need a match → the run FAILS: a test states what it expects. */
+  match?: string[];
+  /** Second look: by our capability's name; "*" = every other one. Missing → {"found": false, …}. */
+  secondLook?: Record<string, string>;
+  /** Facts: every chunk gets this answer. Missing → {"facts": []}. */
+  facts?: string;
+  /** Capacity answers: after `afterCalls` successful calls of the run, the next `times` calls answer "no capacity". */
+  rateLimit?: { afterCalls: number; times: number };
+}
+
+const isJson = (v: unknown): v is string => {
+  if (typeof v !== "string") return false;
+  try {
+    JSON.parse(v);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** The knob's value as given by a test, checked: every answer must be JSON text. Returns what is wrong, or the answers. */
+export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "answers must be an object" };
+  const r = raw as Record<string, unknown>;
+  if ("classify" in r) return { error: "the classify / facts shape is gone: use research, merge, match, secondLook, facts, rateLimit" };
+  const out: TestAiAnswers = {};
+  for (const key of ["research", "secondLook"] as const) {
+    if (r[key] === undefined) continue;
+    const m = r[key];
+    if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every(isJson)) return { error: `${key} must be an object of JSON texts` };
+    out[key] = m as Record<string, string>;
+  }
+  for (const key of ["merge", "match"] as const) {
+    if (r[key] === undefined) continue;
+    if (!Array.isArray(r[key]) || !(r[key] as unknown[]).every(isJson)) return { error: `${key} must be a list of JSON texts` };
+    out[key] = r[key] as string[];
+  }
+  if (r.facts !== undefined) {
+    if (!isJson(r.facts)) return { error: "facts must be JSON text" };
+    out.facts = r.facts;
+  }
+  if (r.rateLimit !== undefined) {
+    const l = r.rateLimit as Record<string, unknown> | null;
+    const ok = l && typeof l === "object" && Number.isInteger(l.afterCalls) && Number.isInteger(l.times) && (l.afterCalls as number) >= 0 && (l.times as number) >= 0;
+    if (!ok) return { error: "rateLimit must be { afterCalls, times } with whole numbers" };
+    out.rateLimit = { afterCalls: l.afterCalls as number, times: l.times as number };
+  }
+  return out;
+}
+
+/**
+ * TEST KNOB: the answers injected for this competitor, or null. Keyed by competitor, so one test's answers never
+ * reach another test, another organization or another competitor. Null whenever the knobs are off — production
+ * never reads the setting. The analysis engine reads it ONCE per run, at the claim.
+ */
+export async function testAiAnswers(competitorId: string): Promise<TestAiAnswers | null> {
+  if (!testKnobsEnabled()) return null;
+  const all = await readSetting(KEYS.aiAnswers);
+  if (!all || typeof all !== "object" || Array.isArray(all)) return null;
+  const entry = (all as Record<string, unknown>)[competitorId];
+  if (!entry) return null;
+  const answers = readTestAiAnswers(entry);
+  return "error" in answers ? null : answers;
+}
+
+/** Tests only: set or clear (null) the injected answers of one competitor. Refused outside test environments. */
+export async function setTestAiAnswers(competitorId: string, answers: TestAiAnswers | null): Promise<boolean> {
+  if (!testKnobsEnabled()) return false;
+  const all = await readSetting(KEYS.aiAnswers);
+  const next: Record<string, unknown> = all && typeof all === "object" && !Array.isArray(all) ? { ...(all as Record<string, unknown>) } : {};
+  if (answers === null) delete next[competitorId];
+  else next[competitorId] = answers;
+  await writeSetting(KEYS.aiAnswers, next as Prisma.InputJsonValue);
+  return true;
 }
 
 /** Tests only: set or clear (null) the two limit knobs. Refused outside test environments. */

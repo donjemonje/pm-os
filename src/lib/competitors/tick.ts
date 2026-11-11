@@ -21,7 +21,10 @@ import { getGlobalScanSettings, now } from "./settings";
  *                         the remote lane, remote OFF → parked in the local lane;
  *   3. start queued     — remote scans start while fewer than 8 run, one per
  *                         site at a time;
- *   4. 24-hour alert    — waiting local requests older than a day email
+ *   4. analysis queue   — an analysis run whose runner stopped reporting goes
+ *                         back to the queue, and the head of the queue starts
+ *                         when nothing is running (analysis/engine.ts);
+ *   5. 24-hour alert    — waiting local requests older than a day email
  *                         support once.
  *
  * A finishing scan calls startQueuedScans() itself, so a freed slot is used at
@@ -45,6 +48,9 @@ export async function runTick(launch: Launcher, log: (msg: string) => void = () 
   const due = await queueDueScans(t, settings.remoteScanEnabled, log);
   await promoteQueued(null, settings.remoteScanEnabled);
   const started = await startQueuedScans(launch, log);
+  // The safety net of the analysis queue: a run whose runner died is put back and the head of the queue is started.
+  const { kickAnalyses } = await import("./analysis/engine");
+  await kickAnalyses();
   const alerts = await alertOldRequests(appUrl());
   if (alerts) log(`${alerts} waiting-request alert${alerts === 1 ? "" : "s"} sent to support`);
   await cleanupScanTokens(t);

@@ -13,7 +13,8 @@ import { now } from "./settings";
  *   the job container has Chromium. Cloud Scheduler runs the same job with
  *   `--tick` once an hour: the job (same code, same database) decides what is
  *   due, sweeps stale scans and sends the 24-hour alerts — no HTTP route, no
- *   new auth surface.
+ *   new auth surface. Analysis runs execute the same way: in-process in local
+ *   dev, in the job (`--analysis <id>`) in prod, one at a time.
  */
 
 /** Inline launches in flight — the scanner job awaits them before it exits (settleInline), so a scan a finishing scan started is never killed with the process. */
@@ -37,6 +38,18 @@ export async function launchScan(scanId: string): Promise<void> {
   }
   track(runScan(scanId).catch((e) => {
     console.error("[competitors] scan failed", scanId, e);
+  }));
+}
+
+/** Same runner choice for an analysis run (lib/competitors/analysis/engine.ts): the job gets `--analysis <id>`, local dev runs it in-process. */
+export async function launchAnalysis(analysisId: string): Promise<void> {
+  if (runnerMode() === "cloudrun") {
+    await triggerCloudRunJob(["--analysis", analysisId]);
+    return;
+  }
+  const { runAnalysis } = await import("./analysis/engine");
+  track(runAnalysis(analysisId).catch((e) => {
+    console.error("[competitors] analysis failed", analysisId, e);
   }));
 }
 

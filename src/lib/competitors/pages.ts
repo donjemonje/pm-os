@@ -17,8 +17,8 @@ import { pageKey } from "./url";
  *                hash, title, state (present / missing / removed / unlinked),
  *                the current text. No retention (Daniel 2026-11-04): a change
  *                replaces the text; the previous text is held only until the
- *                analysis of that change has run (releasePreviousTexts), so the
- *                change insight can be computed, then dropped.
+ *                analysis has read the change (the research step of the
+ *                analysis run drops it), then dropped.
  *
  * Page states: a 404/410 (or a not-found page in the local lane) marks the
  * page "missing" once and "removed" on the second consecutive one; a page
@@ -203,12 +203,6 @@ export async function rewriteSourceOrigin(sourceIds: string[], oldUrl: string, n
   const to = newUrl.replace(/\/+$/, "");
   if (!sourceIds.length || from === to) return 0;
   return db.$executeRaw`UPDATE "SourcePage" SET url = ${to} || substr(url, ${from.length + 1}) WHERE "sourceId" IN (${Prisma.join(sourceIds)}) AND (url = ${from} OR url LIKE ${from + "/%"})`;
-}
-
-/** The handover is done: the analysis of this scan's changes ran, the previous texts are dropped (hashes stay). */
-export async function releasePreviousTexts(sourceId: string, scanId: string): Promise<number> {
-  const r = await db.sourcePage.updateMany({ where: { sourceId, lastReadScanId: scanId, previousText: { not: null } }, data: { previousText: null, previousHash: null } });
-  return r.count;
 }
 
 export interface KnownPage {

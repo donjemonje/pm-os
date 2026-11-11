@@ -114,8 +114,27 @@ export async function executeRun(runId: string): Promise<void> {
   });
   await recordCompetitorEvent(run.workspaceId, run.startedById, "cmp_run_finished", { runId, competitors: done, failed: failed ?? null, durationMs: Date.now() - t0 });
   try {
-    await notifyRun(runId);
+    await notifyRunWhenAnalyzed(runId);
   } catch (e) {
     console.error("[competitors] run notification failed", runId, e);
   }
+}
+
+/**
+ * The run's one notification, sent once, after the analyses its scans queued: the scans only store pages, what
+ * changed in the table is known when the analyses are done. Called at the end of the run and at the end of every
+ * analysis; `summarizedAt` is the claim that makes it happen once.
+ */
+export async function notifyRunWhenAnalyzed(runId: string): Promise<void> {
+  const run = await db.competitorScanRun.findUnique({ where: { id: runId }, select: { status: true, summarizedAt: true, scans: { select: { id: true } } } });
+  // While the run is still scanning, an analysis that ends early must not send the email: later scans queue more.
+  if (!run || run.summarizedAt || run.status === "running") return;
+  const scanIds = run.scans.map((s) => s.id);
+  if (scanIds.length) {
+    const pending = await db.competitorAnalysis.count({ where: { scanId: { in: scanIds }, status: { in: ["queued", "running", "waiting"] } } });
+    if (pending > 0) return;
+  }
+  const claimed = await db.competitorScanRun.updateMany({ where: { id: runId, summarizedAt: null }, data: { summarizedAt: new Date() } });
+  if (claimed.count !== 1) return;
+  await notifyRun(runId);
 }

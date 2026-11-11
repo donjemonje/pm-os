@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
+import { queueAnalysis } from "./analysis/engine";
 import { recordCompetitorEvent } from "./analytics";
 import {
   ACTIVE_SCAN_STATUSES,
@@ -17,7 +18,7 @@ import { COMPETITORS_COPY as C } from "./copy";
 import { Frontier, readRobots, readSitemap } from "./crawl";
 import { acquireBrowser, browserAvailable, fetchPage, isRetryable, outcomeCategoryOf, releaseBrowser, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
-import { finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
+import { finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
 import { isPdfUrl, pageKey } from "./url";
 
@@ -549,6 +550,8 @@ export async function runScan(scanId: string): Promise<void> {
   let robotsDisallowed: string[] = [];
   let removedPages: string[] = [];
   let handToLocal = false;
+  /** The analysis run this scan queued (null: none — the scan read nothing, or the test knob switched PMOS AI off). */
+  let analysisId: string | null = null;
 
   try {
     const ctx: CollectContext = { scanId, workspaceId, source, competitor, log, t0, resumedFromId: staleBefore?.id ?? null };
@@ -584,11 +587,17 @@ export async function runScan(scanId: string): Promise<void> {
       errorKind = errorKind ?? "other";
       error = error ?? "no page could be read";
     } else {
-      // The scan ends at the pages. What they say is read by the analysis, its own step after the scan.
+      // The scan ends at the pages. What they say is read by the analysis: its own queued run, after the scan.
+      // Queued after every scan that read a page, also when no page changed — such a run makes no research call and
+      // is how a new row of ours gets looked for at this competitor.
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
-      log.add("info", "Pages stored. The analysis runs as its own step after the scan (not wired in this commit).");
-      const released = await releasePreviousTexts(source.id, scanId);
-      if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped`);
+      const q = await queueAnalysis(workspaceId, competitor.id, "scan", { scanId, startedById: scan.startedById });
+      if ("skipped" in q) {
+        log.add("warn", "PMOS AI analysis skipped (COMPETITORS_AI=off, test knob)");
+      } else {
+        analysisId = q.id;
+        log.add("info", q.created ? `Analysis queued (${q.id})` : `Analysis already queued (${q.id})`);
+      }
     }
 
     // ——— Badge (PRD): Blocked = the site refused us on most pages or at the door; Unreachable = no answer at all ———
@@ -647,6 +656,7 @@ export async function runScan(scanId: string): Promise<void> {
     pagesFetched: log.read,
     pagesChanged: log.changed,
     pagesNotAttempted: log.notAttempted,
+    analysisId,
     durationMs,
     errorKind: errorKind ?? "none",
   });
