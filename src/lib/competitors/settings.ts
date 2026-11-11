@@ -69,7 +69,11 @@ export function testKnobsEnabled(): boolean {
   return on;
 }
 
-/** Test knob: COMPETITORS_AI=off queues no analysis after a scan (unless a test injected answers for the competitor). */
+/**
+ * Test knob: COMPETITORS_AI=off — nothing automatic reaches PMOS AI. A finished scan, a catalog change and the kicks
+ * (server start, timer, tick) queue and start no analysis. A run asked for by hand (trigger "manual") and a run with
+ * injected answers still run (analysis/gate.ts). Local dev sets it; production never does.
+ */
 export function aiStepEnabled(): boolean {
   if (!testKnobsEnabled()) return true;
   const v = process.env.COMPETITORS_AI?.trim().toLowerCase();

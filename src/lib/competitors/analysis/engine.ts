@@ -3,10 +3,11 @@ import { db } from "../../db";
 import { AnswerError, callTool, CapacityError, getCompetitorsModel, type CallOptions } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
-import { aiStepEnabled, now, testAiAnswers, testKnobsEnabled, type TestAiAnswers } from "../settings";
+import { aiStepEnabled, now, testAiAnswers, type TestAiAnswers } from "../settings";
 import { getCompetitorsConfig } from "../store";
 import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
 import { factsStep } from "./facts";
+import { analysisMayRun, queueFilter } from "./gate";
 import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
 
 /**
@@ -140,9 +141,18 @@ export interface RunContext {
 
 export type QueueResult = { id: string; created: boolean } | { skipped: "ai_off" };
 
+/** The runs that take part in "one at a time, oldest first" right now (gate.ts: with the PMOS AI step off, only what was asked by hand or injected). */
+function activeQueue(): Prisma.CompetitorAnalysisWhereInput {
+  return queueFilter({ aiOff: !aiStepEnabled() }) as Prisma.CompetitorAnalysisWhereInput;
+}
+
 /**
  * Queue an analysis of a competitor's stored pages. At most one queued run per competitor: a second request while
- * one waits folds into it (the newer scan wins). The run starts at once when nothing else is running.
+ * one waits folds into it (the newer scan wins; a request by hand makes the waiting run a manual one). The run
+ * starts at once when nothing else is running.
+ *
+ * TEST KNOB — COMPETITORS_AI=off (with COMPETITORS_TEST_KNOBS=on): the automatic triggers ("scan", "catalog") queue
+ * nothing. A run asked for by hand ("manual") and a run with injected answers are queued and run (gate.ts).
  */
 export async function queueAnalysis(
   workspaceId: string,
@@ -151,12 +161,13 @@ export async function queueAnalysis(
   opts: { scanId?: string | null; startedById?: string | null } = {},
 ): Promise<QueueResult> {
   const answers = await testAiAnswers(competitorId);
-  // Test knob: COMPETITORS_AI=off and no injected answers for the competitor → no analysis (the scanning story is tested without it).
-  if (testKnobsEnabled() && !aiStepEnabled() && !answers) return { skipped: "ai_off" };
+  if (!analysisMayRun({ trigger, injected: Boolean(answers) }, { aiOff: !aiStepEnabled() })) return { skipped: "ai_off" };
   const queued = await db.competitorAnalysis.findFirst({ where: { competitorId, status: "queued" }, orderBy: { createdAt: "asc" }, select: { id: true } });
   let result: QueueResult;
   if (queued) {
-    if (opts.scanId) await db.competitorAnalysis.update({ where: { id: queued.id }, data: { scanId: opts.scanId } });
+    if (opts.scanId || trigger === "manual") {
+      await db.competitorAnalysis.update({ where: { id: queued.id }, data: { ...(opts.scanId ? { scanId: opts.scanId } : {}), ...(trigger === "manual" ? { trigger: "manual" } : {}) } });
+    }
     result = { id: queued.id, created: false };
   } else {
     const run = await db.competitorAnalysis.create({
@@ -172,27 +183,36 @@ export async function queueAnalysis(
 
 /**
  * Our catalog got a row the competitors were never checked for (added by hand, restored, or created by another
- * competitor's run): queue a run for every competitor of the workspace that has stored pages. Such a run reads no
- * page again — it matches nothing new and gives the row its second look.
+ * competitor's run): queue a run for every competitor of the workspace that already has a finished analysis. Such a
+ * run reads no page again — it matches nothing new and gives the row its second look.
+ *
+ * Never a first full read: a competitor that was never analysed to the end is left alone — its own scan queues its
+ * first analysis, and that run looks for every row of ours anyway.
  */
 export async function queueCatalogAnalyses(workspaceId: string, opts: { exceptCompetitorId?: string; startedById?: string | null } = {}): Promise<number> {
   const competitors = await db.competitor.findMany({
-    where: { workspaceId, deletedAt: null, ...(opts.exceptCompetitorId ? { id: { not: opts.exceptCompetitorId } } : {}), sources: { some: { pages: { some: {} } } } },
+    where: { workspaceId, deletedAt: null, ...(opts.exceptCompetitorId ? { id: { not: opts.exceptCompetitorId } } : {}), analyses: { some: { status: "done" } } },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     select: { id: true },
   });
-  for (const c of competitors) await queueAnalysis(workspaceId, c.id, "catalog", { startedById: opts.startedById ?? null });
-  return competitors.length;
+  let queued = 0;
+  for (const c of competitors) {
+    const q = await queueAnalysis(workspaceId, c.id, "catalog", { startedById: opts.startedById ?? null });
+    if (!("skipped" in q)) queued++;
+  }
+  return queued;
 }
 
 /**
  * Start the head of the queue when nothing is running. Called when a run is queued, when a run ends, by the hourly
  * tick, at server start, and (inline runner) once a minute — so a restart resumes a run without anyone pressing anything.
+ * With the PMOS AI step off (test knob) the queue holds only runs asked for by hand or injected (gate.ts): a kick
+ * starts nothing else.
  */
 export async function kickAnalyses(): Promise<void> {
   try {
     await sweepStaleAnalyses(await now());
-    const head = await db.competitorAnalysis.findFirst({ where: { status: { in: [...ACTIVE_ANALYSIS_STATUSES] } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, status: true } });
+    const head = await db.competitorAnalysis.findFirst({ where: activeQueue(), orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, status: true } });
     if (!head || head.status !== "queued") return;
     const { launchAnalysis } = await import("../run");
     await launchAnalysis(head.id);
@@ -248,7 +268,7 @@ export async function runAnalysis(id: string): Promise<void> {
   const model = getCompetitorsModel();
   // The claim: only the head of the queue can be claimed, and only once — so two runs never execute together.
   const claimed = await db.$transaction(async (tx) => {
-    const head = await tx.competitorAnalysis.findFirst({ where: { status: { in: [...ACTIVE_ANALYSIS_STATUSES] } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, startedAt: true } });
+    const head = await tx.competitorAnalysis.findFirst({ where: activeQueue(), orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, startedAt: true } });
     if (!head || head.id !== id) return null;
     const t = new Date();
     const r = await tx.competitorAnalysis.updateMany({ where: { id, status: "queued" }, data: { status: "running", startedAt: head.startedAt ?? t, heartbeatAt: t, resumeAt: null, model } });
