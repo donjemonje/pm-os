@@ -87,6 +87,8 @@ export interface Counters {
   placed: number;
   secondLooks: number;
   secondLookFound: number;
+  /** Second looks that are due but over the run's limit: they wait for the next run (set by the step, not added up). */
+  secondLooksWaiting: number;
   newCapabilities: number;
   newFeatures: number;
   newDomains: number;
@@ -101,7 +103,7 @@ export function emptyCounters(): Counters {
   return {
     pagesRead: 0, pagesFailed: 0, calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
-    matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0,
+    matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
     newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0, factsNew: 0,
   };
 }
@@ -131,6 +133,8 @@ export interface RunContext {
   /** Workspace settings, read once at the claim. */
   readWeak: boolean;
   minPagesForNewRow: number;
+  /** The most second looks this run makes in all (CompetitorsConfig.secondLooksPerRun). */
+  maxSecondLooks: number;
   model: string;
   /** TEST KNOB: the injected answers of the run, read once at the claim; null = a real run. */
   answers: TestAiAnswers | null;
@@ -349,6 +353,7 @@ export async function runAnalysis(id: string): Promise<void> {
       competitor: { id: row.competitor.id, name: row.competitor.name, host: row.competitor.host },
       readWeak: config.readWeakPages,
       minPagesForNewRow: config.minPagesForNewRow,
+      maxSecondLooks: config.secondLooksPerRun,
       model,
       answers,
       counters,
@@ -427,9 +432,9 @@ export async function runAnalysis(id: string): Promise<void> {
     await setStep("match");
     await matchStep(ctx);
     await setStep("second_look");
-    await secondLookStep(ctx);
+    const lookWaiting = await secondLookStep(ctx);
     await setStep("apply");
-    await applyStep(ctx);
+    await applyStep(ctx, lookWaiting);
     await setStep("facts");
     await factsStep(ctx);
     log("info", `Analysis done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);

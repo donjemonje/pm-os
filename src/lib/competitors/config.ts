@@ -8,7 +8,7 @@
  * Scanning PRD (2026-11-04) the scan frequency lives per source
  * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
  * what remains here is the manual-rescan limit, the notification recipients,
- * the news baseline and the two analysis settings.
+ * the news baseline and the three analysis settings.
  */
 export const DEFAULT_MANUAL_RESCANS_PER_DAY = 1;
 /** Scan frequency per source, in days (PRD: once every 2 days). */
@@ -30,6 +30,11 @@ export interface CompetitorsConfig {
   readWeakPages: boolean;
   /** Analysis: how many distinct pages must carry an item that is none of our rows before it becomes a new row (1–5). */
   minPagesForNewRow: number;
+  /**
+   * Analysis: the most second looks one run makes (one PMOS AI call per capability of ours with no evidence, 1–500).
+   * The capabilities beyond it keep waiting — no cell is written for them — and the competitor's next run goes on.
+   */
+  secondLooksPerRun: number;
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
@@ -38,6 +43,7 @@ export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
   baselineUntil: null,
   readWeakPages: false,
   minPagesForNewRow: 1,
+  secondLooksPerRun: 30,
 };
 
 // ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————
@@ -139,6 +145,9 @@ export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
     minPagesForNewRow: typeof r.minPagesForNewRow === "number" && Number.isFinite(r.minPagesForNewRow)
       ? Math.min(5, Math.max(1, Math.round(r.minPagesForNewRow)))
       : DEFAULT_COMPETITORS_CONFIG.minPagesForNewRow,
+    secondLooksPerRun: typeof r.secondLooksPerRun === "number" && Number.isFinite(r.secondLooksPerRun)
+      ? Math.min(500, Math.max(1, Math.round(r.secondLooksPerRun)))
+      : DEFAULT_COMPETITORS_CONFIG.secondLooksPerRun,
   };
 }
 

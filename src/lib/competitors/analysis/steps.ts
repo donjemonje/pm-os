@@ -39,7 +39,7 @@ import {
   type MergeEntry,
   type Placement,
 } from "./prompts";
-import { indexPages, lookKey, pagesFor, type LookPage } from "./secondlook";
+import { capLooks, indexPages, lookKey, pagesFor, type LookPage } from "./secondlook";
 import { readKey, researchTodo, rowsSince, tooManyFailed } from "./todo";
 
 /**
@@ -672,12 +672,18 @@ async function tableRows(workspaceId: string) {
 
 const NOT_FOUND_ANSWER = '{"found": false, "quote": "", "url": "", "theirName": "", "reasoning": ""}';
 
-export async function secondLookStep(ctx: RunContext): Promise<void> {
+/**
+ * Returns the capabilities whose second look is due but was not made in this run (the per-run limit): the apply
+ * step writes no cell for them — a cell says not found only after a look found nothing.
+ */
+export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
   const competitorId = ctx.competitor.id;
   const workspaceId = ctx.run.workspaceId;
+  const waiting = new Set<string>();
+  ctx.counters.secondLooksWaiting = 0;
   const [{ capabilities }, evidence] = await Promise.all([tableRows(workspaceId), loadEvidence(workspaceId, competitorId)]);
   const candidates = capabilities.filter((k) => !evidence.byCapability.get(k.id)?.length);
-  if (!candidates.length) return;
+  if (!candidates.length) return waiting;
 
   // The pool: the pages the analysis reads, with their texts.
   const picked = await pickedPages(ctx);
@@ -698,7 +704,7 @@ export async function secondLookStep(ctx: RunContext): Promise<void> {
       update: { lookKey: key },
     });
 
-  const todo: Array<{ capability: (typeof candidates)[number]; aliases: string[]; pages: LookPage[]; key: string }> = [];
+  const due: Array<{ capability: (typeof candidates)[number]; aliases: string[]; pages: LookPage[]; key: string }> = [];
   for (const k of candidates) {
     const aliases = aliasList(k.aliases);
     const pages = pagesFor({ name: k.name, aliases }, indexed);
@@ -709,10 +715,15 @@ export async function secondLookStep(ctx: RunContext): Promise<void> {
       await saveKey(k.id, key);
       continue;
     }
-    todo.push({ capability: k, aliases, pages, key });
+    due.push({ capability: k, aliases, pages, key });
   }
-  if (!todo.length) return;
-  ctx.log("info", `Second look: ${todo.length} of your capabilities have no evidence at ${ctx.competitor.name} yet — asking once each, on their most likely pages`);
+  if (!due.length) return waiting;
+  // The limit per run, in table order. What is over it waits for the competitor's next run.
+  const { now: todo, later } = capLooks(due, ctx.counters.secondLooks, ctx.maxSecondLooks);
+  for (const t of later) waiting.add(t.capability.id);
+  ctx.counters.secondLooksWaiting = later.length;
+  ctx.log("info", `Second look: ${due.length} of your capabilities have no evidence at ${ctx.competitor.name} yet — asking once each, on their most likely pages${later.length ? `; ${todo.length} now (the limit is ${ctx.maxSecondLooks} per run), ${later.length} wait for the next run` : ""}`);
+  if (!todo.length) return waiting;
   let found = 0;
   await ctx.paced({
     items: todo,
@@ -745,13 +756,14 @@ export async function secondLookStep(ctx: RunContext): Promise<void> {
       return r.tokens;
     },
   });
-  ctx.log("info", `Second look: ${found} found, ${todo.length - found} not found`);
+  ctx.log("info", `Second look: ${found} found, ${todo.length - found} not found${later.length ? `, ${later.length} not asked yet` : ""}`);
   await ctx.flush();
+  return waiting;
 }
 
 // ————— 5. Apply: rows, then cells — no AI —————
 
-export async function applyStep(ctx: RunContext): Promise<void> {
+export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string> = new Set()): Promise<void> {
   const competitorId = ctx.competitor.id;
   const workspaceId = ctx.run.workspaceId;
   // The first analysis of a competitor sets the starting picture: values are replaced (POC cells included), nothing is "news".
@@ -914,6 +926,9 @@ export async function applyStep(ctx: RunContext): Promise<void> {
   };
   const cellOf = new Map(storedCells.map((c) => [c.capabilityId, c]));
   for (const k of capabilities) {
+    // Its second look is still to come (the per-run limit): nothing is known yet, so nothing is written — a new row
+    // stays without a cell, an existing cell keeps what it says until the look was made.
+    if (lookWaiting.has(k.id) && !evidence.byCapability.get(k.id)?.length) continue;
     const cell = cellFromEvidence(evidence.byCapability.get(k.id) ?? []);
     const data = shown(cell);
     const stored = cellOf.get(k.id);
@@ -967,6 +982,6 @@ export async function applyStep(ctx: RunContext): Promise<void> {
 
   // ——— D. The cells are current as of now ———
   await ctx.markApplied(now);
-  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}`);
+  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}${ctx.counters.secondLooksWaiting ? ` · ${ctx.counters.secondLooksWaiting} capabilit${ctx.counters.secondLooksWaiting === 1 ? "y waits" : "ies wait"} for a second look (next run)` : ""}`);
   await ctx.flush();
 }

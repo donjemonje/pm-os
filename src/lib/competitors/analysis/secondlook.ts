@@ -99,16 +99,28 @@ export function pagesFor(capability: { name: string; aliases: string[] }, pages:
 }
 
 /**
- * What a second look was asked with. The same key = the same question about the same texts: it is not asked again.
+ * What a second look was asked with. The same key = the same question about the same pages: it is not asked again.
  * It changes with the prompt version, the model, the capability's name, description or aliases, its domain's name
- * or definition, and the pages chosen (which page, and each page's text) — not with their order.
+ * or definition, and which pages were chosen — not with their order, and not with their text: a page whose text
+ * changed is read again by the research step, which finds what the new text offers; asking every look that showed
+ * the page once more would cost a call per capability for every edited page.
  */
 export function lookKey(
   capability: { name: string; description: string; aliases: string[] },
   domain: { name: string; description: string },
-  pages: Array<{ id: string; hash: string }>,
+  pages: Array<{ id: string }>,
   model: string,
 ): string {
-  const payload = JSON.stringify([LOOK_VERSION, model, capability.name, capability.description, [...capability.aliases].sort(), domain.name, domain.description, pages.map((p) => `${p.id}:${p.hash}`).sort()]);
+  const payload = JSON.stringify([LOOK_VERSION, model, capability.name, capability.description, [...capability.aliases].sort(), domain.name, domain.description, pages.map((p) => p.id).sort()]);
   return createHash("sha256").update(payload).digest("hex").slice(0, 32);
+}
+
+/**
+ * The limit on second looks per run (CompetitorsConfig.secondLooksPerRun): the to-do in its order, cut at what the
+ * run may still ask. `asked` = the looks this run already made (a run that continues counts what it did before it
+ * stopped). What is left over waits for the competitor's next run — its cell is not written until it was looked at.
+ */
+export function capLooks<T>(todo: T[], asked: number, perRun: number): { now: T[]; later: T[] } {
+  const room = Math.max(0, Math.floor(perRun) - Math.max(0, asked));
+  return { now: todo.slice(0, room), later: todo.slice(room) };
 }

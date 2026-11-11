@@ -1,6 +1,6 @@
 /** Capability Analysis — the second look (analysis/secondlook.ts): which pages are shown, and when it is asked again. Pure module. */
 import { describe, expect, it } from "vitest";
-import { indexPages, lookKey, pagesFor, scorePage, type LookPage } from "@/lib/competitors/analysis/secondlook";
+import { capLooks, indexPages, lookKey, pagesFor, scorePage, type LookPage } from "@/lib/competitors/analysis/secondlook";
 
 const page = (path: string, title: string, text: string): LookPage => ({ id: path, url: `https://acme.example${path}`, title, text, hash: `h${path}` });
 
@@ -70,13 +70,40 @@ describe("lookKey", () => {
     expect(base).toMatch(/^[0-9a-f]{32}$/);
     expect(lookKey(capability, domain, [...pages].reverse(), "model-a")).toBe(base);
   });
-  it("changes with the description, an alias, a page's text, the page set and the model", () => {
+  it("does not change when a page's text changes: the research step reads the changed page, the look is not asked again", () => {
+    const edited = [{ id: "p1", hash: "h1-changed" }, { id: "p2", hash: "h2-changed" }];
+    expect(lookKey(capability, domain, edited, "model-a")).toBe(base);
+    expect(lookKey(capability, domain, [{ id: "p1" }, { id: "p2" }], "model-a")).toBe(base);
+  });
+  it("changes with the description, an alias, the page set and the model", () => {
     expect(lookKey({ ...capability, description: "One login for all apps." }, domain, pages, "model-a")).not.toBe(base);
     expect(lookKey({ ...capability, aliases: [] }, domain, pages, "model-a")).not.toBe(base);
-    expect(lookKey(capability, domain, [{ id: "p1", hash: "h1-changed" }, pages[1]], "model-a")).not.toBe(base);
+    expect(lookKey(capability, domain, [{ id: "p3" }, pages[1]], "model-a")).not.toBe(base);
     expect(lookKey(capability, domain, [pages[0]], "model-a")).not.toBe(base);
     expect(lookKey(capability, domain, pages, "model-b")).not.toBe(base);
     expect(lookKey(capability, { ...domain, description: "Who may enter." }, pages, "model-a")).not.toBe(base);
     expect(lookKey(capability, domain, [], "model-a")).not.toBe(base);
+  });
+});
+
+describe("capLooks — the limit on second looks per run", () => {
+  const todo = Array.from({ length: 50 }, (_, i) => `k${i + 1}`);
+  it("under the limit everything is asked now", () => {
+    expect(capLooks(todo.slice(0, 12), 0, 30)).toEqual({ now: todo.slice(0, 12), later: [] });
+    expect(capLooks([], 0, 30)).toEqual({ now: [], later: [] });
+  });
+  it("over the limit: the first 30 in the to-do's order now, the rest stay due for the next run", () => {
+    const r = capLooks(todo, 0, 30);
+    expect(r.now).toEqual(todo.slice(0, 30));
+    expect(r.later).toEqual(todo.slice(30));
+  });
+  it("a run that continues counts the looks it made before it stopped", () => {
+    // 12 were asked before the stop, so they are no longer on the to-do; 18 more fit.
+    const left = todo.slice(12);
+    const r = capLooks(left, 12, 30);
+    expect(r.now).toEqual(left.slice(0, 18));
+    expect(r.later).toHaveLength(20);
+    expect(capLooks(left, 30, 30).now).toEqual([]);
+    expect(capLooks(left, 45, 30)).toEqual({ now: [], later: left });
   });
 });

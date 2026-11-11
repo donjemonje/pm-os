@@ -10,7 +10,7 @@ import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    const defaults = { manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null, readWeakPages: false, minPagesForNewRow: 1 };
+    const defaults = { manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null, readWeakPages: false, minPagesForNewRow: 1, secondLooksPerRun: 30 };
     expect(mergeCompetitorsConfig(null)).toEqual(defaults);
     expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual(defaults);
     expect(mergeCompetitorsConfig("junk")).toEqual(defaults);
@@ -28,6 +28,11 @@ describe("mergeCompetitorsConfig", () => {
     expect(mergeCompetitorsConfig({ minPagesForNewRow: 9 }).minPagesForNewRow).toBe(5);
     expect(mergeCompetitorsConfig({ minPagesForNewRow: 2.6 }).minPagesForNewRow).toBe(3);
     expect(mergeCompetitorsConfig({ minPagesForNewRow: "3" }).minPagesForNewRow).toBe(1);
+    expect(mergeCompetitorsConfig({}).secondLooksPerRun).toBe(30);
+    expect(mergeCompetitorsConfig({ secondLooksPerRun: 80 }).secondLooksPerRun).toBe(80);
+    expect(mergeCompetitorsConfig({ secondLooksPerRun: 0 }).secondLooksPerRun).toBe(1);
+    expect(mergeCompetitorsConfig({ secondLooksPerRun: 9000 }).secondLooksPerRun).toBe(500);
+    expect(mergeCompetitorsConfig({ secondLooksPerRun: "80" }).secondLooksPerRun).toBe(30);
   });
   it("carries the PRD's numbers: every 2 days, no page limit, 8 h per scan, 10 GB of page text, stale after 10 min (Daniel 2026-11-09)", () => {
     expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);
