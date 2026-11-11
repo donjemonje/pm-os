@@ -9,6 +9,9 @@
  *   npm run competitors:scan -- --import <manifest>    hand a collector's pages to the pipeline
  *   npm run competitors:scan -- --analysis <id>        one queued analysis run (what the app asks the job for)
  *   npm run competitors:scan -- --analyze <competitorId>   queue an analysis of a competitor's stored pages now and run it
+ *   npm run competitors:scan -- --rematch <competitorId>   forget the matches PMOS AI made for this competitor's items (after a match
+ *                                                      prompt change, on purpose); the next analysis matches them again. Matches
+ *                                                      by name, rows created from an item and PM decisions are not touched.
  *
  * --import reads a manifest and runs one scan per source, in order:
  *   {
@@ -27,6 +30,7 @@
  * Env: DATABASE_URL (or the Cloud SQL connector vars), the Vertex settings,
  * COMPETITORS_BROWSER=on when Chromium is installed (the job image).
  */
+import { Prisma } from "@prisma/client";
 import { db } from "../src/lib/db";
 import { readBundleManifest } from "../src/lib/competitors/bundle";
 import { importPages } from "../src/lib/competitors/import";
@@ -68,6 +72,7 @@ async function main() {
   const runIdx = args.indexOf("--run");
   const analysisIdx = args.indexOf("--analysis");
   const analyzeIdx = args.indexOf("--analyze");
+  const rematchIdx = args.indexOf("--rematch");
   // The sweep belongs to the tick and the runs. A job started for one scan does not sweep: were it to start late, it would
   // mark the very scan it came to process as stale and relaunch it (Tomer's review 2026-11-10).
   if (scanIdx < 0 && analysisIdx < 0) {
@@ -94,10 +99,16 @@ async function main() {
     await recordCompetitorEvent(competitor.workspaceId, null, "cmp_analysis_requested", { competitorId: competitor.id, via: "cli" });
     const q = await queueAnalysis(competitor.workspaceId, competitor.id, "manual");
     console.log("skipped" in q ? "[scanner] analysis not queued: COMPETITORS_AI=off (test knob) and no injected answers" : `[scanner] analysis ${q.id} ${q.created ? "queued" : "was already queued"} for ${competitor.name}`);
+  } else if (rematchIdx >= 0 && args[rematchIdx + 1]) {
+    const r = await db.competitorItem.updateMany({
+      where: { competitorId: args[rematchIdx + 1], matchedBy: "ai" },
+      data: { capabilityId: null, featureId: null, placement: Prisma.DbNull, matchedBy: null, matchedAt: null, matchAnalysisId: null },
+    });
+    console.log(`[scanner] ${r.count} match${r.count === 1 ? "" : "es"} by PMOS AI forgotten — run --analyze ${args[rematchIdx + 1]} to match them again`);
   } else if (args.includes("--tick") || args.includes("--due")) {
     await tick((m) => console.log(`[scanner] ${m}`));
   } else {
-    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId>");
+    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId> | --rematch <competitorId>");
     process.exitCode = 2;
   }
 }
