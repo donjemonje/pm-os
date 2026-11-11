@@ -4,7 +4,7 @@
  * and the page key that keeps a video id.
  */
 import { describe, expect, it } from "vitest";
-import { chunkBySize, chunkPages, cut, dedupeFacts, factDateOf, factKey, packedSize, packPages, parseFacts, tidy, type PageText } from "@/lib/competitors/ai";
+import { AnswerError, chunkBySize, chunkPages, cut, dedupeFacts, factDateOf, factKey, NO_USAGE, packedSize, packPages, parseFacts, tidy, type PageText } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
 
 const page = (i: number, chars: number, extra: Partial<PageText> = {}): PageText => ({ url: `https://e.com/p${i}`, title: `P${i}`, text: "x".repeat(chars), ...extra });
@@ -97,5 +97,16 @@ describe("cut", () => {
   });
   it("falls back to a hard cut when there is no usable space", () => {
     expect(cut("x".repeat(100), 80)).toBe("x".repeat(80));
+  });
+});
+
+describe("AnswerError — an unusable answer was still a billed call", () => {
+  it("carries the tokens the call used, so the run counts them", () => {
+    const e = new AnswerError("PMOS AI did not finish its answer (finish: MAX_TOKENS, 9000 chars)", { input: 4200, output: 17000, cached: 0 });
+    expect(e.usage).toEqual({ input: 4200, output: 17000, cached: 0 });
+    expect(e.name).toBe("AnswerError");
+  });
+  it("without usage (an injected answer, a test) it counts nothing", () => {
+    expect(new AnswerError("invalid JSON").usage).toEqual(NO_USAGE);
   });
 });

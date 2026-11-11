@@ -68,7 +68,10 @@ class RunLost extends Error {}
 export interface Counters {
   pagesRead: number;
   pagesFailed: number;
+  /** Model calls that were made and billed — the ones whose answer was unusable included. */
   calls: number;
+  /** Of those, the calls whose answer was unusable (empty, cut off, invalid JSON). */
+  unusableAnswers: number;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
@@ -101,7 +104,7 @@ export interface Counters {
 
 export function emptyCounters(): Counters {
   return {
-    pagesRead: 0, pagesFailed: 0, calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
+    pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
     newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0, factsNew: 0,
@@ -390,7 +393,16 @@ export async function runAnalysis(id: string): Promise<void> {
         try {
           r = await callTool<T>(system, shared, tail, tool, opts);
         } catch (e) {
-          if (e instanceof CapacityError || e instanceof AnswerError) throw e;
+          if (e instanceof AnswerError) {
+            // The call was made and is billed: its tokens count, whatever the step does with the failure.
+            counters.calls++;
+            counters.unusableAnswers++;
+            counters.inputTokens += e.usage.input;
+            counters.outputTokens += e.usage.output;
+            counters.cachedTokens += e.usage.cached;
+            throw e;
+          }
+          if (e instanceof CapacityError) throw e;
           throw new AnalysisError("ai", e instanceof Error ? e.message.slice(0, 300) : String(e));
         }
         okCalls++;
@@ -439,23 +451,33 @@ export async function runAnalysis(id: string): Promise<void> {
     if (await shouldStop()) throw lost ? new RunLost() : new RunCancelled();
 
     log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model}`}`);
+    /** One step, with a log line of what it cost — also when it fails: the counters are totals, this is the split. */
+    const inStep = async <R>(name: AnalysisStepName, work: () => Promise<R>): Promise<R> => {
+      await setStep(name);
+      const before = { ...counters };
+      const started = Date.now();
+      try {
+        return await work();
+      } finally {
+        const calls = counters.calls - before.calls;
+        if (calls > 0) {
+          const unusable = counters.unusableAnswers - before.unusableAnswers;
+          log("info", `Step ${name.replace("_", " ")}: ${calls} PMOS AI call${calls === 1 ? "" : "s"} · ${counters.inputTokens - before.inputTokens} input + ${counters.outputTokens - before.outputTokens} output tokens${unusable ? ` · ${unusable} unusable answer${unusable === 1 ? "" : "s"}` : ""} · ${Math.round((Date.now() - started) / 1000)} s`);
+        }
+      }
+    };
     await setStep("research");
     const plan = await planResearch(ctx);
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_started", {
       analysisId: id, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, resumed: claimed.resumed,
       pagesPicked: plan.picked, pagesToRead: plan.todo.length, readWeak: config.readWeakPages, model, injected: Boolean(answers),
     });
-    await researchStep(ctx, plan);
-    await setStep("merge");
-    await mergeStep(ctx);
-    await setStep("match");
-    await matchStep(ctx);
-    await setStep("second_look");
-    const lookWaiting = await secondLookStep(ctx);
-    await setStep("apply");
-    await applyStep(ctx, lookWaiting);
-    await setStep("facts");
-    await factsStep(ctx);
+    await inStep("research", () => researchStep(ctx, plan));
+    await inStep("merge", () => mergeStep(ctx));
+    await inStep("match", () => matchStep(ctx));
+    const lookWaiting = await inStep("second_look", () => secondLookStep(ctx));
+    await inStep("apply", () => applyStep(ctx, lookWaiting));
+    await inStep("facts", () => factsStep(ctx));
     log("info", `Analysis done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);
   } catch (e) {
     if (lost || e instanceof RunLost) {

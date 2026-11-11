@@ -70,6 +70,11 @@ describe("pageTier — order and exceptions", () => {
       if (r.tier !== "skip") expect(KIND_RANK, r.kind).toContain(r.kind);
     }
   });
+  it("the evidence rank lists only kinds that are read: nothing ranks the kind of pages no rule names (they are skipped)", () => {
+    const read = new Set(PAGE_KIND_RULES.filter((r) => r.tier !== "skip").map((r) => r.kind));
+    for (const kind of KIND_RANK) expect(read, kind).toContain(kind);
+    expect(KIND_RANK).not.toContain(DEFAULT_KIND.kind);
+  });
 });
 
 describe("pickPages", () => {

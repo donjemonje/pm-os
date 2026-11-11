@@ -59,7 +59,7 @@ export const PAGE_KIND_RULES: readonly KindRule[] = [
 export const DEFAULT_KIND = { kind: "other", tier: "skip" } as const;
 
 /** Evidence rank of a kind: its index in this list (lower = stronger). */
-export const KIND_RANK: readonly string[] = ["pricing", "docs", "product", "other", "content", "news"];
+export const KIND_RANK: readonly string[] = ["pricing", "docs", "product", "content", "news"];
 
 function segmentsOf(url: string): string[] {
   let path = "";

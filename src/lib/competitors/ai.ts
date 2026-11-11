@@ -181,11 +181,16 @@ export class EndpointError extends Error {
   }
 }
 
-/** The model answered (HTTP 200) but the answer is unusable: invalid JSON, no structured answer, empty, or cut off. */
+/**
+ * The model answered (HTTP 200) but the answer is unusable: invalid JSON, no structured answer, empty, or cut off.
+ * The call was made and is billed: `usage` carries its tokens so the run counts them.
+ */
 export class AnswerError extends Error {
-  constructor(message: string) {
+  usage: Usage;
+  constructor(message: string, usage: Usage = NO_USAGE) {
     super(message);
     this.name = "AnswerError";
+    this.usage = usage;
   }
 }
 
@@ -280,12 +285,12 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
     const usage: Usage = { input: u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0), cached: u?.cachedContentTokenCount ?? 0 };
     const text = response.text ?? "";
     const finish = String(response.candidates?.[0]?.finishReason ?? "unknown");
-    if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish})`);
-    if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${text.length} chars)`);
+    if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish})`, usage);
+    if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${text.length} chars)`, usage);
     try {
       return { value: JSON.parse(text) as T, usage };
     } catch {
-      throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`);
+      throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`, usage);
     }
   }
   let message;
@@ -308,8 +313,8 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
     cached: mu?.cache_read_input_tokens ?? 0,
   };
   const toolUse = message.content.find((b) => b.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") throw new AnswerError("PMOS AI returned no structured answer");
-  if (message.stop_reason === "max_tokens") throw new AnswerError("PMOS AI did not finish its answer (max tokens)");
+  if (!toolUse || toolUse.type !== "tool_use") throw new AnswerError("PMOS AI returned no structured answer", usage);
+  if (message.stop_reason === "max_tokens") throw new AnswerError("PMOS AI did not finish its answer (max tokens)", usage);
   return { value: toolUse.input as T, usage };
 }
 
