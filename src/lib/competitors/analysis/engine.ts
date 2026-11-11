@@ -179,21 +179,24 @@ export async function queueAnalysis(
 ): Promise<QueueResult> {
   const answers = await testAiAnswers(competitorId);
   if (!analysisMayRun({ trigger, injected: Boolean(answers) }, { aiOff: !aiStepEnabled() })) return { skipped: "ai_off" };
-  const queued = await db.competitorAnalysis.findFirst({ where: { competitorId, status: "queued" }, orderBy: { createdAt: "asc" }, select: { id: true } });
-  let result: QueueResult;
-  if (queued) {
-    if (opts.scanId || trigger === "manual") {
-      await db.competitorAnalysis.update({ where: { id: queued.id }, data: { ...(opts.scanId ? { scanId: opts.scanId } : {}), ...(trigger === "manual" ? { trigger: "manual" } : {}) } });
+  // Look-then-create under a lock held to the end of the transaction, one per competitor: two requests in the same
+  // instant (two scans ending, a scan and a catalog change) fold into one queued run instead of making two.
+  const result = await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`competitor-analysis-queue:${competitorId}`}))`;
+    const queued = await tx.competitorAnalysis.findFirst({ where: { competitorId, status: "queued" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+    if (queued) {
+      if (opts.scanId || trigger === "manual") {
+        await tx.competitorAnalysis.update({ where: { id: queued.id }, data: { ...(opts.scanId ? { scanId: opts.scanId } : {}), ...(trigger === "manual" ? { trigger: "manual" } : {}) } });
+      }
+      return { id: queued.id, created: false };
     }
-    result = { id: queued.id, created: false };
-  } else {
-    const run = await db.competitorAnalysis.create({
+    const run = await tx.competitorAnalysis.create({
       data: { workspaceId, competitorId, trigger, scanId: opts.scanId ?? null, startedById: opts.startedById ?? null, injected: Boolean(answers) },
       select: { id: true },
     });
-    await recordCompetitorEvent(workspaceId, opts.startedById ?? null, "cmp_analysis_queued", { analysisId: run.id, competitorId, trigger, scanId: opts.scanId ?? null });
-    result = { id: run.id, created: true };
-  }
+    return { id: run.id, created: true };
+  });
+  if (result.created) await recordCompetitorEvent(workspaceId, opts.startedById ?? null, "cmp_analysis_queued", { analysisId: result.id, competitorId, trigger, scanId: opts.scanId ?? null });
   await kickAnalyses();
   return result;
 }
@@ -231,8 +234,24 @@ export async function kickAnalyses(): Promise<void> {
     await sweepStaleAnalyses(await now());
     const head = await db.competitorAnalysis.findFirst({ where: activeQueue(), orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, status: true } });
     if (!head || head.status !== "queued") return;
+    // One runner per queued run: the kick that marks the run is the one that asks for a runner. Every other kick —
+    // the minute timer, the tick, another run being queued — finds the mark and asks for nothing, so on Cloud Run a
+    // queued run gets one job execution, not one per kick. A runner that never came (the mark is 10 minutes old) is
+    // asked for again; a run that is running or waiting is never launched (it is not "queued").
+    const at = new Date();
+    const marked = await db.competitorAnalysis.updateMany({
+      where: { id: head.id, status: "queued", OR: [{ launchedAt: null }, { launchedAt: { lt: new Date(at.getTime() - STALE_MS) } }] },
+      data: { launchedAt: at },
+    });
+    if (!marked.count) return;
     const { launchAnalysis } = await import("../run");
-    await launchAnalysis(head.id);
+    try {
+      await launchAnalysis(head.id);
+    } catch (e) {
+      // No runner was started: the next kick may ask again at once.
+      await db.competitorAnalysis.updateMany({ where: { id: head.id, status: "queued", launchedAt: at }, data: { launchedAt: null } });
+      throw e;
+    }
   } catch (e) {
     console.error("[competitors] could not start the next analysis", e);
   }
@@ -252,7 +271,7 @@ export async function sweepStaleAnalyses(t: Date): Promise<number> {
       where: { id: s.id, status: { in: ["running", "waiting"] }, heartbeatAt: { lt: cutoff } },
       data: gaveUp
         ? { status: "failed", staleCount: s.staleCount + 1, resumeAt: null, ownerToken: null, finishedAt: new Date(), errorKind: "stale", error: `the runner stopped reporting ${MAX_STALE} times` }
-        : { status: "queued", staleCount: s.staleCount + 1, resumeAt: null, ownerToken: null },
+        : { status: "queued", staleCount: s.staleCount + 1, resumeAt: null, ownerToken: null, launchedAt: null },
     });
     if (!r.count) continue;
     swept++;

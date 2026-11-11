@@ -829,6 +829,9 @@ model CompetitorAnalysis {
   /// Every write of that worker names it, so a worker whose run was swept as stale (its process slept, the database
   /// was away) and claimed again finds zero rows and stops.
   ownerToken   String?
+  /// When a runner was last asked to execute the queued run (a Cloud Run job execution, an in-process start). A kick
+  /// does not ask again while this is younger than 10 minutes; cleared when the run goes back to the queue.
+  launchedAt   DateTime?
   /// TEST KNOB: the run takes injected answers and may never call a model.
   injected     Boolean    @default(false)
   model        String?
