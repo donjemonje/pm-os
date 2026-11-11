@@ -215,7 +215,7 @@ export const COMPETITORS_COPY = {
     unreadCount: (n: number) => `${n} unread`,
     markRead: "Mark read",
     openCell: "Open in matrix",
-    suggestionStates: { suggested: "Awaiting review", active: "Accepted", dismissed: "Dismissed" } as Record<string, string>,
+    suggestionStates: { suggested: "Awaiting review", active: "Accepted", dismissed: "Dismissed", removed: "Removed" } as Record<string, string>,
     ownStatus: (org: string, value: string) => `${org}: ${value}`,
     signals: (n: number) => `${n} signal${n === 1 ? "" : "s"}`,
     highImpact: (n: number) => `${n} high impact`,
