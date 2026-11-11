@@ -20,11 +20,17 @@ import { quoteChecker, verifyQuote } from "./quotes";
 export const RESEARCH_VERSION = "research-1";
 export const MERGE_VERSION = "merge-1";
 /** Bumping MATCH_VERSION invalidates nothing: a saved match is a decision. */
-export const MATCH_VERSION = "match-1";
-export const LOOK_VERSION = "look-1";
+export const MATCH_VERSION = "match-2";
+export const LOOK_VERSION = "look-2";
 
 /** Closed sets up to this size ride in the response schema as an enum; larger ones are enforced by the parser only. */
 export const MAX_ENUM = 120;
+/**
+ * "No value" in a closed set. An enum may not hold an empty string — Gemini refuses the whole request (HTTP 400,
+ * "enum[0]: cannot be empty"; first real run, 2026-11-11) — so a field that may stay without a value offers this
+ * word instead. The parsers read it, like an empty string, as nothing.
+ */
+export const NO_VALUE = "none";
 
 // ————— 1. Research: one call per page —————
 
@@ -267,9 +273,9 @@ For an entry with ours = "none":
 - description: one plain sentence saying what it does.
 - If it is a capability: domain = the code of the domain of ours it belongs in, or "new" when no domain of ours fits. With "new" give newDomainName (short, title case, a market term) and newDomainDefinition (one sentence). Always give closestDomain: the code of the existing domain of ours that fits best, also when you answer "new".
 - Never propose a domain that is in REMOVED DOMAINS, or a rewording of one. Answer with the closest existing domain instead.
-- If it is a feature: leave domain, newDomainName, newDomainDefinition and closestDomain empty. It follows its capability.
+- If it is a feature: answer "none" for domain and closestDomain and leave newDomainName and newDomainDefinition empty. It follows its capability.
 
-For an entry with ours = a code, leave every other field empty.`;
+For an entry with ours = a code, answer "none" for domain and closestDomain and leave every other field empty.`;
 
 export const MATCH_MAX_TOKENS = 12000;
 /** Entries of their list per match call. */
@@ -292,8 +298,8 @@ export interface MatchBatchEntry {
 /** The tool of one batch: `entry` is always a closed set; our codes ride as an enum only while the set is small. */
 export function matchTool(entryCodes: string[], catalog: MatchCatalog): Record<string, unknown> {
   const ours = ["none", ...catalog.ours.keys()];
-  const domains = ["", "new", ...catalog.domains.keys()];
-  const closest = ["", ...catalog.domains.keys()];
+  const domains = [NO_VALUE, "new", ...catalog.domains.keys()];
+  const closest = [NO_VALUE, ...catalog.domains.keys()];
   const closed = (values: string[]) => (values.length <= MAX_ENUM ? { enum: values } : {});
   return {
     name: "match_entries",
@@ -308,10 +314,10 @@ export function matchTool(entryCodes: string[], catalog: MatchCatalog): Record<s
             properties: {
               entry: { type: "string", enum: entryCodes },
               ours: { type: "string", description: 'A K- or F-code of ours, or "none".', ...closed(ours) },
-              domain: { type: "string", description: 'A D-code of ours, "new", or empty.', ...closed(domains) },
+              domain: { type: "string", description: 'A D-code of ours, "new", or "none" (a feature, or an entry that is one of ours).', ...closed(domains) },
               newDomainName: { type: "string" },
               newDomainDefinition: { type: "string" },
-              closestDomain: { type: "string", description: "A D-code of ours, or empty.", ...closed(closest) },
+              closestDomain: { type: "string", description: 'A D-code of ours, or "none" (a feature, or an entry that is one of ours).', ...closed(closest) },
               marketName: { type: "string" },
               description: { type: "string" },
             },
@@ -405,7 +411,7 @@ export const LOOK_SYSTEM_PROMPT = `A product team wants to know whether one comp
 
 Answer whether the pages show that the company offers this capability.
 - If they do: found = true; quote = the exact passage that shows it (copied character for character, one continuous passage of at most 300 characters); url = the address of the page the quote is on (one of the PAGE lines); theirName = the name the company uses for it; reasoning = one sentence: why this quote means they offer it.
-- If they do not: found = false and every other field empty.
+- If they do not: found = false, url = "none" and every other field empty.
 A related or broader offering is not this capability. Do not guess.`;
 
 export const LOOK_MAX_TOKENS = 1000;
@@ -419,7 +425,7 @@ export function lookTool(urls: string[]): Record<string, unknown> {
       properties: {
         found: { type: "boolean" },
         quote: { type: "string" },
-        url: { type: "string", ...(urls.length <= MAX_ENUM ? { enum: ["", ...urls] } : {}) },
+        url: { type: "string", description: 'The address of the page the quote is on (one of the PAGE lines); "none" when not found.', ...(urls.length <= MAX_ENUM ? { enum: [NO_VALUE, ...urls] } : {}) },
         theirName: { type: "string" },
         reasoning: { type: "string" },
       },

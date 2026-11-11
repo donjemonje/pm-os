@@ -1,9 +1,11 @@
 /** Capability Analysis — the parsers of the four prompts (analysis/prompts.ts): bad fields are dropped and counted, never thrown. Pure module. */
 import { describe, expect, it } from "vitest";
 import {
+  lookTool,
   MAX_CAPABILITIES_PER_PAGE,
   MAX_ENUM,
   matchTool,
+  MERGE_TOOL,
   parseMatch,
   parseMerge,
   parseResearch,
@@ -11,9 +13,11 @@ import {
   renderMatchTail,
   renderMergeCapabilities,
   renderResearch,
+  RESEARCH_TOOL,
   type MatchCatalog,
   type MergeEntry,
 } from "@/lib/competitors/analysis/prompts";
+import { FACTS_TOOL } from "@/lib/competitors/ai";
 
 const PAGE = `Acme Core
 Detect threats across your whole stack in real time.
@@ -153,7 +157,14 @@ describe("parseMatch", () => {
     const big: MatchCatalog = { ours: new Map(Array.from({ length: MAX_ENUM + 1 }, (_, i) => [`K-${i}`, { kind: "capability" as const, id: `c${i}` }])), domains: catalog.domains };
     const large = matchTool(["T1"], big) as typeof small;
     expect(large.input_schema.properties.matches.items.properties.ours.enum).toBeUndefined();
-    expect(large.input_schema.properties.matches.items.properties.domain.enum).toEqual(["", "new", "D-11111111", "D-22222222"]);
+    expect(large.input_schema.properties.matches.items.properties.domain.enum).toEqual(["none", "new", "D-11111111", "D-22222222"]);
+    expect(large.input_schema.properties.matches.items.properties.closestDomain.enum).toEqual(["none", "D-11111111", "D-22222222"]);
+  });
+  it('"none" for a domain is no domain: the parser reads it like an empty answer', () => {
+    const r = parseMatch({ matches: [row("T1", { domain: "none", closestDomain: "none", marketName: "SCIM provisioning" }), row("T2", { domain: "none", closestDomain: "none" })] }, batch, catalog);
+    expect(r.answers[0].placement).toEqual({ domainId: null, newDomainName: "", newDomainDefinition: "", closestDomainId: null, marketName: "SCIM provisioning", description: "" });
+    expect(r.answers[1].placement).toMatchObject({ domainId: null, closestDomainId: null });
+    expect(r.unknownOurs).toEqual([]);
   });
   it("renders their list: a capability, then its features", () => {
     const out = renderMatchTail("Acme", ["Identity Security"], [
@@ -174,6 +185,10 @@ describe("parseSecondLook", () => {
   it("not found when the model says so", () => {
     expect(parseSecondLook({ found: false, quote: "", url: "", theirName: "", reasoning: "" }, pages)).toEqual({ found: false, quoteDropped: false });
   });
+  it('not found with url "none" (what the schema offers for "no page")', () => {
+    expect(parseSecondLook({ found: false, quote: "", url: "none", theirName: "", reasoning: "" }, pages)).toEqual({ found: false, quoteDropped: false });
+    expect(parseSecondLook(answer({ url: "none" }), pages)).toEqual({ found: false, quoteDropped: false });
+  });
   it("a page that was not offered does not count", () => {
     expect(parseSecondLook(answer({ url: "https://acme.example/other" }), pages)).toEqual({ found: false, quoteDropped: false });
   });
@@ -182,5 +197,41 @@ describe("parseSecondLook", () => {
   });
   it("nothing about people", () => {
     expect(parseSecondLook(answer({ quote: "Contact Jane Doe, CEO of Acme, for a demo" }), pages)).toEqual({ found: false, quoteDropped: false });
+  });
+});
+
+describe("the response schemas a model is sent", () => {
+  /** Every enum in a schema, wherever it sits. */
+  const enums = (node: unknown, path = "$"): Array<{ path: string; values: unknown[] }> => {
+    if (!node || typeof node !== "object") return [];
+    if (Array.isArray(node)) return node.flatMap((n, i) => enums(n, `${path}[${i}]`));
+    const o = node as Record<string, unknown>;
+    return [...(Array.isArray(o.enum) ? [{ path, values: o.enum }] : []), ...Object.entries(o).filter(([k]) => k !== "enum").flatMap(([k, v]) => enums(v, `${path}.${k}`))];
+  };
+  const catalog: MatchCatalog = {
+    ours: new Map([["K-aaaaaaaa", { kind: "capability" as const, id: "cap-1" }]]),
+    domains: new Map([["D-11111111", { id: "dom-active", state: "active" }]]),
+  };
+  const tools: Array<[string, Record<string, unknown>]> = [
+    ["research", RESEARCH_TOOL],
+    ["merge", MERGE_TOOL],
+    ["match", matchTool(["T1", "T2"], catalog)],
+    ["second look", lookTool(["https://acme.example/features", "https://acme.example/pricing"])],
+    ["facts", FACTS_TOOL],
+  ];
+  it("no enum holds an empty string: Gemini refuses the whole request (HTTP 400 — the first real run failed on it)", () => {
+    for (const [name, tool] of tools) {
+      for (const e of enums(tool)) {
+        expect(e.values.length, `${name} ${e.path}`).toBeGreaterThan(0);
+        for (const v of e.values) expect(typeof v === "string" && v.trim().length > 0, `${name} ${e.path}: ${JSON.stringify(v)}`).toBe(true);
+      }
+    }
+  });
+  it('a field that may stay without a value offers "none" in its closed set', () => {
+    const match = matchTool(["T1"], catalog) as { input_schema: { properties: { matches: { items: { properties: Record<string, { enum?: string[] }> } } } } };
+    expect(match.input_schema.properties.matches.items.properties.domain.enum?.[0]).toBe("none");
+    expect(match.input_schema.properties.matches.items.properties.closestDomain.enum?.[0]).toBe("none");
+    const look = lookTool(["https://acme.example/features"]) as { input_schema: { properties: Record<string, { enum?: string[] }> } };
+    expect(look.input_schema.properties.url.enum).toEqual(["none", "https://acme.example/features"]);
   });
 });
