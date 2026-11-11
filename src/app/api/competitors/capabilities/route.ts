@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
+import { queueCatalogAnalyses } from "@/lib/competitors/analysis/engine";
 import { nextPosition } from "@/lib/competitors/store";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { isOwnStatus, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
@@ -77,6 +78,8 @@ export async function POST(req: Request) {
       },
     });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: dup.id, field: "state", from: dup.state, to: "active", name, via: "add" });
+    // The row is back in the table: it is looked for at every competitor (no page is read again).
+    await queueCatalogAnalyses(ctx.workspaceId, { startedById: ctx.user.id });
     return stateResponse(ctx, 201);
   }
   const cap = await db.capability.create({
@@ -95,5 +98,7 @@ export async function POST(req: Request) {
     select: { id: true },
   });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "create", entityId: cap.id, field: null, from: null, to: name, name });
+  // A row of ours the competitors were never checked for: it is looked for at every competitor (no page is read again).
+  await queueCatalogAnalyses(ctx.workspaceId, { startedById: ctx.user.id });
   return stateResponse(ctx, 201);
 }

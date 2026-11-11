@@ -3,13 +3,17 @@ import { db } from "../../db";
 import type { AnswerError } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
 import { COMPETITORS_COPY as C } from "../copy";
-import { NameIndex, type Resolved } from "../decisions";
-import { AnalysisError, type RunContext } from "./engine";
+import { aliasList, judgeNewRow, NameIndex, placeInDomain, type Resolved } from "../decisions";
+import { cellFromEvidence, type CellFromEvidence, type Evidence } from "./cells";
+import { AnalysisError, queueCatalogAnalyses, type RunContext } from "./engine";
 import { canonicalName, findItem, itemKey, ownKey, planChildMerges, planMerges, wordingKey, type ItemLite, type MergePlan } from "./items";
-import { pickPages } from "./kinds";
+import { pageTier, pickPages } from "./kinds";
 import { batchItems, buildCatalog, type Catalog } from "./match";
 import { analysisConcurrency, estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import {
+  LOOK_MAX_TOKENS,
+  LOOK_SYSTEM_PROMPT,
+  lookTool,
   MATCH_MAX_TOKENS,
   MATCH_SYSTEM_PROMPT,
   matchTool,
@@ -21,10 +25,12 @@ import {
   parseMatch,
   parseMerge,
   parseResearch,
+  parseSecondLook,
   renderMatchTail,
   renderMergeCapabilities,
   renderMergeFeatures,
   renderResearch,
+  renderSecondLook,
   RESEARCH_MAX_TOKENS,
   RESEARCH_SYSTEM_PROMPT,
   RESEARCH_TOOL,
@@ -33,6 +39,7 @@ import {
   type MergeEntry,
   type Placement,
 } from "./prompts";
+import { indexPages, lookKey, pagesFor, type LookPage } from "./secondlook";
 import { readKey, researchTodo, tooManyFailed } from "./todo";
 
 /**
@@ -606,8 +613,356 @@ export async function matchStep(ctx: RunContext): Promise<void> {
   await ctx.flush();
 }
 
-// ————— 4–6. Built in the next steps of the build —————
+// ————— Evidence: the findings behind a cell —————
 
-export async function secondLookStep(_ctx: RunContext): Promise<void> {}
-export async function applyStep(_ctx: RunContext): Promise<void> {}
+interface EvidenceMaps {
+  byCapability: Map<string, Evidence[]>;
+  byFeature: Map<string, Evidence[]>;
+}
+
+/**
+ * No table of its own. For a competitor and a capability of ours: the findings of their items matched to it, the
+ * findings of items matched to one of its active features (a feature of ours found there is evidence for the
+ * capability), and second-look findings that answer it. For a feature: the findings of items matched to it.
+ * A finding's tier is computed here, from its page's address and source with the current page kinds.
+ */
+async function loadEvidence(workspaceId: string, competitorId: string): Promise<EvidenceMaps> {
+  const [findings, features] = await Promise.all([
+    db.pageFinding.findMany({
+      where: { competitorId, OR: [{ itemId: { not: null } }, { capabilityId: { not: null } }] },
+      select: { id: true, origin: true, quote: true, reasoning: true, wording: true, capabilityId: true, item: { select: { capabilityId: true, featureId: true, name: true } }, page: { select: { url: true, kind: true, source: { select: { type: true } } } } },
+    }),
+    db.feature.findMany({ where: { workspaceId, state: "active" }, select: { id: true, capabilityId: true } }),
+  ]);
+  const capabilityOfFeature = new Map(features.map((f) => [f.id, f.capabilityId]));
+  const out: EvidenceMaps = { byCapability: new Map(), byFeature: new Map() };
+  const add = (map: Map<string, Evidence[]>, id: string, e: Evidence) => map.set(id, [...(map.get(id) ?? []), e]);
+  for (const f of findings) {
+    const t = pageTier(f.page.url, f.page.source.type, f.page.kind);
+    if (t.tier === "skip") continue;
+    const e: Evidence = { findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording };
+    if (f.origin === "second_look") {
+      if (f.capabilityId) add(out.byCapability, f.capabilityId, e);
+    } else if (f.item?.capabilityId) {
+      add(out.byCapability, f.item.capabilityId, e);
+    } else if (f.item?.featureId) {
+      add(out.byFeature, f.item.featureId, e);
+      const capabilityId = capabilityOfFeature.get(f.item.featureId);
+      if (capabilityId) add(out.byCapability, capabilityId, e);
+    }
+  }
+  return out;
+}
+
+/** The rows of ours that have a cell: active capabilities in a domain that is in the table (or suggested), and their active features. */
+async function tableRows(workspaceId: string) {
+  const capabilities = await db.capability.findMany({
+    where: { workspaceId, state: "active", domain: { state: { in: ["active", "suggested"] } } },
+    select: { id: true, name: true, description: true, aliases: true, domain: { select: { name: true, description: true } } },
+    orderBy: [{ position: "asc" }, { name: "asc" }],
+  });
+  const features = await db.feature.findMany({ where: { workspaceId, state: "active", capabilityId: { in: capabilities.map((k) => k.id) } }, select: { id: true, capabilityId: true, name: true } });
+  return { capabilities, features };
+}
+
+// ————— 4. Second look: one call per capability of ours with no evidence —————
+
+const NOT_FOUND_ANSWER = '{"found": false, "quote": "", "url": "", "theirName": "", "reasoning": ""}';
+
+export async function secondLookStep(ctx: RunContext): Promise<void> {
+  const competitorId = ctx.competitor.id;
+  const workspaceId = ctx.run.workspaceId;
+  const [{ capabilities }, evidence] = await Promise.all([tableRows(workspaceId), loadEvidence(workspaceId, competitorId)]);
+  const candidates = capabilities.filter((k) => !evidence.byCapability.get(k.id)?.length);
+  if (!candidates.length) return;
+
+  // The pool: the pages the analysis reads, with their texts.
+  const picked = await pickedPages(ctx);
+  const sourceTypeOf = new Map(picked.map((p) => [p.id, p.sourceType]));
+  const pool: Array<LookPage & { kind: string }> = [];
+  for (let i = 0; i < picked.length; i += CHUNK) {
+    const rows = await db.sourcePage.findMany({ where: { id: { in: picked.slice(i, i + CHUNK).map((p) => p.id) } }, select: { id: true, url: true, title: true, text: true, hash: true, kind: true } });
+    for (const r of rows) if (r.text != null) pool.push({ id: r.id, url: r.url, title: r.title ?? "", text: r.text, hash: r.hash, kind: r.kind });
+  }
+  const kindOf = new Map(pool.map((p) => [p.id, p.kind]));
+  const indexed = indexPages(pool);
+  const asked = new Map((await db.capabilityStatus.findMany({ where: { competitorId, capabilityId: { in: candidates.map((k) => k.id) } }, select: { capabilityId: true, lookKey: true } })).map((c) => [c.capabilityId, c.lookKey]));
+  // The only write to a cell outside the apply step, and it writes no value on an existing cell: what the look was asked with.
+  const saveKey = (capabilityId: string, key: string) =>
+    db.capabilityStatus.upsert({
+      where: { competitorId_capabilityId: { competitorId, capabilityId } },
+      create: { workspaceId, competitorId, capabilityId, value: "not_found", lookKey: key, changedAt: null },
+      update: { lookKey: key },
+    });
+
+  const todo: Array<{ capability: (typeof candidates)[number]; aliases: string[]; pages: LookPage[]; key: string }> = [];
+  for (const k of candidates) {
+    const aliases = aliasList(k.aliases);
+    const pages = pagesFor({ name: k.name, aliases }, indexed);
+    const key = lookKey({ name: k.name, description: k.description, aliases }, k.domain, pages, ctx.model);
+    if (asked.get(k.id) === key) continue;
+    if (!pages.length) {
+      // No page is likely to mention it: nothing to ask. Remembered, so it is looked at again only when something changes.
+      await saveKey(k.id, key);
+      continue;
+    }
+    todo.push({ capability: k, aliases, pages, key });
+  }
+  if (!todo.length) return;
+  ctx.log("info", `Second look: ${todo.length} of your capabilities have no evidence at ${ctx.competitor.name} yet — asking once each, on their most likely pages`);
+  let found = 0;
+  await ctx.paced({
+    items: todo,
+    concurrency: analysisConcurrency(),
+    estimate: (t) => estimateTokens(t.pages.reduce((n, p) => n + p.text.length, 0)) + 500 + OUTPUT_RESERVE,
+    work: async (t) => {
+      const k = t.capability;
+      const injected = ctx.answers ? ctx.answers.secondLook?.[k.name] ?? ctx.answers.secondLook?.["*"] ?? NOT_FOUND_ANSWER : undefined;
+      const r = await ctx.call<Record<string, unknown>>(
+        LOOK_SYSTEM_PROMPT,
+        "",
+        renderSecondLook({ name: k.name, description: k.description, aliases: t.aliases }, k.domain, ctx.competitor.name, t.pages.map((p) => ({ url: p.url, title: p.title, text: p.text, kind: kindOf.get(p.id), sourceLabel: C.profile.sourceTypes[sourceTypeOf.get(p.id) ?? ""] }))),
+        lookTool(t.pages.map((p) => p.url)),
+        { maxTokens: LOOK_MAX_TOKENS, thinking: "low", injected },
+      );
+      const answer = parseSecondLook(r.value, t.pages);
+      ctx.counters.secondLooks++;
+      if (answer.found) {
+        const page = t.pages.find((p) => p.id === answer.pageId)!;
+        await db.pageFinding.create({
+          data: { workspaceId, competitorId, pageId: page.id, pageHash: page.hash, analysisId: ctx.run.id, origin: "second_look", kind: "capability", wording: answer.wording || k.name, quote: answer.quote, reasoning: answer.reasoning, capabilityId: k.id },
+        });
+        found++;
+        ctx.counters.secondLookFound++;
+        ctx.log("info", `Second look: found "${k.name}"`, page.url);
+      } else {
+        if (answer.quoteDropped) ctx.counters.quotesDropped++;
+        await saveKey(k.id, t.key);
+      }
+      return r.tokens;
+    },
+  });
+  ctx.log("info", `Second look: ${found} found, ${todo.length - found} not found`);
+  await ctx.flush();
+}
+
+// ————— 5. Apply: rows, then cells — no AI —————
+
+export async function applyStep(ctx: RunContext): Promise<void> {
+  const competitorId = ctx.competitor.id;
+  const workspaceId = ctx.run.workspaceId;
+  // The first analysis of a competitor sets the starting picture: values are replaced (POC cells included), nothing is "news".
+  const baseline = (await db.competitorAnalysis.count({ where: { competitorId, appliedAt: { not: null } } })) === 0;
+  const respected = (entity: "capability" | "feature" | "domain", row: Resolved, found: string) =>
+    recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity, entityId: row.id, name: row.name, found, reason: row.state, competitorId, analysisId: ctx.run.id });
+
+  // ——— A. Rows: their items that are none of ours become capabilities and features — through decisions.ts, so a PM's decision is never reopened ———
+  const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(competitorId)]);
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const byName = (a: DbItem, b: DbItem) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const todo = items.filter((i) => i.placement && !i.capabilityId && !i.featureId);
+  const added: Array<{ capabilityId: string; name: string; domainId: string; inSuggestedDomain: boolean; pages: number }> = [];
+  if (todo.length) {
+    const [domainRows, capabilityRows, featureRows] = await Promise.all([
+      db.competitorDomain.findMany({ where: { workspaceId }, select: { id: true, name: true, aliases: true, state: true, position: true } }),
+      db.capability.findMany({ where: { workspaceId }, select: { id: true, name: true, aliases: true, state: true, position: true } }),
+      db.feature.findMany({ where: { workspaceId }, select: { id: true, capabilityId: true, name: true, aliases: true, state: true, position: true } }),
+    ]);
+    const capabilityIndex = new NameIndex(capabilityRows);
+    const domainIndex = new NameIndex(domainRows);
+    const featureIndex = new Map<string, NameIndex>();
+    const featurePosition = new Map<string, number>();
+    const capabilityOfFeature = new Map(featureRows.map((f) => [f.id, f.capabilityId]));
+    for (const f of featureRows) {
+      const index = featureIndex.get(f.capabilityId) ?? new NameIndex();
+      index.add(f);
+      featureIndex.set(f.capabilityId, index);
+      featurePosition.set(f.capabilityId, Math.max(featurePosition.get(f.capabilityId) ?? -1, f.position));
+    }
+    const domainState = new Map(domainRows.map((d) => [d.id, d.state]));
+    const domainName = new Map(domainRows.map((d) => [d.id, d.name]));
+    const capabilityState = new Map(capabilityRows.map((k) => [k.id, k.state]));
+    const fallback = domainRows.filter((d) => d.state === "active").sort((a, b) => a.position - b.position || (a.name < b.name ? -1 : 1))[0]?.id ?? null;
+    let position = capabilityRows.filter((k) => k.state === "active").reduce((n, k) => Math.max(n, k.position), -1);
+    let waiting = 0;
+    let noDomain = 0;
+
+    for (const item of [...todo.filter((i) => i.kind === "capability").sort(byName), ...todo.filter((i) => i.kind === "feature").sort(byName)]) {
+      const placement = item.placement!;
+      const pages = stats.get(item.id)?.pages ?? 0;
+      // The brake on table growth: an item becomes a row only when enough pages carry it. It stays on the to-do.
+      if (pages < ctx.minPagesForNewRow) {
+        waiting++;
+        continue;
+      }
+      const names = [placement.marketName, item.name].filter(Boolean);
+      if (item.kind === "capability") {
+        const verdict = judgeNewRow(capabilityIndex, names);
+        if (verdict.action === "match" || verdict.action === "silent") {
+          item.capabilityId = verdict.row.id;
+          item.matchedBy = verdict.action === "silent" ? "silent" : verdict.via;
+          await db.competitorItem.update({ where: { id: item.id }, data: { capabilityId: verdict.row.id, matchedBy: item.matchedBy } });
+          if (verdict.action === "silent") await respected("capability", verdict.row, item.name);
+          else ctx.counters.matchedByName++;
+          continue;
+        }
+        if (!verdict.name) continue;
+        if (!fallback) {
+          noDomain++;
+          continue;
+        }
+        // A domain the match named may have left the table since: then it is a name like any other, and the PM's decision about it stands.
+        const wanted = placement.domainId && ["active", "suggested"].includes(domainState.get(placement.domainId) ?? "") ? placement.domainId : null;
+        const closest = placement.closestDomainId && domainState.get(placement.closestDomainId) === "active" ? placement.closestDomainId : null;
+        const place = placeInDomain(domainIndex, { domainId: wanted, newDomainName: placement.newDomainName || (placement.domainId && !wanted ? domainName.get(placement.domainId) ?? "" : ""), closestDomainId: closest }, fallback);
+        position++;
+        const row = await db.$transaction(async (tx) => {
+          let domainId: string;
+          if (place.action === "suggest") {
+            const domain = await tx.competitorDomain.create({
+              data: { workspaceId, name: place.name, description: placement.newDomainDefinition, position: 9999, origin: "ai", state: "suggested", suggestedById: competitorId },
+              select: { id: true },
+            });
+            domainId = domain.id;
+          } else {
+            domainId = place.domainId;
+          }
+          const inSuggestedDomain = place.action === "suggest" || domainState.get(domainId) === "suggested";
+          const capability = await tx.capability.create({
+            data: {
+              workspaceId, domainId, name: verdict.name, description: placement.description, ourStatus: "not_found", origin: "ai", state: "active", position,
+              // Kept for a decline of the suggested domain: the row then moves to the closest existing domain.
+              closestDomainId: inSuggestedDomain ? (place.action === "suggest" ? place.closestDomainId : closest ?? fallback) : null,
+            },
+            select: { id: true },
+          });
+          await tx.competitorItem.update({ where: { id: item.id }, data: { capabilityId: capability.id, matchedBy: "created" } });
+          return { capabilityId: capability.id, domainId, inSuggestedDomain };
+        });
+        item.capabilityId = row.capabilityId;
+        item.matchedBy = "created";
+        capabilityIndex.add({ id: row.capabilityId, name: verdict.name, aliases: [], state: "active" });
+        capabilityState.set(row.capabilityId, "active");
+        ctx.counters.newCapabilities++;
+        added.push({ capabilityId: row.capabilityId, name: verdict.name, domainId: row.domainId, inSuggestedDomain: row.inSuggestedDomain, pages });
+        if (place.action === "suggest") {
+          domainIndex.add({ id: row.domainId, name: place.name, aliases: [], state: "suggested" });
+          domainState.set(row.domainId, "suggested");
+          domainName.set(row.domainId, place.name);
+          ctx.counters.newDomains++;
+          await recordCompetitorEvent(workspaceId, null, "cmp_domain_suggested", { domainId: row.domainId, name: place.name, closestDomainId: place.closestDomainId, competitorId, analysisId: ctx.run.id });
+          ctx.log("info", `New domain suggested: ${place.name}`);
+        } else if (place.action === "closest") {
+          await respected("domain", place.respected, placement.newDomainName || place.respected.name);
+        }
+        ctx.log("info", `New capability: ${verdict.name}${item.name !== verdict.name ? ` (they call it "${item.name}")` : ""}`);
+        continue;
+      }
+      // A feature follows its capability: the row its capability item is matched to, or the capability of the feature that item is matched to.
+      const parent = item.parentItemId ? byId.get(item.parentItemId) : undefined;
+      const home = parent?.capabilityId ?? (parent?.featureId ? capabilityOfFeature.get(parent.featureId) ?? null : null);
+      if (!home || capabilityState.get(home) !== "active") continue;
+      const index = featureIndex.get(home) ?? new NameIndex();
+      featureIndex.set(home, index);
+      const verdict = judgeNewRow(index, names);
+      if (verdict.action === "match" || verdict.action === "silent") {
+        item.featureId = verdict.row.id;
+        item.matchedBy = verdict.action === "silent" ? "silent" : verdict.via;
+        await db.competitorItem.update({ where: { id: item.id }, data: { featureId: verdict.row.id, matchedBy: item.matchedBy } });
+        if (verdict.action === "silent") await respected("feature", verdict.row, item.name);
+        else ctx.counters.matchedByName++;
+        continue;
+      }
+      if (!verdict.name) continue;
+      const next = (featurePosition.get(home) ?? -1) + 1;
+      featurePosition.set(home, next);
+      const featureId = await db.$transaction(async (tx) => {
+        const feature = await tx.feature.create({ data: { workspaceId, capabilityId: home, name: verdict.name, description: placement.description, ourStatus: "not_found", origin: "ai", state: "active", position: next }, select: { id: true } });
+        await tx.competitorItem.update({ where: { id: item.id }, data: { featureId: feature.id, matchedBy: "created" } });
+        return feature.id;
+      });
+      item.featureId = featureId;
+      item.matchedBy = "created";
+      index.add({ id: featureId, name: verdict.name, aliases: [], state: "active" });
+      capabilityOfFeature.set(featureId, home);
+      ctx.counters.newFeatures++;
+      await recordCompetitorEvent(workspaceId, null, "cmp_feature_added", { featureId, capabilityId: home, name: verdict.name, competitorId, analysisId: ctx.run.id });
+    }
+    if (waiting) ctx.log("info", `${waiting} item${waiting === 1 ? "" : "s"} of theirs wait${waiting === 1 ? "s" : ""} for more pages before becoming a row (at least ${ctx.minPagesForNewRow} pages)`);
+    if (noDomain) ctx.log("warn", `${noDomain} new capabilit${noDomain === 1 ? "y was" : "ies were"} not added: your catalog has no domain yet — add one in Settings → Competitors`);
+  }
+
+  // ——— B. Cells: by fixed rules from the evidence. A PM's correction is never read or written here ———
+  const [{ capabilities, features }, evidence, storedCells, storedFeatureCells] = await Promise.all([
+    tableRows(workspaceId),
+    loadEvidence(workspaceId, competitorId),
+    db.capabilityStatus.findMany({ where: { competitorId }, select: { id: true, capabilityId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, evidenceCount: true, scanId: true } }),
+    db.featureStatus.findMany({ where: { competitorId }, select: { id: true, featureId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, evidenceCount: true } }),
+  ]);
+  const now = new Date();
+  const shown = (cell: CellFromEvidence) => ({ quote: cell.best?.quote ?? null, sourceUrl: cell.best?.pageUrl ?? null, reasoning: cell.best?.reasoning ?? null, wording: cell.best?.wording ?? null, evidenceCount: cell.count });
+  const sameEvidence = (a: { quote: string | null; sourceUrl: string | null; reasoning: string | null; wording: string | null; evidenceCount: number }, b: ReturnType<typeof shown>) =>
+    a.quote === b.quote && a.sourceUrl === b.sourceUrl && a.reasoning === b.reasoning && a.wording === b.wording && a.evidenceCount === b.evidenceCount;
+  const count = (value: string) => {
+    if (value === "found") ctx.counters.cellsFound++;
+    else if (value === "low") ctx.counters.cellsLow++;
+    else ctx.counters.cellsNotFound++;
+  };
+  const valueOf = new Map<string, string>();
+  const cellOf = new Map(storedCells.map((c) => [c.capabilityId, c]));
+  for (const k of capabilities) {
+    const cell = cellFromEvidence(evidence.byCapability.get(k.id) ?? []);
+    const data = shown(cell);
+    const stored = cellOf.get(k.id);
+    valueOf.set(k.id, cell.value);
+    count(cell.value);
+    if (!stored) {
+      await db.capabilityStatus.create({ data: { workspaceId, competitorId, capabilityId: k.id, value: cell.value, ...data, analysisId: ctx.run.id, scanId: ctx.run.scanId, changedAt: null } });
+    } else if (stored.value === cell.value) {
+      if (!sameEvidence(stored, data)) await db.capabilityStatus.update({ where: { id: stored.id }, data: { ...data, analysisId: ctx.run.id } });
+    } else if (baseline) {
+      await db.capabilityStatus.update({ where: { id: stored.id }, data: { value: cell.value, ...data, analysisId: ctx.run.id } });
+    } else {
+      await db.$transaction([
+        db.statusHistory.create({ data: { statusId: stored.id, value: stored.value, quote: stored.quote, sourceUrl: stored.sourceUrl, scanId: stored.scanId } }),
+        db.capabilityStatus.update({ where: { id: stored.id }, data: { value: cell.value, ...data, analysisId: ctx.run.id, changedAt: now, summary: cell.best?.reasoning ?? null, imageUrl: null, scanId: ctx.run.scanId } }),
+      ]);
+      ctx.counters.cellsChanged++;
+      ctx.log("info", `${k.name}: ${C.values[stored.value] ?? stored.value} → ${C.values[cell.value]}`, cell.best?.pageUrl);
+    }
+  }
+  const featureCellOf = new Map(storedFeatureCells.map((c) => [c.featureId, c]));
+  for (const f of features) {
+    const cell = cellFromEvidence(evidence.byFeature.get(f.id) ?? []);
+    const data = shown(cell);
+    const stored = featureCellOf.get(f.id);
+    count(cell.value);
+    if (!stored) {
+      await db.featureStatus.create({ data: { workspaceId, competitorId, featureId: f.id, value: cell.value, ...data, analysisId: ctx.run.id, changedAt: null } });
+    } else if (stored.value === cell.value) {
+      if (!sameEvidence(stored, data)) await db.featureStatus.update({ where: { id: stored.id }, data: { ...data, analysisId: ctx.run.id } });
+    } else {
+      // Features carry no history (the feed does not report them in this build).
+      await db.featureStatus.update({ where: { id: stored.id }, data: { value: cell.value, ...data, analysisId: ctx.run.id, ...(baseline ? {} : { changedAt: now }) } });
+      if (!baseline) ctx.counters.cellsChanged++;
+    }
+  }
+  for (const a of added) {
+    await recordCompetitorEvent(workspaceId, null, "cmp_capability_added", { capabilityId: a.capabilityId, name: a.name, domainId: a.domainId, inSuggestedDomain: a.inSuggestedDomain, competitorId, analysisId: ctx.run.id, pages: a.pages, value: valueOf.get(a.capabilityId) ?? "found" });
+  }
+
+  // ——— C. The cells are current as of now ———
+  await db.competitorAnalysis.updateMany({ where: { id: ctx.run.id }, data: { appliedAt: now } });
+  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}`);
+  await ctx.flush();
+
+  // ——— D. A row this run created is looked for at the other competitors: a follow-up run each (no page is read again) ———
+  if (added.length) {
+    const others = await queueCatalogAnalyses(workspaceId, { exceptCompetitorId: competitorId });
+    if (others) ctx.log("info", `${others} other competitor${others === 1 ? "" : "s"} queued: the new rows are looked for there too`);
+  }
+}
+
+// ————— 6. Built in the next step of the build —————
+
 export async function factsStep(_ctx: RunContext): Promise<void> {}

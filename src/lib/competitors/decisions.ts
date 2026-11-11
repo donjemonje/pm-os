@@ -115,3 +115,50 @@ export function judgeDomainSuggestion(index: NameIndex, name: string): DomainVer
   if (row.state === "dismissed") return { action: "skip", reason: "dismissed", row };
   return { action: "use", row };
 }
+
+// ————— The analysis run: rows are created without reopening a PM decision —————
+
+/** What an item that is "none of ours" becomes. */
+export type NewRowVerdict =
+  /** It is a row the catalog has (by its name or by a name a PM replaced): no row is created. */
+  | { action: "match"; row: Resolved; via: "name" | "alias" }
+  /** A PM removed or declined it: remembered, nothing shown, never added back. */
+  | { action: "silent"; row: Resolved; reason: "removed" | "dismissed" }
+  | { action: "create"; name: string };
+
+/** `names` in order of preference: the market name first, then the competitor's own wording. The first name the catalog knows decides. */
+export function judgeNewRow(index: NameIndex, names: string[]): NewRowVerdict {
+  const given = names.map((n) => n.trim().replace(/\s+/g, " ")).filter(Boolean);
+  for (const name of given) {
+    const row = index.resolve(name);
+    if (!row) continue;
+    if (row.state === "removed") return { action: "silent", row, reason: "removed" };
+    if (row.state === "dismissed") return { action: "silent", row, reason: "dismissed" };
+    return { action: "match", row, via: row.via };
+  }
+  return { action: "create", name: given[0] ?? "" };
+}
+
+/** Where a new capability goes. */
+export type DomainPlacement =
+  /** An active or suggested domain. */
+  | { action: "use"; domainId: string }
+  /** The wanted domain was removed or declined by a PM: the capability goes to the closest existing one. */
+  | { action: "closest"; domainId: string; respected: Resolved }
+  /** A new domain, suggested to the team. */
+  | { action: "suggest"; name: string; closestDomainId: string };
+
+/**
+ * `index` holds every domain of the workspace, in any state. `answer` is the match call's: a domain of ours, or the
+ * name of a new one, and the closest existing domain. `fallbackDomainId` = the active domain with the lowest position.
+ */
+export function placeInDomain(index: NameIndex, answer: { domainId: string | null; newDomainName: string; closestDomainId: string | null }, fallbackDomainId: string): DomainPlacement {
+  if (answer.domainId) return { action: "use", domainId: answer.domainId };
+  const closest = answer.closestDomainId ?? fallbackDomainId;
+  const name = answer.newDomainName.trim().replace(/\s+/g, " ");
+  if (!name) return { action: "use", domainId: closest };
+  const verdict = judgeDomainSuggestion(index, name);
+  if (verdict.action === "use") return { action: "use", domainId: verdict.row.id };
+  if (verdict.action === "skip") return { action: "closest", domainId: closest, respected: verdict.row };
+  return { action: "suggest", name, closestDomainId: closest };
+}

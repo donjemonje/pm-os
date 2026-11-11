@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { isOwnStatus, MAX_OWN_PRODUCT, splitSuggestedQuote } from "@/lib/competitors/config";
+import { queueCatalogAnalyses } from "@/lib/competitors/analysis/engine";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { aliasesAfterRename } from "@/lib/competitors/decisions";
 import { cleanProductLines, releaseCapabilityAlias } from "../route";
@@ -42,6 +43,8 @@ export async function PATCH(req: Request, { params }: Params) {
     if (!target) return bad(C.settings.activeDomainRequired);
     await db.capability.update({ where: { id }, data: { state: "active", removedAt: null, removedById: null, domainId: target.id, position: await nextActivePosition(ctx.workspaceId) } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: id, field: "state", from: "removed", to: "active", name: existing.name, via: "settings", fromDomainId: existing.domainId, toDomainId: target.id, domainChanged: target.id !== existing.domainId });
+    // The row is back in the table: its evidence returns with it, and it is looked for at every competitor again.
+    await queueCatalogAnalyses(ctx.workspaceId, { startedById: ctx.user.id });
     return stateResponse(ctx);
   }
 

@@ -170,6 +170,21 @@ export async function queueAnalysis(
 }
 
 /**
+ * Our catalog got a row the competitors were never checked for (added by hand, restored, or created by another
+ * competitor's run): queue a run for every competitor of the workspace that has stored pages. Such a run reads no
+ * page again — it matches nothing new and gives the row its second look.
+ */
+export async function queueCatalogAnalyses(workspaceId: string, opts: { exceptCompetitorId?: string; startedById?: string | null } = {}): Promise<number> {
+  const competitors = await db.competitor.findMany({
+    where: { workspaceId, deletedAt: null, ...(opts.exceptCompetitorId ? { id: { not: opts.exceptCompetitorId } } : {}), sources: { some: { pages: { some: {} } } } },
+    orderBy: [{ position: "asc" }, { name: "asc" }],
+    select: { id: true },
+  });
+  for (const c of competitors) await queueAnalysis(workspaceId, c.id, "catalog", { startedById: opts.startedById ?? null });
+  return competitors.length;
+}
+
+/**
  * Start the head of the queue when nothing is running. Called when a run is queued, when a run ends, by the hourly
  * tick, at server start, and (inline runner) once a minute — so a restart resumes a run without anyone pressing anything.
  */
