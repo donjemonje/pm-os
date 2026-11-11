@@ -11,19 +11,29 @@ import { cut, tidy } from "../ai";
  * Pure: no database, no network.
  */
 
+/** Curly and angled single quotes, primes, backtick, acute accent. */
+const SINGLE_QUOTES = /[\u2018\u2019\u201A\u201B\u2032\u0060\u00B4]/g;
+/** Curly double quotes, double prime, guillemets. */
+const DOUBLE_QUOTES = /[\u201C\u201D\u201E\u201F\u2033\u00AB\u00BB]/g;
+/** Hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar, minus, small and full-width forms. */
+const DASHES = /[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g;
+const ELLIPSIS = /\u2026/g;
+/** Zero-width space / non-joiner / joiner, word joiner, byte-order mark, soft hyphen. */
+const HIDDEN = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
+
 /**
- * Lower-case, NFKC, curly quotes → straight, every dash → "-", "…" → "...", zero-width and soft-hyphen characters
- * removed, every run of whitespace (newlines and nbsp included) → one space, trimmed.
+ * Lower-case, NFKC, curly quotes → straight, every dash → "-", the ellipsis character → "...", zero-width and
+ * soft-hyphen characters removed, every run of whitespace (newlines and nbsp included) → one space, trimmed.
  */
 export function normalizeForQuote(s: string): string {
   return s
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[‘’‚‛′`´]/g, "'")
-    .replace(/[“”„‟″«»]/g, '"')
-    .replace(/[‐-―−﹘﹣－]/g, "-")
-    .replace(/…/g, "...")
-    .replace(/[​-‍⁠﻿­]/g, "")
+    .replace(SINGLE_QUOTES, "'")
+    .replace(DOUBLE_QUOTES, '"')
+    .replace(DASHES, "-")
+    .replace(ELLIPSIS, "...")
+    .replace(HIDDEN, "")
     .replace(/\s+/g, " ")
     .trim();
 }

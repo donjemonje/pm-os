@@ -2,23 +2,28 @@
 import { describe, expect, it } from "vitest";
 import { MAX_QUOTE_CHARS, normalizeForQuote, quoteChecker, verifyQuote } from "@/lib/competitors/analysis/quotes";
 
-const PAGE = `Acme Core
-Detect threats across your whole stack — in real time.
-Our platform “connects” to 200+ tools,
-so your team's alerts land in one place.
-Single sign-on (SSO) is included in every plan.`;
+const NBSP = "\u00a0";
+const PAGE = [
+  "Acme Core",
+  "Detect threats across your whole stack \u2014 in real time.",
+  "Our platform \u201cconnects\u201d to 200+ tools,",
+  "so your team's alerts land in one place.",
+  `Single sign-on${NBSP}(SSO) is included in every plan.`,
+].join("\n");
 
 describe("verifyQuote", () => {
   it("accepts an exact passage", () => {
-    expect(verifyQuote("Single sign-on (SSO) is included in every plan.", PAGE)).toBe("Single sign-on (SSO) is included in every plan.");
+    const exact = `Single sign-on${NBSP}(SSO) is included in every plan.`;
+    expect(verifyQuote(exact, PAGE)).toBe(exact);
   });
   it("accepts a passage that runs across a line break", () => {
-    expect(verifyQuote("connects” to 200+ tools, so your team's alerts land in one place", PAGE)).not.toBeNull();
+    expect(verifyQuote("connects\u201d to 200+ tools, so your team's alerts land in one place", PAGE)).not.toBeNull();
   });
   it("ignores the kind of quote mark, dash and space, and the case", () => {
     expect(verifyQuote('Our platform "connects" to 200+ tools', PAGE)).not.toBeNull();
-    expect(verifyQuote("so your team’s alerts land in one place", PAGE)).not.toBeNull();
+    expect(verifyQuote("so your team\u2019s alerts land in one place", PAGE)).not.toBeNull();
     expect(verifyQuote("across your whole stack - in real time", PAGE)).not.toBeNull();
+    expect(verifyQuote("across your whole stack \u2013 in real time", PAGE)).not.toBeNull();
     expect(verifyQuote("Single sign-on (SSO) is included", PAGE)).not.toBeNull();
     expect(verifyQuote("DETECT THREATS ACROSS YOUR WHOLE STACK", PAGE)).not.toBeNull();
   });
@@ -30,7 +35,7 @@ describe("verifyQuote", () => {
     expect(verifyQuote("Detect threats across your entire stack", PAGE)).toBeNull();
   });
   it("refuses a quote stitched from two passages with an ellipsis", () => {
-    expect(verifyQuote("Detect threats across your whole stack … Single sign-on (SSO) is included", PAGE)).toBeNull();
+    expect(verifyQuote("Detect threats across your whole stack \u2026 Single sign-on (SSO) is included", PAGE)).toBeNull();
     expect(verifyQuote("Detect threats across your whole stack... Single sign-on (SSO) is included", PAGE)).toBeNull();
   });
   it("a leaked piece of the next JSON field is cut off before the check", () => {
@@ -48,8 +53,8 @@ describe("verifyQuote", () => {
 });
 
 describe("normalizeForQuote / quoteChecker", () => {
-  it("normalizes quotes, dashes, ellipsis, hidden characters and whitespace", () => {
-    expect(normalizeForQuote("  “A”​ — b­c…\n\n  D e ")).toBe('"a" - bc... d e');
+  it("normalizes quotes, dashes, the ellipsis, hidden characters and whitespace", () => {
+    expect(normalizeForQuote("  \u201cA\u201d\u200b \u2014 b\u00adc\u2026\n\n  D\u00a0e ")).toBe('"a" - bc... d e');
   });
   it("checks many quotes against one page", () => {
     const check = quoteChecker(PAGE);

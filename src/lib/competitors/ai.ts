@@ -11,14 +11,17 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
  * runs on Claude through the Vertex Anthropic client (forced tool use). Both
  * paths validate the answer field by field.
  *
- * extractFacts — a competitor's pages → lean-profile facts (closed kinds), each with a URL.
+ * This module is the model boundary: callTool (one structured call, with the tokens it used and typed errors),
+ * the string cleaners, and the profile-facts prompt. The four prompts of the capability analysis (research,
+ * merge, match, second look) live in analysis/prompts.ts; who calls what, and when, is analysis/steps.ts.
  * The organization itself is never scanned: its catalog and own statuses are entered by its PMs.
  *
- * Pages are sent as text only. The shared prefix (instructions + catalog) is
- * cache-marked; the per-call tail is the page text.
+ * Pages are sent as text only. A shared prefix (when a prompt has one) goes first so that provider-side
+ * caching can apply; the per-call tail follows.
  */
 
-export const COMPETITORS_PROMPT_VERSION = "competitors-v2";
+/** Bumping it makes every stored page due for the facts step again (it is part of SourcePage.factsKey). */
+export const FACTS_VERSION = "facts-1";
 
 export function getCompetitorsModel(): string {
   return process.env.COMPETITORS_MODEL?.trim() || "gemini-4-argon";
@@ -70,9 +73,9 @@ function toGeminiSchema(node: Record<string, unknown>): Schema {
   return out;
 }
 
-/** Keep each call well inside the context window; marketing pages are wordy. */
+/** Facts only: a page's text is cut to this in a facts call. The research step of the analysis sends the full text. */
 const MAX_PAGE_CHARS = 6000;
-/** Page text per call. Gemini's window is large; Claude's calls stay smaller. */
+/** Facts only: page text per call. Gemini's window is large; Claude's calls stay smaller. */
 export function maxTotalChars(provider = getCompetitorsProvider()): number {
   return provider === "gemini" ? 300_000 : 90_000;
 }
@@ -116,72 +119,149 @@ export function chunkPages(pages: PageText[], limit = maxTotalChars()): PageText
   return chunks;
 }
 
+/** What a page is, in one line for the model: its kind when it is not a web page, its source, its date. "" when there is nothing to say. */
+export function pageMeta(p: Pick<PageText, "kind" | "sourceLabel" | "observedAt">): string {
+  return [p.kind && p.kind !== "page" ? p.kind : null, p.sourceLabel ?? null, p.observedAt ? `dated ${p.observedAt.slice(0, 10)}` : null].filter(Boolean).join(" · ");
+}
+
 export function packPages(pages: PageText[]): string {
   return pages
     .map((p) => {
-      const meta = [p.kind && p.kind !== "page" ? p.kind : null, p.sourceLabel ?? null, p.observedAt ? `dated ${p.observedAt.slice(0, 10)}` : null].filter(Boolean).join(" · ");
+      const meta = pageMeta(p);
       return `### PAGE ${p.url}\nTitle: ${p.title}${meta ? `\nSource: ${meta}` : ""}\n${pageBody(p)}`;
     })
     .join("\n\n");
 }
 
-export interface AiResult<T> {
-  value: T;
-  usage: unknown;
-  /** Model calls made (one per chunk of pages). */
-  calls: number;
+/** Tokens one call used. `output` includes thinking tokens; `cached` is the part of `input` served from a cache. */
+export interface Usage {
+  input: number;
+  output: number;
+  cached: number;
+}
+export const NO_USAGE: Usage = { input: 0, output: 0, cached: 0 };
+
+/** PMOS AI has no capacity right now (HTTP 429, 503, 529 or RESOURCE_EXHAUSTED): the caller waits and continues. */
+export class CapacityError extends Error {
+  retryAfterMs: number | null;
+  constructor(message: string, retryAfterMs: number | null = null) {
+    super(message);
+    this.name = "CapacityError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/** The model answered (HTTP 200) but the answer is unusable: invalid JSON, no structured answer, empty, or cut off. */
+export class AnswerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AnswerError";
+  }
+}
+
+export type ThinkingName = "minimal" | "low" | "medium" | "high";
+export interface CallOptions {
+  /** Visible output tokens the answer may take (thinking is on top). */
+  maxTokens: number;
+  /** The thinking level this prompt asks for; COMPETITORS_THINKING overrides it when set. */
+  thinking?: ThinkingName;
+  /** TEST KNOB: the raw JSON text the model would have answered. With it no model is ever called. */
+  injected?: string;
+}
+
+function retryAfterOf(e: unknown): number | null {
+  const headers = (e as { headers?: unknown } | null)?.headers;
+  let raw: unknown = null;
+  if (headers && typeof (headers as { get?: unknown }).get === "function") raw = (headers as { get: (k: string) => unknown }).get("retry-after");
+  else if (headers && typeof headers === "object") raw = (headers as Record<string, unknown>)["retry-after"];
+  const seconds = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds * 1000) : null;
+}
+
+/** A provider error that means "no capacity" → CapacityError; anything else is returned untouched. */
+export function asCapacityError(e: unknown): unknown {
+  if (e instanceof CapacityError) return e;
+  const status = (e as { status?: unknown } | null)?.status;
+  const message = e instanceof Error ? e.message : String(e);
+  if (status === 429 || status === 503 || status === 529 || /RESOURCE_EXHAUSTED/.test(message)) return new CapacityError(message.slice(0, 300), retryAfterOf(e));
+  return e;
 }
 
 /**
- * `injected` is the TEST KNOB at the model boundary (settings.ts testAiAnswers, COMPETITORS_TEST_KNOBS=on only): the raw
- * JSON text the model would have answered. It replaces the model call and nothing else — chunking, parsing, name
- * matching and everything the scan does with the answer run unchanged. With an injected answer no model is ever called.
+ * One structured call. `shared` goes first (the part that repeats across calls of a run, "" when there is none),
+ * `tail` after it.
+ *
+ * `opts.injected` is the TEST KNOB at the model boundary (settings.ts testAiAnswers, COMPETITORS_TEST_KNOBS=on only):
+ * the raw JSON text the model would have answered. It replaces the model call and nothing else — parsing, the quote
+ * check and everything the analysis does with the answer run unchanged. With an injected answer no model is ever called.
+ *
+ * Throws CapacityError (wait and continue), AnswerError (the answer is unusable), or the provider's own error.
  */
-async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number, injected?: string): Promise<AiResult<T>> {
-  if (injected !== undefined) {
+export async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions): Promise<{ value: T; usage: Usage }> {
+  if (opts.injected !== undefined) {
     try {
-      return { value: JSON.parse(injected) as T, usage: null, calls: 1 };
+      return { value: JSON.parse(opts.injected) as T, usage: { ...NO_USAGE } };
     } catch {
-      throw new Error(`PMOS AI test answer is not valid JSON (${injected.length} chars)`);
+      throw new Error(`PMOS AI test answer is not valid JSON (${opts.injected.length} chars)`);
     }
   }
   const model = getCompetitorsModel();
+  const contents = shared ? `${shared}\n\n${tail}` : tail;
   if (getCompetitorsProvider(model) === "gemini") {
-    const response = await getGemini().models.generateContent({
-      model,
-      contents: `${shared}\n\n${tail}`,
-      config: {
-        systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
-        temperature: 0,
-        // Gemini 4 takes a thinking *level*, not a token budget (a budget is
-        // rejected). HIGH (Daniel, 2026-10-26): the status call weighs 26
-        // capabilities against 50 pages and runs once a week per competitor,
-        // so accuracy beats speed. Thinking is billed against maxOutputTokens.
-        thinkingConfig: { thinkingLevel: thinkingLevel() },
-        maxOutputTokens: maxTokens + 16000,
-        responseMimeType: "application/json",
-        responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
-      },
-    });
-    const text = response.text ?? "";
+    let response;
     try {
-      return { value: JSON.parse(text) as T, usage: response.usageMetadata, calls: 1 };
+      response = await getGemini().models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
+          temperature: 0,
+          // Gemini 4 takes a thinking *level*, not a token budget (a budget is rejected). Each prompt asks for its
+          // own level (analysis/prompts.ts); thinking is billed against maxOutputTokens, hence the headroom.
+          thinkingConfig: { thinkingLevel: thinkingLevel(opts.thinking) },
+          maxOutputTokens: opts.maxTokens + 16000,
+          responseMimeType: "application/json",
+          responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
+        },
+      });
+    } catch (e) {
+      throw asCapacityError(e);
+    }
+    const u = response.usageMetadata;
+    const usage: Usage = { input: u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0), cached: u?.cachedContentTokenCount ?? 0 };
+    const text = response.text ?? "";
+    const finish = String(response.candidates?.[0]?.finishReason ?? "unknown");
+    if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish})`);
+    if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${text.length} chars)`);
+    try {
+      return { value: JSON.parse(text) as T, usage };
     } catch {
-      const finish = response.candidates?.[0]?.finishReason ?? "unknown";
-      throw new Error(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`);
+      throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`);
     }
   }
-  const message = await getCompetitorsClient().messages.create({
-    model: getCompetitorsModel(),
-    max_tokens: maxTokens,
-    system,
-    tools: [tool as never],
-    tool_choice: { type: "tool", name: tool.name as string },
-    messages: prefixedUserMessage(shared, tail),
-  });
+  let message;
+  try {
+    message = await getCompetitorsClient().messages.create({
+      model,
+      max_tokens: opts.maxTokens,
+      system,
+      tools: [tool as never],
+      tool_choice: { type: "tool", name: tool.name as string },
+      messages: prefixedUserMessage(shared, tail),
+    });
+  } catch (e) {
+    throw asCapacityError(e);
+  }
+  const mu = message.usage;
+  const usage: Usage = {
+    input: (mu?.input_tokens ?? 0) + (mu?.cache_creation_input_tokens ?? 0) + (mu?.cache_read_input_tokens ?? 0),
+    output: mu?.output_tokens ?? 0,
+    cached: mu?.cache_read_input_tokens ?? 0,
+  };
   const toolUse = message.content.find((b) => b.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") throw new Error("PMOS AI returned no structured answer");
-  return { value: toolUse.input as T, usage: message.usage, calls: 1 };
+  if (!toolUse || toolUse.type !== "tool_use") throw new AnswerError("PMOS AI returned no structured answer");
+  if (message.stop_reason === "max_tokens") throw new AnswerError("PMOS AI did not finish its answer (max tokens)");
+  return { value: toolUse.input as T, usage };
 }
 
 /**
@@ -202,8 +282,9 @@ export function cut(s: string, max: number): string {
   const space = head.lastIndexOf(" ");
   return (space > max * 0.6 ? head.slice(0, space) : head).replace(/[\s,;:\-–—(]+$/, "");
 }
-const str = (v: unknown, max = 500): string => (typeof v === "string" ? cut(tidy(v), max) : "");
-const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+/** A model's string as stored: tidied, cut at a word boundary; "" for anything that is not a string. */
+export const str = (v: unknown, max = 500): string => (typeof v === "string" ? cut(tidy(v), max) : "");
+export const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 // ————— Lean-profile facts —————
 
@@ -280,42 +361,48 @@ export interface KnownFact { kind: string; value: string }
 /** Known facts shown to the model so restatements keep their wording (and merge on upsert). */
 export const MAX_KNOWN_FACTS = 1500;
 
-export async function extractFacts(competitorName: string, known: KnownFact[], pages: PageText[], onChunk?: (done: number, total: number) => void, injected?: string): Promise<AiResult<ExtractedFact[]>> {
-  const shared = `Extract facts for the competitor profile.`;
-  const knownBlock = known.length ? `KNOWN FACTS (already on the profile):\n${known.slice(0, MAX_KNOWN_FACTS).map((f) => `- ${f.kind}: ${f.value}`).join("\n")}\n\n` : "";
+/** The facts of one answer, field by field; duplicates inside the answer dropped. */
+export function parseFacts(value: unknown): ExtractedFact[] {
   const seen = new Set<string>();
   const facts: ExtractedFact[] = [];
-  const chunks = chunkPages(pages);
-  let calls = 0;
-  let usage: unknown = null;
-  for (const [i, chunk] of chunks.entries()) {
-    const tail = `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
-    const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 6000, injected);
-    calls += r.calls;
-    usage = r.usage;
-    for (const f of arr(r.value.facts)) {
-      const o = (f ?? {}) as Record<string, unknown>;
-      const kind = str(o.kind, 20);
-      const value = str(o.value, 80);
-      if (!(FACT_KINDS as readonly string[]).includes(kind) || !value) continue;
-      const key = `${kind}|${value.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const date = str(o.date, 10);
-      facts.push({ kind: kind as FactKind, value, url: str(o.url, 500), date: factDateOf(date) ? date : null, headline: str(o.headline, 120) || null, summary: str(o.summary, 400) || null });
-    }
-    onChunk?.(i + 1, chunks.length);
+  for (const f of arr((value as Record<string, unknown> | null)?.facts)) {
+    const o = (f ?? {}) as Record<string, unknown>;
+    const kind = str(o.kind, 20);
+    const v = str(o.value, 80);
+    if (!(FACT_KINDS as readonly string[]).includes(kind) || !v) continue;
+    const key = factKey(kind, v);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const date = str(o.date, 10);
+    facts.push({ kind: kind as FactKind, value: v, url: str(o.url, 500), date: factDateOf(date) ? date : null, headline: str(o.headline, 120) || null, summary: str(o.summary, 400) || null });
   }
-  return { value: facts, usage, calls };
+  return facts;
+}
+
+/** One fact = one kind and one value, whatever its letter case. */
+export function factKey(kind: string, value: string): string {
+  return `${kind}|${value.toLowerCase()}`;
+}
+
+/** What one facts call is asked: the known facts (so restatements keep their wording) and one chunk of pages. */
+export function renderFactsTail(competitorName: string, known: KnownFact[], chunk: PageText[], part: number, parts: number): string {
+  const knownBlock = known.length ? `KNOWN FACTS (already on the profile):\n${known.slice(0, MAX_KNOWN_FACTS).map((f) => `- ${f.kind}: ${f.value}`).join("\n")}\n\n` : "";
+  return `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${parts > 1 ? ` (part ${part} of ${parts})` : ""}:\n\n${packPages(chunk)}`;
+}
+
+/** One facts call for one chunk of pages (chunkPages). The loop over chunks, its pacing and the saving are analysis/facts.ts. */
+export async function extractFactsChunk(competitorName: string, known: KnownFact[], chunk: PageText[], part: number, parts: number, injected?: string): Promise<{ facts: ExtractedFact[]; usage: Usage }> {
+  const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, "Extract facts for the competitor profile.", renderFactsTail(competitorName, known, chunk, part, parts), FACTS_TOOL, { maxTokens: 6000, injected });
+  return { facts: parseFacts(r.value), usage: r.usage };
 }
 
 /**
- * Gemini thinking level: HIGH by default (accuracy over speed for a weekly
- * scan); COMPETITORS_THINKING=medium|low|minimal trades accuracy for a faster
- * answer (a live demo, a small hand-in).
+ * Gemini thinking level: COMPETITORS_THINKING wins when it is set (dev sets "low"), else the level the prompt
+ * asks for, else HIGH.
  */
-function thinkingLevel(): ThinkingLevel {
-  const v = process.env.COMPETITORS_THINKING?.trim().toLowerCase();
+function thinkingLevel(asked?: ThinkingName): ThinkingLevel {
+  const env = process.env.COMPETITORS_THINKING?.trim().toLowerCase();
+  const v = env === "low" || env === "medium" || env === "minimal" || env === "high" ? env : asked;
   if (v === "low") return ThinkingLevel.LOW;
   if (v === "medium") return ThinkingLevel.MEDIUM;
   if (v === "minimal") return ThinkingLevel.MINIMAL;
