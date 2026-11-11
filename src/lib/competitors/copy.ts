@@ -86,6 +86,8 @@ export const COMPETITORS_COPY = {
     analyzing: "Analyzing",
     analysisWaiting: "Analyzing — waiting for PMOS AI",
     analyzingCell: "analyzing",
+    featuresToggle: (name: string, n: number) => `${name}: show or hide its ${n} feature${n === 1 ? "" : "s"}`,
+    featuresCount: (n: number) => `${n} feature${n === 1 ? "" : "s"}`,
     suggested: "Suggested",
     suggestedN: (n: number) => `${n} suggested`,
     suggestedRowHint: "Proposed by a scan — not in your catalog yet. Accept to add the row (your status starts as missing), dismiss to never see it again.",

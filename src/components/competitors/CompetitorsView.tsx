@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
@@ -13,7 +13,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
 import { rankByCloseness } from "@/lib/competitors/closeness";
-import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
+import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { cn } from "@/lib/utils";
@@ -161,7 +161,21 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   const own = state.orgName.trim() || "Your organization";
   const [tab, setTab] = useState<Tab>("parity");
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(null);
-  const [openCell, setOpenCell] = useState<{ competitorId: string; capabilityId: string } | null>(null);
+  /** The open cell popover: a competitor's cell (or "own") on a capability row or a feature row. */
+  const [openCell, setOpenCell] = useState<OpenCell | null>(null);
+  // Capabilities whose features are shown under them. Closed by default.
+  const [openFeatures, setOpenFeatures] = useState<Set<string>>(new Set());
+  const toggleFeatures = (capabilityId: string, features: number) => {
+    setOpenFeatures((cur) => {
+      const next = new Set(cur);
+      if (next.has(capabilityId)) next.delete(capabilityId);
+      else {
+        next.add(capabilityId);
+        track("cmp_features_opened", { capabilityId, features });
+      }
+      return next;
+    });
+  };
   // Capability whose description row is open under it (click on the name cell).
   const [openDesc, setOpenDesc] = useState<string | null>(null);
   const toggleDesc = useCallback((capabilityId: string) => {
@@ -262,6 +276,18 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     return m;
   }, [state.cells]);
   const cellOf = (competitorId: string | null | undefined, capabilityId: string) => (competitorId ? cellMap.get(`${competitorId}|${capabilityId}`) : undefined);
+  const featuresByCapability = useMemo(() => {
+    const m = new Map<string, FeatureRow[]>();
+    for (const f of [...state.features].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))) m.set(f.capabilityId, [...(m.get(f.capabilityId) ?? []), f]);
+    return m;
+  }, [state.features]);
+  const featuresOf = (capabilityId: string) => featuresByCapability.get(capabilityId) ?? [];
+  const featureCellMap = useMemo(() => {
+    const m = new Map<string, CellRow>();
+    for (const c of state.featureCells) m.set(`${c.competitorId}|${c.featureId}`, c);
+    return m;
+  }, [state.featureCells]);
+  const featureCellOf = (competitorId: string, featureId: string) => featureCellMap.get(`${competitorId}|${featureId}`);
   /** The org's own cell is the capability's ourStatus — set by PMs, never scanned. */
   const ownOf = (k: CapabilityRow): OwnStatus => k.ourStatus;
   /** Gap = not found at the org while found at a competitor (a low-confidence find opens no gap); only-us = found at the org and at no competitor, not even with low confidence. */
@@ -593,11 +619,21 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                               const kind = rowKind(k);
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "found").length;
                               const descOpen = openDesc === k.id;
+                              const features = featuresOf(k.id);
+                              const featuresOpen = features.length > 0 && openFeatures.has(k.id);
                               return (
-                                <tr key={k.id} className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
+                                <Fragment key={k.id}>
+                                <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
                                   <td className={cn("px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")}>
                                     <span className="inline-flex flex-wrap items-center gap-2">
+                                      {features.length > 0 && (
+                                        <button type="button" onClick={() => toggleFeatures(k.id, features.length)} aria-expanded={featuresOpen} aria-label={C.matrix.featuresToggle(k.name, features.length)} title={C.matrix.featuresToggle(k.name, features.length)}
+                                          className="-ml-[22px] inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle">
+                                          {featuresOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                                        </button>
+                                      )}
                                       {k.name}
+                                      {features.length > 0 && <span className="text-[11px] font-normal text-fg-muted">{C.matrix.featuresCount(features.length)}</span>}
                                       <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
                                       {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
@@ -605,14 +641,14 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
-                                      <OwnCell capability={k} org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      <OwnCell row={k} kind="capability" org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
                                     </span>
                                   </td>
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
                                     return (
                                       <td key={c.id} className="text-center">
-                                        <Cell cell={cell} competitorId={c.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+                                        <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
                                       </td>
                                     );
                                   })}
@@ -625,6 +661,10 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     </span>
                                   </td>
                                 </tr>
+                                {featuresOpen && features.map((f) => (
+                                  <FeatureLine key={f.id} feature={f} org={own} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={(competitorId) => openProfile(competitorId, "cell")} />
+                                ))}
+                                </Fragment>
                               );
                             })}
                           </DomainGroup>
@@ -703,7 +743,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                               meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(isOpen ? null : item.key); if (!item.read) void markRead([item.key]); }} />
                             {isOpen && (
                               <FeedDetail item={item} org={own} meaning={feedMeaning(item)} canEdit={canEdit}
-                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, capabilityId: item.capabilityId! }); } : null}
+                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, rowId: item.capabilityId! }); } : null}
                                 onDecide={item.kind === "suggestion" && item.suggestionState === "suggested" && item.capabilityId ? (decision) => { void decideCapability(item.capabilityId!, decision); } : null} />
                             )}
                           </div>
@@ -912,6 +952,44 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
       {open && children}
       {open && suggestedRows}
     </>
+  );
+}
+
+// ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
+
+function FeatureLine({ feature, org, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
+  feature: FeatureRow;
+  org: string;
+  competitors: CompetitorRow[];
+  cellOf: (competitorId: string) => CellRow | undefined;
+  open: OpenCell | null;
+  setOpen: (v: OpenCell | null) => void;
+  onPatch: (url: string, body: unknown) => Promise<boolean>;
+  onProfile: (competitorId: string) => void;
+}) {
+  const haveN = competitors.filter((c) => cellOf(c.id)?.value === "found").length;
+  return (
+    <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
+      <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]" title={feature.description || undefined}>{feature.name}</td>
+      <td className="bg-[rgba(36,87,245,.06)] text-center">
+        <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
+          <OwnCell row={feature} kind="feature" org={org} open={open} setOpen={setOpen} onPatch={onPatch} />
+        </span>
+      </td>
+      {competitors.map((c) => (
+        <td key={c.id} className="text-center">
+          <Cell cell={cellOf(c.id)} competitorId={c.id} row={feature} kind="feature" open={open} setOpen={setOpen} onPatch={onPatch} onProfile={() => onProfile(c.id)} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+        </td>
+      ))}
+      <td className="px-4">
+        <span className="flex items-center gap-2">
+          <span className="inline-flex h-1 w-[54px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+            <span className="block h-full bg-[#5b6c85]" style={{ width: `${competitors.length ? Math.round((haveN / competitors.length) * 100) : 0}%` }} />
+          </span>
+          <span className="font-mono text-[11px] font-semibold text-fg-3">{C.matrix.ofN(haveN, competitors.length)}</span>
+        </span>
+      </td>
+    </tr>
   );
 }
 
@@ -1180,19 +1258,32 @@ const HOVER_OPEN_MS = 250;
 /** The card stays this long after the pointer leaves, so it can cross the gap to the card and click the link. */
 const HOVER_CLOSE_MS = 150;
 
-function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfile, notScanned, analyzing }: {
+/** Which popover is open: the competitor's column (or "own") and the row — a capability or a feature. */
+interface OpenCell {
+  competitorId: string;
+  rowId: string;
+}
+/** Where a row's own mark and its competitor cells are saved. */
+const PATCH_BASE = {
+  capability: { own: "/api/competitors/capabilities", cell: "/api/competitors/statuses" },
+  feature: { own: "/api/competitors/features", cell: "/api/competitors/feature-statuses" },
+} as const;
+
+function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile, notScanned, analyzing }: {
   cell: CellRow | undefined;
   competitorId: string;
-  capability: CapabilityRow;
-  open: { competitorId: string; capabilityId: string } | null;
-  setOpen: (v: { competitorId: string; capabilityId: string } | null) => void;
+  /** The row of the cell: a capability or a feature. */
+  row: { id: string; name: string };
+  kind: "capability" | "feature";
+  open: OpenCell | null;
+  setOpen: (v: OpenCell | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
   onProfile: (() => void) | null;
   notScanned?: boolean;
   /** The competitor's analysis run is queued or in progress. */
   analyzing?: boolean;
 }) {
-  const isOpen = open?.competitorId === competitorId && open.capabilityId === capability.id;
+  const isOpen = open?.competitorId === competitorId && open.rowId === row.id;
   // Hover: the evidence, read-only, from the cell data already in the state — no fetch, nothing to wait for.
   const [hover, setHover] = useState(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1206,10 +1297,10 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
   const showHover = hover && !isOpen && Boolean(cell) && (Boolean(cell?.quote) || cell?.value === "not_found");
   useEffect(() => {
     if (!showHover || !cell) return;
-    const key = `${competitorId}|${capability.id}`;
+    const key = `${competitorId}|${row.id}`;
     if (!hoverShown.has(key)) {
       hoverShown.add(key);
-      track("cmp_cell_evidence_shown", { competitorId, rowKind: "capability", rowId: capability.id, value: cell.value, via: "hover", hasEvidence: Boolean(cell.quote) });
+      track("cmp_cell_evidence_shown", { competitorId, rowKind: kind, rowId: row.id, value: cell.value, via: "hover", hasEvidence: Boolean(cell.quote) });
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setHover(false);
@@ -1231,8 +1322,8 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
       setNote("");
     } else {
       setValue(correctable(cell?.value));
-      track("cmp_cell_opened", { competitorId, capabilityId: capability.id, value: cell?.value ?? "not_found", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
-      track("cmp_cell_evidence_shown", { competitorId, rowKind: "capability", rowId: capability.id, value: cell?.value ?? "not_found", via: "click", hasEvidence: Boolean(cell?.quote) });
+      track("cmp_cell_opened", { competitorId, rowKind: kind, ...(kind === "capability" ? { capabilityId: row.id } : { featureId: row.id }), value: cell?.value ?? "not_found", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
+      track("cmp_cell_evidence_shown", { competitorId, rowKind: kind, rowId: row.id, value: cell?.value ?? "not_found", via: "click", hasEvidence: Boolean(cell?.quote) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -1254,23 +1345,23 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
   async function save() {
     if (!cell) return;
     setBusy(true);
-    const ok = await onPatch(`/api/competitors/statuses/${cell.id}`, { value, note });
+    const ok = await onPatch(`${PATCH_BASE[kind].cell}/${cell.id}`, { value, note });
     setBusy(false);
     if (ok) setEditing(false);
   }
   async function reset() {
     if (!cell) return;
     setBusy(true);
-    await onPatch(`/api/competitors/statuses/${cell.id}`, { reset: true });
+    await onPatch(`${PATCH_BASE[kind].cell}/${cell.id}`, { reset: true });
     setBusy(false);
   }
 
   return (
     <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
       <button
-        onClick={() => { setHover(false); setOpen(isOpen ? null : { competitorId, capabilityId: capability.id }); }}
+        onClick={() => { setHover(false); setOpen(isOpen ? null : { competitorId, rowId: row.id }); }}
         className={cn("relative inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-        aria-label={`${capability.name}: ${C.values[cell?.value ?? "not_found"]}`}
+        aria-label={`${row.name}: ${C.values[cell?.value ?? "not_found"]}`}
         aria-expanded={isOpen}
       >
         <CellValue cell={cell} />
@@ -1287,7 +1378,7 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
           <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
             <div className="mb-2 flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-bold">{capability.name}</div>
+                <div className="text-[13px] font-bold">{row.name}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11.5px] text-fg-muted">
                   <span className="inline-flex items-center gap-1.5"><CellValue cell={cell} size={16} /> {C.values[cell.value]}</span>
                   {cell.changedAt && <span>· {C.matrix.changed(shortDate(cell.changedAt))}</span>}
@@ -1306,7 +1397,7 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
               <div className="text-[12.5px] text-fg-2">
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
                 <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} count={cell.evidenceCount} empty={cell.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
-                {cell.evidenceCount > 1 && <EvidenceList cellId={cell.id} kind="capability" competitorId={competitorId} rowId={capability.id} count={cell.evidenceCount} />}
+                {cell.evidenceCount > 1 && <EvidenceList cellId={cell.id} kind={kind} competitorId={competitorId} rowId={row.id} count={cell.evidenceCount} />}
               </div>
             )}
             {editing && (
@@ -1345,14 +1436,16 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
 
 // ————— The org's own cell: its status on a capability, set by PMs —————
 
-function OwnCell({ capability, org, open, setOpen, onPatch }: {
-  capability: CapabilityRow;
+function OwnCell({ row, kind, org, open, setOpen, onPatch }: {
+  /** The row: a capability or a feature, with the org's own mark on it. */
+  row: { id: string; name: string; ourStatus: OwnStatus };
+  kind: "capability" | "feature";
   org: string;
-  open: { competitorId: string; capabilityId: string } | null;
-  setOpen: (v: { competitorId: string; capabilityId: string } | null) => void;
+  open: OpenCell | null;
+  setOpen: (v: OpenCell | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
 }) {
-  const isOpen = open?.competitorId === "own" && open.capabilityId === capability.id;
+  const isOpen = open?.competitorId === "own" && open.rowId === row.id;
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!isOpen) return;
@@ -1362,20 +1455,20 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, featureId: null, value: capability.ourStatus, scannedValue: capability.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
   async function set(v: OwnStatus) {
-    if (v === capability.ourStatus) return;
+    if (v === row.ourStatus) return;
     setBusy(true);
-    const ok = await onPatch(`/api/competitors/capabilities/${capability.id}`, { ourStatus: v });
+    const ok = await onPatch(`${PATCH_BASE[kind].own}/${row.id}`, { ourStatus: v });
     setBusy(false);
     if (ok) setOpen(null);
   }
   return (
     <span className="relative inline-flex items-center justify-center">
       <button
-        onClick={() => setOpen(isOpen ? null : { competitorId: "own", capabilityId: capability.id })}
+        onClick={() => setOpen(isOpen ? null : { competitorId: "own", rowId: row.id })}
         className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-        aria-label={`${capability.name}: ${org} ${C.values[capability.ourStatus]}`}
+        aria-label={`${row.name}: ${org} ${C.values[row.ourStatus]}`}
         aria-expanded={isOpen}
       >
         <CellValue cell={fake} />
@@ -1386,14 +1479,14 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
           <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[280px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-bold">{capability.name}</div>
+                <div className="text-[13px] font-bold">{row.name}</div>
                 <div className="mt-0.5 text-[11.5px] text-fg-muted">{C.matrix.ownCellTitle(org)} · {C.matrix.ownCellHint}</div>
               </div>
               <button onClick={() => setOpen(null)} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label="Close"><X size={14} /></button>
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {OWN_STATUS_VALUES.map((v) => (
-                <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", capability.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
+                <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", row.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
               ))}
             </div>
           </div>

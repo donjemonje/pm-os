@@ -30,7 +30,7 @@ export async function PATCH(req: Request, { params }: Params) {
       data: { overrideValue: null, overrideNote: null, overrideUserId: null, overrideAt: null },
     });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_status_overridden", {
-      competitorId: cell.competitorId, capabilityId: cell.capabilityId, from, to: cell.value, hasNote: false, reset: true, surface,
+      competitorId: cell.competitorId, rowKind: "capability", capabilityId: cell.capabilityId, from, to: cell.value, hasNote: false, reset: true, surface,
     });
     return stateResponse(ctx);
   }
@@ -43,7 +43,7 @@ export async function PATCH(req: Request, { params }: Params) {
     data: { overrideValue: body.value, overrideNote: note, overrideUserId: ctx.user.id, overrideAt: new Date() },
   });
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_status_overridden", {
-    competitorId: cell.competitorId, capabilityId: cell.capabilityId, from, to: body.value, hasNote: note != null, reset: false, surface,
+    competitorId: cell.competitorId, rowKind: "capability", capabilityId: cell.capabilityId, from, to: body.value, hasNote: note != null, reset: false, surface,
   });
   return stateResponse(ctx);
 }
