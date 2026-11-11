@@ -4,7 +4,7 @@
  * and the page key that keeps a video id.
  */
 import { describe, expect, it } from "vitest";
-import { chunkPages, cut, factDateOf, packPages, tidy, type PageText } from "@/lib/competitors/ai";
+import { chunkBySize, chunkPages, cut, dedupeFacts, factDateOf, factKey, packedSize, packPages, parseFacts, tidy, type PageText } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
 
 const page = (i: number, chars: number, extra: Partial<PageText> = {}): PageText => ({ url: `https://e.com/p${i}`, title: `P${i}`, text: "x".repeat(chars), ...extra });
@@ -30,6 +30,30 @@ describe("chunkPages", () => {
     const packed = packPages([page(1, 10, { kind: "article", sourceLabel: "Help center", observedAt: "2026-09-29T13:56:20Z" })]);
     expect(packed).toContain("### PAGE https://e.com/p1");
     expect(packed).toContain("Source: article · Help center · dated 2026-09-29");
+  });
+});
+
+describe("facts over many chunks", () => {
+  const fact = (kind: string, value: string) => ({ kind, value, url: "https://e.com/p1", date: "", headline: "", summary: "" });
+  it("chunks by the size a page has in a facts call, without needing its text", () => {
+    const pages = [{ url: "https://e.com/a", chars: 50_000 }, { url: "https://e.com/b", chars: 50_000 }, { url: "https://e.com/c", chars: 100 }];
+    expect(packedSize(50_000, 15)).toBe(6000 + 4 + 15 + 40);
+    expect(packedSize(100, 15)).toBe(155);
+    expect(chunkBySize(pages, (p) => packedSize(p.chars, p.url.length), 13_000).map((c) => c.map((p) => p.url))).toEqual([["https://e.com/a", "https://e.com/b", "https://e.com/c"]]);
+    expect(chunkBySize(pages, (p) => packedSize(p.chars, p.url.length), 7_000).map((c) => c.length)).toEqual([1, 2]);
+  });
+  it("parses one answer: closed kinds only, no empty value, one fact per kind and value whatever its case", () => {
+    const facts = parseFacts({ facts: [fact("product", "Acme Hunt"), fact("product", "ACME HUNT"), fact("weather", "Sunny"), fact("customer", ""), null, fact("customer", "Globex")] });
+    expect(facts.map((f) => `${f.kind}:${f.value}`)).toEqual(["product:Acme Hunt", "customer:Globex"]);
+    expect(parseFacts(null)).toEqual([]);
+  });
+  it("a fact an earlier chunk of the run returned is not returned again by a later one", () => {
+    const seen = new Set<string>();
+    const first = dedupeFacts(parseFacts({ facts: [fact("product", "Acme Hunt"), fact("customer", "Globex")] }), seen);
+    const second = dedupeFacts(parseFacts({ facts: [fact("product", "acme hunt"), fact("customer", "Initech"), fact("vertical", "Globex")] }), seen);
+    expect(first.map((f) => f.value)).toEqual(["Acme Hunt", "Globex"]);
+    expect(second.map((f) => `${f.kind}:${f.value}`)).toEqual(["customer:Initech", "vertical:Globex"]);
+    expect(seen.has(factKey("product", "ACME HUNT"))).toBe(true);
   });
 });
 

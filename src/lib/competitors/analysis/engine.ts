@@ -6,7 +6,8 @@ import { HEARTBEAT_MS, STALE_MS } from "../config";
 import { aiStepEnabled, now, testAiAnswers, testKnobsEnabled, type TestAiAnswers } from "../settings";
 import { getCompetitorsConfig } from "../store";
 import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
-import { applyStep, factsStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
+import { factsStep } from "./facts";
+import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
 
 /**
  * The analysis run (Capability Analysis, "How the analysis runs").

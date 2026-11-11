@@ -962,7 +962,3 @@ export async function applyStep(ctx: RunContext): Promise<void> {
     if (others) ctx.log("info", `${others} other competitor${others === 1 ? "" : "s"} queued: the new rows are looked for there too`);
   }
 }
-
-// ————— 6. Built in the next step of the build —————
-
-export async function factsStep(_ctx: RunContext): Promise<void> {}

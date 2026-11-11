@@ -96,27 +96,37 @@ function pageBody(p: PageText): string {
   return p.text.length > MAX_PAGE_CHARS ? p.text.slice(0, MAX_PAGE_CHARS) + "\n[…]" : p.text;
 }
 
-/**
- * Split pages into calls: each chunk fits maxTotalChars after per-page
- * truncation. A website scan of 50 pages is one chunk; an import of a
- * thousand documents is many, run in order.
- */
-export function chunkPages(pages: PageText[], limit = maxTotalChars()): PageText[][] {
-  const chunks: PageText[][] = [];
-  let cur: PageText[] = [];
+/** What a page weighs in a facts call: its text after the per-page cut, plus its header. */
+export function packedSize(chars: number, urlLength: number): number {
+  return Math.min(chars, MAX_PAGE_CHARS) + (chars > MAX_PAGE_CHARS ? "\n[…]".length : 0) + urlLength + 40;
+}
+
+/** Items in order, packed into chunks of at most `limit` (an item larger than the limit goes alone); none is dropped. */
+export function chunkBySize<T>(items: T[], sizeOf: (item: T) => number, limit: number): T[][] {
+  const chunks: T[][] = [];
+  let cur: T[] = [];
   let total = 0;
-  for (const p of pages) {
-    const len = pageBody(p).length + p.url.length + 40;
+  for (const item of items) {
+    const len = sizeOf(item);
     if (cur.length && total + len > limit) {
       chunks.push(cur);
       cur = [];
       total = 0;
     }
-    cur.push(p);
+    cur.push(item);
     total += len;
   }
   if (cur.length) chunks.push(cur);
   return chunks;
+}
+
+/**
+ * Split pages into facts calls: each chunk fits maxTotalChars after per-page
+ * truncation. A site of 50 pages is one chunk; a thousand documents are many,
+ * run in order.
+ */
+export function chunkPages(pages: PageText[], limit = maxTotalChars()): PageText[][] {
+  return chunkBySize(pages, (p) => packedSize(p.text.length, p.url.length), limit);
 }
 
 /** What a page is, in one line for the model: its kind when it is not a web page, its source, its date. "" when there is nothing to say. */
@@ -390,10 +400,20 @@ export function renderFactsTail(competitorName: string, known: KnownFact[], chun
   return `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${parts > 1 ? ` (part ${part} of ${parts})` : ""}:\n\n${packPages(chunk)}`;
 }
 
-/** One facts call for one chunk of pages (chunkPages). The loop over chunks, its pacing and the saving are analysis/facts.ts. */
-export async function extractFactsChunk(competitorName: string, known: KnownFact[], chunk: PageText[], part: number, parts: number, injected?: string): Promise<{ facts: ExtractedFact[]; usage: Usage }> {
-  const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, "Extract facts for the competitor profile.", renderFactsTail(competitorName, known, chunk, part, parts), FACTS_TOOL, { maxTokens: 6000, injected });
-  return { facts: parseFacts(r.value), usage: r.usage };
+/** The shared prefix and the answer size of a facts call. The call itself, the loop over chunks, the pacing and the saving are analysis/facts.ts. */
+export const FACTS_SHARED = "Extract facts for the competitor profile.";
+export const FACTS_MAX_TOKENS = 6000;
+
+/** A run reads the pages in several chunks: a fact an earlier chunk of the run already returned is not returned again. `seen` is the run's memory (factKey). */
+export function dedupeFacts(facts: ExtractedFact[], seen: Set<string>): ExtractedFact[] {
+  const out: ExtractedFact[] = [];
+  for (const f of facts) {
+    const key = factKey(f.kind, f.value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(f);
+  }
+  return out;
 }
 
 /**
