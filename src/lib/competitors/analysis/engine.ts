@@ -144,6 +144,8 @@ export interface RunContext {
   paced: <T>(o: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError">) => Promise<PacedResult>;
   /** Save the one thing that cannot be derived (the facts baseline). */
   saveCursor: (patch: Record<string, unknown>) => Promise<void>;
+  /** The apply step finished: the cells are current as of `at`. */
+  markApplied: (at: Date) => Promise<void>;
   /** Write counters, progress and log now (also done with every heartbeat). */
   flush: () => Promise<void>;
 }
@@ -405,9 +407,12 @@ export async function runAnalysis(id: string): Promise<void> {
         Object.assign(cursor, patch);
         if (!(await own({ cursor: cursor as Prisma.InputJsonValue }))) throw new RunLost();
       },
+      markApplied: async (at) => {
+        if (!(await own({ appliedAt: at }))) throw new RunLost();
+      },
       flush,
     };
-    if (await shouldStop()) throw new RunCancelled();
+    if (await shouldStop()) throw lost ? new RunLost() : new RunCancelled();
 
     log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model}`}`);
     await setStep("research");

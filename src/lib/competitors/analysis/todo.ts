@@ -65,3 +65,13 @@ export function factsBaseline(sourceIds: string[], pages: Array<{ sourceId: stri
   const known = new Set(sourceIds);
   return [...new Set([...factsBaselineSources(sourceIds, pages), ...carried.filter((id) => known.has(id))])];
 }
+
+/**
+ * The rows of ours made from a competitor's items that the other competitors were not yet asked about: those made
+ * after the competitor's last finished run (`since` = that run's appliedAt; null = it never finished one, so all of
+ * them). Read from the tables at the end of every apply step — nothing is remembered in the process, so a run that
+ * crashed or failed after making a row still gets its follow-up runs.
+ */
+export function rowsSince<T extends { createdAt: Date }>(rows: T[], since: Date | null): T[] {
+  return since ? rows.filter((r) => r.createdAt.getTime() > since.getTime()) : rows;
+}

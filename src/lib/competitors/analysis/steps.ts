@@ -40,7 +40,7 @@ import {
   type Placement,
 } from "./prompts";
 import { indexPages, lookKey, pagesFor, type LookPage } from "./secondlook";
-import { readKey, researchTodo, tooManyFailed } from "./todo";
+import { readKey, researchTodo, rowsSince, tooManyFailed } from "./todo";
 
 /**
  * The database side of the six steps of an analysis run (Capability Analysis, "How the analysis runs").
@@ -215,6 +215,8 @@ interface ItemStats {
   quote: string;
   /** The spellings as the pages have them. */
   spellings: string[];
+  /** At least one of its findings is on a strong page (kinds.ts) — what the cell rules call found. */
+  strong: boolean;
 }
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -228,14 +230,15 @@ async function loadItems(competitorId: string): Promise<DbItem[]> {
 }
 
 async function loadItemStats(competitorId: string): Promise<Map<string, ItemStats>> {
-  const findings = await db.pageFinding.findMany({ where: { competitorId, itemId: { not: null } }, select: { itemId: true, pageId: true, quote: true, wording: true, page: { select: { url: true } } } });
+  const findings = await db.pageFinding.findMany({ where: { competitorId, itemId: { not: null } }, select: { itemId: true, pageId: true, quote: true, wording: true, page: { select: { url: true, kind: true, source: { select: { type: true } } } } } });
   findings.sort((a, b) => (a.page.url < b.page.url ? -1 : a.page.url > b.page.url ? 1 : a.quote < b.quote ? -1 : a.quote > b.quote ? 1 : 0));
   const pages = new Map<string, Set<string>>();
   const out = new Map<string, ItemStats>();
   for (const f of findings) {
     const id = f.itemId!;
-    const s = out.get(id) ?? { findings: 0, pages: 0, quote: f.quote, spellings: [] };
+    const s = out.get(id) ?? { findings: 0, pages: 0, quote: f.quote, spellings: [], strong: false };
     s.findings++;
+    if (!s.strong && pageTier(f.page.url, f.page.source.type, f.page.kind).tier === "strong") s.strong = true;
     if (!s.spellings.includes(f.wording)) s.spellings.push(f.wording);
     const set = pages.get(id) ?? new Set<string>();
     set.add(f.pageId);
@@ -761,7 +764,6 @@ export async function applyStep(ctx: RunContext): Promise<void> {
   const byId = new Map(items.map((i) => [i.id, i]));
   const byName = (a: DbItem, b: DbItem) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const todo = items.filter((i) => i.placement && !i.capabilityId && !i.featureId);
-  const added: Array<{ capabilityId: string; name: string; domainId: string; inSuggestedDomain: boolean; pages: number }> = [];
   if (todo.length) {
     const [domainRows, capabilityRows, featureRows] = await Promise.all([
       db.competitorDomain.findMany({ where: { workspaceId }, select: { id: true, name: true, aliases: true, state: true, position: true } }),
@@ -844,7 +846,9 @@ export async function applyStep(ctx: RunContext): Promise<void> {
         capabilityIndex.add({ id: row.capabilityId, name: verdict.name, aliases: [], state: "active" });
         capabilityState.set(row.capabilityId, "active");
         ctx.counters.newCapabilities++;
-        added.push({ capabilityId: row.capabilityId, name: verdict.name, domainId: row.domainId, inSuggestedDomain: row.inSuggestedDomain, pages });
+        // Recorded when the row is made, not at the end of the step: a run that stops in between loses nothing.
+        // The value is the one the cell rules will give it (cells.ts): found on a strong page, low confidence otherwise.
+        await recordCompetitorEvent(workspaceId, null, "cmp_capability_added", { capabilityId: row.capabilityId, name: verdict.name, domainId: row.domainId, inSuggestedDomain: row.inSuggestedDomain, competitorId, analysisId: ctx.run.id, pages, value: stats.get(item.id)?.strong ? "found" : "low" });
         if (place.action === "suggest") {
           domainIndex.add({ id: row.domainId, name: place.name, aliases: [], state: "suggested" });
           domainState.set(row.domainId, "suggested");
@@ -908,13 +912,11 @@ export async function applyStep(ctx: RunContext): Promise<void> {
     else if (value === "low") ctx.counters.cellsLow++;
     else ctx.counters.cellsNotFound++;
   };
-  const valueOf = new Map<string, string>();
   const cellOf = new Map(storedCells.map((c) => [c.capabilityId, c]));
   for (const k of capabilities) {
     const cell = cellFromEvidence(evidence.byCapability.get(k.id) ?? []);
     const data = shown(cell);
     const stored = cellOf.get(k.id);
-    valueOf.set(k.id, cell.value);
     count(cell.value);
     if (!stored) {
       await db.capabilityStatus.create({ data: { workspaceId, competitorId, capabilityId: k.id, value: cell.value, ...data, analysisId: ctx.run.id, scanId: ctx.run.scanId, changedAt: null } });
@@ -947,18 +949,24 @@ export async function applyStep(ctx: RunContext): Promise<void> {
       if (!baseline) ctx.counters.cellsChanged++;
     }
   }
-  for (const a of added) {
-    await recordCompetitorEvent(workspaceId, null, "cmp_capability_added", { capabilityId: a.capabilityId, name: a.name, domainId: a.domainId, inSuggestedDomain: a.inSuggestedDomain, competitorId, analysisId: ctx.run.id, pages: a.pages, value: valueOf.get(a.capabilityId) ?? "found" });
-  }
 
-  // ——— C. The cells are current as of now ———
-  await db.competitorAnalysis.updateMany({ where: { id: ctx.run.id }, data: { appliedAt: now } });
-  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}`);
-  await ctx.flush();
-
-  // ——— D. A row this run created is looked for at the other competitors: a follow-up run each (no page is read again) ———
-  if (added.length) {
+  // ——— C. A row made from this competitor's items is looked for at the other competitors: a follow-up run each (no page is read again) ———
+  // Which rows: read from the tables, not remembered — the rows made from this competitor's items since its last
+  // finished run. So a run that crashed or failed after making a row (in this step, or later) still gets its
+  // follow-up runs: from this run when it continues, or from the competitor's next run. Before the cells are marked
+  // current, for the same reason.
+  const [lastDone, made] = await Promise.all([
+    db.competitorAnalysis.findFirst({ where: { competitorId, status: "done", appliedAt: { not: null } }, orderBy: { appliedAt: "desc" }, select: { appliedAt: true } }),
+    db.competitorItem.findMany({ where: { competitorId, kind: "capability", matchedBy: "created", capability: { is: { state: "active" } } }, select: { capability: { select: { id: true, createdAt: true } } } }),
+  ]);
+  const fresh = rowsSince(made.flatMap((m) => (m.capability ? [m.capability] : [])), lastDone?.appliedAt ?? null);
+  if (fresh.length) {
     const others = await queueCatalogAnalyses(workspaceId, { exceptCompetitorId: competitorId });
     if (others) ctx.log("info", `${others} other competitor${others === 1 ? "" : "s"} queued: the new rows are looked for there too`);
   }
+
+  // ——— D. The cells are current as of now ———
+  await ctx.markApplied(now);
+  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}`);
+  await ctx.flush();
 }

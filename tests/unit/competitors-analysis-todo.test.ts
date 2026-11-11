@@ -1,6 +1,6 @@
 /** Capability Analysis — what is due (analysis/todo.ts): a run keeps no cursor, the to-do is computed from state. Pure module. */
 import { describe, expect, it } from "vitest";
-import { carriedFactsBaseline, factsBaseline, factsBaselineSources, factsTodo, readKey, researchTodo, tooManyFailed } from "@/lib/competitors/analysis/todo";
+import { carriedFactsBaseline, factsBaseline, factsBaselineSources, factsTodo, readKey, researchTodo, rowsSince, tooManyFailed } from "@/lib/competitors/analysis/todo";
 
 describe("researchTodo", () => {
   const V = "research-1";
@@ -74,5 +74,20 @@ describe("the facts baseline is carried over from the competitor's last unfinish
   it("sources never read are baseline as before; an inherited source that no longer exists is dropped; no source twice", () => {
     const pages = [{ sourceId: "s1", factsKey: "facts-1:h" }, { sourceId: "s2", factsKey: null }];
     expect(factsBaseline(["s1", "s2"], pages, ["s1", "s2", "gone"])).toEqual(["s2", "s1"]);
+  });
+});
+
+describe("rowsSince — the rows a competitor's runs made that still need their follow-up runs", () => {
+  const row = (id: string, at: string) => ({ id, createdAt: new Date(at) });
+  const rows = [row("old", "2026-11-01T10:00:00Z"), row("new", "2026-11-11T10:05:00Z")];
+  it("the competitor never finished a run: every row made from its items", () => {
+    expect(rowsSince(rows, null).map((r) => r.id)).toEqual(["old", "new"]);
+  });
+  it("only the rows made after its last finished run — whichever run made them, also one that crashed or failed after making them", () => {
+    expect(rowsSince(rows, new Date("2026-11-11T10:00:00Z")).map((r) => r.id)).toEqual(["new"]);
+  });
+  it("nothing made since: no follow-up", () => {
+    expect(rowsSince(rows, new Date("2026-11-11T11:00:00Z"))).toEqual([]);
+    expect(rowsSince([], null)).toEqual([]);
   });
 });
