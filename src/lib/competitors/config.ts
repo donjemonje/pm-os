@@ -83,6 +83,10 @@ export const HEARTBEAT_MS = 30_000;
 export const MAX_PARALLEL_REMOTE = 8;
 /** A local-scan request older than this emails support@pm-os.io once and keeps waiting. */
 export const LOCAL_ALERT_MS = 24 * 3600_000;
+/** The station checks in every 15 minutes: no check-in for this long (and no scan being read) means it is off. */
+export const STATION_ONLINE_MS = 20 * 60_000;
+/** The "station is off" email goes out when a scan starts, at most once per this long. */
+export const STATION_OFF_ALERT_EVERY_MS = 3600_000;
 /** A scan token stays valid this long after its scan reached a final state. */
 export const SCAN_TOKEN_GRACE_MS = 15 * 60_000;
 /** The poller rotates its machine key this often (no expiry; rotation is automatic). */

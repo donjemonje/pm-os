@@ -1373,6 +1373,48 @@ test.describe("Website Scanning rows", () => {
     }
   });
 
+  test("WS-39 a scan starts while the station is off: support is emailed at once, at most one email an hour; with the station on, no email", async () => {
+    test.setTimeout(120_000);
+    const KEY = "competitors.stationOffAlert";
+    const alert = () => withTestDb(async (db) => ((await db.appSetting.findUnique({ where: { key: KEY } }))?.value ?? null) as { at: string; scanId: string } | null);
+    const stationLastSeen = (at: Date) => withTestDb((db) => db.scannerKey.updateMany({ where: { revokedAt: null }, data: { lastUsedAt: at } }));
+    const settle = () => new Promise((r) => setTimeout(r, 2000));
+    // Setup: the station last checked in 2 hours ago, reads nothing right now, and no alert is on record.
+    await stationLastSeen(new Date(Date.now() - 2 * HOUR));
+    await withTestDb(async (db) => {
+      await db.competitorScan.updateMany({ where: { lane: "local", status: "running" }, data: { heartbeatAt: new Date(Date.now() - HOUR) } });
+      await db.appSetting.deleteMany({ where: { key: KEY } });
+    });
+
+    // 1. Station off → the email goes out when the scan starts (not after 24 hours).
+    const a = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off A");
+    const scanA = await waitForScanWithStatus(a.sourceId, "pending_local");
+    await expect.poll(async () => (await alert())?.scanId ?? null, { timeout: 15_000, intervals: [250, 500] }).toBe(scanA.id);
+    const first = (await alert())!;
+    expect((await requestOf(scanA.id)).state, "the scan keeps waiting").toBe("waiting");
+
+    // 2. A second scan within the hour sends nothing more.
+    const b = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off B");
+    await waitForScanWithStatus(b.sourceId, "pending_local");
+    await settle();
+    expect(await alert(), "still the first email only").toEqual(first);
+
+    // 3. More than an hour later, but the station is on (checked in just now) → no email.
+    const old = { at: new Date(Date.now() - 2 * HOUR).toISOString(), scanId: scanA.id };
+    await withTestDb((db) => db.appSetting.update({ where: { key: KEY }, data: { value: old } }));
+    await stationLastSeen(new Date());
+    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off C");
+    await waitForScanWithStatus(c.sourceId, "pending_local");
+    await settle();
+    expect(await alert(), "station on: nothing sent").toEqual(old);
+
+    // 4. The station is off again and the hour has passed → the next scan emails again.
+    await stationLastSeen(new Date(Date.now() - 2 * HOUR));
+    const d = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off D");
+    const scanD = await waitForScanWithStatus(d.sourceId, "pending_local");
+    await expect.poll(async () => (await alert())?.scanId ?? null, { timeout: 15_000, intervals: [250, 500] }).toBe(scanD.id);
+  });
+
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
     // Knobs: run-once, Mac locked, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
     // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".

@@ -31,6 +31,8 @@ const KEYS = {
   remote: "competitors.remoteScanEnabled",
   analysisOff: "competitors.analysisDisabled",
   clock: "competitors.clockOffsetMs",
+  /** { at, scanId } of the last "station is off" email (one per STATION_OFF_ALERT_EVERY_MS). */
+  stationOffAlert: "competitors.stationOffAlert",
   /** TEST KNOBS: a shorter time limit / a smaller storage limit for one test. Honoured only with COMPETITORS_TEST_KNOBS=on. */
   ceilingMs: "competitors.test.ceilingMs",
   storageLimit: "competitors.test.storageLimitChars",
@@ -54,6 +56,18 @@ export async function setGlobalScanSettings(patch: Partial<GlobalScanSettings>):
   if (patch.remoteScanEnabled !== undefined) await writeSetting(KEYS.remote, patch.remoteScanEnabled);
   if (patch.analysisDisabled !== undefined) await writeSetting(KEYS.analysisOff, patch.analysisDisabled);
   return getGlobalScanSettings();
+}
+
+/** The last "the local station is off" email: when it went out and for which scan. */
+export async function lastStationOffAlert(): Promise<{ at: Date; scanId: string } | null> {
+  const v = (await readSetting(KEYS.stationOffAlert)) as { at?: unknown; scanId?: unknown } | null | undefined;
+  if (!v || typeof v.at !== "string" || typeof v.scanId !== "string") return null;
+  const at = new Date(v.at);
+  return Number.isNaN(at.getTime()) ? null : { at, scanId: v.scanId };
+}
+
+export async function noteStationOffAlert(at: Date, scanId: string): Promise<void> {
+  await writeSetting(KEYS.stationOffAlert, { at: at.toISOString(), scanId });
 }
 
 // ————— Clock (test knob) —————

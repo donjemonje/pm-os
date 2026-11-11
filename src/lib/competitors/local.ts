@@ -1,8 +1,8 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { db } from "../db";
 import { sendEmail } from "../mailer";
-import { ACTIVE_SCAN_STATUSES, KEY_ROTATE_DAYS, KEY_ROTATION_GRACE_MS, LOCAL_ALERT_MS, SCAN_TOKEN_GRACE_MS } from "./config";
-import { now } from "./settings";
+import { ACTIVE_SCAN_STATUSES, KEY_ROTATE_DAYS, KEY_ROTATION_GRACE_MS, LOCAL_ALERT_MS, SCAN_TOKEN_GRACE_MS, STALE_MS, STATION_OFF_ALERT_EVERY_MS, STATION_ONLINE_MS } from "./config";
+import { lastStationOffAlert, noteStationOffAlert, now } from "./settings";
 
 /**
  * The LOCAL lane (Website Scanning PRD 2026-11-04): a scan the remote lane
@@ -146,6 +146,72 @@ export async function createLocalRequest(scanId: string): Promise<void> {
     db.localScanRequest.upsert({ where: { scanId }, create: { workspaceId: scan.workspaceId, scanId, sourceId: scan.sourceId, state: "waiting" }, update: { state: "waiting", startedAt: null, finishedAt: null, keyId: null } }),
     db.competitorSource.update({ where: { id: scan.sourceId }, data: { lastStatus: "pending" } }),
   ]);
+  // The scan is parked whatever happens here: an email that cannot be sent never fails a scan.
+  try {
+    await alertStationOff(scanId);
+  } catch (e) {
+    console.error("[competitors] station-off alert failed", scanId, e);
+  }
+}
+
+export function appUrl(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000").replace(/\/+$/, "");
+}
+
+/**
+ * Is a station on? Yes when a machine key checked in within STATION_ONLINE_MS
+ * (the poller checks in every 15 minutes), or when a station is reading a scan
+ * right now — it does not check in while it reads, its scan's heartbeat is the
+ * sign of life.
+ */
+export async function stationStatus(t: Date): Promise<{ online: boolean; lastContact: Date | null }> {
+  const key = await db.scannerKey.findFirst({ where: { revokedAt: null, lastUsedAt: { not: null } }, orderBy: { lastUsedAt: "desc" }, select: { lastUsedAt: true } });
+  const lastContact = key?.lastUsedAt ?? null;
+  if (lastContact && t.getTime() - lastContact.getTime() <= STATION_ONLINE_MS) return { online: true, lastContact };
+  // Heartbeats are wall-clock times (not the test clock), so they are compared with the wall clock.
+  const reading = await db.localScanRequest.findFirst({ where: { state: "running", scan: { status: "running", heartbeatAt: { gt: new Date(Date.now() - STALE_MS) } } }, select: { id: true } });
+  return { online: !!reading, lastContact };
+}
+
+/**
+ * A scan was just parked in the local lane (a new competitor, Rescan, the
+ * schedule): when no station is on, support hears about it now instead of
+ * after 24 hours (Daniel 2026-11-11). At most one email per
+ * STATION_OFF_ALERT_EVERY_MS, so a schedule that parks twenty scans sends one.
+ * The 24-hour email per request stays. Returns true when an email went out.
+ */
+export async function alertStationOff(scanId: string): Promise<boolean> {
+  const t = await now();
+  const station = await stationStatus(t);
+  if (station.online) return false;
+  const last = await lastStationOffAlert();
+  // A last alert "in the future" (the test clock moved back) does not hold the next one.
+  if (last && last.at.getTime() <= t.getTime() && t.getTime() - last.at.getTime() < STATION_OFF_ALERT_EVERY_MS) return false;
+  const r = await db.localScanRequest.findUnique({
+    where: { scanId },
+    include: { source: { select: { url: true, competitor: { select: { name: true, workspace: { select: { organization: { select: { name: true } } } } } } } } },
+  });
+  if (!r) return false;
+  const waiting = await db.localScanRequest.count({ where: { state: "waiting" } });
+  const org = r.source.competitor.workspace.organization.name;
+  await sendEmail({
+    to: SUPPORT_EMAIL,
+    subject: `[PM-OS] Local station is off — scan waiting: ${r.source.competitor.name} (${org})`,
+    text: [
+      `A competitor scan just started and no local station is on to read it.`,
+      ``,
+      `Organization: ${org}`,
+      `Competitor:   ${r.source.competitor.name} — ${r.source.url}`,
+      `Station last checked in: ${station.lastContact ? station.lastContact.toISOString() : "never"}`,
+      `Scans waiting now: ${waiting}`,
+      ``,
+      `What to do: make sure the local station is awake (charger, lid open, no sleep when the display is off) and the poller is running (launchctl list | grep pm-os). The scan keeps waiting; nothing is lost.`,
+      `This email is sent at most once an hour; a scan still waiting after 24 hours gets its own email.`,
+      `Scan log: ${appUrl()}/admin/competitors`,
+    ].join("\n"),
+  });
+  await noteStationOffAlert(t, scanId);
+  return true;
 }
 
 export interface WaitingScan {
