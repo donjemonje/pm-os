@@ -629,6 +629,10 @@ model Competitor {
   facts    ProfileFact[]
   sources  CompetitorSource[]
   media    CompetitorMedia[]
+  analyses        CompetitorAnalysis[]
+  items           CompetitorItem[]
+  findings        PageFinding[]
+  featureStatuses FeatureStatus[]
 
   @@unique([workspaceId, host])
   @@index([workspaceId])
@@ -673,10 +677,9 @@ model CompetitorDomain {
 }
 
 /// A matrix row: one domain, many of the org's product lines (names, matched
-/// against ProductLine.name). `ourStatus` is the org's own cell — "has" |
-/// "partial" | "missing" — set by PMs (default has; a competitor suggestion
-/// accepted into the catalog starts as missing = a gap). origin "ai" = a
-/// competitor scan suggested it; state "suggested" rows wait for a PM.
+/// against ProductLine.name). `ourStatus` is the org's own cell — "found" |
+/// "not_found" — set by PMs (default found; a capability an analysis found only
+/// at a competitor starts as not_found = a gap). origin "ai" = an analysis added it.
 model Capability {
   id             String           @id @default(uuid())
   workspaceId    String
@@ -691,8 +694,8 @@ model Capability {
   /// Product-line names of the org that serve this capability (story 2 decision:
   /// product lines are the org's only; competitor products live in ProfileFact).
   productLines   Json             @default("[]")
-  /// "has" | "partial" | "missing"
-  ourStatus      String           @default("has")
+  /// "found" | "not_found"
+  ourStatus      String           @default("found")
   position       Int              @default(0)
   /// "manual" | "ai"
   origin         String           @default("manual")
@@ -707,12 +710,18 @@ model Capability {
   removedAt      DateTime?
   /// The PM who removed it (plain id, no relation: the record outlives the user).
   removedById    String?
+  /// Set when an analysis created the row inside a suggested domain: the existing domain PMOS AI named as closest
+  /// (plain id, no relation). A declined domain moves the row there.
+  closestDomainId String?
   /// Ideas this roadmap row is linked to: created from the row, or matched to an existing idea.
   ideas          CapabilityIdea[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   statuses CapabilityStatus[]
+  features Feature[]
+  items    CompetitorItem[]
+  findings PageFinding[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, domainId])
@@ -741,12 +750,21 @@ model CapabilityStatus {
   competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
   capabilityId String
   capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
-  /// "has" | "partial" | "missing" | "unknown"
-  value        String     @default("unknown")
-  /// 0–1 from PMOS AI; low confidence is shown as "partial?" to confirm.
+  /// "found" | "low" | "not_found" — set by the analysis run's apply step from the evidence, by fixed rules.
+  value        String     @default("not_found")
+  /// No longer written or read (the confidence is a value now); left in place for a later cleanup push.
   confidence   Float?
+  /// The top-ranked evidence behind the cell (the rest is the PageFinding rows): quote, page, why, their name for it.
   quote        String?
   sourceUrl    String?
+  reasoning    String?
+  wording      String?
+  /// Distinct pages that carry evidence for the cell.
+  evidenceCount Int       @default(0)
+  /// The analysis run that last wrote the cell.
+  analysisId   String?
+  /// What the last second look that found nothing was asked with (analysis/secondlook.ts lookKey); same key = not asked again.
+  lookKey      String?
   scanId       String?
   /// When `value` last changed (drives "New changes" and "Changed <date>").
   changedAt    DateTime?
@@ -782,6 +800,194 @@ model StatusHistory {
   at        DateTime         @default(now())
 
   @@index([statusId, at])
+}
+
+/// One analysis of one competitor's stored pages (Capability Analysis, "How the analysis runs").
+/// Queued by a finished scan, by a catalog change, or by a PM-OS admin. One run executes at a time, oldest first.
+model CompetitorAnalysis {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// "scan" | "catalog" (our catalog got a row this competitor was never checked for) | "manual" (PM-OS admin / CLI)
+  trigger      String
+  /// The scan whose end queued it (the newest one when several were folded into one queued run); null for catalog / manual.
+  scanId       String?
+  startedById  String?
+  /// "queued" | "running" | "waiting" (PMOS AI has no capacity; sleeping until resumeAt) | "done" | "failed" | "cancelled"
+  status       String     @default("queued")
+  /// Display only — where the run is: "research" | "merge" | "match" | "second_look" | "apply" | "facts" | "done".
+  /// A resumed run never trusts it: every step recomputes its own to-do from the tables.
+  step         String     @default("research")
+  /// The one thing that cannot be derived: { factsBaselineSources: string[] }.
+  cursor       Json       @default("{}")
+  /// Set while status = "waiting".
+  resumeAt     DateTime?
+  /// Times the run was put back in the queue because its runner stopped reporting (3 → failed).
+  staleCount   Int        @default(0)
+  /// TEST KNOB: the run takes injected answers and may never call a model.
+  injected     Boolean    @default(false)
+  model        String?
+  createdAt    DateTime   @default(now())
+  startedAt    DateTime?
+  /// When the apply step last finished (cells are current as of this moment).
+  appliedAt    DateTime?
+  finishedAt   DateTime?
+  heartbeatAt  DateTime   @default(now())
+  /// Research progress for the UI.
+  pagesTotal   Int        @default(0)
+  pagesDone    Int        @default(0)
+  /// Everything else that is counted (analysis/engine.ts Counters).
+  counters     Json       @default("{}")
+  /// "none" | "capacity" | "answer" | "ai" | "stale" | "other"
+  errorKind    String?
+  error        String?
+  /// [{at, level, msg, url?}] — same shape as CompetitorScan.log.
+  log          Json       @default("[]")
+
+  @@index([status, createdAt])
+  @@index([competitorId, createdAt])
+  @@index([workspaceId, createdAt])
+}
+
+/// One thing a page says the competitor offers, with the quote that proves it. Written by the research step (one call per
+/// page) and by the second look. A finding exists only while its page text is the text it was read from: when the page
+/// changes or is removed, its findings are deleted and the page is read again.
+model PageFinding {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  competitorId  String
+  competitor    Competitor      @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  pageId        String
+  page          SourcePage      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  /// SourcePage.hash of the text the quote was verified against.
+  pageHash      String
+  /// The run that wrote it (plain id, no relation).
+  analysisId    String?
+  /// "research" | "second_look"
+  origin        String          @default("research")
+  /// "capability" | "feature"
+  kind          String
+  /// Their name for it, as the page says it.
+  wording       String
+  /// For a feature: the wording of the capability it sits under on this page.
+  parentWording String?
+  /// Verbatim from the page (verified in code), at most 400 characters.
+  quote         String
+  /// One sentence: why this quote means the capability exists.
+  reasoning     String
+  /// The competitor's merged item this finding belongs to (set by the merge step; null for second-look findings).
+  itemId        String?
+  item          CompetitorItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  /// Second look only: the capability of ours it answers.
+  capabilityId  String?
+  capability    Capability?     @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+
+  @@index([pageId])
+  @@index([itemId])
+  @@index([competitorId, capabilityId])
+}
+
+/// One capability or feature of a competitor, in their words, after the same thing on several pages was merged.
+/// Carries the saved match to our catalog: decided once, reused on every later run.
+model CompetitorItem {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  competitorId    String
+  competitor      Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// "capability" | "feature"
+  kind            String
+  /// Stable key: "c:<wordingKey>" or "f:<parent item key>><wordingKey>" (analysis/items.ts itemKey).
+  key             String
+  /// Their most common wording for it — "the competitor's own name", shown behind the evidence.
+  name            String
+  /// wordingKeys merged into this item (code merge and saved AI merges): a later finding with one of them joins it without a call.
+  wordings        Json             @default("[]")
+  parentItemId    String?
+  parent          CompetitorItem?  @relation("ItemParent", fields: [parentItemId], references: [id], onDelete: Cascade)
+  children        CompetitorItem[] @relation("ItemParent")
+  /// False until the item went through one AI merge call.
+  mergeChecked    Boolean          @default(false)
+  /// The saved match: exactly one of the two is set once the item is settled.
+  capabilityId    String?
+  capability      Capability?      @relation(fields: [capabilityId], references: [id], onDelete: SetNull)
+  featureId       String?
+  feature         Feature?         @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  /// "name" | "alias" (resolved in code through decisions.ts) | "ai" (the match call) | "created" (the apply step made the row
+  /// from this item) | "silent" (it is a row a PM removed or declined: remembered, never shown)
+  matchedBy       String?
+  matchedAt       DateTime?
+  matchAnalysisId String?
+  /// The match call's answer for an item that is none of ours, kept until the apply step turns it into a row:
+  /// { domainId, newDomainName, newDomainDefinition, closestDomainId, marketName, description }
+  placement       Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  findings PageFinding[]
+
+  @@unique([competitorId, key])
+  @@index([competitorId, kind])
+  @@index([capabilityId])
+  @@index([featureId])
+}
+
+/// A detail of how a capability works — the level under a capability in the table. Same PM-decision fields as Capability.
+model Feature {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  capabilityId String
+  capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  name         String
+  description  String     @default("")
+  /// The org's own mark: "found" | "not_found". A feature found only at competitors starts as not_found.
+  ourStatus    String     @default("not_found")
+  position     Int        @default(0)
+  /// "manual" | "ai"
+  origin       String     @default("manual")
+  /// "active" | "removed" (kept so an analysis never adds it back)
+  state        String     @default("active")
+  /// Names a PM replaced by renaming.
+  aliases      Json       @default("[]")
+  removedAt    DateTime?
+  removedById  String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  statuses FeatureStatus[]
+  items    CompetitorItem[]
+
+  @@unique([capabilityId, name])
+  @@index([workspaceId, capabilityId])
+}
+
+/// One cell of a feature row. Same rules as CapabilityStatus; no history (the feed does not carry features in this build).
+model FeatureStatus {
+  id             String     @id @default(uuid())
+  workspaceId    String
+  competitorId   String
+  competitor     Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  featureId      String
+  feature        Feature    @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  /// "found" | "low" | "not_found"
+  value          String     @default("not_found")
+  quote          String?
+  sourceUrl      String?
+  reasoning      String?
+  wording        String?
+  evidenceCount  Int        @default(0)
+  analysisId     String?
+  changedAt      DateTime?
+  overrideValue  String?
+  overrideNote   String?
+  overrideUserId String?
+  overrideAt     DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([competitorId, featureId])
+  @@index([workspaceId])
 }
 
 /// A lean-profile fact read off the website. `kind` is a closed list:
@@ -959,6 +1165,8 @@ model CompetitorScanRun {
   /// {competitors, gaps, raised, lowered, facts, suggestions, recipients, skipped?}
   summary     Json      @default("{}")
   notifiedAt  DateTime?
+  /// The claim that makes the run's notification happen once, after the analyses its scans queued.
+  summarizedAt DateTime?
 
   scans CompetitorScan[]
 
@@ -1034,7 +1242,16 @@ model SourcePage {
   /// then dropped. Set on the first change since the last successful analysis, kept across further changes until then.
   previousText String?
   previousHash String?
+  /// "<RESEARCH_VERSION>:<hash>" of the text the analysis's research step last read; a different value = the page is due.
+  analyzedKey String?
+  analyzedAt  DateTime?
+  /// Set when the page's research answer was unusable; cleared when the page is read again.
+  analysisError String?
+  /// "<FACTS_VERSION>:<hash>" of the text the facts step last read.
+  factsKey    String?
   updatedAt   DateTime         @updatedAt
+
+  findings PageFinding[]
 
   @@unique([sourceId, url])
   @@index([workspaceId])
