@@ -19,6 +19,8 @@ type Params = { params: Promise<{ id: string }> };
  * cross-reference domains by name); the answer carries `renamedReferences`.
  * A rename also keeps the replaced name behind the domain (aliases): a scan that meets the old name recognises it.
  * PATCH {state:"active"} on a removed domain restores it, empty, at the end of the order.
+ * PATCH {state:"active"} on a suggested domain approves it; {state:"dismissed"} declines it: its capabilities move
+ * to their closest existing domain and the domain is never suggested again (Capability Analysis, "How the analysis runs").
  * DELETE ?moveTo=<active domain id>: the PM removes the domain. It is not erased: it leaves the table, scans never
  * suggest it again, and it can be restored. Its capabilities stay in the table — they move to the domain the PM
  * picks, asked once (Capability Analysis PRD, "PM and PMOS AI").
@@ -41,19 +43,39 @@ export async function PATCH(req: Request, { params }: Params) {
   }
   const data: { name?: string; description?: string; summary?: string; color?: string; state?: string; position?: number; aliases?: string[] } = {};
   let field: string | null = null;
-  // Decide a suggested domain: accept (its suggested capabilities stay for their own decision) or dismiss
-  // (its suggested capabilities go with it; the name is never proposed again).
+  // Decide a domain an analysis suggested. Approve: it joins the table as it is. Decline: its capabilities stay in the
+  // table — each moves to the existing domain PMOS AI named as closest for it — and the name is never suggested again.
   if (body.state === "active" || body.state === "dismissed") {
-    if (existing.state !== "suggested") return bad("Only a suggested domain can be accepted or dismissed.");
-    data.state = body.state;
+    if (existing.state !== "suggested") return bad(C.settings.onlySuggestedDecided);
     if (body.state === "active") {
       const agg = await db.competitorDomain.aggregate({ where: { workspaceId: ctx.workspaceId, state: "active" }, _max: { position: true } });
-      data.position = (agg._max.position ?? -1) + 1;
-    } else {
-      await db.capability.updateMany({ where: { workspaceId: ctx.workspaceId, domainId: id, state: "suggested" }, data: { state: "dismissed" } });
+      await db.$transaction([
+        db.competitorDomain.update({ where: { id }, data: { state: "active", position: (agg._max.position ?? -1) + 1 } }),
+        db.capability.updateMany({ where: { workspaceId: ctx.workspaceId, domainId: id, closestDomainId: { not: null } }, data: { closestDomainId: null } }),
+      ]);
+      await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_domain_suggestion", { domainId: id, competitorId: existing.suggestedById, decision: "accepted" });
+      return stateResponse(ctx);
     }
-    await db.competitorDomain.update({ where: { id }, data });
-    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_domain_suggestion", { domainId: id, competitorId: existing.suggestedById, decision: body.state === "active" ? "accepted" : "dismissed" });
+    const [rows, activeDomains] = await Promise.all([
+      db.capability.findMany({ where: { workspaceId: ctx.workspaceId, domainId: id, state: "active" }, select: { id: true, name: true, closestDomainId: true } }),
+      db.competitorDomain.findMany({ where: { workspaceId: ctx.workspaceId, state: "active" }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { id: true } }),
+    ]);
+    const active = new Set(activeDomains.map((d) => d.id));
+    const fallback = activeDomains[0]?.id ?? null;
+    if (rows.length > 0 && !fallback) return bad(C.settings.removeDomainLast);
+    // The closest domain when it is still in the table, else the first domain of the table.
+    const targetOf = (closestDomainId: string | null) => (closestDomainId && active.has(closestDomainId) ? closestDomainId : fallback!);
+    await db.$transaction([
+      ...rows.map((k) => db.capability.update({ where: { id: k.id }, data: { domainId: targetOf(k.closestDomainId), closestDomainId: null } })),
+      // Rows of the declined domain that are not in the table (removed earlier) keep no pointer to it either.
+      db.capability.updateMany({ where: { workspaceId: ctx.workspaceId, domainId: id, closestDomainId: { not: null } }, data: { closestDomainId: null } }),
+      db.competitorDomain.update({ where: { id }, data: { state: "dismissed" } }),
+    ]);
+    const movedTo = [...new Set(rows.map((k) => targetOf(k.closestDomainId)))];
+    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_domain_suggestion", { domainId: id, competitorId: existing.suggestedById, decision: "dismissed", moved: rows.length, movedTo: movedTo.join(",") });
+    for (const k of rows) {
+      await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", entityId: k.id, action: "move", via: "domain_declined", field: "domainId", from: id, to: targetOf(k.closestDomainId), name: k.name });
+    }
     return stateResponse(ctx);
   }
   if (body.name !== undefined) {

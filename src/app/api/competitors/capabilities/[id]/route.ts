@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { isOwnStatus, MAX_OWN_PRODUCT, splitSuggestedQuote } from "@/lib/competitors/config";
+import { isOwnStatus, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
 import { queueCatalogAnalyses } from "@/lib/competitors/analysis/engine";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { aliasesAfterRename } from "@/lib/competitors/decisions";
@@ -15,9 +15,9 @@ type Params = { params: Promise<{ id: string }> };
 
 /**
  * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
- * org's own status (`ourStatus`: found / not_found — any member), or
- * decide a suggestion (`state`: "active" = accept, "dismissed" = dismiss), or restore a removed row
+ * org's own status (`ourStatus`: found / not_found — any member), or restore a removed row
  * (`state`: "active", with an active `domainId` when its own domain is not in the table).
+ * There is nothing to accept or decline: a capability an analysis finds is just added to the table.
  * DELETE: the PM removes the row. It is not erased: it leaves the table, its statuses are kept,
  * scans never add it back, and it can be restored (Capability Analysis PRD, "PM and PMOS AI").
  *
@@ -108,56 +108,11 @@ export async function PATCH(req: Request, { params }: Params) {
     field = "ourStatus";
   }
 
-  let decision: "accepted" | "dismissed" | null = null;
-  if (body.state === "active" || body.state === "dismissed") {
-    if (existing.state === "suggested") {
-      decision = body.state === "active" ? "accepted" : "dismissed";
-      data.state = body.state;
-      if (body.state === "active") {
-        data.position = await nextActivePosition(ctx.workspaceId);
-        // Accepting a capability inside a suggested domain accepts the domain with it.
-        const domain = await db.competitorDomain.findUnique({ where: { id: (data.domainId as string | undefined) ?? existing.domainId }, select: { id: true, state: true } });
-        // A row enters the table only inside a domain that is in the table (or one accepted with it).
-        if (domain?.state !== "active" && domain?.state !== "suggested") return bad(C.settings.activeDomainRequired);
-        if (domain?.state === "suggested") {
-          const agg = await db.competitorDomain.aggregate({ where: { workspaceId: ctx.workspaceId, state: "active" }, _max: { position: true } });
-          await db.competitorDomain.update({ where: { id: domain.id }, data: { state: "active", position: (agg._max.position ?? -1) + 1 } });
-          await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_domain_suggestion", { domainId: domain.id, competitorId: existing.suggestedById, decision: "accepted", via: "capability" });
-        }
-      }
-    } else if (body.state === "active" && existing.state === "dismissed") {
-      const domain = await db.competitorDomain.findUnique({ where: { id: (data.domainId as string | undefined) ?? existing.domainId }, select: { state: true } });
-      if (domain?.state !== "active") return bad(C.settings.activeDomainRequired);
-      data.state = "active";
-      data.position = await nextActivePosition(ctx.workspaceId);
-      decision = "accepted";
-    }
-  }
-
   await db.capability.update({ where: { id }, data });
   if (typeof data.name === "string") await releaseCapabilityAlias(ctx.workspaceId, data.name, id);
-  if (decision === "accepted" && existing.suggestedById) {
-    // The competitor whose scan proposed the row has it: write that cell from the
-    // suggestion's evidence, unless a later scan already classified it.
-    const { quote, url } = splitSuggestedQuote(existing.suggestedQuote);
-    const current = await db.capabilityStatus.findUnique({ where: { competitorId_capabilityId: { competitorId: existing.suggestedById, capabilityId: id } }, select: { id: true, value: true } });
-    const evidence = { value: "found", quote: quote || null, sourceUrl: url, confidence: null, scanId: null, changedAt: null };
-    if (!current) {
-      await db.capabilityStatus.create({ data: { workspaceId: ctx.workspaceId, competitorId: existing.suggestedById, capabilityId: id, ...evidence } });
-    } else if (current.value === "not_found") {
-      await db.capabilityStatus.update({ where: { id: current.id }, data: evidence });
-    }
-  }
-  // A decision and the edits sent with it (a rename or a move while accepting) are each recorded.
+  // Each changed field is recorded on its own.
   for (const e of events) await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", entityId: id, ...e });
-  if (decision) {
-    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_capability_suggestion", {
-      capabilityId: id,
-      competitorId: existing.suggestedById,
-      decision,
-      domainChanged: data.domainId !== undefined,
-    });
-  } else if (!events.length) {
+  if (!events.length) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "update", entityId: id, field, from: null, to: null });
   }
   return stateResponse(ctx);

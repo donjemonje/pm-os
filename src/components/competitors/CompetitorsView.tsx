@@ -10,7 +10,7 @@ import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
 import { rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
@@ -264,11 +264,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   // ——— Derived data ———
   const competitors = state.competitors;
   const activeCaps = useMemo(() => state.capabilities.filter((k) => k.state === "active"), [state.capabilities]);
-  // Scan suggestions wait in the matrix itself (dashed rows / a dashed domain group) for a PM's ✓ or ×.
-  const suggestedCaps = useMemo(() => state.capabilities.filter((k) => k.state === "suggested"), [state.capabilities]);
+  // Capabilities an analysis finds are just added. Only a NEW DOMAIN waits for a PM: a dashed group at the bottom of the table, approve or decline.
   const activeDomains = state.domains.filter((d) => d.state === "active");
-  const [suggestionsOnly, setSuggestionsOnly] = useState(false);
-  const decideCapability = (id: string, decision: "active" | "dismissed") => patch(`/api/competitors/capabilities/${id}`, { state: decision });
   const decideDomain = (id: string, decision: "active" | "dismissed") => patch(`/api/competitors/domains/${id}`, { state: decision });
   const cellMap = useMemo(() => {
     const m = new Map<string, CellRow>();
@@ -329,21 +326,14 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     const wanted = STATUS_VALUES[STATUS_OPTIONS.indexOf(statusFilter[0])];
     return shownCompetitors.some((c) => (cellOf(c.id, k.id)?.value ?? "not_found") === wanted);
   };
-  const visibleCaps = suggestionsOnly ? [] : activeCaps.filter((k) => {
+  const visibleCaps = activeCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q) && !k.description.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
     if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
     if (gapsOnly && rowKind(k) !== "gap") return false;
     return matchesStatus(k);
   });
-  // Suggested rows follow the search, domain and competitor filters; status/gap/product-line filters do not apply to them.
-  const visibleSuggested = gapsOnly || productFilter.length || statusFilter.length ? [] : suggestedCaps.filter((k) => {
-    if (q && !k.name.toLowerCase().includes(q)) return false;
-    if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
-    if (competitorFilter.length && !shownCompetitors.some((c) => c.id === k.suggestedById)) return false;
-    return true;
-  });
-  const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && (visibleCaps.some((k) => k.domainId === d.id) || visibleSuggested.some((k) => k.domainId === d.id)));
+  const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && visibleCaps.some((k) => k.domainId === d.id));
   const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
 
   // ——— News feed: items since the baseline, grouped by day, per-user read marks ———
@@ -524,7 +514,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                   <div className="mt-0.5 text-[12.5px] text-fg-3">
                     {summary.parity == null ? C.strip.parityNone : C.strip.paritySub(summary.full, summary.total)}
                   </div>
-                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(activeDomains.length, activeCaps.length, competitors.length)}{suggestedCaps.length > 0 && ` · ${C.matrix.suggestedN(suggestedCaps.length)}`}</div>
+                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(activeDomains.length, activeCaps.length, competitors.length)}</div>
                 </div>
               </div>
               <StatCard label={C.strip.gaps} tone="#f0b43c" toneFg="#8a5a00" value={summary.measured ? summary.gaps : null} sub={summary.measured ? C.strip.gapsSub(summary.gaps) : C.strip.gapsNone} />
@@ -543,12 +533,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
               <button aria-pressed={gapsOnly} onClick={() => setGapsOnly((v) => !v)} className={chipClass(gapsOnly)}>
                 {C.filters.gapsOnly}{gapsOnly && <Check size={12} strokeWidth={3} />}
               </button>
-              {suggestedCaps.length > 0 && (
-                <button aria-pressed={suggestionsOnly} onClick={() => setSuggestionsOnly((v) => !v)} className={cn(chipClass(suggestionsOnly), !suggestionsOnly && "border-dashed")} data-testid="cmp-suggestions-chip">
-                  {C.matrix.suggestionsOnly}
-                  <span className={cn("inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px] font-semibold", suggestionsOnly ? "bg-white/25 text-white" : "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]")}>{suggestedCaps.length}</span>
-                </button>
-              )}
             </div>
 
             {/* Matrix */}
@@ -591,30 +575,26 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                     </tr>
                   </thead>
                   <tbody>
-                    {(activeCaps.length === 0 && suggestedCaps.length === 0) || competitors.length === 0 ? (
+                    {activeCaps.length === 0 || competitors.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-14 text-center">
                           <div className="font-title mb-1 text-[15px] font-bold">{activeCaps.length === 0 ? C.matrix.noCatalogTitle : C.matrix.emptyTitle}</div>
                           <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{activeCaps.length === 0 ? C.matrix.noCatalogBody : C.matrix.emptyBody(own)}</div>
                         </td>
                       </tr>
-                    ) : visibleCaps.length === 0 && visibleSuggested.length === 0 ? (
+                    ) : visibleCaps.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-10 text-center text-[13px] text-fg-3">No capability matches these filters.</td>
                       </tr>
                     ) : (
                       domainsWithRows.map((d) => {
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
-                        const sugRows = visibleSuggested.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
                         const covered = rows.filter((k) => ownOf(k) === "found").length;
                         const gaps = rows.filter((k) => rowKind(k) === "gap").length;
                         return (
                           <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length}
-                            suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} suggestedCount={sugRows.length} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}
-                            suggestedRows={sugRows.map((k) => (
-                              <SuggestedRow key={k.id} capability={k} org={own} seenAt={competitorName(k.suggestedById)} competitors={shownCompetitors} canEdit={canEdit} onDecide={(decision) => void decideCapability(k.id, decision)} descOpen={openDesc === k.id} onToggleDesc={() => toggleDesc(k.id)} />
-                            ))}>
+                            suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "found").length;
@@ -684,7 +664,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                 {C.matrix.legendLow}
               </span>
               <span className="inline-flex items-center gap-1.5"><span className="text-[11px] text-fg-faint">{C.values.not_found}</span>{C.matrix.legendNotFound}</span>
-              {suggestedCaps.length > 0 && <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-[3px] border border-dashed border-[rgba(36,87,245,.6)] bg-[rgba(36,87,245,.06)]" />{C.matrix.legendSuggested}</span>}
               <span className="ml-auto text-fg-muted">{C.matrix.legendHint}</span>
             </div>
           </section>
@@ -742,9 +721,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                             <FeedRow item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null} open={isOpen}
                               meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(isOpen ? null : item.key); if (!item.read) void markRead([item.key]); }} />
                             {isOpen && (
-                              <FeedDetail item={item} org={own} meaning={feedMeaning(item)} canEdit={canEdit}
-                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, rowId: item.capabilityId! }); } : null}
-                                onDecide={item.kind === "suggestion" && item.suggestionState === "suggested" && item.capabilityId ? (decision) => { void decideCapability(item.capabilityId!, decision); } : null} />
+                              <FeedDetail item={item} meaning={feedMeaning(item)}
+                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, rowId: item.capabilityId! }); } : null} />
                             )}
                           </div>
                         );
@@ -913,12 +891,10 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, suggestedCount = 0, suggestedRows, canEdit = false, onDecide }: {
+function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide }: {
   domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
-  /** Set when the domain itself is a scan suggestion (dashed group): the competitor it was seen at. */
+  /** Set when the domain itself is suggested by an analysis (dashed group at the bottom of the table): the competitor it was seen at. Its capabilities are ordinary rows. */
   suggestedBy?: string | null;
-  suggestedCount?: number;
-  suggestedRows?: React.ReactNode;
   canEdit?: boolean;
   onDecide?: (decision: "active" | "dismissed") => void;
 }) {
@@ -937,7 +913,6 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
               ) : (
                 <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
               )}
-              {suggestedCount > 0 && !isSuggested && <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedN(suggestedCount)}</span>}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
               <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
                 {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
@@ -945,12 +920,11 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
             </button>
-            {isSuggested && canEdit && onDecide && <DecideButtons accept={C.matrix.acceptDomain} dismiss={C.matrix.dismissDomain} onDecide={onDecide} />}
+            {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
       </tr>
       {open && children}
-      {open && suggestedRows}
     </>
   );
 }
@@ -1051,9 +1025,9 @@ function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedI
 }
 
 /** The signal opened in place, under its row: everything the feed knows about it, and the actions. */
-function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
-  item: FeedItem; org: string; meaning: string; canEdit: boolean;
-  onOpenCell: (() => void) | null; onDecide: ((decision: "active" | "dismissed") => void) | null;
+function FeedDetail({ item, meaning, onOpenCell }: {
+  item: FeedItem; meaning: string;
+  onOpenCell: (() => void) | null;
 }) {
   const at = new Date(item.at);
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -1088,15 +1062,9 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
             </span>
           </Row>
           <Row label={C.feed.detail.found}>{at.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Row>
-        {(onOpenCell || (onDecide && canEdit)) && (
+        {onOpenCell && (
           <div className="flex items-center gap-2 py-3">
-            {onOpenCell && <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>}
-            {onDecide && canEdit && (
-              <span className="ml-auto inline-flex gap-2">
-                <Button size="sm" onClick={() => onDecide("active")}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
-                <Button size="sm" variant="secondary" onClick={() => onDecide("dismissed")}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
-              </span>
-            )}
+            <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>
           </div>
         )}
       </div>
@@ -1104,112 +1072,19 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
   );
 }
 
-/** ✓ / × for a suggestion, same pair on a row and on a suggested domain's header. */
-function DecideButtons({ accept, dismiss, onDecide }: { accept: string; dismiss: string; onDecide: (decision: "active" | "dismissed") => void }) {
+/** ✓ / × on a suggested domain's header: approve keeps the domain, decline moves its capabilities to the closest existing domain. */
+function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: string; decline: string; declineHint: string; onDecide: (decision: "active" | "dismissed") => void }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-      <button type="button" onClick={() => onDecide("active")} title={accept} aria-label={accept} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
-      <button type="button" onClick={() => onDecide("dismissed")} title={dismiss} aria-label={dismiss} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
+      <button type="button" onClick={() => onDecide("active")} title={approve} aria-label={approve} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
+      <button type="button" onClick={() => onDecide("dismissed")} title={declineHint} aria-label={decline} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
     </span>
   );
 }
 
-/** A capability a scan proposed: dashed row at the end of its domain, same height as a catalog row; the proposing competitor's ✓ opens the evidence; ✓ / × to decide. */
-function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide, descOpen, onToggleDesc }: {
-  capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
-  descOpen: boolean; onToggleDesc: () => void;
-}) {
-  const { quote, url } = splitSuggestedQuote(capability.suggestedQuote);
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    track("cmp_suggestion_evidence_opened", { capabilityId: capability.id, competitorId: capability.suggestedById, hasUrl: Boolean(url) });
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-  return (
-    <>
-    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
-      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]">
-        <span className="inline-flex flex-wrap items-center gap-2">
-          {capability.name}
-          <DescriptionInfo name={capability.name} description={capability.description} ownProduct="" org={org} open={descOpen} onToggle={onToggleDesc} suggested hint={C.matrix.suggestedRowHint} />
-          <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested}</span>
-        </span>
-      </td>
-      <td className="bg-[rgba(36,87,245,.06)] text-center" title={C.matrix.ownCellTitle(org)}>
-        <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px font-mono text-[10px] font-semibold text-[#8a5a00]">{C.matrix.ownSuggested}</span>
-      </td>
-      {competitors.map((c) => (
-        <td key={c.id} className="text-center">
-          {c.id === capability.suggestedById ? (
-            <span className="relative inline-flex items-center justify-center">
-              <button
-                type="button"
-                onClick={() => setOpen(!open)}
-                title={C.matrix.suggestedCellHint(seenAt)}
-                aria-label={`${capability.name}: ${C.values.found} — ${C.matrix.suggestedCellHint(seenAt)}`}
-                aria-expanded={open}
-                className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", open && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-                data-testid="cmp-suggestion-evidence"
-              >
-                <OkMark size={16} />
-              </button>
-              {open && (
-                <>
-                  <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
-                  <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
-                    <div className="mb-2 flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-bold">{capability.name}</div>
-                        <div className="text-[11.5px] text-fg-muted">{C.matrix.suggested} · {C.settings.suggestedBy(seenAt)}</div>
-                      </div>
-                      <button type="button" onClick={() => setOpen(false)} aria-label={C.feed.detail.close} className="rounded-md p-1 text-fg-muted hover:bg-background"><X size={14} /></button>
-                    </div>
-                    {capability.description && <p className="m-0 mb-2 text-[12.5px] leading-snug text-foreground">{capability.description}</p>}
-                    {quote ? (
-                      <blockquote className="m-0 rounded-[8px] border-l-[3px] border-primary bg-bg-2 px-2.5 py-2 text-[12.5px] italic leading-snug text-[#1f2f47]">“{quote}”</blockquote>
-                    ) : (
-                      <div className="text-[12px] text-fg-faint">{C.cell.noEvidence}</div>
-                    )}
-                    {url && (
-                      <a href={url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-[12.5px] text-primary hover:underline" data-testid="cmp-suggestion-link">
-                        {C.matrix.learnMore}<ExternalLink size={12} />
-                      </a>
-                    )}
-                    {canEdit && (
-                      <div className="mt-3 flex items-center gap-2 border-t border-border pt-2.5">
-                        <Button size="sm" onClick={() => { setOpen(false); onDecide("active"); }}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
-                        <Button size="sm" variant="secondary" onClick={() => { setOpen(false); onDecide("dismissed"); }}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </span>
-          ) : (
-            <span className="text-[12px] text-fg-faint">—</span>
-          )}
-        </td>
-      ))}
-      <td className="px-4">
-        {/* Same 98 px footprint as the coverage bar + "n of N" above, so the ✓ / × pair sits centred under it. */}
-        <span className="flex w-[98px] items-center justify-center">
-          {canEdit ? <DecideButtons accept={C.matrix.accept} dismiss={C.matrix.dismiss} onDecide={onDecide} /> : <span className="text-[11px] text-fg-faint">{C.matrix.suggested}</span>}
-        </span>
-      </td>
-    </tr>
-    </>
-  );
-}
-
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
-function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, suggested = false, hint }: {
-  name: string; description: string; ownProduct: string; org: string; open: boolean; onToggle: () => void; suggested?: boolean; hint?: string;
+function DescriptionInfo({ name, description, ownProduct, org, open, onToggle }: {
+  name: string; description: string; ownProduct: string; org: string; open: boolean; onToggle: () => void;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -1234,14 +1109,13 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, s
       {open && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={onToggle} />
-          <div className={cn("absolute left-0 top-[calc(100%+6px)] z-[25] w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", suggested && "border-dashed border-[rgba(36,87,245,.45)]")} data-testid="cmp-description-card">
+          <div className={cn("absolute left-0 top-[calc(100%+6px)] z-[25] w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]")} data-testid="cmp-description-card">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
               <button type="button" onClick={onToggle} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
             </div>
             {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
             {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
-            {suggested && hint && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{hint}</p>}
           </div>
         </>
       )}

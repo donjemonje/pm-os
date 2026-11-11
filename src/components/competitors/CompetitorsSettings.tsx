@@ -43,7 +43,7 @@ const POLL_MS = 3000;
 
 /**
  * Settings → Competitors: competitors (with Scan now and the scan log),
- * suggestions waiting for review, domains (with the definition text PMOS AI
+ * domains (with the definition text PMOS AI
  * reads), the capability catalog with the org's own status per row, and the
  * scan schedule. The organization itself is never scanned. Reads are for everyone; catalog and schedule writes
  * need a customer admin (the API enforces the same). Scan now and the log are
@@ -137,9 +137,8 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
   }
 
   const competitors = state.competitors;
-  const suggested = state.capabilities.filter((k) => k.state === "suggested");
   const active = state.capabilities.filter((k) => k.state === "active");
-  // Suggested domains are decided in the matrix (dashed group); the catalog panels show accepted ones.
+  // A suggested domain is approved or declined in the matrix (dashed group); the catalog panels show the domains in the table.
   const activeDomains = state.domains.filter((d) => d.state === "active");
   const nextScanAt = (c: CompetitorRow) =>
     c.source?.lastScanAt ? new Date(new Date(c.source.lastScanAt).getTime() + c.source.scanEveryDays * 86_400_000).toISOString() : null;
@@ -167,18 +166,6 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
           ))
         )}
       </section>
-
-      {/* Suggestions / proposed catalog */}
-      {suggested.length > 0 && (
-        <SuggestionsPanel
-          suggested={suggested}
-          domains={state.domains.filter((d) => d.state !== "dismissed")}
-          competitors={state.competitors}
-          canEdit={canEdit}
-          busy={busy}
-          onDecide={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
-        />
-      )}
 
       {/* Domains */}
       <DomainsPanel domains={activeDomains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
@@ -472,75 +459,6 @@ function AddCompetitorForm({ busy, onAdd }: { busy: boolean; onAdd: (body: unkno
         {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
       </Button>
     </form>
-  );
-}
-
-// ————— Suggestions —————
-
-function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, onDecide }: {
-  suggested: CapabilityRow[];
-  domains: DomainRow[];
-  competitors: CompetitorRow[];
-  canEdit: boolean;
-  busy: boolean;
-  onDecide: (id: string, body: unknown) => Promise<boolean>;
-}) {
-  const [names, setNames] = useState<Record<string, string>>({});
-  const [domainOf, setDomainOf] = useState<Record<string, string>>({});
-  const domainName = (id: string) => domains.find((d) => d.id === id)?.name ?? "";
-  const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
-
-  return (
-    <section className="rounded-xl border border-primary/40 bg-card shadow-[0_0_0_3px_rgba(36,87,245,.06)]">
-      <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-        <div>
-          <div className="font-medium text-foreground">{C.settings.suggestionsTitle}</div>
-          <p className="mt-1 text-sm text-muted">{C.settings.suggestionsBlurb}</p>
-        </div>
-      </div>
-      {suggested.map((k) => {
-        const quote = k.suggestedQuote?.split(" — https") ?? [];
-        return (
-          <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3 last:border-b-0">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                {canEdit ? (
-                  <input value={names[k.id] ?? k.name} onChange={(e) => setNames((p) => ({ ...p, [k.id]: e.target.value }))} className={cn(INPUT, "w-72")} disabled={busy} aria-label="Capability name" />
-                ) : (
-                  <span className="text-[14px] font-medium">{k.name}</span>
-                )}
-                {canEdit ? (
-                  <select value={domainOf[k.id] ?? k.domainId} onChange={(e) => setDomainOf((p) => ({ ...p, [k.id]: e.target.value }))} className={cn(SELECT, "w-56")} disabled={busy} aria-label="Domain">
-                    {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                  </select>
-                ) : (
-                  <span className="text-[12px] text-fg-muted">{domainName(k.domainId)}</span>
-                )}
-                {k.suggestedById && <span className="text-[12px] text-fg-muted">{C.settings.suggestedBy(competitorName(k.suggestedById))}</span>}
-              </div>
-              {k.description && <div className="mt-1 text-[12.5px] text-fg-3">{k.description}</div>}
-              {quote[0] && (
-                <div className="mt-1 text-[12px] italic text-fg-muted">
-                  “{quote[0]}”{quote[1] && <> — <a href={`https${quote[1]}`} target="_blank" rel="noreferrer" className="not-italic text-primary hover:underline">{C.matrix.learnMore} ↗</a></>}
-                </div>
-              )}
-            </div>
-            {canEdit && (
-              <div className="flex shrink-0 items-center gap-1.5">
-                <button onClick={() => onDecide(k.id, { state: "dismissed" })} className={SMALL_BTN} disabled={busy}>{C.settings.dismiss}</button>
-                <button
-                  onClick={() => onDecide(k.id, { state: "active", ...(names[k.id] && names[k.id] !== k.name ? { name: names[k.id] } : {}), ...(domainOf[k.id] && domainOf[k.id] !== k.domainId ? { domainId: domainOf[k.id] } : {}) })}
-                  className={cn(SMALL_BTN, "border-transparent bg-primary text-white hover:bg-primary-hover")}
-                  disabled={busy}
-                >
-                  <Check size={12} /> {C.settings.accept}
-                </button>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </section>
   );
 }
 
