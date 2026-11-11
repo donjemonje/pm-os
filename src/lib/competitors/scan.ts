@@ -610,6 +610,11 @@ export async function runScan(scanId: string): Promise<void> {
     } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
       log.add("info", "Nothing changed since the last scan — PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
+    } else if ((await getGlobalScanSettings()).analysisDisabled) {
+      // Administration → Competitors → "Disable analysis" (Daniel 2026-11-11): the scan ends here, with its pages saved.
+      // The previous texts of changed pages are kept, so an analysis run later can still see what changed.
+      log.add("info", "Analysis is disabled in Administration — the scan ends after saving the pages; PMOS AI not called");
+      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
     } else if (!aiStepEnabled()) {
       // Test knob: the scanning story is tested without the analysis step (deterministic, free). Counts as analyzed.
       log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");

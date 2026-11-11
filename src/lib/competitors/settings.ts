@@ -8,6 +8,10 @@ import { STORAGE_LIMIT_CHARS, ceilingMsFromEnv } from "./config";
  *   competitors.remoteScanEnabled  — the remote lane's ON/OFF switch, default
  *                                    OFF (Website Scanning PRD 2026-11-04: every
  *                                    scan goes to the local lane while off).
+ *   competitors.analysisDisabled   — "Disable analysis", default OFF (Daniel
+ *                                    2026-11-11). While ON a scan ends after its
+ *                                    pages are saved: page states and the badge
+ *                                    are set, PMOS AI is not called.
  *   competitors.clockOffsetMs      — TEST KNOB. Honoured only when
  *                                    COMPETITORS_TEST_KNOBS=on (never in
  *                                    production): shifts "now" for everything
@@ -19,10 +23,13 @@ import { STORAGE_LIMIT_CHARS, ceilingMsFromEnv } from "./config";
 
 export interface GlobalScanSettings {
   remoteScanEnabled: boolean;
+  /** "Disable analysis": a scan ends after saving its pages, PMOS AI is not called. Default false. */
+  analysisDisabled: boolean;
 }
 
 const KEYS = {
   remote: "competitors.remoteScanEnabled",
+  analysisOff: "competitors.analysisDisabled",
   clock: "competitors.clockOffsetMs",
   /** TEST KNOBS: a shorter time limit / a smaller storage limit for one test. Honoured only with COMPETITORS_TEST_KNOBS=on. */
   ceilingMs: "competitors.test.ceilingMs",
@@ -39,12 +46,13 @@ async function writeSetting(key: string, value: Prisma.InputJsonValue): Promise<
 }
 
 export async function getGlobalScanSettings(): Promise<GlobalScanSettings> {
-  const remote = await readSetting(KEYS.remote);
-  return { remoteScanEnabled: remote === true };
+  const [remote, analysisOff] = await Promise.all([readSetting(KEYS.remote), readSetting(KEYS.analysisOff)]);
+  return { remoteScanEnabled: remote === true, analysisDisabled: analysisOff === true };
 }
 
 export async function setGlobalScanSettings(patch: Partial<GlobalScanSettings>): Promise<GlobalScanSettings> {
   if (patch.remoteScanEnabled !== undefined) await writeSetting(KEYS.remote, patch.remoteScanEnabled);
+  if (patch.analysisDisabled !== undefined) await writeSetting(KEYS.analysisOff, patch.analysisDisabled);
   return getGlobalScanSettings();
 }
 

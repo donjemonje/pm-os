@@ -182,6 +182,11 @@ async function setRemote(on: boolean): Promise<void> {
   expect(res.status(), await res.text()).toBe(200);
   expect(((await res.json()) as { settings: { remoteScanEnabled: boolean } }).settings.remoteScanEnabled).toBe(on);
 }
+async function setAnalysisDisabled(on: boolean): Promise<void> {
+  const res = await adminApi.patch("/api/admin/competitors/settings", { data: { analysisDisabled: on } });
+  expect(res.status(), await res.text()).toBe(200);
+  expect(((await res.json()) as { settings: { analysisDisabled: boolean } }).settings.analysisDisabled).toBe(on);
+}
 async function createKey(label: string): Promise<{ id: string; secret: string; file: string }> {
   const res = await adminApi.post("/api/admin/competitors/keys", { data: { label } });
   expect(res.status(), await res.text()).toBe(201);
@@ -1326,6 +1331,46 @@ test.describe("Website Scanning rows", () => {
     expect(failed.error).toMatch(/processing failed 3 times after the station handed the pages in — contact support@pm-os.io/);
     expect((await withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId: pending.id } }))).state).toBe("failed");
     expect((await runPoller({ mac: "locked" })).stdout).toMatch(/nothing waiting/);
+  });
+
+  test("WS-38 Disable analysis (Administration switch, default OFF): ON → the scan ends after saving the pages — Full 12, 12 rows with text, 0 AI calls, the log says analysis is disabled; OFF again → the next scan takes the analysis path", async ({ browser }) => {
+    // Knobs: run-once, Mac locked, fetch runner, pause 0. The switch itself is the product (AppSetting competitors.analysisDisabled), not a knob.
+    test.setTimeout(200_000);
+    const admin = await newPage(browser, "admin");
+    await admin.goto("/admin/competitors");
+    const toggle = admin.getByTestId("admin-analysis-toggle");
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    try {
+      const site = await newSite();
+      const c = await addCompetitor(pmApi, site, "QA-WS No Analysis");
+      const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+      expect((await runPoller({ mac: "locked" })).code).toBe(0);
+      const done = await waitForScanEnd(pending.id);
+      expect(done.status).toBe("ok");
+      expect(done.badge).toBe("full");
+      expect(done.pagesFetched).toBe(12);
+      expect(done.aiCalls).toBe(0);
+      const msgs = (done.log as { msg: string }[]).map((l) => l.msg);
+      expect(msgs, JSON.stringify(msgs)).toContain("Analysis is disabled in Administration — the scan ends after saving the pages; PMOS AI not called");
+      expect(msgs.some((m) => /PMOS AI skipped/.test(m))).toBe(false);
+      const rows = await pagesOf(c.sourceId);
+      expect(rows.length).toBe(12);
+      expect(rows.every((r) => r.text && r.hash)).toBe(true);
+      // OFF again: the next scan of a changed site goes down the analysis path (here the test environment's AI-off knob answers).
+      await setAnalysisDisabled(false);
+      await site.control({ footerDate: "2031-01-01" });
+      const s2 = await scanNow(adminApi, c.id);
+      expect(s2.status(), await s2.text()).toBeLessThan(300);
+      const next = await waitForScanWithStatus(c.sourceId, "pending_local");
+      expect((await runPoller({ mac: "locked" })).code).toBe(0);
+      const done2 = await waitForScanEnd(next.id);
+      const msgs2 = (done2.log as { msg: string }[]).map((l) => l.msg);
+      expect(msgs2.some((m) => /Analysis is disabled/.test(m)), JSON.stringify(msgs2)).toBe(false);
+    } finally {
+      await setAnalysisDisabled(false);
+    }
   });
 
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
