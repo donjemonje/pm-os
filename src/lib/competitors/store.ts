@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
-import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
+import { mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -108,8 +108,8 @@ export interface CapabilityRow {
   /** The org's own product or module that carries it; "" when none. */
   ownProduct: string;
   productLines: string[];
-  /** The org's own cell: has | partial | missing. */
-  ourStatus: StatusValue;
+  /** The org's own cell: found | not_found — set by PMs, no confidence. */
+  ourStatus: OwnStatus;
   position: number;
   origin: string;
   state: string;
@@ -126,8 +126,6 @@ export interface CellRow {
   /** Effective value: override when set, else scanned. */
   value: StatusValue;
   scannedValue: StatusValue;
-  confidence: number | null;
-  lowConfidence: boolean;
   quote: string | null;
   sourceUrl: string | null;
   changedAt: string | null;
@@ -352,7 +350,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       description: k.description,
       ownProduct: k.ownProduct,
       productLines: asStringArray(k.productLines),
-      ourStatus: (k.ourStatus === "partial" || k.ourStatus === "missing" ? k.ourStatus : "has") as StatusValue,
+      ourStatus: (k.ourStatus === "not_found" ? "not_found" : "found") as OwnStatus,
       position: k.position,
       origin: k.origin,
       state: k.state,
@@ -372,8 +370,6 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         capabilityId: s.capabilityId,
         value: ov ?? scanned,
         scannedValue: scanned,
-        confidence: s.confidence,
-        lowConfidence: !ov && s.confidence != null && s.confidence < LOW_CONFIDENCE && (scanned === "has" || scanned === "partial"),
         quote: s.quote,
         sourceUrl: s.sourceUrl,
         changedAt: s.changedAt?.toISOString() ?? null,

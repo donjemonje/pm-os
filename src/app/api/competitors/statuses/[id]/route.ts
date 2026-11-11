@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, cleanText, competitorsGuard, MAX_NOTE, readJson, stateResponse } from "@/lib/competitors/api";
-import { isStatusValue } from "@/lib/competitors/config";
+import { isOwnStatus } from "@/lib/competitors/config";
+import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
 type Params = { params: Promise<{ id: string }> };
@@ -34,7 +35,8 @@ export async function PATCH(req: Request, { params }: Params) {
     return stateResponse(ctx);
   }
 
-  if (!isStatusValue(body.value)) return bad("Pick a status: has, partial, missing or unknown.");
+  // A PM corrects a cell to found or not found; "low confidence" is a value only the analysis sets.
+  if (!isOwnStatus(body.value)) return bad(C.errors.pickStatus);
   const note = cleanText(body.note, MAX_NOTE) || null;
   await db.capabilityStatus.update({
     where: { id },

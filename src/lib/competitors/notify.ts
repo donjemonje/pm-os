@@ -15,7 +15,7 @@ import { COMPETITORS_COPY as C } from "./copy";
 import type { OwnStatus, StatusValue } from "./config";
 import { getCompetitorsConfig } from "./store";
 
-const RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
+const RANK: Record<StatusValue, number> = { found: 3, low: 2, not_found: 1 };
 
 export type ChangeKind = "gap" | "raised" | "lowered";
 
@@ -23,14 +23,14 @@ export type ChangeKind = "gap" | "raised" | "lowered";
 export function classifyChange(from: StatusValue, to: StatusValue, own: OwnStatus): ChangeKind | null {
   if (RANK[to] === RANK[from]) return null;
   if (RANK[to] < RANK[from]) return "lowered";
-  return own === "missing" && (to === "has" || to === "partial") ? "gap" : "raised";
+  return own === "not_found" && (to === "found" || to === "low") ? "gap" : "raised";
 }
 
-/** A domain entrance: every cell of the domain was missing/unknown before and at least one is has/partial now. */
+/** A domain entrance: every cell of the domain was not found before and at least one is found (or low confidence) now. */
 export function isDomainEntrance(before: StatusValue[], after: StatusValue[]): boolean {
   if (before.length === 0) return false;
-  const had = before.some((v) => v === "has" || v === "partial");
-  const has = after.some((v) => v === "has" || v === "partial");
+  const had = before.some((v) => v === "found" || v === "low");
+  const has = after.some((v) => v === "found" || v === "low");
   return !had && has;
 }
 
@@ -169,7 +169,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
     const row = byCompetitor.get(m.competitorId);
     const before = m.history[0];
     if (!row || !before) continue;
-    const own = (m.capability.ourStatus === "partial" || m.capability.ourStatus === "missing" ? m.capability.ourStatus : "has") as OwnStatus;
+    const own: OwnStatus = m.capability.ourStatus === "not_found" ? "not_found" : "found";
     const kind = classifyChange(before.value as StatusValue, m.value as StatusValue, own);
     if (!kind) continue;
     row.changes.push({ summary: m.summary, imageUrl: m.imageUrl, capability: m.capability.name, domain: m.capability.domain.name, from: before.value as StatusValue, to: m.value as StatusValue, own, kind, quote: m.quote, sourceUrl: m.sourceUrl, product: m.product });
@@ -195,7 +195,7 @@ export async function collectRunChanges(runId: string): Promise<RunNotification 
       if (isDomainEntrance(before, after)) {
         byCompetitor.get(competitorId)!.domainEntrances.push({
           domain: inDomain[0].capability.domain.name,
-          capabilities: inDomain.filter((c) => c.value === "has" || c.value === "partial").map((c) => c.capability.name),
+          capabilities: inDomain.filter((c) => c.value === "found" || c.value === "low").map((c) => c.capability.name),
         });
       }
     }

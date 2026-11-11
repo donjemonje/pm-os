@@ -31,32 +31,32 @@ const run = (competitors: CompetitorChanges[], unchanged: string[] = []): RunNot
 
 describe("classifyChange", () => {
   it("is a gap when they now offer what the org lacks", () => {
-    expect(classifyChange("missing", "has", "missing")).toBe("gap");
-    expect(classifyChange("unknown", "partial", "missing")).toBe("gap");
+    expect(classifyChange("not_found", "found", "not_found")).toBe("gap");
+    expect(classifyChange("not_found", "low", "not_found")).toBe("gap");
   });
   it("is raised when the org has it too, lowered when they drop", () => {
-    expect(classifyChange("partial", "has", "partial")).toBe("raised");
-    expect(classifyChange("missing", "has", "has")).toBe("raised");
-    expect(classifyChange("has", "partial", "missing")).toBe("lowered");
+    expect(classifyChange("low", "found", "found")).toBe("raised");
+    expect(classifyChange("not_found", "found", "found")).toBe("raised");
+    expect(classifyChange("found", "low", "not_found")).toBe("lowered");
   });
   it("is nothing when the rank did not move", () => {
-    expect(classifyChange("has", "has", "missing")).toBeNull();
+    expect(classifyChange("found", "found", "not_found")).toBeNull();
   });
 });
 
 describe("isDomainEntrance", () => {
   it("fires when a domain goes from nothing to something", () => {
-    expect(isDomainEntrance(["missing", "unknown"], ["has", "unknown"])).toBe(true);
+    expect(isDomainEntrance(["not_found", "not_found"], ["found", "not_found"])).toBe(true);
   });
   it("does not fire when the domain already had an offer, or still has none", () => {
-    expect(isDomainEntrance(["partial", "missing"], ["has", "missing"])).toBe(false);
-    expect(isDomainEntrance(["missing"], ["missing"])).toBe(false);
+    expect(isDomainEntrance(["low", "not_found"], ["found", "not_found"])).toBe(false);
+    expect(isDomainEntrance(["not_found"], ["not_found"])).toBe(false);
     expect(isDomainEntrance([], [])).toBe(false);
   });
 });
 
 describe("renderRunEmail", () => {
-  const gap = { capability: "Autonomous hunting", domain: "Operations", from: "missing" as const, to: "has" as const, own: "missing" as const, kind: "gap" as const, quote: "Hunt across your stack", sourceUrl: "https://acme.example/products/hunt", product: "Acme Hunt", summary: null, imageUrl: null };
+  const gap = { capability: "Autonomous hunting", domain: "Operations", from: "not_found" as const, to: "found" as const, own: "not_found" as const, kind: "gap" as const, quote: "Hunt across your stack", sourceUrl: "https://acme.example/products/hunt", product: "Acme Hunt", summary: null, imageUrl: null };
   const fact = { kind: "product", value: "Acme MCP generally available", sourceUrl: "https://acme.example/blog/mcp", factDate: "2026-09-28T00:00:00.000Z", headline: null, summary: null, imageUrl: null };
 
   it("sends nothing when no competitor changed", () => {
@@ -72,13 +72,13 @@ describe("renderRunEmail", () => {
     expect(mail.html).toContain("Shadow AI feeds");
     expect(mail.html).not.toContain("At a glance");
     expect(mail.html).not.toContain("Beta Corp");
-    expect(mail.text).toContain("Autonomous hunting: Missing → Has it (Org missing)");
+    expect(mail.text).toContain("Autonomous hunting: Not found → Found (Org not found)");
     expect(mail.text).toContain("Shadow AI feeds · AI Security");
   });
   it("several competitors: one email, no glance table, unchanged ones not mentioned, suggestions tagged", () => {
     const mail = renderRunEmail(run([
       base({ changes: [gap] }),
-      base({ competitorId: "c2", name: "Beta Corp", changes: [{ ...gap, kind: "raised", own: "partial", from: "partial" }] }),
+      base({ competitorId: "c2", name: "Beta Corp", changes: [{ ...gap, kind: "raised", own: "found", from: "low" }] }),
       base({ competitorId: "c3", name: "Gamma", suggestions: [{ name: "Takedowns", domain: "Brand" }] }),
     ], ["Delta"]))!;
     expect(mail.subject).toBe("3 competitors changed — competitor scan");
@@ -98,7 +98,7 @@ describe("renderRunEmail", () => {
 
 describe("summarize", () => {
   it("counts by kind across competitors", () => {
-    const gap = { capability: "A", domain: "D", from: "missing" as const, to: "has" as const, own: "missing" as const, kind: "gap" as const, quote: null, sourceUrl: null, product: null, summary: null, imageUrl: null };
+    const gap = { capability: "A", domain: "D", from: "not_found" as const, to: "found" as const, own: "not_found" as const, kind: "gap" as const, quote: null, sourceUrl: null, product: null, summary: null, imageUrl: null };
     const s = summarize(run([
       base({ changes: [gap, { ...gap, kind: "raised" }], domainEntrances: [{ domain: "D", capabilities: ["A"] }], facts: [{ kind: "customer", value: "X", sourceUrl: null, factDate: null, headline: null, summary: null, imageUrl: null }] }),
       base({ competitorId: "c2", name: "B", changes: [{ ...gap, kind: "lowered" }], suggestions: [{ name: "S", domain: "D" }] }),

@@ -47,12 +47,12 @@ export interface FeedItem {
   read: boolean;
 }
 
-const RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
+const RANK: Record<StatusValue, number> = { found: 3, low: 2, not_found: 1 };
 
 export function statusKind(from: StatusValue, to: StatusValue, own: OwnStatus): Exclude<FeedKind, "fact" | "suggestion"> | null {
   if (RANK[to] === RANK[from]) return null;
   if (RANK[to] < RANK[from]) return "lowered";
-  return own === "missing" && (to === "has" || to === "partial") ? "gap" : "raised";
+  return own === "not_found" && (to === "found" || to === "low") ? "gap" : "raised";
 }
 
 export function impactOf(kind: FeedKind): FeedImpact {
@@ -143,7 +143,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
     // The value before the change: the newest history row written at (or just before) the change.
     const before = s.history.find((h) => h.at.getTime() <= at.getTime() + 2000) ?? s.history[0];
     if (!before) continue;
-    const own = (s.capability.ourStatus === "partial" || s.capability.ourStatus === "missing" ? s.capability.ourStatus : "has") as OwnStatus;
+    const own: OwnStatus = s.capability.ourStatus === "not_found" ? "not_found" : "found";
     const kind = statusKind(before.value as StatusValue, s.value as StatusValue, own);
     if (!kind) continue;
     const key = `status:${s.id}:${at.getTime()}`;

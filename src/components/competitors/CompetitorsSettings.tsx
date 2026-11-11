@@ -564,9 +564,9 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
   /** Competitors that have a capability of this domain in full while the org doesn't. */
   function competitorsAhead(d: DomainRow): number {
-    const caps = capabilities.filter((k) => k.domainId === d.id && k.ourStatus !== "has");
+    const caps = capabilities.filter((k) => k.domainId === d.id && k.ourStatus !== "found");
     const ahead = new Set<string>();
-    for (const k of caps) for (const c of cells) if (c.capabilityId === k.id && c.value === "has") ahead.add(c.competitorId);
+    for (const k of caps) for (const c of cells) if (c.capabilityId === k.id && c.value === "found") ahead.add(c.competitorId);
     return [...ahead].filter((id) => competitors.some((c) => c.id === id)).length;
   }
 
@@ -833,7 +833,7 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                           {OWN_STATUS_VALUES.map((v) => (
                             <button key={v} type="button" onClick={() => k.ourStatus !== v && void onSave(k.id, { ourStatus: v })} disabled={busy} aria-pressed={k.ourStatus === v}
                               className={cn("rounded-full border px-2 py-px font-mono text-[10px] font-semibold", k.ourStatus === v
-                                ? v === "has" ? "border-transparent bg-[rgba(23,178,106,.16)] text-[#0f7a47]" : v === "partial" ? "border-transparent bg-[rgba(59,124,246,.15)] text-[#2a5fd0]" : "border-transparent bg-[#fff7e0] text-[#8a5a00]"
+                                ? v === "found" ? "border-transparent bg-[rgba(23,178,106,.16)] text-[#0f7a47]" : "border-transparent bg-[#fff7e0] text-[#8a5a00]"
                                 : "border-border bg-white text-fg-faint hover:border-primary/55")}>
                               {C.values[v]}
                             </button>

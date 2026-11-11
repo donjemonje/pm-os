@@ -7,8 +7,8 @@
  * Per-workspace settings (Workspace.competitorsConfig). Since the Website
  * Scanning PRD (2026-11-04) the scan frequency lives per source
  * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
- * what remains here is the manual-rescan limit, the notification recipients
- * and the news baseline.
+ * what remains here is the manual-rescan limit, the notification recipients,
+ * the news baseline and the two analysis settings.
  */
 export const DEFAULT_MANUAL_RESCANS_PER_DAY = 1;
 /** Scan frequency per source, in days (PRD: once every 2 days). */
@@ -23,12 +23,21 @@ export interface CompetitorsConfig {
   notifyUserIds: string[];
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
   baselineUntil: string | null;
+  /**
+   * Analysis: are weak pages (blog, news, press, content marketing) read? Off = only strong pages (product, features,
+   * pricing, docs, help, integrations) are read and "low confidence" is not produced (Daniel 2026-11-11: start lean).
+   */
+  readWeakPages: boolean;
+  /** Analysis: how many distinct pages must carry an item that is none of our rows before it becomes a new row (1–5). */
+  minPagesForNewRow: number;
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
   manualRescansPerDay: DEFAULT_MANUAL_RESCANS_PER_DAY,
   notifyUserIds: [],
   baselineUntil: null,
+  readWeakPages: false,
+  minPagesForNewRow: 1,
 };
 
 // ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————
@@ -122,6 +131,10 @@ export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
     manualRescansPerDay: rescans,
     notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
     baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
+    readWeakPages: typeof r.readWeakPages === "boolean" ? r.readWeakPages : DEFAULT_COMPETITORS_CONFIG.readWeakPages,
+    minPagesForNewRow: typeof r.minPagesForNewRow === "number" && Number.isFinite(r.minPagesForNewRow)
+      ? Math.min(5, Math.max(1, Math.round(r.minPagesForNewRow)))
+      : DEFAULT_COMPETITORS_CONFIG.minPagesForNewRow,
   };
 }
 
@@ -135,14 +148,17 @@ export const MAX_CAPABILITY_DESCRIPTION = 500;
 export const MAX_OWN_PRODUCT = 160;
 
 /** The org's own cell on a capability — set by PMs, never scanned. */
-export const OWN_STATUS_VALUES = ["has", "partial", "missing"] as const;
+export const OWN_STATUS_VALUES = ["found", "not_found"] as const;
 export type OwnStatus = (typeof OWN_STATUS_VALUES)[number];
 export function isOwnStatus(v: unknown): v is OwnStatus {
   return typeof v === "string" && (OWN_STATUS_VALUES as readonly string[]).includes(v);
 }
 
-/** Matrix cell values. */
-export const STATUS_VALUES = ["has", "partial", "missing", "unknown"] as const;
+/**
+ * Matrix cell values. Decided by fixed rules from the evidence (analysis/cells.ts), never by a model:
+ * found = evidence on a strong page; low = evidence on weak pages only (blog, news, press); not_found = none.
+ */
+export const STATUS_VALUES = ["found", "low", "not_found"] as const;
 export type StatusValue = (typeof STATUS_VALUES)[number];
 export function isStatusValue(v: unknown): v is StatusValue {
   return typeof v === "string" && (STATUS_VALUES as readonly string[]).includes(v);
@@ -173,9 +189,6 @@ export type FactKind = (typeof FACT_KINDS)[number];
 export function isFactKind(v: unknown): v is FactKind {
   return typeof v === "string" && (FACT_KINDS as readonly string[]).includes(v);
 }
-
-/** Below this confidence a scanned "has"/"partial" is shown as "partial?" to confirm. */
-export const LOW_CONFIDENCE = 0.6;
 
 /**
  * Where a competitor's pages come from. The website is crawled by the

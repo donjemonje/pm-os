@@ -10,12 +10,24 @@ import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    expect(mergeCompetitorsConfig(null)).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig("junk")).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
+    const defaults = { manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null, readWeakPages: false, minPagesForNewRow: 1 };
+    expect(mergeCompetitorsConfig(null)).toEqual(defaults);
+    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual(defaults);
+    expect(mergeCompetitorsConfig("junk")).toEqual(defaults);
     expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] }).notifyUserIds).toEqual(["u1", "u2"]);
     expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
     expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
+  });
+  it("analysis settings: weak pages are off by default (Daniel 2026-11-11: start lean); a new row needs 1 page, clamped to 1–5", () => {
+    expect(mergeCompetitorsConfig({}).readWeakPages).toBe(false);
+    expect(mergeCompetitorsConfig({ readWeakPages: true }).readWeakPages).toBe(true);
+    expect(mergeCompetitorsConfig({ readWeakPages: "yes" }).readWeakPages).toBe(false);
+    expect(mergeCompetitorsConfig({}).minPagesForNewRow).toBe(1);
+    expect(mergeCompetitorsConfig({ minPagesForNewRow: 2 }).minPagesForNewRow).toBe(2);
+    expect(mergeCompetitorsConfig({ minPagesForNewRow: 0 }).minPagesForNewRow).toBe(1);
+    expect(mergeCompetitorsConfig({ minPagesForNewRow: 9 }).minPagesForNewRow).toBe(5);
+    expect(mergeCompetitorsConfig({ minPagesForNewRow: 2.6 }).minPagesForNewRow).toBe(3);
+    expect(mergeCompetitorsConfig({ minPagesForNewRow: "3" }).minPagesForNewRow).toBe(1);
   });
   it("carries the PRD's numbers: every 2 days, no page limit, 8 h per scan, 10 GB of page text, stale after 10 min (Daniel 2026-11-09)", () => {
     expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);

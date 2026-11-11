@@ -14,7 +14,7 @@ type Params = { params: Promise<{ id: string }> };
 
 /**
  * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
- * org's own status (`ourStatus`: has / partial / missing — any member), or
+ * org's own status (`ourStatus`: found / not_found — any member), or
  * decide a suggestion (`state`: "active" = accept, "dismissed" = dismiss), or restore a removed row
  * (`state`: "active", with an active `domainId` when its own domain is not in the table).
  * DELETE: the PM removes the row. It is not erased: it leaves the table, its statuses are kept,
@@ -99,7 +99,7 @@ export async function PATCH(req: Request, { params }: Params) {
   }
   if (typeof body.position === "number" && Number.isFinite(body.position)) data.position = Math.max(0, Math.round(body.position));
   if (body.ourStatus !== undefined) {
-    if (!isOwnStatus(body.ourStatus)) return bad("Pick has, partial or missing.");
+    if (!isOwnStatus(body.ourStatus)) return bad(C.errors.pickOwnStatus);
     data.ourStatus = body.ourStatus;
     if (body.ourStatus !== existing.ourStatus) events.push({ action: "ourStatus", field: "ourStatus", from: existing.ourStatus, to: body.ourStatus });
     field = "ourStatus";
@@ -138,10 +138,10 @@ export async function PATCH(req: Request, { params }: Params) {
     // suggestion's evidence, unless a later scan already classified it.
     const { quote, url } = splitSuggestedQuote(existing.suggestedQuote);
     const current = await db.capabilityStatus.findUnique({ where: { competitorId_capabilityId: { competitorId: existing.suggestedById, capabilityId: id } }, select: { id: true, value: true } });
-    const evidence = { value: "has", quote: quote || null, sourceUrl: url, confidence: null, scanId: null, changedAt: null };
+    const evidence = { value: "found", quote: quote || null, sourceUrl: url, confidence: null, scanId: null, changedAt: null };
     if (!current) {
       await db.capabilityStatus.create({ data: { workspaceId: ctx.workspaceId, competitorId: existing.suggestedById, capabilityId: id, ...evidence } });
-    } else if (current.value === "unknown") {
+    } else if (current.value === "not_found") {
       await db.capabilityStatus.update({ where: { id: current.id }, data: evidence });
     }
   }

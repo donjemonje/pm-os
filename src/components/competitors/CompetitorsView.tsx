@@ -80,7 +80,7 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
             const [bar, fg] = tone(closeness.score);
             return (
               <li key={c.id}>
-                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}`}>
+                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.strip.closestScore(closeness.found, closeness.low, closeness.total)}`}>
                   <Logo c={c} size={16} />
                   <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
                   <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
@@ -134,20 +134,19 @@ function Logo({ c, size = 28, dark }: { c: CompetitorRow; size?: number; dark?: 
   );
 }
 
-/** The value a cell displays — a correction wins; a low-confidence scan shows as "partial?". */
+/** The value a cell displays — a correction wins. Found = a check; low confidence = the check in an amber dashed ring; not found = the words (no X). */
 function CellValue({ cell, size = 22 }: { cell: CellRow | undefined; size?: number }) {
   if (!cell) return <span className="text-[12px] text-fg-faint">—</span>;
   const v = cell.value;
-  if (v === "has") return <OkMark size={size} />;
-  if (v === "partial") {
+  if (v === "found") return <OkMark size={size} />;
+  if (v === "low") {
     return (
-      <span className="inline-block rounded-full bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0]" title={cell.lowConfidence ? C.matrix.lowConfidence : undefined}>
-        {C.values.partial}{cell.lowConfidence ? "?" : ""}
+      <span className="inline-flex rounded-full border border-dashed border-[#f0b43c] p-px" title={C.matrix.lowConfidence} data-testid="cmp-cell-low">
+        <OkMark size={size - 4} />
       </span>
     );
   }
-  if (v === "missing") return <span className="font-semibold text-[#5b6c85]">—</span>;
-  return <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" title={C.matrix.unknownTip} aria-label={C.values.unknown} />;
+  return <span className="whitespace-nowrap text-[11px] text-fg-faint">{C.values.not_found}</span>;
 }
 
 /**
@@ -259,33 +258,30 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   }, [state.cells]);
   const cellOf = (competitorId: string | null | undefined, capabilityId: string) => (competitorId ? cellMap.get(`${competitorId}|${capabilityId}`) : undefined);
   /** The org's own cell is the capability's ourStatus — set by PMs, never scanned. */
-  const ownOf = (k: CapabilityRow): StatusValue => k.ourStatus;
-  /** Gap = own missing while any competitor has it; only-us = own has while no competitor has/partial. */
-  const rowKind = (k: CapabilityRow): "gap" | "partial" | "only" | "level" | "none" => {
-    const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "unknown");
-    const anyHas = theirs.some((v) => v === "has");
-    const anyHasOrPartial = theirs.some((v) => v === "has" || v === "partial");
+  const ownOf = (k: CapabilityRow): OwnStatus => k.ourStatus;
+  /** Gap = not found at the org while found at a competitor (a low-confidence find opens no gap); only-us = found at the org and at no competitor, not even with low confidence. */
+  const rowKind = (k: CapabilityRow): "gap" | "only" | "level" | "none" => {
+    const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "not_found");
+    const anyFound = theirs.some((v) => v === "found");
+    const anyFoundOrLow = theirs.some((v) => v === "found" || v === "low");
     const ownV = ownOf(k);
     if (competitors.length === 0) return "none";
-    if (ownV === "has" && !anyHasOrPartial) return "only";
-    if (ownV === "missing" && anyHas) return "gap";
-    if (ownV === "partial" && anyHas) return "partial";
+    if (ownV === "found" && !anyFoundOrLow) return "only";
+    if (ownV === "not_found" && anyFound) return "gap";
     return "level";
   };
 
   const summary = useMemo(() => {
     const total = activeCaps.length;
-    let full = 0, partial = 0, gaps = 0, only = 0;
+    let full = 0, gaps = 0, only = 0;
     for (const k of activeCaps) {
       const kind = rowKind(k);
-      const ownV = ownOf(k);
-      if (ownV === "has") full++;
-      else if (ownV === "partial") partial++;
+      if (ownOf(k) === "found") full++;
       if (kind === "gap") gaps++;
       if (kind === "only") only++;
     }
     const measured = competitors.length > 0 && total > 0 && state.cells.length > 0;
-    return { total, full, partial, gaps, only, measured, parity: measured ? Math.round(((full + partial * 0.5) / total) * 100) : null };
+    return { total, full, gaps, only, measured, parity: measured ? Math.round((full / total) * 100) : null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCaps, state.cells, competitors.length]);
 
@@ -300,13 +296,13 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   const matchesStatus = (k: CapabilityRow) => {
     if (statusFilter.length === 0) return true;
     const wanted = STATUS_VALUES[STATUS_OPTIONS.indexOf(statusFilter[0])];
-    return shownCompetitors.some((c) => (cellOf(c.id, k.id)?.value ?? "unknown") === wanted);
+    return shownCompetitors.some((c) => (cellOf(c.id, k.id)?.value ?? "not_found") === wanted);
   };
   const visibleCaps = suggestionsOnly ? [] : activeCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q) && !k.description.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
     if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
-    if (gapsOnly && rowKind(k) !== "gap" && rowKind(k) !== "partial") return false;
+    if (gapsOnly && rowKind(k) !== "gap") return false;
     return matchesStatus(k);
   });
   // Suggested rows follow the search, domain and competitor filters; status/gap/product-line filters do not apply to them.
@@ -350,10 +346,10 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   /** The "For <org>" line — derived from the data, no AI: what the item means against the org's own status. */
   const feedMeaning = (i: FeedItem): string => {
     if (i.kind === "gap" && i.capabilityId) {
-      const n = competitors.filter((c) => cellOf(c.id, i.capabilityId!)?.value === "has").length;
+      const n = competitors.filter((c) => cellOf(c.id, i.capabilityId!)?.value === "found").length;
       return C.feed.meaning.gap(own, i.competitorName, n, competitors.length);
     }
-    if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "unknown"].toLowerCase());
+    if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "not_found"].toLowerCase());
     if (i.kind === "fact") return C.feed.meaning.fact(i.competitorName, C.notify.email.factKinds[i.factKind ?? ""] ?? i.factKind ?? "");
     return C.feed.meaning.suggestion((C.feed.suggestionStates[i.suggestionState ?? ""] ?? "").toLowerCase());
   };
@@ -454,7 +450,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           <div role="tablist" aria-label="Competitor views" className="flex flex-wrap gap-1.5 border-b border-border pb-3">
             {TABS.map(({ key, label }) => {
               const on = tab === key;
-              const badge = key === "roadmap" && summary.measured ? summary.gaps + summary.partial : 0;
+              const badge = key === "roadmap" && summary.measured ? summary.gaps : 0;
               return (
                 <button
                   key={key}
@@ -495,13 +491,12 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                 <div>
                   <div className="font-title text-[15px] font-bold">{C.strip.parityTitle}</div>
                   <div className="mt-0.5 text-[12.5px] text-fg-3">
-                    {summary.parity == null ? C.strip.parityNone : C.strip.paritySub(summary.full, summary.partial, summary.total)}
+                    {summary.parity == null ? C.strip.parityNone : C.strip.paritySub(summary.full, summary.total)}
                   </div>
                   <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(activeDomains.length, activeCaps.length, competitors.length)}{suggestedCaps.length > 0 && ` · ${C.matrix.suggestedN(suggestedCaps.length)}`}</div>
                 </div>
               </div>
               <StatCard label={C.strip.gaps} tone="#f0b43c" toneFg="#8a5a00" value={summary.measured ? summary.gaps : null} sub={summary.measured ? C.strip.gapsSub(summary.gaps) : C.strip.gapsNone} />
-              <StatCard label={C.strip.partial} tone="#3b7cf6" toneFg="#2a5fd0" value={summary.measured ? summary.partial : null} sub={C.strip.partialSub} />
               <StatCard label={C.strip.only(own)} tone="#17b26a" toneFg="#0f7a47" value={summary.measured ? summary.only : null} sub={summary.measured ? C.strip.onlySub(summary.only) : C.strip.onlyNone} />
               <ClosestCard org={own} ranked={closest} measured={summary.measured} onOpen={(id) => openProfile(id, "cell")} />
             </div>
@@ -571,18 +566,17 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
                         const sugRows = visibleSuggested.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
-                        const covered = rows.filter((k) => ownOf(k) === "has").length;
-                        const partial = rows.filter((k) => ownOf(k) === "partial").length;
+                        const covered = rows.filter((k) => ownOf(k) === "found").length;
                         const gaps = rows.filter((k) => rowKind(k) === "gap").length;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} partial={partial} gaps={gaps} colSpan={3 + shownCompetitors.length}
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} suggestedCount={sugRows.length} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}
                             suggestedRows={sugRows.map((k) => (
                               <SuggestedRow key={k.id} capability={k} org={own} seenAt={competitorName(k.suggestedById)} competitors={shownCompetitors} canEdit={canEdit} onDecide={(decision) => void decideCapability(k.id, decision)} descOpen={openDesc === k.id} onToggleDesc={() => toggleDesc(k.id)} />
                             ))}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
-                              const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
+                              const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "found").length;
                               const descOpen = openDesc === k.id;
                               return (
                                 <tr key={k.id} className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
@@ -629,13 +623,12 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
 
             {/* Legend */}
             <div className="mt-3 flex flex-wrap items-center gap-[18px] px-1 text-[12px] text-fg-3">
-              <span className="inline-flex items-center gap-1.5"><OkMark size={16} />{C.matrix.legendHas}</span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="inline-block rounded-full bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0]">{C.matrix.legendPartial}</span>
-                {C.matrix.legendPartialSub}
+              <span className="inline-flex items-center gap-1.5"><OkMark size={16} />{C.matrix.legendFound}</span>
+              <span className="inline-flex items-center gap-1.5" title={C.matrix.legendLowSub}>
+                <span className="inline-flex rounded-full border border-dashed border-[#f0b43c] p-px"><OkMark size={12} /></span>
+                {C.matrix.legendLow}
               </span>
-              <span className="inline-flex items-center gap-1.5"><span className="font-semibold text-[#5b6c85]">—</span>{C.matrix.legendMissing}</span>
-              <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" />{C.matrix.legendUnknown}</span>
+              <span className="inline-flex items-center gap-1.5"><span className="text-[11px] text-fg-faint">{C.values.not_found}</span>{C.matrix.legendNotFound}</span>
               {suggestedCaps.length > 0 && <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-[3px] border border-dashed border-[rgba(36,87,245,.6)] bg-[rgba(36,87,245,.06)]" />{C.matrix.legendSuggested}</span>}
               <span className="ml-auto text-fg-muted">{C.matrix.legendHint}</span>
             </div>
@@ -748,11 +741,9 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
 
         {tab === "roadmap" && (() => {
           const gapRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "gap") : [];
-          const partialRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "partial") : [];
-          const total = gapRows.length + partialRows.length;
+          const total = gapRows.length;
           const sections = [
             { key: "gap", title: C.roadmap.gaps, sub: C.roadmap.gapsSub(own), empty: C.roadmap.gapsEmpty, rows: gapRows, color: "#f0b43c", glow: "rgba(240,180,60,.6)", gradient: "linear-gradient(90deg, rgba(240,180,60,.18), rgba(255,255,255,0) 60%)" },
-            { key: "partial", title: C.roadmap.partial, sub: C.roadmap.partialSub(own), empty: C.roadmap.partialEmpty, rows: partialRows, color: "#3b7cf6", glow: "rgba(59,124,246,.6)", gradient: "linear-gradient(90deg, rgba(59,124,246,.16), rgba(255,255,255,0) 60%)" },
           ];
           return (
             <section aria-label={C.tabs.roadmap} className="flex flex-col gap-4">
@@ -774,7 +765,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                       <div className="px-4 py-8 text-center text-[13px] text-fg-3">{g.empty}</div>
                     ) : (
                       g.rows.map((k) => (
-                        <RoadmapRow key={k.id} capability={k} kind={g.key as "gap" | "partial"} competitors={competitors} cellOf={cellOf} domain={state.domains.find((d) => d.id === k.domainId)?.name ?? ""} onCreateIdea={() => post(`/api/competitors/capabilities/${k.id}/idea`)} />
+                        <RoadmapRow key={k.id} capability={k} competitors={competitors} cellOf={cellOf} domain={state.domains.find((d) => d.id === k.domainId)?.name ?? ""} onCreateIdea={() => post(`/api/competitors/capabilities/${k.id}/idea`)} />
                       ))
                     )}
                   </div>
@@ -790,9 +781,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
 
 // ————— Roadmap row (design C2): name, evidence line, Jira / idea pill, Create idea, Evidence · N —————
 
-function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreateIdea }: {
+function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }: {
   capability: CapabilityRow;
-  kind: "gap" | "partial";
   competitors: CompetitorRow[];
   cellOf: (competitorId: string, capabilityId: string) => CellRow | undefined;
   domain: string;
@@ -802,15 +792,14 @@ function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreate
   const [busy, setBusy] = useState(false);
   const withIt = competitors
     .map((c) => ({ c, cell: cellOf(c.id, k.id) }))
-    .filter(({ cell }) => cell && (cell.value === "has" || cell.value === "partial"));
-  const full = withIt.filter(({ cell }) => cell?.value === "has").length;
+    .filter(({ cell }) => cell && (cell.value === "found" || cell.value === "low"));
   const names = withIt.map(({ c }) => c.name);
-  const headline = kind === "gap" ? C.roadmap.haveIt(withIt.length, competitors.length) : C.roadmap.haveItFull(full, competitors.length);
+  const headline = C.roadmap.haveIt(withIt.length, competitors.length);
   const sub = [headline, names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} +${names.length - 3}`, domain].filter(Boolean).join(" · ");
   const evidence = withIt.filter(({ cell }) => cell?.quote || cell?.sourceUrl);
   const toggle = () => {
     setOpen((v) => !v);
-    if (!open) track("cmp_roadmap_evidence_opened", { capabilityId: k.id, kind, count: evidence.length });
+    if (!open) track("cmp_roadmap_evidence_opened", { capabilityId: k.id, kind: "gap", count: evidence.length });
   };
   async function create() {
     setBusy(true);
@@ -869,8 +858,8 @@ function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreate
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, children, suggestedBy, suggestedCount = 0, suggestedRows, canEdit = false, onDecide }: {
-  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; partial: number; gaps: number; colSpan: number; children: React.ReactNode;
+function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, suggestedCount = 0, suggestedRows, canEdit = false, onDecide }: {
+  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
   /** Set when the domain itself is a scan suggestion (dashed group): the competitor it was seen at. */
   suggestedBy?: string | null;
   suggestedCount?: number;
@@ -897,7 +886,6 @@ function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, chi
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
               <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
                 {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
-                {partial > 0 && <span className="font-semibold text-[#2a5fd0]">{C.matrix.partialN(partial)}</span>}
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
@@ -952,7 +940,7 @@ function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedI
     ? item.headline
     : item.kind === "fact" || item.kind === "suggestion"
       ? `${item.competitorName}: ${item.title}`
-      : `${item.competitorName} ${C.values[item.from ?? "unknown"].toLowerCase()} → ${C.values[item.to ?? "unknown"].toLowerCase()} on ${item.title}`;
+      : `${item.competitorName} ${C.values[item.from ?? "not_found"].toLowerCase()} → ${C.values[item.to ?? "not_found"].toLowerCase()} on ${item.title}`;
   return (
     <button type="button" onClick={onOpen} aria-expanded={open} className={cn("flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left hover:bg-[rgba(255,255,255,.7)]", !open && "[.group-last>&]:border-b-0")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
       {competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}
@@ -988,8 +976,8 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
           <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground">{meaning}</div>
           {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
             <>
-              <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "unknown"]} → {C.values[item.to ?? "unknown"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>
-              <Row label={C.feed.detail.yourStatus}><span className="font-semibold">{C.values[item.own ?? "unknown"]}</span></Row>
+              <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "not_found"]} → {C.values[item.to ?? "not_found"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>
+              <Row label={C.feed.detail.yourStatus}><span className="font-semibold">{C.values[item.own ?? "not_found"]}</span></Row>
               {item.product && <Row label={C.feed.detail.product}>{item.product}</Row>}
             </>
           )}
@@ -1071,7 +1059,7 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide,
                 type="button"
                 onClick={() => setOpen(!open)}
                 title={C.matrix.suggestedCellHint(seenAt)}
-                aria-label={`${capability.name}: ${C.values.has} — ${C.matrix.suggestedCellHint(seenAt)}`}
+                aria-label={`${capability.name}: ${C.values.found} — ${C.matrix.suggestedCellHint(seenAt)}`}
                 aria-expanded={open}
                 className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", open && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
                 data-testid="cmp-suggestion-evidence"
@@ -1111,7 +1099,7 @@ function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide,
               )}
             </span>
           ) : (
-            <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" aria-label={C.values.unknown} />
+            <span className="text-[12px] text-fg-faint">—</span>
           )}
         </td>
       ))}
@@ -1182,7 +1170,9 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
 }) {
   const isOpen = open?.competitorId === competitorId && open.capabilityId === capability.id;
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState<StatusValue>(cell?.value ?? "unknown");
+  // A PM corrects to found or not found; "low confidence" is a value only the analysis sets.
+  const correctable = (v: StatusValue | undefined): OwnStatus => (v === "not_found" || v === undefined ? "not_found" : "found");
+  const [value, setValue] = useState<OwnStatus>(correctable(cell?.value));
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -1191,8 +1181,8 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
       setEditing(false);
       setNote("");
     } else {
-      setValue(cell?.value ?? "unknown");
-      track("cmp_cell_opened", { competitorId, capabilityId: capability.id, value: cell?.value ?? "unknown", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
+      setValue(correctable(cell?.value));
+      track("cmp_cell_opened", { competitorId, capabilityId: capability.id, value: cell?.value ?? "not_found", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -1229,7 +1219,7 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
       <button
         onClick={() => setOpen(isOpen ? null : { competitorId, capabilityId: capability.id })}
         className={cn("relative inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-        aria-label={`${capability.name}: ${C.values[cell?.value ?? "unknown"]}`}
+        aria-label={`${capability.name}: ${C.values[cell?.value ?? "not_found"]}`}
         aria-expanded={isOpen}
       >
         <CellValue cell={cell} />
@@ -1245,7 +1235,6 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11.5px] text-fg-muted">
                   <span className="inline-flex items-center gap-1.5"><CellValue cell={cell} size={16} /> {C.values[cell.value]}</span>
                   {cell.changedAt && <span>· {C.matrix.changed(shortDate(cell.changedAt))}</span>}
-                  {cell.confidence != null && !cell.override && <span>· {Math.round(cell.confidence * 100)}%</span>}
                 </div>
               </div>
               <button onClick={() => setOpen(null)} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label="Close"><X size={14} /></button>
@@ -1272,7 +1261,7 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
               <div className="text-[12.5px]">
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.setTo}</div>
                 <div className="mb-2 flex flex-wrap gap-1.5">
-                  {STATUS_VALUES.map((v) => (
+                  {OWN_STATUS_VALUES.map((v) => (
                     <button key={v} onClick={() => setValue(v)} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", value === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
                   ))}
                 </div>
@@ -1321,7 +1310,7 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, confidence: null, lowConfidence: false, quote: null, sourceUrl: null, changedAt: null, override: null, product: null, history: [] };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, quote: null, sourceUrl: null, changedAt: null, override: null, product: null, history: [] };
   async function set(v: OwnStatus) {
     if (v === capability.ourStatus) return;
     setBusy(true);

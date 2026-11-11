@@ -1,28 +1,28 @@
 /**
  * How close a competitor is to the org's capability list, from the matrix alone:
- * the share of the org's active capabilities the competitor has (a partial counts
- * half). Pure, so the strip card and tests share one definition.
+ * the share of the org's active capabilities found at the competitor (a
+ * low-confidence find counts half). Pure, so the strip card and tests share one definition.
  */
 import type { StatusValue } from "./config";
 
 export interface Closeness {
   /** 0–100, or null when the org has no capabilities. */
   score: number | null;
-  has: number;
-  partial: number;
+  found: number;
+  low: number;
   total: number;
 }
 
 export function closenessOf(capabilityIds: readonly string[], valueOf: (capabilityId: string) => StatusValue | undefined): Closeness {
-  let has = 0;
-  let partial = 0;
+  let found = 0;
+  let low = 0;
   for (const id of capabilityIds) {
     const v = valueOf(id);
-    if (v === "has") has++;
-    else if (v === "partial") partial++;
+    if (v === "found") found++;
+    else if (v === "low") low++;
   }
   const total = capabilityIds.length;
-  return { score: total ? Math.round(((has + partial * 0.5) / total) * 100) : null, has, partial, total };
+  return { score: total ? Math.round(((found + low * 0.5) / total) * 100) : null, found, low, total };
 }
 
 /** Competitors ranked closest first; ties keep the given order (the matrix column order). */

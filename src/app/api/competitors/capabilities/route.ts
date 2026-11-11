@@ -87,7 +87,7 @@ export async function POST(req: Request) {
       description: cleanText(body.description, MAX_DESCRIPTION) ?? "",
       ownProduct: cleanText(body.ownProduct, MAX_OWN_PRODUCT) ?? "",
       productLines: productLines as unknown as Prisma.InputJsonValue,
-      ourStatus: isOwnStatus(body.ourStatus) ? body.ourStatus : "has",
+      ourStatus: isOwnStatus(body.ourStatus) ? body.ourStatus : "found",
       position: await nextPosition("capability", ctx.workspaceId),
       origin: "manual",
       state: "active",
