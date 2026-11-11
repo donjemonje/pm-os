@@ -1,12 +1,13 @@
-import { AnswerError, CapacityError } from "../ai";
+import { AnswerError, CapacityError, EndpointError, TransientError } from "../ai";
 
 /**
  * Pacing of an analysis run (Capability Analysis, "How the analysis runs"): calls stay under the model's
  * tokens-per-minute limit, and a "no capacity" answer makes the step wait and continue from where it stopped.
  *
- * Nothing here is a retry in the "try again and hope" sense: an item is worked again only after a capacity answer,
- * and only because it is still on the to-do. An unusable answer is recorded and skipped (when the step says how);
- * anything else stops the loop.
+ * Nothing here is a retry in the "try again and hope" sense: an item is worked again only after a capacity answer
+ * (or a passing failure of the endpoint: HTTP 500, 502, 504, a network error — waited out the same way), and only
+ * because it is still on the to-do. An unusable answer is recorded and skipped (when the step says how); anything
+ * else stops the loop. Both kinds of waiting end: capacity after 24 h in all, a failing endpoint after 6 waits in a row.
  *
  * Pure: the clock, the sleep and the work are handed in.
  */
@@ -21,6 +22,11 @@ export const MAX_WAIT_MS = 24 * 3600_000;
 export const OUTPUT_RESERVE = 2_000;
 /** The first wait after a capacity answer. */
 export const BASE_WAIT_MS = 60_000;
+/**
+ * Waits in a row after a failing endpoint (500, 502, 504, network) with no call getting through in between. The
+ * next failure ends the run: 1 + 2 + 4 + 8 + 15 + 15 = 45 minutes of a broken endpoint is not a blip.
+ */
+export const MAX_TRANSIENT_WAITS = 6;
 
 export function estimateTokens(chars: number): number {
   return Math.ceil(chars / 4);
@@ -99,8 +105,8 @@ export interface PacedOptions<T> {
   work: (item: T) => Promise<number>;
   budget: TokenBudget;
   sleep: (ms: number) => Promise<void>;
-  /** A capacity answer: the loop is about to sleep `ms`. */
-  onWait: (ms: number, attempt: number) => Promise<void>;
+  /** A capacity answer (or a failing endpoint: `cause.transient`): the loop is about to sleep `ms`. */
+  onWait: (ms: number, attempt: number, cause: { transient: boolean; message: string }) => Promise<void>;
   onResume: () => Promise<void>;
   /** An unusable answer for one item: record it and go on. Without it an AnswerError stops the loop. */
   onAnswerError?: (item: T, e: AnswerError) => Promise<void>;
@@ -109,6 +115,8 @@ export interface PacedOptions<T> {
   /** All waiting together; past it the loop throws CapacityError. */
   maxWaitMs: number;
   baseWaitMs?: number;
+  /** Waits in a row for a failing endpoint; past it the loop throws EndpointError. Default MAX_TRANSIENT_WAITS. */
+  maxTransientWaits?: number;
 }
 
 export interface PacedResult {
@@ -126,6 +134,9 @@ export interface PacedResult {
  * 2. work succeeds → the item is done; the count of capacity answers in a row goes back to 0.
  * 3. work throws CapacityError → no new item starts; the calls in flight are left to finish; every item that got a
  *    capacity answer goes back to the front of the to-do in its original order; then onWait, sleep, onResume, and on.
+ *    A TransientError (the endpoint failed: 500, 502, 504, network) is waited out the same way, with a ceiling: when
+ *    every refusal of a round was transient and no call got through since the last such round, the round counts;
+ *    after `maxTransientWaits` such waits in a row the next one throws EndpointError instead of waiting.
  * 4. work throws AnswerError → with onAnswerError: called, the item counts as failed, the loop goes on; without: as 5.
  * 5. work throws anything else → no new item starts, calls in flight finish, the first such error is rethrown.
  * 6. shouldStop() true → calls in flight finish, the loop returns stopped.
@@ -135,7 +146,9 @@ export async function runPaced<T>(o: PacedOptions<T>): Promise<PacedResult> {
   const result: PacedResult = { done: 0, failed: 0, waits: 0, waitedMs: 0, stopped: false };
   const inflight = new Set<Promise<void>>();
   let attempt = 0;
-  let capacity: { entries: Array<{ index: number; item: T }>; retryAfterMs: number | null } | null = null;
+  let transientWaits = 0;
+  type Hit = { entries: Array<{ index: number; item: T }>; retryAfterMs: number | null; transient: boolean; message: string };
+  let capacity: Hit | null = null;
   let fatal: { error: unknown } | null = null;
   const halted = () => capacity !== null || fatal !== null || result.stopped;
 
@@ -145,12 +158,18 @@ export async function runPaced<T>(o: PacedOptions<T>): Promise<PacedResult> {
       o.budget.settle(handle, used);
       result.done++;
       attempt = 0;
+      transientWaits = 0;
     } catch (e) {
       if (e instanceof CapacityError) {
         // The request was refused: it used nothing.
         o.budget.settle(handle, 0);
-        capacity ??= { entries: [], retryAfterMs: null };
+        capacity ??= { entries: [], retryAfterMs: null, transient: true, message: e.message };
         capacity.entries.push(entry);
+        // A round is a failing endpoint only when every refusal in it was one; a real capacity answer makes it a capacity round.
+        if (!(e instanceof TransientError)) {
+          if (capacity.transient) capacity.message = e.message;
+          capacity.transient = false;
+        }
         if (e.retryAfterMs != null) capacity.retryAfterMs = Math.max(capacity.retryAfterMs ?? 0, e.retryAfterMs);
       } else if (e instanceof AnswerError && o.onAnswerError) {
         try {
@@ -189,14 +208,22 @@ export async function runPaced<T>(o: PacedOptions<T>): Promise<PacedResult> {
     }
     if (fatal) throw (fatal as { error: unknown }).error;
     if (capacity) {
-      const hit: { entries: Array<{ index: number; item: T }>; retryAfterMs: number | null } = capacity;
+      const hit: Hit = capacity;
       capacity = null;
       queue.unshift(...hit.entries.sort((a, b) => a.index - b.index));
       attempt++;
+      if (hit.transient) {
+        if (transientWaits >= (o.maxTransientWaits ?? MAX_TRANSIENT_WAITS)) {
+          throw new EndpointError(`PMOS AI did not answer ${transientWaits + 1} times in a row, with ${transientWaits} wait${transientWaits === 1 ? "" : "s"} in between — giving up. Last error: ${hit.message}`.slice(0, 300));
+        }
+        transientWaits++;
+      } else {
+        transientWaits = 0;
+      }
       const ms = backoffMs(attempt, hit.retryAfterMs, o.baseWaitMs);
       if (result.waitedMs + ms > o.maxWaitMs) throw new CapacityError(`PMOS AI had no capacity for ${Math.round(result.waitedMs / 60_000)} min in all — giving up`, hit.retryAfterMs);
       result.waits++;
-      await o.onWait(ms, attempt);
+      await o.onWait(ms, attempt, { transient: hit.transient, message: hit.message });
       await o.sleep(ms);
       result.waitedMs += ms;
       await o.onResume();

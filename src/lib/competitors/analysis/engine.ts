@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "../../db";
-import { AnswerError, callTool, CapacityError, getCompetitorsModel, type CallOptions } from "../ai";
+import { AnswerError, callTool, CapacityError, EndpointError, getCompetitorsModel, type CallOptions } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
 import { aiStepEnabled, now, testAiAnswers, type TestAiAnswers } from "../settings";
@@ -19,11 +19,13 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  * rows to one catalog at once would add the same row twice. A queue of one needs no shared rate limiter, no locks.
  *
  *   queued ──claim (it is the head of the queue)──▶ running
- *   running ──capacity answer──▶ waiting (resumeAt; the same process sleeps) ──sleep over──▶ running
+ *   running ──capacity answer, or the endpoint failed (500, 502, 504, network)──▶ waiting (resumeAt; the same
+ *                      process sleeps) ──sleep over──▶ running
  *   running | waiting ──no heartbeat for 10 min──▶ queued (staleCount + 1; at 3 → failed "stale"); the worker that
  *                      held it, if it is still alive, finds it is no longer the owner and stops without writing
  *   running ──all six steps done──▶ done
- *   running ──an unusable answer in merge / match, too many failed pages, 24 h of waiting, any other error──▶ failed
+ *   running ──an unusable answer in merge / match, too many failed pages, 24 h of waiting for capacity, an endpoint
+ *                      that failed 7 times in a row (6 waits, 45 min), any other error──▶ failed
  *   queued | running | waiting ──the competitor was removed──▶ cancelled
  *
  * The run keeps no cursor: every start walks the six steps from the first, and each step computes its to-do from
@@ -381,14 +383,14 @@ export async function runAnalysis(id: string): Promise<void> {
           maxWaitMs: Math.max(0, MAX_WAIT_MS - counters.waitedMs),
           baseWaitMs: analysisBaseWaitMs(),
           shouldStop,
-          onWait: async (ms, attempt) => {
+          onWait: async (ms, attempt, cause) => {
             const resumeAt = new Date(Date.now() + ms);
             counters.waits++;
             counters.waitedMs += ms;
-            log("warn", `PMOS AI has no capacity — waiting ${Math.round(ms / 1000)} s, then continuing from where it stopped (wait ${attempt} in a row)`);
+            log("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, 160)})` : "PMOS AI has no capacity"} — waiting ${Math.round(ms / 1000)} s, then continuing from where it stopped (wait ${attempt} in a row)`);
             await own({ status: "waiting", resumeAt });
             await flush();
-            await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: row.competitorId, step, waitMs: ms, attempt });
+            await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: row.competitorId, step, waitMs: ms, attempt, reason: cause.transient ? "endpoint" : "capacity" });
           },
           onResume: async () => {
             if (!(await own({ status: "running", resumeAt: null, heartbeatAt: new Date() }))) throw new RunLost();
@@ -434,10 +436,10 @@ export async function runAnalysis(id: string): Promise<void> {
       log("warn", "The competitor was removed — analysis cancelled");
     } else {
       outcome = "failed";
-      errorKind = e instanceof CapacityError ? "capacity" : e instanceof AnswerError ? "answer" : e instanceof AnalysisError ? e.kind : "other";
+      errorKind = e instanceof CapacityError ? "capacity" : e instanceof AnswerError ? "answer" : e instanceof EndpointError ? "ai" : e instanceof AnalysisError ? e.kind : "other";
       error = e instanceof Error ? e.message.slice(0, 300) : String(e);
       log("error", `Analysis stopped in the ${step.replace("_", " ")} step: ${error}`);
-      if (!(e instanceof CapacityError || e instanceof AnswerError || e instanceof AnalysisError)) console.error("[competitors] analysis failed", id, e);
+      if (!(e instanceof CapacityError || e instanceof AnswerError || e instanceof AnalysisError || e instanceof EndpointError)) console.error("[competitors] analysis failed", id, e);
     }
   } finally {
     clearInterval(heartbeat);

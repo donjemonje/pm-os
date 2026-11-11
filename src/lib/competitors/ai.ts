@@ -161,6 +161,26 @@ export class CapacityError extends Error {
   }
 }
 
+/**
+ * PMOS AI did not answer for a reason that usually passes by itself: HTTP 500, 502, 504 or a network error (no
+ * connection, a reset, a timeout). The caller waits and continues exactly as after a capacity answer. Unlike a capacity
+ * answer it has a ceiling: an endpoint that fails many times in a row ends the run (analysis/pacing.ts → EndpointError).
+ */
+export class TransientError extends CapacityError {
+  constructor(message: string, retryAfterMs: number | null = null) {
+    super(message, retryAfterMs);
+    this.name = "TransientError";
+  }
+}
+
+/** The endpoint kept failing (transient errors in a row, past the ceiling): the run ends as failed, with what the endpoint said. */
+export class EndpointError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EndpointError";
+  }
+}
+
 /** The model answered (HTTP 200) but the answer is unusable: invalid JSON, no structured answer, empty, or cut off. */
 export class AnswerError extends Error {
   constructor(message: string) {
@@ -188,12 +208,30 @@ function retryAfterOf(e: unknown): number | null {
   return Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds * 1000) : null;
 }
 
-/** A provider error that means "no capacity" → CapacityError; anything else is returned untouched. */
+const NETWORK_CODES = /\b(ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|EPIPE|UND_ERR_[A-Z_]+)\b/;
+const NETWORK_WORDS = /fetch failed|socket hang up|network error|connection (error|reset|closed|refused|timed out)|request timed out|timeout/i;
+
+/** The request never got an HTTP answer: no connection, a reset, a timeout. An error that carries an HTTP status is not one. */
+export function isNetworkError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (typeof (e as { status?: unknown }).status === "number") return false;
+  const cause = (e as { cause?: unknown }).cause;
+  const code = (e as { code?: unknown }).code ?? (cause as { code?: unknown } | null | undefined)?.code;
+  const text = `${e.name} ${e.message} ${cause instanceof Error ? `${cause.name} ${cause.message}` : ""} ${typeof code === "string" ? code : ""}`;
+  return NETWORK_CODES.test(text) || NETWORK_WORDS.test(text);
+}
+
+/**
+ * A provider error the run waits out: "no capacity" (429, 503, 529, RESOURCE_EXHAUSTED) → CapacityError; a passing
+ * failure (500, 502, 504, a network error) → TransientError. Anything else — a refused request, a bad schema, no
+ * permission — is returned untouched and stops the run.
+ */
 export function asCapacityError(e: unknown): unknown {
   if (e instanceof CapacityError) return e;
   const status = (e as { status?: unknown } | null)?.status;
   const message = e instanceof Error ? e.message : String(e);
   if (status === 429 || status === 503 || status === 529 || /RESOURCE_EXHAUSTED/.test(message)) return new CapacityError(message.slice(0, 300), retryAfterOf(e));
+  if (status === 500 || status === 502 || status === 504 || isNetworkError(e)) return new TransientError(message.slice(0, 300), retryAfterOf(e));
   return e;
 }
 
@@ -205,7 +243,8 @@ export function asCapacityError(e: unknown): unknown {
  * the raw JSON text the model would have answered. It replaces the model call and nothing else — parsing, the quote
  * check and everything the analysis does with the answer run unchanged. With an injected answer no model is ever called.
  *
- * Throws CapacityError (wait and continue), AnswerError (the answer is unusable), or the provider's own error.
+ * Throws CapacityError (wait and continue; TransientError is the kind with a ceiling), AnswerError (the answer is
+ * unusable), or the provider's own error.
  */
 export async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions): Promise<{ value: T; usage: Usage }> {
   if (opts.injected !== undefined) {

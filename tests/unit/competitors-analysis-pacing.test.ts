@@ -1,6 +1,6 @@
 /** Capability Analysis — pacing and the resume state machine (analysis/pacing.ts). Pure module: fake clock, fake work. */
 import { describe, expect, it } from "vitest";
-import { AnswerError, CapacityError } from "@/lib/competitors/ai";
+import { AnswerError, asCapacityError, CapacityError, EndpointError, isNetworkError, TransientError } from "@/lib/competitors/ai";
 import { backoffMs, estimateTokens, runPaced, TokenBudget, type PacedOptions } from "@/lib/competitors/analysis/pacing";
 
 function fakeClock() {
@@ -94,7 +94,7 @@ function harness(items: string[], fail: (item: string, call: number) => Error | 
     },
     budget: new TokenBudget(1_000_000, c.now),
     sleep: c.sleep,
-    onWait: async (ms, attempt) => { events.push(`wait ${ms} #${attempt}`); },
+    onWait: async (ms, attempt, cause) => { events.push(`wait ${ms} #${attempt}${cause.transient ? " endpoint" : ""}`); },
     onResume: async () => { events.push("resume"); },
     maxWaitMs: 24 * 3600_000,
     ...opts,
@@ -156,6 +156,40 @@ describe("runPaced", () => {
     expect(h.saved).toEqual(["a"]);
     expect(h.events).toEqual(["wait 60000 #1", "resume", "wait 120000 #2", "resume"]);
   });
+  it("a failing endpoint (500, 504, network) is waited out like a capacity answer and the loop continues from where it stopped", async () => {
+    const h = harness(ITEMS, (item, n) => (item === "c" && n <= 2 ? new TransientError("500 Internal error") : null));
+    const r = await runPaced(h.options);
+    expect(h.saved).toEqual(ITEMS);
+    expect(h.events).toEqual(["wait 60000 #1 endpoint", "resume", "wait 120000 #2 endpoint", "resume"]);
+    expect(h.calls.get("c")).toBe(3);
+    expect(r).toMatchObject({ done: 6, waits: 2, waitedMs: 180_000 });
+  });
+  it("an endpoint that keeps failing ends the loop with a clear error after 6 waits in a row — it never waits forever", async () => {
+    const h = harness(ITEMS, (item) => (item === "b" ? new TransientError("fetch failed") : null));
+    const run = runPaced(h.options);
+    await expect(run).rejects.toBeInstanceOf(EndpointError);
+    await expect(run).rejects.toThrow(/did not answer 7 times in a row.*fetch failed/);
+    expect(h.saved).toEqual(["a"]);
+    expect(h.calls.get("b")).toBe(7);
+    // 1 + 2 + 4 + 8 + 15 + 15 minutes.
+    expect(h.events.filter((e) => e.startsWith("wait")).map((e) => e.split(" ")[1])).toEqual(["60000", "120000", "240000", "480000", "900000", "900000"]);
+  });
+  it("the ceiling counts failures in a row: a call that gets through, or a real capacity answer, starts the count again", async () => {
+    // b fails 5 times, then works; c fails 5 times, then works: 10 waits in all, never 7 failures in a row.
+    const h = harness(ITEMS, (item, n) => ((item === "b" || item === "c") && n <= 5 ? new TransientError("504") : null), { maxTransientWaits: 5 });
+    const r = await runPaced(h.options);
+    expect(h.saved).toEqual(ITEMS);
+    expect(r.waits).toBe(10);
+    // Capacity answers have no such ceiling (only the 24 h in all).
+    const k = harness(ITEMS, (item, n) => (item === "b" && n <= 9 ? new CapacityError("429") : null), { maxTransientWaits: 2 });
+    await runPaced(k.options);
+    expect(k.saved).toEqual(ITEMS);
+    // A round with a real capacity answer in it is a capacity round.
+    const m = harness(ITEMS, (item, n) => (n <= 4 && (item === "a" || item === "b") ? (item === "a" ? new TransientError("500") : new CapacityError("429")) : null), { concurrency: 2, maxTransientWaits: 2 });
+    await runPaced(m.options);
+    expect([...m.saved].sort()).toEqual(ITEMS);
+    expect(m.events.filter((e) => e.endsWith("endpoint"))).toEqual([]);
+  });
   it("an unusable answer with a handler is recorded and the loop goes on", async () => {
     const failedItems: string[] = [];
     const h = harness(ITEMS, (item) => (item === "c" ? new AnswerError("invalid JSON") : null), { onAnswerError: async (item) => { failedItems.push(item); } });
@@ -204,5 +238,43 @@ describe("runPaced", () => {
     const r = await run(null);
     expect(worked).toEqual(["a", "b", "c", "d", "e", "f"]);
     expect(r.done).toBe(3);
+  });
+});
+
+describe("asCapacityError — which provider errors the run waits out", () => {
+  const http = (status: number, message = `HTTP ${status}`) => Object.assign(new Error(message), { status });
+  it("429, 503, 529 and RESOURCE_EXHAUSTED are capacity answers (no ceiling but the 24 h)", () => {
+    for (const e of [http(429), http(503), http(529), new Error("RESOURCE_EXHAUSTED: quota")]) {
+      const c = asCapacityError(e);
+      expect(c).toBeInstanceOf(CapacityError);
+      expect(c).not.toBeInstanceOf(TransientError);
+    }
+  });
+  it("500, 502 and 504 are a failing endpoint: waited out, with a ceiling", () => {
+    for (const status of [500, 502, 504]) expect(asCapacityError(http(status))).toBeInstanceOf(TransientError);
+    // A TransientError is a CapacityError for every caller that only knows "wait and continue".
+    expect(asCapacityError(http(500))).toBeInstanceOf(CapacityError);
+  });
+  it("network errors are a failing endpoint", () => {
+    const fetchFailed = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ETIMEDOUT 10.0.0.1:443"), { code: "ETIMEDOUT" }) });
+    const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    const sdk = new Error("Connection error.");
+    const timeout = new Error("Request timed out.");
+    for (const e of [fetchFailed, reset, sdk, timeout]) {
+      expect(isNetworkError(e), e.message).toBe(true);
+      expect(asCapacityError(e), e.message).toBeInstanceOf(TransientError);
+    }
+  });
+  it("anything else is returned untouched and stops the run: a refused request, no permission, a bug", () => {
+    const bad = http(400, "INVALID_ARGUMENT: schema");
+    const denied = http(403, "PERMISSION_DENIED");
+    const bug = new TypeError("cannot read properties of undefined");
+    for (const e of [bad, denied, bug]) expect(asCapacityError(e)).toBe(e);
+    // An error with an HTTP status is never a network error, whatever its text says.
+    expect(isNetworkError(http(400, "timeout must be a number"))).toBe(false);
+  });
+  it("keeps the server's retry-after", () => {
+    const e = Object.assign(new Error("HTTP 500"), { status: 500, headers: { "retry-after": "30" } });
+    expect((asCapacityError(e) as TransientError).retryAfterMs).toBe(30_000);
   });
 });
