@@ -497,18 +497,22 @@ export async function runAnalysis(id: string): Promise<void> {
   }
 
   // The close carries the owner token too: a worker that lost the run never overwrites the status the other worker set.
+  // Decided here, once: a heartbeat still in flight that lands after the close finds no owner and must not count.
+  let closed = false;
   if (!lost) {
     const finishedAt = new Date();
     try {
-      await own({
+      closed = await own({
         status: outcome, step: outcome === "done" ? "done" : step, finishedAt, heartbeatAt: finishedAt, resumeAt: null, ownerToken: null, errorKind: errorKind ?? "none", error,
         counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
       });
     } catch (e) {
+      // The database refused the write: not a lost claim. The stale sweep will put the run back; the event and the kick below still go out.
       console.error("[competitors] could not close the analysis run", id, e);
+      closed = true;
     }
   }
-  if (lost) {
+  if (!closed) {
     console.warn(`[competitors] analysis ${id}: this worker no longer owns the run (it was put back in the queue while this process was alive) — stopped in the ${step} step without writing; the run continues from the tables when it is claimed again`);
     return;
   }
