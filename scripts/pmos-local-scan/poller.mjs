@@ -139,8 +139,11 @@ async function askUser(sites) {
   if (ANSWER === "later") return false;
   const list = sites.map((s) => `• ${s}`).join("\n");
   const script = `display dialog "PM-OS wants to scan ${sites.length === 1 ? "this site" : `${sites.length} sites`} from your browser:\n\n${list.replace(/"/g, '\\"')}" with title "PM-OS competitor scan" buttons {"Later", "Approve"} default button "Approve" giving up after 120`;
+  // The station is a background service: without "activate" its dialog opens BEHIND the open windows and times out
+  // unseen (Daniel 2026-11-11). It comes to the front, with a sound.
+  run("afplay", ["/System/Library/Sounds/Glass.aiff"]).catch(() => undefined);
   try {
-    const { stdout } = await run("osascript", ["-e", script]);
+    const { stdout } = await run("osascript", ["-e", "activate", "-e", script]);
     return /button returned:Approve/.test(stdout) && !/gave up:true/.test(stdout);
   } catch {
     return false; // Cancel / Esc = Later
