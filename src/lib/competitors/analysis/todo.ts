@@ -42,3 +42,26 @@ export function factsBaselineSources(sourceIds: string[], pages: Array<{ sourceI
   const read = new Set(pages.filter((p) => p.factsKey != null).map((p) => p.sourceId));
   return sourceIds.filter((id) => !read.has(id));
 }
+
+/**
+ * The facts baseline a run inherits. A run that stopped in the middle of the facts step (it failed, it was
+ * cancelled) left some pages of a first-read source unread — and the pages it did read now carry a factsKey, so
+ * factsBaselineSources() alone would call the rest "news". The next run therefore takes the baseline over from the
+ * competitor's last unfinished run: `earlier` is the competitor's other runs, newest first; the first one that
+ * decided a baseline hands it on, unless a run that finished ("done": every page was read) comes before it.
+ */
+export function carriedFactsBaseline(earlier: Array<{ status: string; cursor: unknown }>): string[] {
+  for (const run of earlier) {
+    if (run.status === "done") return [];
+    const cursor = run.cursor && typeof run.cursor === "object" && !Array.isArray(run.cursor) ? (run.cursor as Record<string, unknown>) : {};
+    const list = cursor.factsBaselineSources;
+    if (Array.isArray(list)) return list.filter((x): x is string => typeof x === "string");
+  }
+  return [];
+}
+
+/** The baseline of a run: the sources never read for facts, plus the inherited ones that still exist. No source twice. */
+export function factsBaseline(sourceIds: string[], pages: Array<{ sourceId: string; factsKey: string | null }>, carried: string[]): string[] {
+  const known = new Set(sourceIds);
+  return [...new Set([...factsBaselineSources(sourceIds, pages), ...carried.filter((id) => known.has(id))])];
+}

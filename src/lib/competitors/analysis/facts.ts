@@ -6,7 +6,7 @@ import { checkPii } from "../pii";
 import type { RunContext } from "./engine";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import { loadPages } from "./steps";
-import { factsBaselineSources, factsTodo, readKey } from "./todo";
+import { carriedFactsBaseline, factsBaseline, factsTodo, readKey } from "./todo";
 
 /**
  * The profile facts (tagline, products, pricing tiers, customers, funding …) — the last step of an analysis run.
@@ -24,10 +24,13 @@ export async function factsStep(ctx: RunContext): Promise<void> {
   const todo = factsTodo(pages, FACTS_VERSION);
   if (!todo.length) return;
 
-  // A source's first read is the baseline, not news. Decided once per run (a run that continues reads what it wrote).
+  // A source's first read is the baseline, not news. Decided once per run (a run that continues reads what it wrote),
+  // and handed on: when the competitor's last run stopped inside this step, the sources it was reading for the first
+  // time are still a first read — their remaining pages must not arrive as news in the feed and the email.
   let baseline = Array.isArray(ctx.run.cursor.factsBaselineSources) ? (ctx.run.cursor.factsBaselineSources as string[]) : null;
   if (!baseline) {
-    baseline = factsBaselineSources([...new Set(pages.map((p) => p.sourceId))], pages);
+    const earlier = await db.competitorAnalysis.findMany({ where: { competitorId, id: { not: ctx.run.id } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { status: true, cursor: true } });
+    baseline = factsBaseline([...new Set(pages.map((p) => p.sourceId))], pages, carriedFactsBaseline(earlier));
     await ctx.saveCursor({ factsBaselineSources: baseline });
   }
   const baselineSources = new Set(baseline);
