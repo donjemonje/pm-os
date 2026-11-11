@@ -23,6 +23,9 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  * Round 3 (2026-11-11, Daniel: USER and CUSTOMER_ADMIN have the same permissions by default — d232d00): CA-17 now
  * asserts that the member has the org admin's controls, routes and Removed panel, and that /admin stays closed.
  *
+ * Round 4 (2026-11-11, Daniel: news is historic data — eeb646a): CA-19 now asserts that the feed item about a removed
+ * capability stays in the feed while it is removed and after the restore; its profile assertions are gone.
+ *
  * Common setup (every row): one QA org (QA-CA Org) with a PM-OS admin (knobs,
  * Scan now without the daily limit), an org admin PM (every catalog change —
  * "the admin" of the rows) and a member (role USER; the same permissions, CA-17). Two competitors, Alpha and Beta, each
@@ -390,16 +393,6 @@ async function openFeed(page: Page): Promise<void> {
 }
 const feedItems = (page: Page, text: string | RegExp) => page.getByTestId("cmp-feed-item").filter({ hasText: text });
 
-async function openProfile(page: Page, competitor: string): Promise<void> {
-  await page.getByRole("tab", { name: "Profiles" }).click();
-  const chip = page.getByRole("group", { name: "Choose a competitor" }).getByRole("button", { name: new RegExp(`${competitor}$`) });
-  await chip.click();
-  await expect(chip).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("heading", { level: 2, name: competitor })).toBeVisible();
-}
-/** A capability's row in the profile (its accessible name starts with the capability name). */
-const profileRow = (page: Page, capability: string) => page.locator('section[aria-label="Profiles"]').getByRole("button", { name: new RegExp(`^${capability}`) });
-
 /**
  * Settings → Domains: drag a domain by its handle onto another domain's card (HTML5 drag and drop, real mouse).
  * The card under the pointer accepts the drop only once the page knows what is being dragged, so each step waits
@@ -542,6 +535,9 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     // the feed" is read off a feed that renders this org's signals. Seeded, not taken from the scan below: on the
     // local lane a re-scan's status change is logged as "first evidence … not a change" and never reaches the feed
     // (scan.ts firstScan — reported to engineering on 2026-11-10, outside this row).
+    // Since eeb646a (news is history, CA-19) the feed no longer hides a removed capability's items. The 0 below still
+    // holds and now rests on the scan alone: nothing was reported about Dashboards before the removal (its seeded
+    // cells carry no change date), and this scan must not report anything about it — no status change, no suggestion.
     const changedAt = new Date(Date.now() - 60_000);
     await withTestDb((db) => db.capabilityStatus.update({
       where: { competitorId_capabilityId: { competitorId: alpha.id, capabilityId: cap["Feedback inbox"] } },
@@ -1298,7 +1294,10 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     }
   });
 
-  test("CA-19 (proposed) a removed capability leaves the feed and the profile: while removed no feed item and no profile row for Dashboards; after the restore both are back [knobs: none]", async ({ browser }) => {
+  // Daniel, 2026-11-11 (product eeb646a): news is historic data — what was already reported about a capability stays
+  // in the feed after a PM removes the capability from the table. Before that commit this row asserted the opposite
+  // (the item left the feed with the table row and came back with the restore). The profile is not part of the decision.
+  test("CA-19 a removed capability's news stays in the feed: the feed item about Dashboards is there while the capability is removed, and after the restore [knobs: none]", async ({ browser }) => {
     // Alpha's cell on Dashboards changed in its latest scan (missing → has; the org's own status is missing → a gap signal).
     const changedAt = new Date(Date.now() - 60_000);
     await withTestDb((db) => db.capabilityStatus.update({
@@ -1306,31 +1305,24 @@ test.describe("Capability Analysis — PM decisions stick", () => {
       data: { changedAt, history: { create: { value: "missing", quote: null, sourceUrl: null, at: changedAt } } },
     }));
     const signal = `${ALPHA} missing → has it on Dashboards`;
+    await removeCapability(cap.Dashboards);
+    expect((await capabilityRow(cap.Dashboards)).state).toBe("removed");
+
     const page = await open(browser, "member");
-    // Positive control: before the removal the signal and the profile row are there.
     await openMatrix(page);
+    // The capability is out of the table, so the feed item below is read while the removal is in force.
+    expect(allRows(await matrixGroups(page)), "the table while Dashboards is removed").not.toContain("Dashboards");
     await openFeed(page);
     await expect(feedItems(page, signal)).toHaveCount(1);
-    await openProfile(page, ALPHA);
-    await expect(profileRow(page, "Dashboards")).toHaveCount(1);
-
-    await removeCapability(cap.Dashboards);
-    await openMatrix(page);
-    await openFeed(page);
-    await expect(page.locator('section[aria-label="News feed"]')).toBeVisible();
-    await expect(feedItems(page, /Dashboards/)).toHaveCount(0);
-    await openProfile(page, ALPHA);
-    await expect(profileRow(page, "Roadmap")).toHaveCount(1);
-    await expect(profileRow(page, "Dashboards")).toHaveCount(0);
-    await expect(page.locator('section[aria-label="Profiles"]')).not.toContainText("Dashboards");
+    await expect(feedItems(page, /Dashboards/), "one item about Dashboards, not two").toHaveCount(1);
 
     await ok(await pmApi.patch(`/api/competitors/capabilities/${cap.Dashboards}`, { data: { state: "active" } }));
+    expect((await capabilityRow(cap.Dashboards)).state).toBe("active");
     await openMatrix(page);
+    expect(groupOf(await matrixGroups(page), "Dashboards"), "Dashboards is back in the table").toBe("Reporting");
     await openFeed(page);
     await expect(feedItems(page, signal)).toHaveCount(1);
-    await openProfile(page, ALPHA);
-    await expect(profileRow(page, "Dashboards")).toHaveCount(1);
-    await expect(profileRow(page, "Dashboards")).toContainText(`Changed ${shortDate(changedAt)}`);
+    await expect(feedItems(page, /Dashboards/), "one item about Dashboards, not two").toHaveCount(1);
   });
 
   // ————————————————————————————— Names added by hand —————————————————————————————
