@@ -10,8 +10,11 @@ import { LOCAL_BASE_URL } from "./test-env";
  *
  * SET-01 product lines are the AI's ground truth: a PM-OS admin can add /
  *        rename / delete through /api/ideas/lists/product-lines, a duplicate
- *        name (case-insensitive) is a 409, a plain USER may read the list and
- *        pick a chip color but every other write is a 403; the settings page
+ *        name (case-insensitive) is a 409; a plain USER has the same writes
+ *        (Daniel 2026-11-11: USER and CUSTOMER_ADMIN have the same permissions
+ *        by default — until then every write but the chip color was a 403):
+ *        he reads the list, picks a chip color, adds, renames, reorders and
+ *        deletes, and his duplicate name is a 409 too; the settings page
  *        lists the line while it exists and drops it after the delete.
  * IMP-07 bad input never reaches PMOS AI: an empty file, a CSV without
  *        subject/description columns, a text file renamed .csv and a
@@ -33,6 +36,8 @@ import { LOCAL_BASE_URL } from "./test-env";
 const ROOMLENS_SLUG = "roomlens";
 const SET_LINE = "QA-SET Line";
 const SET_RENAMED = "QA-SET Line renamed";
+const SET_USER_LINE = "QA-SET User line";
+const SET_USER_RENAMED = "QA-SET User line renamed";
 const MRG = {
   jiraIdea: "QA-MRG jira-origin idea", zenIdea: "QA-MRG zendesk-origin idea", consolidated: "QA-MRG consolidated idea",
   tickets: ["QA-MRG-T1", "QA-MRG-T2", "QA-MRG-T3"], ownJira: "QA-MRG-J-SELF", otherJira: "QA-MRG-J-OTHER", thirdJira: "QA-MRG-J-THIRD",
@@ -67,7 +72,7 @@ test.describe("Ideas rules: product lines authz, bad CSV input, all-evidence vot
     });
   });
 
-  test("SET-01 product lines: admin CRUD with duplicate rejection; USER reads and colors only; settings page follows", async ({
+  test("SET-01 product lines: admin CRUD with duplicate rejection; a USER has the same writes (add, rename, reorder, delete) and the same duplicate rejection; settings page follows", async ({
     page,
     browser,
   }) => {
@@ -93,26 +98,61 @@ test.describe("Ideas rules: product lines authz, bad CSV input, all-evidence vot
       name: SET_RENAMED, description: "renamed",
     });
 
-    // A plain USER: read + chip color allowed, every other write refused.
+    // A plain USER (Daniel 2026-11-11: the same permissions as the customer admin): reads, picks a chip color, and
+    // every write that used to answer 403 "Only an admin can change product lines" now goes through.
     const userContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
     const user = await userContext.newPage();
+    const linePositions = () => withTestDb((db) => db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { id: true, position: true } }));
     try {
       await loginAsRoomLens(user);
+      const me = await withTestDb((db) => db.user.findUniqueOrThrow({ where: { email: "qa+roomlens@pm-os.io" } }));
+      expect(me.role, "the seeded member is a plain USER").toBe("USER");
       const list = await user.request.get(LIST);
       expect(list.status()).toBe(200);
       expect(((await list.json()).items as { name: string }[]).map((i) => i.name)).toContain(SET_RENAMED);
       const color = await user.request.patch(LIST, { data: { id: created!.id, color: "teal" } });
-      expect(color.status(), "color pick is presentation, allowed").toBe(200);
-      for (const [method, data] of [
-        ["post", { name: "QA-SET user line" }],
-        ["patch", { id: created!.id, name: "QA-SET user rename" }],
-        ["delete", { id: created!.id }],
-        ["put", { order: [created!.id] }],
-      ] as const) {
-        const res = await user.request.fetch(LIST, { method: method.toUpperCase(), data });
-        expect(res.status(), `USER ${method}`).toBe(403);
-        expect((await res.json()).error).toBe("Only an admin can change product lines");
+      expect(color.status(), "color pick").toBe(200);
+
+      // Add.
+      const userAdd = await user.request.post(LIST, { data: { name: SET_USER_LINE, description: "QA-SET fixture" } });
+      expect(userAdd.status(), `USER post: ${await userAdd.text()}`).toBe(200);
+      const userLine = ((await userAdd.json()).items as { id: string; name: string }[]).find((i) => i.name === SET_USER_LINE);
+      expect(userLine, "the USER's line is in the list").toBeTruthy();
+      expect((await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: userLine!.id } }))).workspaceId).toBe(workspaceId);
+      // The duplicate rule holds for him as for the admin.
+      const userDup = await user.request.post(LIST, { data: { name: SET_RENAMED.toUpperCase() } });
+      expect(userDup.status(), "USER duplicate name").toBe(409);
+      expect((await userDup.json()).error).toContain("already exists");
+      // Rename — his own line and the line the admin made.
+      const userRename = await user.request.patch(LIST, { data: { id: userLine!.id, name: SET_USER_RENAMED, description: "renamed by a USER" } });
+      expect(userRename.status(), `USER patch: ${await userRename.text()}`).toBe(200);
+      expect(await withTestDb((db) => db.productLine.findUnique({ where: { id: userLine!.id } }))).toMatchObject({ name: SET_USER_RENAMED, description: "renamed by a USER" });
+      const adminLineEdit = await user.request.patch(LIST, { data: { id: created!.id, name: SET_RENAMED, description: "edited by a USER" } });
+      expect(adminLineEdit.status(), `USER patch of the admin's line: ${await adminLineEdit.text()}`).toBe(200);
+      expect(await withTestDb((db) => db.productLine.findUnique({ where: { id: created!.id } }))).toMatchObject({ name: SET_RENAMED, description: "edited by a USER" });
+      // Reorder — the whole list reversed; the positions the org had are written back afterwards.
+      const before = await linePositions();
+      expect(before.length, "at least the two QA-SET lines").toBeGreaterThanOrEqual(2);
+      const reversed = before.map((l) => l.id).reverse();
+      try {
+        const userOrder = await user.request.put(LIST, { data: { order: reversed } });
+        expect(userOrder.status(), `USER put: ${await userOrder.text()}`).toBe(200);
+        expect(await linePositions(), "the order the USER saved").toEqual(reversed.map((id, position) => ({ id, position })));
+      } finally {
+        await withTestDb(async (db) => {
+          for (const l of before) await db.productLine.update({ where: { id: l.id }, data: { position: l.position } });
+        });
       }
+      // The settings page gives him the controls and shows his line.
+      await user.goto("/settings/ideas/product-lines");
+      await expect(user.getByText(SET_USER_RENAMED, { exact: true })).toBeVisible();
+      await expect(user.getByRole("button", { name: "Add product line" })).toBeVisible();
+      await expect(user.getByText("read-only for members")).toHaveCount(0);
+      // Delete.
+      const userDelete = await user.request.delete(LIST, { data: { id: userLine!.id } });
+      expect(userDelete.status(), `USER delete: ${await userDelete.text()}`).toBe(200);
+      expect(await withTestDb((db) => db.productLine.findUnique({ where: { id: userLine!.id } }))).toBeNull();
+      // The admin's line is still there for the admin's own delete below.
       expect((await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: created!.id } }))).name).toBe(SET_RENAMED);
     } finally {
       await userContext.close();

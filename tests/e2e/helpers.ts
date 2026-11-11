@@ -219,6 +219,15 @@ export async function acceptConfirm(page: Page): Promise<void> {
 }
 
 /**
+ * React has attached to the element: a click before that is lost (server-rendered page, client component).
+ * Wait for this before the first click on a freshly loaded page.
+ */
+export async function hydrated(target: Locator): Promise<void> {
+  await expect(target.first()).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => target.first().evaluate((el) => Object.keys(el).some((key) => key.startsWith("__reactFiber") || key.startsWith("__reactProps"))), { timeout: 30_000 }).toBe(true);
+}
+
+/**
  * PM-OS Admin works on one organization at a time (banner, cookie). Specs that
  * look at an org other than the admin's own select it here before navigating.
  */

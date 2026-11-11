@@ -8,7 +8,7 @@ import {
   addCompetitor, createStationKey, isolateOtherOrgs, postKnob, restoreOtherOrgs, runStationPoller, scanNow, SCRATCH, startSite,
   waitForScanEnd, waitForScanWithStatus, type Cmp,
 } from "./competitors-helpers";
-import { acceptConfirm, hashPasswordLikeApp, loginWithTotp, seedQaOrgWithUser, withTestDb, type TotpCreds } from "./helpers";
+import { acceptConfirm, hashPasswordLikeApp, hydrated, loginWithTotp, seedQaOrgWithUser, withTestDb, type TotpCreds } from "./helpers";
 import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
 /**
@@ -20,9 +20,12 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  * Round 2 (same night, after the code-review fixes of 7d1964e): rows CA-25 … CA-28 and added assertions in
  * CA-03, CA-17 and CA-24. Each one fails on the code before that commit.
  *
+ * Round 3 (2026-11-11, Daniel: USER and CUSTOMER_ADMIN have the same permissions by default — d232d00): CA-17 now
+ * asserts that the member has the org admin's controls, routes and Removed panel, and that /admin stays closed.
+ *
  * Common setup (every row): one QA org (QA-CA Org) with a PM-OS admin (knobs,
  * Scan now without the daily limit), an org admin PM (every catalog change —
- * "the admin" of the rows) and a member. Two competitors, Alpha and Beta, each
+ * "the admin" of the rows) and a member (role USER; the same permissions, CA-17). Two competitors, Alpha and Beta, each
  * on its own fake site (tests/fixtures/fake-site, two ports), each scanned
  * once in beforeAll by the real station poller run once. Before every row the
  * catalog is seeded again with Prisma (as the profile spec seeds its tables):
@@ -303,12 +306,6 @@ async function capabilityNamed(name: string) {
 /** lib/competitors/time.ts shortDate — "Nov 10" this year. */
 const shortDate = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 const removedBy = (name: string) => `Removed by ${name}, ${shortDate(new Date())}`;
-
-/** React has attached to the element: clicks before that are lost (server-rendered page, client component). */
-async function hydrated(target: Locator): Promise<void> {
-  await expect(target.first()).toBeVisible({ timeout: 30_000 });
-  await expect.poll(() => target.first().evaluate((el) => Object.keys(el).some((key) => key.startsWith("__reactFiber") || key.startsWith("__reactProps"))), { timeout: 30_000 }).toBe(true);
-}
 
 const domainsSection = (page: Page) => page.locator("section", { has: page.getByRole("heading", { level: 2, name: "Domains", exact: true }) });
 /** A domain's card in Settings → Domains (view mode: swatch, name, counts, drag handle, edit, remove). */
@@ -1054,65 +1051,188 @@ test.describe("Capability Analysis — PM decisions stick", () => {
 
   // ————————————————————————————— Roles, organizations —————————————————————————————
 
-  test("CA-17 (proposed) roles: the member sees no remove, restore, rename or move control and no Removed panel; every direct call to the remove, restore, rename, move, add and reorder routes answers 403 and nothing changes; the state sent to the member carries no removed items while the admin's lists them [knobs: none]", async ({ browser }) => {
-    // Something is removed, so an admin would see the Removed panel.
+  // Daniel 2026-11-11: the roles stay, but USER and CUSTOMER_ADMIN have the same permissions by default (d232d00,
+  // canManageOrgSettings). Until then this row asserted the opposite: no controls, no Removed panel, 403 on every route.
+  test("CA-17 roles — a member has the same permissions as the org admin: the same controls in Settings (add, edit, remove, move, drag, suggestions, the Removed panel with its items) and no 'Only an admin' line; the state sent to him lists the removed items; as the member restore, remove, accept and decline a suggestion in the UI and rename, move, add, reorder, remove and restore a domain, save a setting, add and remove a competitor through the routes — each succeeds and is recorded under his name; /admin stays closed to him [knobs: fake site]", async ({ browser }) => {
+    test.setTimeout(180_000);
+    // Something is removed (by the org admin) and two suggestions wait, written the way a scan leaves them.
     await removeCapability(cap.Dashboards);
-    await withTestDb((db) => db.competitorDomain.create({ data: { workspaceId, name: "QA Removed Domain", position: 7, state: "removed", removedAt: new Date(), removedById: pmId } }));
-    const removedDomainId = (await domainsNamed("QA Removed Domain"))[0].id;
-    const before = await catalogOf();
+    const removedDomainId = (await withTestDb((db) => db.competitorDomain.create({ data: { workspaceId, name: "QA Removed Domain", position: 7, state: "removed", removedAt: new Date(), removedById: pmId } }))).id;
+    const suggestion = (name: string, position: number) => withTestDb((db) => db.capability.create({
+      data: { workspaceId, domainId: dom.Reporting, name, description: "QA-CA fixture suggestion", position, origin: "ai", state: "suggested", suggestedById: alpha.id, suggestedQuote: `Listed on the pricing page. — ${alpha.site.url}/pricing` },
+    }));
+    const toAccept = await suggestion("Scheduled reports", 9998);
+    const toDecline = await suggestion("Audit log", 9999);
+    /** Events of this kind recorded under the member's own id. */
+    const byMember = async (event: string, match: Record<string, unknown>) => (await events(event, match)).filter((e) => e.userId === memberId);
 
+    // ——— The same controls as the org admin ———
     const page = await open(browser, "member");
     await openSettings(page);
-    await expect(page.getByText("Only an admin can change competitors.", { exact: true })).toBeVisible();
-    await expect(capLine(page, "Roadmap")).toHaveCount(1);
-    await expect(domainCard(page, "Planning")).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
-    await expect(page.getByLabel("Move to domain")).toHaveCount(0);
-    await expect(page.locator('[title="Drag to reorder"]')).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add capability" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add domain" })).toHaveCount(0);
-    await expect(removedPanel(page)).toHaveCount(0);
-    await expect(page.getByTestId("cmp-restore")).toHaveCount(0);
-    // Positive control: the org admin gets the panel and the controls from the same state.
     const pm = await open(browser, "pm");
     await openSettings(pm);
-    await expect(removedPanel(pm)).toBeVisible();
-    await expect(capLine(pm, "Roadmap").getByRole("button", { name: "Remove" })).toHaveCount(1);
+    await expect(page.getByText("Only an admin can change competitors.", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add competitor" })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Add domain" })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Add capability" })).toHaveCount(1);
+    for (const name of ["Roadmap", "Prioritization scoring", "Feedback inbox", "Customer portal"]) {
+      await expect(capLine(page, name).getByRole("button", { name: "Remove", exact: true }), `${name}: Remove`).toHaveCount(1);
+      await expect(capLine(page, name).getByRole("button", { name: "Edit", exact: true }), `${name}: Edit`).toHaveCount(1);
+      await expect(capLine(page, name).getByLabel("Move to domain"), `${name}: Move to domain`).toHaveCount(1);
+    }
+    for (const name of DOMAINS) {
+      await expect(domainCard(page, name).getByRole("button", { name: "Remove", exact: true }), `${name}: Remove`).toHaveCount(1);
+      await expect(domainCard(page, name).getByRole("button", { name: "Edit", exact: true }), `${name}: Edit`).toHaveCount(1);
+      await expect(domainCard(page, name).locator('[title="Drag to reorder"]'), `${name}: drag handle`).toHaveCount(1);
+    }
+    // The Removed panel, with its items, who removed them and a Restore on each.
+    await expect(removedPanel(page)).toBeVisible();
+    await expect(removedCapability(page, "Dashboards")).toContainText(removedBy(PM.name));
+    await expect(removedCapability(page, "Dashboards").getByTestId("cmp-restore")).toBeEnabled();
+    await expect(removedDomain(page, "QA Removed Domain")).toContainText(removedBy(PM.name));
+    await expect(removedDomain(page, "QA Removed Domain").getByTestId("cmp-restore")).toBeEnabled();
+    // Suggested by scans: both lines can be renamed, moved, accepted and dismissed.
+    await expect(suggestionsPanel(page).getByLabel("Capability name")).toHaveCount(2);
+    await expect(suggestionsPanel(page).getByRole("button", { name: "Accept", exact: true })).toHaveCount(2);
+    await expect(suggestionsPanel(page).getByRole("button", { name: "Dismiss", exact: true })).toHaveCount(2);
+    // Control for control, the member's page is the org admin's page.
+    const controls = async (p: Page) => ({
+      onlyAnAdminLine: await p.getByText("Only an admin can change competitors.", { exact: true }).count(),
+      addCompetitor: await p.getByRole("button", { name: "Add competitor" }).count(),
+      addDomain: await p.getByRole("button", { name: "Add domain" }).count(),
+      addCapability: await p.getByRole("button", { name: "Add capability" }).count(),
+      remove: await p.getByRole("button", { name: "Remove", exact: true }).count(),
+      edit: await p.getByRole("button", { name: "Edit", exact: true }).count(),
+      moveToDomain: await p.getByLabel("Move to domain").count(),
+      dragHandles: await p.locator('[title="Drag to reorder"]').count(),
+      suggestionNames: await suggestionsPanel(p).getByLabel("Capability name").count(),
+      suggestionAccept: await suggestionsPanel(p).getByRole("button", { name: "Accept", exact: true }).count(),
+      suggestionDismiss: await suggestionsPanel(p).getByRole("button", { name: "Dismiss", exact: true }).count(),
+      removedCapabilities: await removedPanel(p).getByTestId("cmp-removed-capability").allInnerTexts(),
+      removedDomains: await removedPanel(p).getByTestId("cmp-removed-domain").allInnerTexts(),
+      restore: await p.getByTestId("cmp-restore").count(),
+      disabledFields: await p.locator("select:disabled, input:disabled").count(),
+    });
+    await expect(removedCapability(pm, "Dashboards")).toHaveCount(1);
+    const memberControls = await controls(page);
+    expect(memberControls, "the member's controls are the org admin's").toEqual(await controls(pm));
+    expect(memberControls).toMatchObject({ onlyAnAdminLine: 0, addCompetitor: 1, addDomain: 1, addCapability: 1, moveToDomain: 4, restore: 2 });
 
-    // Round 2 (review finding 7): the removed names and who removed them are sent to organization admins only —
-    // by the state route and inside the Settings page itself (the hidden panel is not just hidden).
+    // The removed names and who removed them are sent to every member of the organization: by the state route and
+    // inside the Settings page itself.
     type Removed = { domains: { name: string; removedByName: string | null }[]; capabilities: { name: string; removedByName: string | null }[] };
     const removedOf = async (api: APIRequestContext): Promise<Removed> => {
       const res = await api.get("/api/competitors");
       await ok(res);
       return ((await res.json()) as { state: { removed: Removed } }).state.removed;
     };
-    const forAdmin = await removedOf(pmApi);
-    expect(forAdmin.capabilities.map((k) => [k.name, k.removedByName]), "the admin's state lists the removed capability").toEqual([["Dashboards", PM.name]]);
-    expect(forAdmin.domains.map((d) => [d.name, d.removedByName]), "the admin's state lists the removed domain").toEqual([["QA Removed Domain", PM.name]]);
-    expect(await removedOf(memberApi), "the member's state").toEqual({ domains: [], capabilities: [] });
-    expect(await pm.content(), "the admin's Settings page carries the removed domain's name").toContain("QA Removed Domain");
-    expect(await page.content(), "the member's Settings page does not carry it").not.toContain("QA Removed Domain");
+    const forMember = await removedOf(memberApi);
+    expect(forMember.capabilities.map((k) => [k.name, k.removedByName]), "the member's state lists the removed capability").toEqual([["Dashboards", PM.name]]);
+    expect(forMember.domains.map((d) => [d.name, d.removedByName]), "the member's state lists the removed domain").toEqual([["QA Removed Domain", PM.name]]);
+    expect(forMember, "the same lists as the org admin's").toEqual(await removedOf(pmApi));
+    expect(await page.content(), "the member's Settings page carries the removed domain's name").toContain("QA Removed Domain");
 
+    // ——— In the UI, as the member ———
+    // Restore from the Removed panel.
+    await removedCapability(page, "Dashboards").getByTestId("cmp-restore").click();
+    await expect(removedCapability(page, "Dashboards")).toHaveCount(0);
+    await expect(capLine(page, "Dashboards")).toHaveCount(1);
+    expect([(await capabilityRow(cap.Dashboards)).state, (await capabilityRow(cap.Dashboards)).removedById]).toEqual(["active", null]);
+    expect(await byMember("cmp_catalog_edited", { entity: "capability", action: "restore", via: "settings", entityId: cap.Dashboards }), "restore, by the member").toHaveLength(1);
+    // Remove a capability: the same dialog, and the Removed panel names him.
+    await capLine(page, "Customer portal").getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toContainText("Remove Customer portal?");
+    await acceptConfirm(page);
+    await expect(capLine(page, "Customer portal")).toHaveCount(0);
+    await expect(removedCapability(page, "Customer portal")).toContainText(removedBy(MEMBER.name));
+    expect([(await capabilityRow(cap["Customer portal"])).state, (await capabilityRow(cap["Customer portal"])).removedById]).toEqual(["removed", memberId]);
+    expect(await byMember("cmp_catalog_edited", { entity: "capability", action: "remove", entityId: cap["Customer portal"] }), "remove, by the member").toHaveLength(1);
+    // Accept one suggestion and decline the other on the table.
+    await openMatrix(page);
+    const suggestedRow = (name: string) => page.getByTestId("cmp-suggested-row").filter({ hasText: name });
+    await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(2);
+    await suggestedRow("Scheduled reports").getByRole("button", { name: "Accept", exact: true }).click();
+    await expect(suggestedRow("Scheduled reports")).toHaveCount(0);
+    await expect(matrixRow(page, "Scheduled reports")).toHaveCount(1);
+    await expectCell(page, "Scheduled reports", ALPHA, "has");
+    await suggestedRow("Audit log").getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(0);
+    expect((await capabilityRow(toAccept.id)).state).toBe("active");
+    expect((await capabilityRow(toDecline.id)).state).toBe("dismissed");
+    expect(await byMember("cmp_capability_suggestion", { capabilityId: toAccept.id, decision: "accepted" }), "accept, by the member").toHaveLength(1);
+    expect(await byMember("cmp_capability_suggestion", { capabilityId: toDecline.id, decision: "dismissed" }), "decline, by the member").toHaveLength(1);
+
+    // ——— Through the routes, as the member: every call that answered 403 before now succeeds and changes the row ———
+    await ok(await memberApi.patch(`/api/competitors/capabilities/${cap.Roadmap}`, { data: { name: "Member roadmap" } }));
+    expect((await capabilityRow(cap.Roadmap)).name, "rename a capability").toBe("Member roadmap");
+    await ok(await memberApi.patch(`/api/competitors/domains/${dom.Planning}`, { data: { name: "Member planning" } }));
+    expect((await domainRow(dom.Planning)).name, "rename a domain").toBe("Member planning");
+    await ok(await memberApi.patch(`/api/competitors/capabilities/${cap.Roadmap}`, { data: { domainId: dom.Feedback } }));
+    expect((await capabilityRow(cap.Roadmap)).domainId, "move a capability").toBe(dom.Feedback);
+    await ok(await memberApi.post("/api/competitors/capabilities", { data: { name: "Member capability", domainId: dom.Planning } }), 201);
+    expect((await capabilitiesNamed("Member capability")).map((r) => [r.domainId, r.state, r.origin]), "add a capability").toEqual([[dom.Planning, "active", "manual"]]);
+    await ok(await memberApi.post("/api/competitors/capabilities", { data: { name: "Customer portal", domainId: dom.Planning } }), 201);
+    expect((await capabilitiesNamed("Customer portal")).map((r) => [r.id, r.domainId, r.state]), "add a removed capability back").toEqual([[cap["Customer portal"], dom.Planning, "active"]]);
     const order = [dom.Reporting, dom.Planning, dom.Feedback];
-    const calls: [string, () => Promise<APIResponse>][] = [
-      ["remove a capability", () => memberApi.delete(`/api/competitors/capabilities/${cap.Roadmap}`)],
-      ["remove a domain", () => memberApi.delete(`/api/competitors/domains/${dom.Feedback}?moveTo=${dom.Planning}`)],
-      ["restore a capability", () => memberApi.patch(`/api/competitors/capabilities/${cap.Dashboards}`, { data: { state: "active" } })],
-      ["restore a domain", () => memberApi.patch(`/api/competitors/domains/${removedDomainId}`, { data: { state: "active" } })],
-      ["rename a capability", () => memberApi.patch(`/api/competitors/capabilities/${cap.Roadmap}`, { data: { name: "Member roadmap" } })],
-      ["rename a domain", () => memberApi.patch(`/api/competitors/domains/${dom.Planning}`, { data: { name: "Member planning" } })],
-      ["move a capability", () => memberApi.patch(`/api/competitors/capabilities/${cap.Roadmap}`, { data: { domainId: dom.Feedback } })],
-      ["add a capability", () => memberApi.post("/api/competitors/capabilities", { data: { name: "Member capability", domainId: dom.Planning } })],
-      ["add a removed capability back", () => memberApi.post("/api/competitors/capabilities", { data: { name: "Dashboards", domainId: dom.Planning } })],
-      ["add a domain", () => memberApi.post("/api/competitors/domains", { data: { name: "Member domain" } })],
-      ["reorder the domains", () => memberApi.put("/api/competitors/domains", { data: { order } })],
+    await ok(await memberApi.put("/api/competitors/domains", { data: { order } }));
+    expect(await Promise.all(order.map(async (id) => (await domainRow(id)).position)), "reorder the domains").toEqual([0, 1, 2]);
+    await ok(await memberApi.post("/api/competitors/domains", { data: { name: "Member domain" } }), 201);
+    expect((await domainsNamed("Member domain")).map((d) => d.state), "add a domain").toEqual(["active"]);
+    await ok(await memberApi.delete(`/api/competitors/domains/${dom.Feedback}?moveTo=${dom.Planning}`));
+    expect([(await domainRow(dom.Feedback)).state, (await domainRow(dom.Feedback)).removedById], "remove a domain").toEqual(["removed", memberId]);
+    expect((await capabilityRow(cap["Feedback inbox"])).domainId, "its capabilities moved").toBe(dom.Planning);
+    await ok(await memberApi.patch(`/api/competitors/domains/${removedDomainId}`, { data: { state: "active" } }));
+    expect((await domainRow(removedDomainId)).state, "restore a domain").toBe("active");
+    // A setting of Settings → Competitors, saved and put back.
+    const configOf = async (api: APIRequestContext) => {
+      const res = await api.get("/api/competitors");
+      await ok(res);
+      return ((await res.json()) as { state: { config: { manualRescansPerDay: number } } }).state.config;
+    };
+    const rescansBefore = (await configOf(pmApi)).manualRescansPerDay;
+    const rescansChanged = rescansBefore >= 50 ? rescansBefore - 1 : rescansBefore + 1;
+    try {
+      await ok(await memberApi.patch("/api/competitors/settings", { data: { manualRescansPerDay: rescansChanged } }));
+      expect((await configOf(pmApi)).manualRescansPerDay, "save a setting").toBe(rescansChanged);
+    } finally {
+      await ok(await memberApi.patch("/api/competitors/settings", { data: { manualRescansPerDay: rescansBefore } }));
+    }
+    expect((await configOf(pmApi)).manualRescansPerDay).toBe(rescansBefore);
+    // Add a competitor (its first scan waits for the station) and remove it again.
+    const rival = await addCompetitor(memberApi, await startSite(rowSites), "QA-CA Member Rival");
+    await waitForScanWithStatus(rival.sourceId, "pending_local");
+    await ok(await memberApi.delete(`/api/competitors/${rival.id}`));
+    expect((await withTestDb((db) => db.competitor.findUniqueOrThrow({ where: { id: rival.id } }))).deletedAt, "remove a competitor").not.toBeNull();
+
+    // Every one of them is recorded under the member's name; the org admin's only record is the setup's removal.
+    const recorded: [string, Record<string, unknown>, number][] = [
+      ["cmp_catalog_edited", { entity: "capability", action: "rename", entityId: cap.Roadmap, from: "Roadmap", to: "Member roadmap" }, 1],
+      ["cmp_catalog_edited", { entity: "domain", action: "rename", entityId: dom.Planning, from: "Planning", to: "Member planning" }, 1],
+      ["cmp_catalog_edited", { entity: "capability", action: "move", entityId: cap.Roadmap, from: dom.Planning, to: dom.Feedback }, 1],
+      ["cmp_catalog_edited", { entity: "capability", action: "create", name: "Member capability" }, 1],
+      ["cmp_catalog_edited", { entity: "capability", action: "restore", via: "add", entityId: cap["Customer portal"] }, 1],
+      ["cmp_catalog_edited", { entity: "domain", action: "reorder", to: order.join(",") }, 1],
+      ["cmp_catalog_edited", { entity: "domain", action: "create", name: "Member domain" }, 1],
+      ["cmp_catalog_edited", { entity: "domain", action: "remove", entityId: dom.Feedback, moveTo: dom.Planning }, 1],
+      ["cmp_catalog_edited", { entity: "domain", action: "restore", entityId: removedDomainId }, 1],
+      ["cmp_settings_changed", { setting: "manualRescansPerDay" }, 2],
+      ["cmp_competitor_added", { competitorId: rival.id }, 1],
+      ["cmp_competitor_removed", { competitorId: rival.id }, 1],
     ];
-    for (const [what, call] of calls) expect((await call()).status(), what).toBe(403);
-    expect(await catalogOf(), "nothing changes").toEqual(before);
-    expect(await events("cmp_catalog_edited", { action: "remove" }), "only the setup's removal is recorded").toHaveLength(1);
-    expect((await events("cmp_catalog_edited")).filter((e) => e.userId === memberId)).toHaveLength(0);
+    for (const [event, match, n] of recorded) expect(await byMember(event, match), `${event} ${JSON.stringify(match)} by the member`).toHaveLength(n);
+    expect((await events("cmp_catalog_edited")).filter((e) => e.userId === pmId), "the org admin: only the setup's removal").toHaveLength(1);
+
+    // ——— /admin stays closed: a member is not a PM-OS admin ———
+    for (const path of ["/admin", "/admin/users", "/admin/competitors"]) {
+      const response = await page.goto(path);
+      expect(response?.status(), `${path} for the member`).toBe(404);
+    }
+    for (const path of ["/api/admin/organizations", "/api/admin/competitors/settings"]) {
+      expect((await memberApi.get(path)).status(), `GET ${path} for the member`).toBe(404);
+    }
+    expect((await memberApi.patch("/api/admin/competitors/settings", { data: { remoteScanEnabled: false } })).status(), "the member cannot change Administration → Competitors").toBe(404);
+    // Positive control: the route exists and answers the PM-OS admin.
+    await ok(await adminApi.get("/api/admin/organizations"));
   });
 
   test("CA-18 (proposed) organizations are separate: with Dashboards removed in the first org, the second org keeps its Dashboards row and gets its suggestion, and the third org gets a new row [knobs: AI answer injected, fake site, run-once]", async ({ browser, playwright }) => {
