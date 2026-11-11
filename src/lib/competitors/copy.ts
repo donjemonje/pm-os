@@ -412,8 +412,6 @@ export const COMPETITORS_COPY = {
     noProductLinesHint: "No product lines yet — add them in Settings → Product Lines.",
     emptyCapabilities: "No capabilities yet. Add the first one with the button above.",
     suggestedBy: (name: string) => `Seen at ${name}`,
-    accept: "Accept",
-    dismiss: "Dismiss",
     removeCapabilityTitle: (name: string) => `Remove ${name}?`,
     removeCapabilityBody: "It leaves the table and scans will not add it back. You can restore it under Removed, with everything scans found for it.",
     scheduleTitle: "Scanning",

@@ -616,7 +616,6 @@ function DeepDive({ org, k, cell, onPatchStatus, indent }: {
     setBusy(false);
     setFlagging(false);
   }
-  const host = (u: string) => u.replace(/^https?:\/\//, "").slice(0, 70);
   return (
     <div className="flex flex-col gap-3.5 border-b border-border pb-4 pr-4 pt-0.5" style={{ paddingLeft: indent }}>
       {/* Evidence: the quote the scan kept, and where it is */}

@@ -9,7 +9,7 @@ type Params = { params: Promise<{ id: string }> };
  * POST — the station finished reading (scan token as bearer). Body:
  *   { notAttempted?: number }   pages the station discovered but did not read (time or storage limit, slow-down)
  * Answers "received" at once in every environment and hands the process half (page states, hash compare, badge —
- * then the PMOS AI step of the next story) to the runner: a Cloud Run job in production, a background task in
+ * then queueing the analysis run) to the runner: a Cloud Run job in production, a background task in
  * this Node process in local dev (lib/competitors/run.ts). The station never waits for processing; the result
  * shows in Settings → Competitors. A scan with no page handed in ends "failed".
  *

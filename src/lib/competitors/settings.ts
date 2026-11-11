@@ -64,7 +64,7 @@ export function testKnobsEnabled(): boolean {
   const on = v === "on" || v === "true" || v === "1";
   if (on && !warned) {
     warned = true;
-    console.warn("[competitors] TEST KNOBS ON (COMPETITORS_TEST_KNOBS) — clock, tick, ceiling, pause, private hosts and the AI step are controllable. Never in production.");
+    console.warn("[competitors] TEST KNOBS ON (COMPETITORS_TEST_KNOBS) — clock, tick, ceiling, pause, private hosts and the PMOS AI answers of the analysis are controllable. Never in production.");
   }
   return on;
 }

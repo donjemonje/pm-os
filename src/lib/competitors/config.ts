@@ -229,14 +229,3 @@ export type PageKind = (typeof PAGE_KINDS)[number];
 export function isPageKind(v: unknown): v is PageKind {
   return typeof v === "string" && (PAGE_KINDS as readonly string[]).includes(v);
 }
-
-/**
- * A suggestion's evidence is stored as one string, `"<quote> — <url>"` (the URL
- * is optional). Split it for display and for the status row written on accept.
- */
-export function splitSuggestedQuote(raw: string | null | undefined): { quote: string; url: string | null } {
-  const text = raw ?? "";
-  const url = text.match(/\s—\s(https?:\/\/\S+)$/)?.[1] ?? null;
-  const quote = text.replace(/\s+—\s+https?:\/\/\S+$/, "").trim();
-  return { quote, url };
-}

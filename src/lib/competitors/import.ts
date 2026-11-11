@@ -24,7 +24,7 @@ export interface CollectedPage {
   observedAt?: string | null;
 }
 
-/** Longer texts (a 200-page PDF) are cut; the AI step truncates far below this anyway. */
+/** Longer texts (a 200-page PDF) are cut. */
 export const MAX_IMPORTED_PAGE_CHARS = 200_000;
 
 export type ImportResult =

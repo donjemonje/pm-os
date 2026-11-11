@@ -23,8 +23,11 @@ import { getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitC
 import { isPdfUrl, pageKey } from "./url";
 
 /**
- * One scan of one source, end to end, in two halves (Website Scanning PRD
- * 2026-11-04):
+ * One scan of one source, in two halves (Website Scanning PRD 2026-11-04).
+ * A scan ENDS when the pages are stored. What the pages say — capabilities,
+ * features, the table's cells, the profile facts — is read by the analysis:
+ * its own queued run after the scan (analysis/engine.ts), queued here at the
+ * end of every scan that read at least one page.
  *
  *   collect — where the pages come from.
  *     remote  the crawler reads the whole site: known pages of earlier scans
@@ -38,8 +41,8 @@ import { isPdfUrl, pageKey } from "./url";
  *     bundle  a collector handed pages in before the scan (import.ts).
  *
  *   process — the same for every lane: page states (missing / removed /
- *             unlinked) → PMOS AI on new and changed pages → statuses,
- *             suggestions, facts → fact liveness → badge and log.
+ *             unlinked) → fact liveness (which facts' pages were seen) →
+ *             queue the analysis run → badge and log. No PMOS AI call here.
  *
  * Runs inside the scanner job (Cloud Run) or in-process in local dev; both
  * call runScan(scanId). The local lane's "done" call runs it too.

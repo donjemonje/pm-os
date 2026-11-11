@@ -5,7 +5,7 @@
  * rescan limit, the recipients and the news baseline; old keys are ignored.
  */
 import { describe, expect, it } from "vitest";
-import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, splitSuggestedQuote, STALE_MS } from "@/lib/competitors/config";
+import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, STALE_MS } from "@/lib/competitors/config";
 import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
@@ -73,15 +73,5 @@ describe("domain name mentions (rename cascade)", () => {
       "Not here: exposed credentials belong to Exposure & response; see also Threat Intelligence and CTI feeds.",
     );
     expect(renameMentions("", "a", "b")).toBe("");
-  });
-});
-
-describe("splitSuggestedQuote", () => {
-  it("splits the quote from a trailing source URL", () => {
-    expect(splitSuggestedQuote("Detects weapons in images — https://example.com/p")).toEqual({ quote: "Detects weapons in images", url: "https://example.com/p" });
-  });
-  it("keeps a quote without a URL and tolerates null", () => {
-    expect(splitSuggestedQuote("Plain quote")).toEqual({ quote: "Plain quote", url: null });
-    expect(splitSuggestedQuote(null)).toEqual({ quote: "", url: null });
   });
 });
