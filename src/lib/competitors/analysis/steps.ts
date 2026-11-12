@@ -118,7 +118,7 @@ function injectedResearch(ctx: RunContext, url: string): string | undefined {
  * The research call for each page of a to-do, in its order: the broad read and the pages a go-back round chose
  * read through here. One call per page; the findings and the mark on the page are saved in one transaction.
  */
-async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read: number; failed: number }> {
+export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read: number; failed: number }> {
   const competitorId = ctx.competitor.id;
   let failed = 0;
   if (!todo.length) return { read: 0, failed };
@@ -660,7 +660,7 @@ async function loadEvidence(workspaceId: string, competitorId: string, plan: Rea
 }
 
 /** The rows of ours that have a cell: active capabilities in a domain that is in the table (or suggested), and their active features. */
-async function tableRows(workspaceId: string) {
+export async function tableRows(workspaceId: string) {
   const capabilities = await db.capability.findMany({
     where: { workspaceId, state: "active", domain: { state: { in: ["active", "suggested"] } } },
     select: { id: true, name: true, description: true, aliases: true, domain: { select: { name: true, description: true } } },

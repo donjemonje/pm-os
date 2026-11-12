@@ -9,6 +9,7 @@ import { getCompetitorsConfig } from "../store";
 import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
 import { factsStep } from "./facts";
 import { analysisMayRun, queueFilter } from "./gate";
+import { goBackStep } from "./goback";
 import { mapStep } from "./plan";
 import type { ReadingPlan } from "./sections";
 import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
@@ -77,6 +78,9 @@ export interface Counters {
   mapSections: number;
   mapLabeled: number;
   mapCalls: number;
+  /** Going back for the gaps: the rounds this run made (set by the step) and the deep pages they chose. */
+  goBackRounds: number;
+  goBackPages: number;
   pagesRead: number;
   pagesFailed: number;
   /** Model calls that were made and billed — the ones whose answer was unusable included. */
@@ -115,7 +119,7 @@ export interface Counters {
 
 export function emptyCounters(): Counters {
   return {
-    mapSections: 0, mapLabeled: 0, mapCalls: 0,
+    mapSections: 0, mapLabeled: 0, mapCalls: 0, goBackRounds: 0, goBackPages: 0,
     pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
@@ -492,6 +496,9 @@ export async function runAnalysis(id: string): Promise<void> {
     await inStep("research", () => researchStep(ctx, plan));
     await inStep("merge", () => mergeStep(ctx));
     await inStep("match", () => matchStep(ctx));
+    // Their capabilities that came out thin (no description beyond marketing pages, no feature …): read their most
+    // likely deep pages, then merge and match again — at most 2 rounds (analysis/gaps.ts).
+    await inStep("go_back", () => goBackStep(ctx));
     const lookWaiting = await inStep("second_look", () => secondLookStep(ctx));
     await inStep("apply", () => applyStep(ctx, lookWaiting));
     await inStep("facts", () => factsStep(ctx));
