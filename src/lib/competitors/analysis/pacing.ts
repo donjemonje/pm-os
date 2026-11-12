@@ -112,6 +112,14 @@ export interface PacedOptions<T> {
   onAnswerError?: (item: T, e: AnswerError) => Promise<void>;
   /** Asked before each new item; true ends the loop once the calls in flight are done. */
   shouldStop?: () => Promise<boolean>;
+  /**
+   * The run's token budget (budget.ts ReadingBudget), asked before each new item starts. False = this item and every
+   * item still on the to-do are not started: the loop returns once the calls in flight are done, with `left` = the
+   * items it did not work. `release` is called once for every admitted item — when its call ended, however it
+   * ended, or when it was put back without starting.
+   */
+  admit?: (item: T) => boolean;
+  release?: (item: T) => void;
   /** All waiting together; past it the loop throws CapacityError. */
   maxWaitMs: number;
   baseWaitMs?: number;
@@ -125,6 +133,8 @@ export interface PacedResult {
   waits: number;
   waitedMs: number;
   stopped: boolean;
+  /** Items not worked because `admit` said no (the token budget). */
+  left: number;
 }
 
 /**
@@ -140,10 +150,12 @@ export interface PacedResult {
  * 4. work throws AnswerError → with onAnswerError: called, the item counts as failed, the loop goes on; without: as 5.
  * 5. work throws anything else → no new item starts, calls in flight finish, the first such error is rethrown.
  * 6. shouldStop() true → calls in flight finish, the loop returns stopped.
+ * 7. admit(item) false → that item and the rest of the to-do are dropped from this loop and counted in `left`; calls
+ *    in flight finish. An item that comes back after a capacity answer is asked again, and dropped the same way.
  */
 export async function runPaced<T>(o: PacedOptions<T>): Promise<PacedResult> {
   const queue: Array<{ index: number; item: T }> = o.items.map((item, index) => ({ index, item }));
-  const result: PacedResult = { done: 0, failed: 0, waits: 0, waitedMs: 0, stopped: false };
+  const result: PacedResult = { done: 0, failed: 0, waits: 0, waitedMs: 0, stopped: false, left: 0 };
   const inflight = new Set<Promise<void>>();
   let attempt = 0;
   let transientWaits = 0;
@@ -190,15 +202,25 @@ export async function runPaced<T>(o: PacedOptions<T>): Promise<PacedResult> {
         result.stopped = true;
         break;
       }
+      if (o.admit && !o.admit(queue[0].item)) {
+        // The token budget: nothing more starts. What is on the to-do stays due for the next run.
+        result.left += queue.length;
+        queue.length = 0;
+        break;
+      }
       const entry = queue.shift()!;
       const handle = await o.budget.reserve(o.estimate(entry.item), o.sleep);
       if (halted()) {
         // A call in flight ended badly while this one waited for its tokens: it does not start.
         o.budget.settle(handle, 0);
+        o.release?.(entry.item);
         queue.unshift(entry);
         break;
       }
-      const p: Promise<void> = run(entry, handle).finally(() => inflight.delete(p));
+      const p: Promise<void> = run(entry, handle).finally(() => {
+        o.release?.(entry.item);
+        inflight.delete(p);
+      });
       inflight.add(p);
     }
     if (inflight.size > 0) {

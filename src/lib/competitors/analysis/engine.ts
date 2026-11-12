@@ -4,9 +4,10 @@ import { db } from "../../db";
 import { AnswerError, callTool, CapacityError, EndpointError, getCompetitorsModel, type CallOptions } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
-import { aiStepEnabled, now, testAiAnswers, type TestAiAnswers } from "../settings";
+import { aiStepEnabled, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
 import { getCompetitorsConfig } from "../store";
 import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
+import { ReadingBudget } from "./budget";
 import { factsStep } from "./facts";
 import { analysisMayRun, queueFilter } from "./gate";
 import { goBackStep } from "./goback";
@@ -38,6 +39,11 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  * The run keeps no fragile state: every start walks the steps from the first, and each step computes its to-do from
  * the tables (analysis/plan.ts, analysis/steps.ts). A run that stopped — rate limit, crash, deploy — continues with
  * what is left. The cursor holds only what cannot be derived: the pages each go-back round chose, and the facts baseline.
+ *
+ * The token budget (analysis/budget.ts; Administration → Competitors, one number for the installation): every token
+ * of the run counts. When the next reading call (research, go-back research, a second look) would pass it, no
+ * further reading call starts; merge, match, apply and facts still run, so the table is filled from what was read.
+ * The run ends "done" with budgetReached and the pages left unread in its counters; they stay due for the next run.
  *
  * Where it executes: local dev and the e2e server run it in the app's Node process (inline runner), like scans;
  * production runs it in the scanner job (`--analysis <id>`), one execution per run. A failed run is not retried by
@@ -81,6 +87,10 @@ export interface Counters {
   /** Going back for the gaps: the rounds this run made (set by the step) and the deep pages they chose. */
   goBackRounds: number;
   goBackPages: number;
+  /** The run's token budget (set at the claim), whether it was reached (1 / 0), and the pages left unread because of it (set by the steps of each walk, not added up). */
+  budget: number;
+  budgetReached: number;
+  pagesUnread: number;
   pagesRead: number;
   pagesFailed: number;
   /** Model calls that were made and billed — the ones whose answer was unusable included. */
@@ -105,7 +115,7 @@ export interface Counters {
   placed: number;
   secondLooks: number;
   secondLookFound: number;
-  /** Second looks that are due but over the run's limit: they wait for the next run (set by the step, not added up). */
+  /** Second looks that are due but over the run's limit or its token budget: they wait for the next run (set by the step, not added up). */
   secondLooksWaiting: number;
   newCapabilities: number;
   newFeatures: number;
@@ -119,7 +129,7 @@ export interface Counters {
 
 export function emptyCounters(): Counters {
   return {
-    mapSections: 0, mapLabeled: 0, mapCalls: 0, goBackRounds: 0, goBackPages: 0,
+    mapSections: 0, mapLabeled: 0, mapCalls: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
     pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
@@ -165,8 +175,14 @@ export interface RunContext {
   progress: { pagesTotal: number; pagesDone: number };
   /** One model call through the run's accounting. Returns the value and the tokens it used (input + output). */
   call: <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => Promise<{ value: T; tokens: number }>;
-  /** The one loop every step uses (pacing.ts runPaced), with the run's budget, waiting and cancelling wired in. */
-  paced: <T>(o: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError">) => Promise<PacedResult>;
+  /** The run's token budget: the gate of every reading call (budget.ts). */
+  reading: ReadingBudget;
+  /**
+   * The one loop every step uses (pacing.ts runPaced), with the run's pacing, waiting and cancelling wired in.
+   * `reading: true` marks the calls of the loop as READING calls (research, go-back research, second look): each
+   * passes the run's token budget before it starts; the items not started are counted in the result's `left`.
+   */
+  paced: <T>(o: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => Promise<PacedResult>;
   /** Save the one thing that cannot be derived (the facts baseline). */
   saveCursor: (patch: Record<string, unknown>) => Promise<void>;
   /** The apply step finished: the cells are current as of `at`. */
@@ -366,6 +382,12 @@ export async function runAnalysis(id: string): Promise<void> {
   let errorKind: string | null = null;
   let error: string | null = null;
   try {
+    // The token budget of this run: every token it used so far counts (a run that continues keeps its counters).
+    // What the budget left unread is counted again by the steps of this walk.
+    counters.budget = await analysisTokenBudget();
+    counters.budgetReached = 0;
+    counters.pagesUnread = 0;
+    const reading = new ReadingBudget(counters.budget, () => counters.inputTokens + counters.outputTokens);
     // TEST KNOB, read ONCE per run: a run flagged injected whose answers are gone fails — it can never reach a real model.
     const answers = await testAiAnswers(row.competitorId);
     if (row.injected && !answers) throw new AnalysisError("other", "test answers were cleared before the run started (test knob) — no model is called");
@@ -400,6 +422,7 @@ export async function runAnalysis(id: string): Promise<void> {
       counters,
       log,
       progress,
+      reading,
       call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => {
         // A worker that lost the run spends nothing more.
         if (lost) throw new RunLost();
@@ -431,9 +454,10 @@ export async function runAnalysis(id: string): Promise<void> {
         counters.cachedTokens += r.usage.cached;
         return { value: r.value, tokens: r.usage.input + r.usage.output };
       },
-      paced: async <T>(o: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError">) => {
+      paced: async <T>({ reading: isReading, ...o }: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => {
         const r = await runPaced<T>({
           ...o,
+          ...(isReading ? { admit: (item: T) => reading.admit(o.estimate(item)), release: (item: T) => reading.release(o.estimate(item)) } : {}),
           budget,
           sleep,
           // 24 h of waiting in all, across the steps of the run.
@@ -456,6 +480,7 @@ export async function runAnalysis(id: string): Promise<void> {
         });
         if (lost) throw new RunLost();
         if (r.stopped) throw new RunCancelled();
+        if (reading.reached) counters.budgetReached = 1;
         return r;
       },
       saveCursor: async (patch) => {
@@ -502,6 +527,9 @@ export async function runAnalysis(id: string): Promise<void> {
     const lookWaiting = await inStep("second_look", () => secondLookStep(ctx));
     await inStep("apply", () => applyStep(ctx, lookWaiting));
     await inStep("facts", () => factsStep(ctx));
+    if (reading.reached) {
+      log("warn", `The token budget of this run was reached (${(counters.inputTokens + counters.outputTokens).toLocaleString("en-US")} of ${counters.budget.toLocaleString("en-US")} tokens used): ${counters.pagesUnread} page${counters.pagesUnread === 1 ? "" : "s"} left unread${counters.secondLooksWaiting ? `, ${counters.secondLooksWaiting} second look${counters.secondLooksWaiting === 1 ? "" : "s"} not made` : ""}. They stay due — the next run of ${row.competitor.name} continues with a fresh budget`);
+    }
     log("info", `Analysis done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);
   } catch (e) {
     if (lost || e instanceof RunLost) {
@@ -541,7 +569,7 @@ export async function runAnalysis(id: string): Promise<void> {
     return;
   }
   await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-    analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, errorKind: errorKind ?? "none", error,
+    analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, errorKind: errorKind ?? "none", error,
   });
   await notifyScanRun(row.scanId);
   await kickAnalyses();

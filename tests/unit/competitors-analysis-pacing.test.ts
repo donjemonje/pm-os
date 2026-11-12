@@ -1,6 +1,7 @@
 /** Capability Analysis — pacing and the resume state machine (analysis/pacing.ts). Pure module: fake clock, fake work. */
 import { describe, expect, it } from "vitest";
 import { AnswerError, asCapacityError, CapacityError, EndpointError, isNetworkError, TransientError } from "@/lib/competitors/ai";
+import { ReadingBudget } from "@/lib/competitors/analysis/budget";
 import { backoffMs, estimateTokens, runPaced, TokenBudget, type PacedOptions } from "@/lib/competitors/analysis/pacing";
 
 function fakeClock() {
@@ -110,7 +111,7 @@ describe("runPaced", () => {
     const r = await runPaced(h.options);
     expect(h.saved).toEqual(ITEMS);
     expect(h.maxInflight()).toBe(1);
-    expect(r).toEqual({ done: 6, failed: 0, waits: 0, waitedMs: 0, stopped: false });
+    expect(r).toEqual({ done: 6, failed: 0, waits: 0, waitedMs: 0, stopped: false, left: 0 });
   });
   it("starts items in order with 4 in flight, never more", async () => {
     const h = harness(ITEMS, () => null, { concurrency: 4 });
@@ -218,6 +219,69 @@ describe("runPaced", () => {
     const r = await runPaced(h.options);
     expect(h.saved).toEqual(["a", "b"]);
     expect(r.stopped).toBe(true);
+  });
+  it("TOKEN BUDGET: when the next call would pass it nothing more starts; the rest of the to-do is counted as left", async () => {
+    // 10 tokens per call, a budget of 35: three calls fit, the fourth would pass it.
+    let used = 0;
+    const gate = new ReadingBudget(35, () => used);
+    const h = harness(ITEMS, () => null, { admit: () => gate.admit(10), release: () => gate.release(10) });
+    const work = h.options.work;
+    h.options.work = async (item) => {
+      const tokens = await work(item);
+      used += tokens;
+      return tokens;
+    };
+    const r = await runPaced(h.options);
+    expect(h.saved).toEqual(["a", "b", "c"]);
+    expect(r).toMatchObject({ done: 3, left: 3, stopped: false });
+    expect(gate.reached).toBe(true);
+  });
+  it("TOKEN BUDGET with calls in flight: their estimates count, the calls in flight finish, and every admitted call is released once", async () => {
+    let used = 0;
+    const gate = new ReadingBudget(25, () => used);
+    const released: string[] = [];
+    const h = harness(ITEMS, () => null, { concurrency: 4, admit: () => gate.admit(10), release: (item) => { released.push(item); gate.release(10); } });
+    const r = await runPaced(h.options);
+    // Nothing was counted as used yet when c asked: a + b in flight (20) + c (10) > 25.
+    expect(h.started).toEqual(["a", "b"]);
+    expect([...h.saved].sort()).toEqual(["a", "b"]);
+    expect(r).toMatchObject({ done: 2, left: 4 });
+    expect(released.sort()).toEqual(["a", "b"]);
+  });
+  it("TOKEN BUDGET: a later loop of the same run starts nothing at all", async () => {
+    const gate = new ReadingBudget(5, () => 100);
+    expect(gate.admit(1)).toBe(false);
+    const h = harness(ITEMS, () => null, { admit: () => gate.admit(10), release: () => gate.release(10) });
+    const r = await runPaced(h.options);
+    expect(h.started).toEqual([]);
+    expect(r).toMatchObject({ done: 0, left: 6 });
+  });
+  it("TOKEN BUDGET: an item that comes back after a capacity answer is asked again — and left when the budget was reached meanwhile", async () => {
+    let used = 0;
+    const gate = new ReadingBudget(15, () => used);
+    const h = harness(["a", "b"], (item, call) => (item === "a" && call === 1 ? new CapacityError("no capacity") : null), { concurrency: 2, admit: () => gate.admit(5), release: () => gate.release(5) });
+    const work = h.options.work;
+    h.options.work = async (item) => {
+      const tokens = await work(item);
+      used += tokens;
+      return tokens;
+    };
+    const r = await runPaced(h.options);
+    // b got through and used 10 of the 15; a (5 more + the 10 used = 15) still fits when it comes back.
+    expect([...h.saved].sort()).toEqual(["a", "b"]);
+    expect(r).toMatchObject({ done: 2, left: 0, waits: 1 });
+    const gate2 = new ReadingBudget(12, () => used2);
+    let used2 = 0;
+    const h2 = harness(["a", "b"], (item, call) => (item === "a" && call === 1 ? new CapacityError("no capacity") : null), { concurrency: 2, admit: () => gate2.admit(5), release: () => gate2.release(5) });
+    const work2 = h2.options.work;
+    h2.options.work = async (item) => {
+      const tokens = await work2(item);
+      used2 += tokens;
+      return tokens;
+    };
+    const r2 = await runPaced(h2.options);
+    expect(h2.saved).toEqual(["b"]);
+    expect(r2).toMatchObject({ done: 1, left: 1, waits: 1 });
   });
   it("RESUME: after a failure, a second run on the to-do recomputed from the store works only what is left — nothing twice", async () => {
     const store = new Set<string>();

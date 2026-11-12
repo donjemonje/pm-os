@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { ANALYSIS_TOKEN_BUDGET_DEFAULT, ANALYSIS_TOKEN_BUDGET_MAX, ANALYSIS_TOKEN_BUDGET_MIN, checkAnalysisTokenBudget } from "@/lib/competitors/analysis/budget";
+import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { MAX_SCAN_EVERY_DAYS, MIN_SCAN_EVERY_DAYS } from "@/lib/competitors/config";
 import { listScannerKeys } from "@/lib/competitors/local";
 import { getGlobalScanSettings, setGlobalScanSettings, testKnobsEnabled } from "@/lib/competitors/settings";
@@ -9,8 +11,10 @@ import { getGlobalScanSettings, setGlobalScanSettings, testKnobsEnabled } from "
  * Administration → Competitors → Scanning (PM-OS admin only). The global
  * switches of the Website Scanning story and every source's frequency:
  *
- *   GET   → { settings: { remoteScanEnabled, analysisDisabled }, keys, sources, testKnobs }
+ *   GET   → { settings: { remoteScanEnabled, analysisDisabled, analysisTokenBudget }, budgetLimits, keys, sources, testKnobs }
  *   PATCH { remoteScanEnabled?, analysisDisabled? }        → the switches
+ *   PATCH { analysisTokenBudget }                          → the token budget of one analysis run of one competitor
+ *                                                            (a whole number between the limits; analysis/budget.ts)
  *   PATCH { sourceId, scanEveryDays }                      → one source's frequency (days)
  */
 export interface AdminSourceRow {
@@ -48,7 +52,7 @@ async function sources(): Promise<AdminSourceRow[]> {
 
 async function payload() {
   const [settings, keys, src] = await Promise.all([getGlobalScanSettings(), listScannerKeys(), sources()]);
-  return { settings, keys, sources: src, testKnobs: testKnobsEnabled() };
+  return { settings, budgetLimits: { min: ANALYSIS_TOKEN_BUDGET_MIN, max: ANALYSIS_TOKEN_BUDGET_MAX, default: ANALYSIS_TOKEN_BUDGET_DEFAULT }, keys, sources: src, testKnobs: testKnobsEnabled() };
 }
 
 export async function GET() {
@@ -74,7 +78,12 @@ export async function PATCH(req: Request) {
     if (!r.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(await payload());
   }
-  const patch: { remoteScanEnabled?: boolean; analysisDisabled?: boolean } = {};
+  const patch: { remoteScanEnabled?: boolean; analysisDisabled?: boolean; analysisTokenBudget?: number } = {};
+  if (body.analysisTokenBudget !== undefined) {
+    const checked = checkAnalysisTokenBudget(body.analysisTokenBudget);
+    if ("error" in checked) return NextResponse.json({ error: checked.error }, { status: 400 });
+    patch.analysisTokenBudget = checked.value;
+  }
   if (body.analysisDisabled !== undefined) {
     if (typeof body.analysisDisabled !== "boolean") return NextResponse.json({ error: "analysisDisabled must be true or false" }, { status: 400 });
     patch.analysisDisabled = body.analysisDisabled;
@@ -83,6 +92,12 @@ export async function PATCH(req: Request) {
     if (typeof body.remoteScanEnabled !== "boolean") return NextResponse.json({ error: "remoteScanEnabled must be true or false" }, { status: 400 });
     patch.remoteScanEnabled = body.remoteScanEnabled;
   }
+  const before = patch.analysisTokenBudget !== undefined ? (await getGlobalScanSettings()).analysisTokenBudget : null;
   await setGlobalScanSettings(patch);
+  // Recorded like a workspace's own settings (cmp_settings_changed: setting, from, to), on the admin's workspace —
+  // the setting is the installation's, an event needs a workspace. An admin with no workspace leaves no event.
+  if (patch.analysisTokenBudget !== undefined && before !== patch.analysisTokenBudget && admin.workspaceId) {
+    await recordCompetitorEvent(admin.workspaceId, admin.id, "cmp_settings_changed", { setting: "analysisTokenBudget", scope: "installation", from: before, to: patch.analysisTokenBudget });
+  }
   return NextResponse.json(await payload());
 }

@@ -96,9 +96,16 @@ async function pickRound(ctx: RunContext, round: number, taken: Set<string>): Pr
 
 export async function goBackStep(ctx: RunContext): Promise<void> {
   const rounds = savedGoBackRounds(ctx.run.cursor);
+  // False once the run's token budget stopped the reading: the items were not gone back for to the end, so they stay due.
+  let complete = true;
   for (let round = 1; round <= GO_BACK_MAX_ROUNDS; round++) {
     let pageIds = rounds[round - 1];
     if (!pageIds) {
+      if (ctx.reading.reached) {
+        ctx.log("warn", `Go back: not started${round > 1 ? ` (round ${round})` : ""} — the run's token budget (${ctx.reading.limit.toLocaleString("en-US")}) was reached. The gaps stay open for the next run`);
+        complete = false;
+        break;
+      }
       pageIds = await pickRound(ctx, round, new Set(rounds.flat()));
       if (!pageIds.length) break;
       // Saved before a page is read: a run that stops here reads the same pages when it continues.
@@ -111,12 +118,17 @@ export async function goBackStep(ctx: RunContext): Promise<void> {
     const ids = new Set(pageIds);
     const todo = researchTodo((await readablePages(ctx)).filter((p) => ids.has(p.id)), RESEARCH_VERSION);
     const r = await readPages(ctx, todo);
-    ctx.log("info", `Go back, round ${round}: ${r.read} page${r.read === 1 ? "" : "s"} read${r.failed ? `, ${r.failed} skipped (unusable answer)` : ""}${todo.length < pageIds.length ? ` (${pageIds.length - todo.length} of the round's pages were read before the run stopped, or are gone)` : ""}`);
+    ctx.log(r.left ? "warn" : "info", `Go back, round ${round}: ${r.read} page${r.read === 1 ? "" : "s"} read${r.failed ? `, ${r.failed} skipped (unusable answer)` : ""}${todo.length < pageIds.length ? ` (${pageIds.length - todo.length} of the round's pages were read before the run stopped, or are gone)` : ""}${r.left ? ` — the run's token budget (${ctx.reading.limit.toLocaleString("en-US")}) was reached: ${r.left} page${r.left === 1 ? "" : "s"} left unread` : ""}`);
+    // What was read is merged and matched also when the budget cut the round short: the table is filled from what was read.
     await mergeStep(ctx);
     await matchStep(ctx);
+    if (r.left) {
+      complete = false;
+      break;
+    }
   }
   // The rounds are over: every capability item was checked for gaps as of now. A later run goes back for an item
-  // only when it got a finding after this moment (gaps.ts dueForGoBack).
-  await db.competitorItem.updateMany({ where: { competitorId: ctx.competitor.id, kind: "capability" }, data: { gapCheckedAt: new Date() } });
+  // only when it got a finding after this moment (gaps.ts dueForGoBack). Not when the budget cut the reading short.
+  if (complete) await db.competitorItem.updateMany({ where: { competitorId: ctx.competitor.id, kind: "capability" }, data: { gapCheckedAt: new Date() } });
   await ctx.flush();
 }

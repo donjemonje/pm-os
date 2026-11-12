@@ -117,13 +117,17 @@ function injectedResearch(ctx: RunContext, url: string): string | undefined {
 /**
  * The research call for each page of a to-do, in its order: the broad read and the pages a go-back round chose
  * read through here. One call per page; the findings and the mark on the page are saved in one transaction.
+ *
+ * Every call is a reading call: it passes the run's token budget before it starts. `left` = the pages that were
+ * not read because the budget was reached; they keep their old key, so they stay due for the next run.
  */
-export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read: number; failed: number }> {
+export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read: number; failed: number; left: number }> {
   const competitorId = ctx.competitor.id;
   let failed = 0;
-  if (!todo.length) return { read: 0, failed };
-  await ctx.paced({
+  if (!todo.length) return { read: 0, failed, left: 0 };
+  const result = await ctx.paced({
     items: todo,
+    reading: true,
     concurrency: analysisConcurrency(),
     estimate: (p) => estimateTokens(p.chars) + RESEARCH_OVERHEAD_TOKENS + OUTPUT_RESERVE,
     work: async (p) => {
@@ -172,7 +176,11 @@ export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<
       if (tooManyFailed(failed, todo.length)) throw new AnalysisError("answer", `${failed} of ${todo.length} pages got an unusable answer from PMOS AI — stopping`);
     },
   });
-  return { read: todo.length - failed, failed };
+  if (result.left) {
+    ctx.counters.pagesUnread += result.left;
+    ctx.progress.pagesTotal = Math.max(ctx.progress.pagesDone, ctx.progress.pagesTotal - result.left);
+  }
+  return { read: todo.length - failed - result.left, failed, left: result.left };
 }
 
 /** The broad read: every page of the plan's to-do. */
@@ -180,7 +188,7 @@ export async function researchStep(ctx: RunContext, plan: ResearchPlan): Promise
   const competitorId = ctx.competitor.id;
   if (plan.todo.length) {
     const r = await readPages(ctx, plan.todo);
-    ctx.log("info", `Research: ${r.read} page${r.read === 1 ? "" : "s"} read${r.failed ? `, ${r.failed} skipped (unusable answer)` : ""}`);
+    ctx.log(r.left ? "warn" : "info", `Research: ${r.read} page${r.read === 1 ? "" : "s"} read${r.failed ? `, ${r.failed} skipped (unusable answer)` : ""}${r.left ? ` — the run's token budget (${ctx.reading.limit.toLocaleString("en-US")}) was reached: ${r.left} page${r.left === 1 ? "" : "s"} left unread, no further page is read in this run` : ""}`);
     const total = ctx.counters.findings + ctx.counters.quotesDropped;
     if (total > 0 && ctx.counters.quotesDropped > total / 4) ctx.log("warn", `${ctx.counters.quotesDropped} of ${total} findings were dropped because their quote is not on the page — more than a quarter`);
   }
@@ -728,8 +736,11 @@ export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
   ctx.log("info", `Second look: ${due.length} of your capabilities have no evidence at ${ctx.competitor.name} yet — asking once each, on their most likely pages${later.length ? `; ${todo.length} now (the limit is ${ctx.maxSecondLooks} per run), ${later.length} wait for the next run` : ""}`);
   if (!todo.length) return waiting;
   let found = 0;
-  await ctx.paced({
+  // A second look is a reading call: it passes the run's token budget, last in the reading order.
+  const made = new Set<string>();
+  const looks = await ctx.paced({
     items: todo,
+    reading: true,
     concurrency: analysisConcurrency(),
     estimate: (t) => estimateTokens(t.pages.reduce((n, p) => n + p.text.length, 0)) + 500 + OUTPUT_RESERVE,
     work: async (t) => {
@@ -743,6 +754,7 @@ export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
         { maxTokens: LOOK_MAX_TOKENS, thinking: "low", injected },
       );
       const answer = parseSecondLook(r.value, t.pages);
+      made.add(k.id);
       ctx.counters.secondLooks++;
       if (answer.found) {
         const page = t.pages.find((p) => p.id === answer.pageId)!;
@@ -759,7 +771,12 @@ export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
       return r.tokens;
     },
   });
-  ctx.log("info", `Second look: ${found} found, ${todo.length - found} not found${later.length ? `, ${later.length} not asked yet` : ""}`);
+  // The token budget was reached: the looks that were not made wait like the ones over the limit — no cell is written for them.
+  if (looks.left) {
+    for (const t of todo) if (!made.has(t.capability.id)) waiting.add(t.capability.id);
+    ctx.counters.secondLooksWaiting = waiting.size;
+  }
+  ctx.log(looks.left ? "warn" : "info", `Second look: ${found} found, ${made.size - found} not found${waiting.size ? `, ${waiting.size} not asked yet` : ""}${looks.left ? ` — the run's token budget (${ctx.reading.limit.toLocaleString("en-US")}) was reached` : ""}`);
   await ctx.flush();
   return waiting;
 }

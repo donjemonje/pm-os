@@ -14,7 +14,8 @@ import type { ScannerKeyRow } from "@/lib/competitors/local";
  */
 
 interface Payload {
-  settings: { remoteScanEnabled: boolean; analysisDisabled: boolean };
+  settings: { remoteScanEnabled: boolean; analysisDisabled: boolean; analysisTokenBudget: number };
+  budgetLimits: { min: number; max: number; default: number };
   keys: ScannerKeyRow[];
   sources: AdminSourceRow[];
   testKnobs: boolean;
@@ -25,6 +26,49 @@ const BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
+}
+
+/**
+ * "Analysis token budget per competitor, per run": one number for the installation. Enter saves, Esc puts the
+ * saved number back; the field refuses anything that is not a whole number between the limits before it is sent.
+ */
+function BudgetField({ value, limits, busy, onSave }: { value: number; limits: Payload["budgetLimits"]; busy: boolean; onSave: (n: number) => Promise<void> }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const n = Number(draft);
+  const valid = draft.trim() !== "" && Number.isInteger(n) && n >= limits.min && n <= limits.max;
+  const changed = valid && n !== value;
+  return (
+    <div className="text-sm" data-testid="admin-analysis-budget">
+      <label htmlFor="admin-analysis-budget-input" className="block font-medium">Analysis token budget per competitor, per run</label>
+      <div className="mt-1 flex items-center gap-2">
+        <input
+          id="admin-analysis-budget-input"
+          type="number"
+          inputMode="numeric"
+          min={limits.min}
+          max={limits.max}
+          step={1000}
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && changed) void onSave(n);
+            if (e.key === "Escape") setDraft(String(value));
+          }}
+          className={`${INPUT} w-36`}
+          aria-invalid={!valid}
+          aria-describedby="admin-analysis-budget-hint"
+        />
+        <button onClick={() => void onSave(n)} disabled={busy || !changed} className={BTN} data-testid="admin-analysis-budget-save">Save</button>
+      </div>
+      <span id="admin-analysis-budget-hint" className={`mt-1 block text-xs ${valid ? "text-slate-500" : "text-red-600"}`}>
+        {valid
+          ? `Now ${value.toLocaleString("en-US")} tokens (default ${limits.default.toLocaleString("en-US")}). Every token of a run counts. When the next page read or second look would pass it, the run reads nothing more, fills the table from what it read, and the next run continues.`
+          : `Enter a whole number between ${limits.min.toLocaleString("en-US")} and ${limits.max.toLocaleString("en-US")}.`}
+      </span>
+    </div>
+  );
 }
 
 export function AdminScanning() {
@@ -120,6 +164,7 @@ export function AdminScanning() {
               <span className="block text-xs text-slate-500">Default OFF. When on, a scan ends after its pages are saved: PMOS AI is not called and nothing changes in the matrix or the feed.</span>
             </span>
           </label>
+          <BudgetField value={data.settings.analysisTokenBudget} limits={data.budgetLimits} busy={busy} onSave={(n) => patch({ analysisTokenBudget: n })} />
           {data.testKnobs && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800" title="COMPETITORS_TEST_KNOBS=on — the clock and the scheduler tick can be set from the tests. Never in production.">Test knobs on</span>}
         </div>
       </section>
