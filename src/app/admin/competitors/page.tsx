@@ -29,20 +29,22 @@ import { getCompetitorsVertexLocation } from "@/lib/competitors/vertex";
 import { db } from "@/lib/db";
 import { AdminShell } from "../AdminShell";
 import { AdminImportAndScans, type ImportOrg } from "./AdminImport";
+import { AdminReadingPlan } from "./AdminReadingPlan";
 import { AdminScanning } from "./AdminScanning";
 
 /**
  * Admin → Competitors: the PMOS AI prompts of the competitors feature
- * (read-only, with the structured answer each call must return), the import
- * of a collector's pages for one competitor, and every organization's scan
- * runs. Daniel's rule: any new AI logic is visible here.
+ * (read-only, with the structured answer each call must return), the scanning
+ * switches and the analysis token budget, one competitor's reading plan and
+ * analysis runs (read-only), the import of a collector's pages for one
+ * competitor, and every organization's scan runs. Daniel's rule: any new AI logic is visible here.
  * The organization itself is never scanned (2026-10-26): its catalog, domain
  * definitions and own statuses are entered by its PMs.
  */
 export default async function AdminCompetitorsPage() {
   const admin = await requireAdminPage("/admin/competitors");
   const org = await getAdminOrg(admin.organizationId);
-  // Import pages: every organization with its competitors, read with the page so the pickers never wait for data.
+  // Import pages and Reading plan: every organization with its competitors, read with the page so the pickers never wait for data.
   const importOrgs: ImportOrg[] = (
     await db.organization.findMany({
       orderBy: { createdAt: "asc" },
@@ -99,7 +101,7 @@ export default async function AdminCompetitorsPage() {
       user={admin}
       org={org}
       title="Competitors"
-      description="The competitors feature's PMOS AI — model, region and the six prompts — the scanning switches (remote lane, retention, station keys, per-source frequency), the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
+      description="The competitors feature's PMOS AI — model, region and the six prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
     >
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -140,6 +142,7 @@ export default async function AdminCompetitorsPage() {
         </section>
 
         <AdminScanning />
+        <AdminReadingPlan orgs={importOrgs} currentOrgId={org.current?.id ?? null} />
         <AdminImportAndScans orgs={importOrgs} currentOrgId={org.current?.id ?? null} />
       </div>
     </AdminShell>

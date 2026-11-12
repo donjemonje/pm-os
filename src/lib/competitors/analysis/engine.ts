@@ -137,7 +137,8 @@ export function emptyCounters(): Counters {
   };
 }
 
-function readCounters(raw: unknown): Counters {
+/** A run's stored counters (CompetitorAnalysis.counters), every field a number: 0 for what an older run never counted. */
+export function readCounters(raw: unknown): Counters {
   const out = emptyCounters();
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     for (const k of Object.keys(out) as (keyof Counters)[]) {
