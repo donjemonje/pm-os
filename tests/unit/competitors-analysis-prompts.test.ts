@@ -7,6 +7,7 @@ import {
   MAP_MAX_SECTIONS,
   mapTool,
   MAX_CAPABILITIES_PER_PAGE,
+  MAX_DESCRIPTION_CHARS,
   MAX_ENUM,
   matchTool,
   MERGE_TOOL,
@@ -19,6 +20,7 @@ import {
   renderMatchTail,
   renderMergeCapabilities,
   renderResearch,
+  RESEARCH_SYSTEM_PROMPT,
   RESEARCH_TOOL,
   type MapEntry,
   type MatchCatalog,
@@ -41,8 +43,8 @@ describe("parseResearch", () => {
   it("keeps a capability and its features, each with the verified quote", () => {
     const r = parseResearch({ capabilities: [cap("Access management", "Single sign-on (SSO) is included in every plan", [feat("RBAC", "Role-based access control lets admins scope every role")])] }, PAGE);
     expect(r.findings).toEqual([
-      { kind: "capability", wording: "Access management", parentWording: null, quote: "Single sign-on (SSO) is included in every plan", reasoning: "The page says so." },
-      { kind: "feature", wording: "RBAC", parentWording: "Access management", quote: "Role-based access control lets admins scope every role", reasoning: "The page says so." },
+      { kind: "capability", wording: "Access management", parentWording: null, quote: "Single sign-on (SSO) is included in every plan", reasoning: "The page says so.", description: null },
+      { kind: "feature", wording: "RBAC", parentWording: "Access management", quote: "Role-based access control lets admins scope every role", reasoning: "The page says so.", description: null },
     ]);
     expect(r.dropped).toEqual({ noQuote: 0, pii: 0, over: 0 });
   });
@@ -78,6 +80,42 @@ describe("parseResearch", () => {
     expect(parseResearch(null, PAGE).findings).toEqual([]);
     expect(parseResearch({ capabilities: "x" }, PAGE).findings).toEqual([]);
     expect(parseResearch({ capabilities: [null, 3, { name: 7 }, { name: "", quote: "Detect threats across your whole stack" }] }, PAGE).findings).toEqual([]);
+  });
+  it("description: one sentence per capability and per feature, null when the page does not say, cut to the limit", () => {
+    const r = parseResearch({ capabilities: [
+      { ...cap("Access management", "Single sign-on (SSO) is included in every plan", [{ ...feat("RBAC", "Role-based access control lets admins scope every role"), description: "  Lets admins scope what every role may do. " }, { ...feat("Audit log export", "Audit log export sends every admin action to your SIEM"), description: "" }]), description: "Signs every user in once." },
+      { ...cap("Threat detection", "Detect threats across your whole stack in real time"), description: "d".repeat(MAX_DESCRIPTION_CHARS + 50) },
+      { ...cap("Detection", "Detect threats across your whole stack"), description: 7 },
+    ] }, PAGE);
+    expect(r.findings.map((f) => [f.wording, f.description])).toEqual([
+      ["Access management", "Signs every user in once."],
+      ["RBAC", "Lets admins scope what every role may do."],
+      ["Audit log export", null],
+      ["Threat detection", expect.any(String)],
+      ["Detection", null],
+    ]);
+    expect(r.findings[3].description!.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS + 1);
+  });
+  it("a description that names a person is emptied; the finding stays", () => {
+    const r = parseResearch({ capabilities: [{ ...cap("Threat detection", "Detect threats across your whole stack in real time"), description: "Built by Jane Doe, CEO of Acme." }] }, PAGE);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].description).toBeNull();
+    expect(r.dropped.pii).toBe(0);
+  });
+  it("the schema asks for a description on every capability and every feature", () => {
+    const items = (RESEARCH_TOOL.input_schema.properties.capabilities as { items: { required: string[]; properties: { features: { items: { required: string[] } } } } }).items;
+    expect(items.required).toContain("description");
+    expect(items.properties.features.items.required).toContain("description");
+  });
+  it("a page of a compare section carries the COMPARISON PAGE line with the company that owns the site; any other page does not", () => {
+    const page = { url: "https://acme.example/compare/acme-vs-other", title: "Acme vs Other", text: "Acme has SSO. Other has no SSO." };
+    const out = renderResearch(page, { compareCompany: "Acme" });
+    expect(out).toBe("PAGE https://acme.example/compare/acme-vs-other\nTitle: Acme vs Other\nCOMPARISON PAGE: this page compares Acme with another company. List only what it says Acme itself offers; ignore every statement about the other company.\n\nAcme has SSO. Other has no SSO.");
+    expect(renderResearch(page)).not.toContain("COMPARISON PAGE");
+    expect(renderResearch(page, { compareCompany: null })).not.toContain("COMPARISON PAGE");
+    expect(renderResearch(page, { compareCompany: "  " })).not.toContain("COMPARISON PAGE");
+    expect(RESEARCH_SYSTEM_PROMPT).toContain("COMPARISON PAGE");
+    expect(RESEARCH_SYSTEM_PROMPT).toContain("Ignore every statement about the other company");
   });
   it("renders one page, whole", () => {
     const text = "x".repeat(50_000);

@@ -14,11 +14,13 @@ function pageLabel(url: string): string {
  * The evidence behind a cell: the quote from the competitor's page, why it means they offer it, the competitor's
  * own name for it, and the page. Read-only; shared by the cell's hover card, its popover and the profile.
  */
-export function EvidenceCard({ quote, url, reasoning, wording, count, empty }: {
+export function EvidenceCard({ quote, url, reasoning, wording, description, count, empty }: {
   quote: string | null;
   url: string | null;
   reasoning: string | null;
   wording: string | null;
+  /** One plain sentence of what it does, from the competitor's pages. Shown only where a caller passes it (the matrix hover). */
+  description?: string | null;
   /** Distinct pages that carry evidence. */
   count: number;
   /** What to say when there is no quote. */
@@ -28,6 +30,12 @@ export function EvidenceCard({ quote, url, reasoning, wording, count, empty }: {
   return (
     <div className="flex flex-col gap-1.5 text-[12.5px] text-fg-2" data-testid="cmp-evidence-card">
       <blockquote className="m-0 border-l-2 border-border pl-2.5 italic leading-relaxed text-[#1f2f47]">“{quote}”</blockquote>
+      {description && (
+        <div className="leading-snug" data-testid="cmp-evidence-description">
+          <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.whatItDoes} </span>
+          {description}
+        </div>
+      )}
       {reasoning && (
         <div className="leading-snug">
           <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.why} </span>

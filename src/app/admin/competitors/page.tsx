@@ -60,7 +60,7 @@ export default async function AdminCompetitorsPage() {
     {
       id: "research",
       title: `2 · Research — one call per page (${RESEARCH_VERSION})`,
-      note: "Gets one stored page, whole: no cut, no other page, not our capability list. Returns every capability the page says the company offers and the features under each, in the page's words, each with an exact quote and one sentence of reasoning. The quote is then checked in code against the stored page text: no quote on the page, no finding.",
+      note: "Gets one stored page, whole: no cut, no other page, not our capability list. Returns every capability the page says the company offers and the features under each, in the page's words, each with an exact quote, one sentence of reasoning and a one-sentence description of what it does (empty when the page does not say). A page of a \"compare\" section carries a COMPARISON PAGE line: only what it says the company itself offers is listed. The quote is then checked in code against the stored page text: no quote on the page, no finding.",
       text: RESEARCH_SYSTEM_PROMPT,
       tool: RESEARCH_TOOL,
     },

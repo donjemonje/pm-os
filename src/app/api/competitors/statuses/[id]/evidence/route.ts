@@ -43,7 +43,7 @@ export async function GET(req: Request, { params }: Params) {
   }
   const findings = await db.pageFinding.findMany({
     where,
-    select: { id: true, origin: true, quote: true, reasoning: true, wording: true, item: { select: { name: true } }, page: { select: { url: true, title: true, kind: true, sourceId: true, source: { select: { type: true } } } } },
+    select: { id: true, origin: true, quote: true, reasoning: true, description: true, wording: true, item: { select: { name: true } }, page: { select: { url: true, title: true, kind: true, sourceId: true, source: { select: { type: true } } } } },
   });
   // A finding's tier and kind come from its page's place in the competitor's reading plan, as when the cell was filled.
   const plan = await loadReadingPlan(where.competitorId);
@@ -52,7 +52,7 @@ export async function GET(req: Request, { params }: Params) {
   for (const f of findings) {
     const t = plan.read({ url: f.page.url, sourceId: f.page.sourceId, sourceType: f.page.source.type, kind: f.page.kind });
     if (t.tier === "skip") continue;
-    evidence.push({ findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording });
+    evidence.push({ findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording, description: f.description });
   }
   return NextResponse.json({
     evidence: rankEvidence(evidence)

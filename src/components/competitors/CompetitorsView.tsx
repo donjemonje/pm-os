@@ -1243,7 +1243,7 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
       </button>
       {showHover && cell && (
         <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
-          <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} count={cell.evidenceCount} empty={C.cell.notFoundHint} />
+          <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.description} count={cell.evidenceCount} empty={C.cell.notFoundHint} />
         </div>
       )}
       {isOpen && cell && (
@@ -1329,7 +1329,7 @@ function OwnCell({ row, kind, org, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, description: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
   async function set(v: OwnStatus) {
     if (v === row.ourStatus) return;
     setBusy(true);

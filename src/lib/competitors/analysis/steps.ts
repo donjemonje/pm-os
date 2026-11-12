@@ -134,7 +134,8 @@ async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read:
       const r = await ctx.call<Record<string, unknown>>(
         RESEARCH_SYSTEM_PROMPT,
         "",
-        renderResearch({ url: p.url, title: page.title ?? "", text: page.text, kind: page.kind, sourceLabel: C.profile.sourceTypes[p.sourceType] ?? p.sourceType }),
+        // A page of a "compare" section: only what it says the competitor itself offers is listed.
+        renderResearch({ url: p.url, title: page.title ?? "", text: page.text, kind: page.kind, sourceLabel: C.profile.sourceTypes[p.sourceType] ?? p.sourceType }, { compareCompany: p.read.label === "compare" ? ctx.competitor.name : null }),
         RESEARCH_TOOL,
         { maxTokens: RESEARCH_MAX_TOKENS, thinking: "low", injected: injectedResearch(ctx, p.url) },
       );
@@ -144,7 +145,7 @@ async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read:
         db.pageFinding.createMany({
           data: parsed.findings.map((f) => ({
             workspaceId: ctx.run.workspaceId, competitorId, pageId: p.id, pageHash: page.hash, analysisId: ctx.run.id, origin: "research",
-            kind: f.kind, wording: f.wording, parentWording: f.parentWording, quote: f.quote, reasoning: f.reasoning,
+            kind: f.kind, wording: f.wording, parentWording: f.parentWording, quote: f.quote, reasoning: f.reasoning, description: f.description,
           })),
         }),
         db.sourcePage.update({ where: { id: p.id }, data: { analyzedKey: readKey(RESEARCH_VERSION, page.hash), analyzedAt: new Date(), analysisError: null } }),
@@ -634,7 +635,7 @@ async function loadEvidence(workspaceId: string, competitorId: string, plan: Rea
   const [findings, features] = await Promise.all([
     db.pageFinding.findMany({
       where: { competitorId, OR: [{ itemId: { not: null } }, { capabilityId: { not: null } }] },
-      select: { id: true, origin: true, quote: true, reasoning: true, wording: true, capabilityId: true, item: { select: { capabilityId: true, featureId: true, name: true } }, page: { select: { url: true, kind: true, sourceId: true, source: { select: { type: true } } } } },
+      select: { id: true, origin: true, quote: true, reasoning: true, description: true, wording: true, capabilityId: true, item: { select: { capabilityId: true, featureId: true, name: true } }, page: { select: { url: true, kind: true, sourceId: true, source: { select: { type: true } } } } },
     }),
     db.feature.findMany({ where: { workspaceId, state: "active" }, select: { id: true, capabilityId: true } }),
   ]);
@@ -644,7 +645,7 @@ async function loadEvidence(workspaceId: string, competitorId: string, plan: Rea
   for (const f of findings) {
     const t = plan.read({ url: f.page.url, sourceId: f.page.sourceId, sourceType: f.page.source.type, kind: f.page.kind });
     if (t.tier === "skip") continue;
-    const e: Evidence = { findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording };
+    const e: Evidence = { findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording, description: f.description };
     if (f.origin === "second_look") {
       if (f.capabilityId) add(out.byCapability, f.capabilityId, e);
     } else if (f.item?.capabilityId) {
@@ -914,13 +915,13 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
   const [{ capabilities, features }, evidence, storedCells, storedFeatureCells] = await Promise.all([
     tableRows(workspaceId),
     loadEvidence(workspaceId, competitorId, await planOf(ctx)),
-    db.capabilityStatus.findMany({ where: { competitorId }, select: { id: true, capabilityId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, evidenceCount: true, scanId: true } }),
-    db.featureStatus.findMany({ where: { competitorId }, select: { id: true, featureId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, evidenceCount: true } }),
+    db.capabilityStatus.findMany({ where: { competitorId }, select: { id: true, capabilityId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, description: true, evidenceCount: true, scanId: true } }),
+    db.featureStatus.findMany({ where: { competitorId }, select: { id: true, featureId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, description: true, evidenceCount: true } }),
   ]);
   const now = new Date();
-  const shown = (cell: CellFromEvidence) => ({ quote: cell.best?.quote ?? null, sourceUrl: cell.best?.pageUrl ?? null, reasoning: cell.best?.reasoning ?? null, wording: cell.best?.wording ?? null, evidenceCount: cell.count });
-  const sameEvidence = (a: { quote: string | null; sourceUrl: string | null; reasoning: string | null; wording: string | null; evidenceCount: number }, b: ReturnType<typeof shown>) =>
-    a.quote === b.quote && a.sourceUrl === b.sourceUrl && a.reasoning === b.reasoning && a.wording === b.wording && a.evidenceCount === b.evidenceCount;
+  const shown = (cell: CellFromEvidence) => ({ quote: cell.best?.quote ?? null, sourceUrl: cell.best?.pageUrl ?? null, reasoning: cell.best?.reasoning ?? null, wording: cell.best?.wording ?? null, description: cell.description, evidenceCount: cell.count });
+  const sameEvidence = (a: { quote: string | null; sourceUrl: string | null; reasoning: string | null; wording: string | null; description: string | null; evidenceCount: number }, b: ReturnType<typeof shown>) =>
+    a.quote === b.quote && a.sourceUrl === b.sourceUrl && a.reasoning === b.reasoning && a.wording === b.wording && a.description === b.description && a.evidenceCount === b.evidenceCount;
   const count = (value: string) => {
     if (value === "found") ctx.counters.cellsFound++;
     else if (value === "low") ctx.counters.cellsLow++;

@@ -1,8 +1,8 @@
 /** Capability Analysis — the cell rules (analysis/cells.ts): the table is filled in code from the evidence. Pure module. */
 import { describe, expect, it } from "vitest";
-import { cellFromEvidence, rankEvidence, type Evidence } from "@/lib/competitors/analysis/cells";
+import { bestDescription, cellFromEvidence, rankEvidence, type Evidence } from "@/lib/competitors/analysis/cells";
 
-const e = (findingId: string, extra: Partial<Evidence> = {}): Evidence => ({ findingId, pageUrl: `https://acme.example/${findingId}`, tier: "strong", pageKind: "product", origin: "research", quote: `quote ${findingId}`, reasoning: "why", wording: "their name", ...extra });
+const e = (findingId: string, extra: Partial<Evidence> = {}): Evidence => ({ findingId, pageUrl: `https://acme.example/${findingId}`, tier: "strong", pageKind: "product", origin: "research", quote: `quote ${findingId}`, reasoning: "why", wording: "their name", description: null, ...extra });
 
 describe("cellFromEvidence — the three rules", () => {
   it("at least one finding from a strong page → found", () => {
@@ -12,7 +12,7 @@ describe("cellFromEvidence — the three rules", () => {
     expect(cellFromEvidence([e("a", { tier: "weak", pageKind: "news" }), e("b", { tier: "weak", pageKind: "content" })]).value).toBe("low");
   });
   it("none → not found, with no evidence", () => {
-    expect(cellFromEvidence([])).toEqual({ value: "not_found", best: null, count: 0 });
+    expect(cellFromEvidence([])).toEqual({ value: "not_found", best: null, count: 0, description: null });
   });
   it("one strong finding beats any number of weak ones, and is the evidence shown", () => {
     const weak = Array.from({ length: 20 }, (_, i) => e(`w${i}`, { tier: "weak", pageKind: "news" }));
@@ -28,6 +28,24 @@ describe("cellFromEvidence — the three rules", () => {
     const capabilityEvidence: Evidence[] = [];
     const featureEvidence = [e("f", { wording: "SAML" })];
     expect(cellFromEvidence([...capabilityEvidence, ...featureEvidence]).value).toBe("found");
+  });
+});
+
+describe("the description shown on a cell", () => {
+  it("is the description of the best-ranked finding that has one — not always the finding whose quote is shown", () => {
+    const cell = cellFromEvidence([
+      e("pricing", { pageKind: "pricing", description: null }),
+      e("product", { pageKind: "product", description: "Signs users in once for every app." }),
+      e("docs", { pageKind: "docs", description: "Lets admins connect an identity provider over SAML." }),
+      e("news", { tier: "weak", pageKind: "news", description: "A weak page's sentence." }),
+    ]);
+    expect(cell.best?.findingId).toBe("pricing");
+    expect(cell.description).toBe("Lets admins connect an identity provider over SAML.");
+  });
+  it("null when no finding has one; blank counts as none", () => {
+    expect(cellFromEvidence([e("a"), e("b", { description: "   " })]).description).toBeNull();
+    expect(bestDescription([])).toBeNull();
+    expect(bestDescription([{ description: null }, { description: " Trimmed. " }])).toBe("Trimmed.");
   });
 });
 

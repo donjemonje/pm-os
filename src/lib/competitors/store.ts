@@ -149,6 +149,8 @@ export interface CellRow {
   sourceUrl: string | null;
   reasoning: string | null;
   wording: string | null;
+  /** One plain sentence of what it does at this competitor: the description of the best-ranked evidence that has one. */
+  description: string | null;
   /** Distinct pages that carry evidence for the cell. */
   evidenceCount: number;
   changedAt: string | null;
@@ -433,6 +435,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         sourceUrl: s.sourceUrl,
         reasoning: s.reasoning,
         wording: s.wording,
+        description: s.description ?? null,
         evidenceCount: s.evidenceCount,
         changedAt: s.changedAt?.toISOString() ?? null,
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
@@ -455,6 +458,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         sourceUrl: s.sourceUrl,
         reasoning: s.reasoning,
         wording: s.wording,
+        description: s.description ?? null,
         evidenceCount: s.evidenceCount,
         changedAt: s.changedAt?.toISOString() ?? null,
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,

@@ -116,6 +116,7 @@ export const COMPETITORS_COPY = {
     openProfile: "Open profile",
     saveFailed: "Could not save the correction. Try again.",
     why: "Why",
+    whatItDoes: "What it does",
     theirName: (wording: string) => `They call it: ${wording}`,
     evidenceMore: (n: number) => `and ${n} more page${n === 1 ? "" : "s"}`,
     allEvidence: (n: number) => `All evidence · ${n}`,

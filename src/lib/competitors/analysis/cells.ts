@@ -28,6 +28,8 @@ export interface Evidence {
   reasoning: string;
   /** The competitor's own name for it. */
   wording: string;
+  /** One plain sentence of what it does, from the finding's page; null when the page did not say. */
+  description: string | null;
 }
 
 const kindRank = (kind: string) => {
@@ -54,10 +56,17 @@ export interface CellFromEvidence {
   best: Evidence | null;
   /** Distinct pages that carry evidence. */
   count: number;
+  /** What it does: the description of the best-ranked evidence that has one. */
+  description: string | null;
+}
+
+/** The description of the best-ranked finding that has one; null when none has. `ranked` is in rankEvidence order. */
+export function bestDescription(ranked: Array<Pick<Evidence, "description">>): string | null {
+  return ranked.find((e) => e.description?.trim())?.description?.trim() ?? null;
 }
 
 export function cellFromEvidence(list: Evidence[]): CellFromEvidence {
-  if (list.length === 0) return { value: "not_found", best: null, count: 0 };
+  if (list.length === 0) return { value: "not_found", best: null, count: 0, description: null };
   const ranked = rankEvidence(list);
-  return { value: ranked[0].tier === "strong" ? "found" : "low", best: ranked[0], count: new Set(list.map((e) => e.pageUrl)).size };
+  return { value: ranked[0].tier === "strong" ? "found" : "low", best: ranked[0], count: new Set(list.map((e) => e.pageUrl)).size, description: bestDescription(ranked) };
 }

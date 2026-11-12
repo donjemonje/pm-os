@@ -22,7 +22,7 @@ import { isSectionLabel, prefixPath, SECTION_LABELS, type Section, type SectionL
 export const MAP_VERSION = "map-1";
 
 /** Bumping RESEARCH_VERSION makes every page of every competitor due again (it is part of SourcePage.analyzedKey). */
-export const RESEARCH_VERSION = "research-1";
+export const RESEARCH_VERSION = "research-2";
 export const MERGE_VERSION = "merge-1";
 /** Bumping MATCH_VERSION invalidates nothing: a saved match is a decision. */
 export const MATCH_VERSION = "match-2";
@@ -163,6 +163,8 @@ Rules:
 - Use their words. The name is the name the page itself uses, as short as the page allows (at most 80 characters). Do not rename, generalise or translate it.
 - For every capability and every feature give one exact quote from the page that shows it: copied character for character, one continuous passage of at most 300 characters, no ellipsis, nothing added, nothing joined from two places.
 - For every capability and every feature give one sentence of reasoning: why this quote means the company offers it.
+- For every capability and every feature give a description: one plain sentence saying what it does, taken only from what this page says. When the page does not say what it does, leave the description empty. Never fill it from what you know.
+- A page marked COMPARISON PAGE compares the company named there with another company. List only what the page says that company itself offers. Ignore every statement about the other company: nothing the other company offers or lacks is listed, and no quote is taken from a passage about the other company.
 - Only what this page says the company itself offers today. Not what its customers or partners do, not what an article discusses in general, not plans or roadmaps, not job requirements, not legal text, not menu labels.
 - A page that offers nothing (an article about the industry, a legal page, an empty page) has an empty list. An empty list is a correct answer.
 - Nothing about people: no names, titles or contact details.`;
@@ -171,6 +173,7 @@ const FINDING_PROPS = {
   name: { type: "string", description: "The name the page uses, at most 80 characters." },
   quote: { type: "string", description: "One exact, continuous passage from the page, at most 300 characters." },
   reasoning: { type: "string", description: "One sentence: why this quote means the company offers it." },
+  description: { type: "string", description: "One plain sentence of what it does, taken only from this page. Empty when the page does not say." },
 };
 
 export const RESEARCH_TOOL = {
@@ -185,9 +188,9 @@ export const RESEARCH_TOOL = {
           type: "object",
           properties: {
             ...FINDING_PROPS,
-            features: { type: "array", items: { type: "object", properties: FINDING_PROPS, required: ["name", "quote", "reasoning"] } },
+            features: { type: "array", items: { type: "object", properties: FINDING_PROPS, required: ["name", "quote", "reasoning", "description"] } },
           },
-          required: ["name", "quote", "reasoning", "features"],
+          required: ["name", "quote", "reasoning", "description", "features"],
         },
       },
     },
@@ -198,6 +201,8 @@ export const RESEARCH_TOOL = {
 export const RESEARCH_MAX_TOKENS = 8000;
 export const MAX_CAPABILITIES_PER_PAGE = 40;
 export const MAX_FEATURES_PER_CAPABILITY = 30;
+/** A finding's description is cut to this many characters. */
+export const MAX_DESCRIPTION_CHARS = 300;
 
 export interface PromptPage {
   url: string;
@@ -209,10 +214,15 @@ export interface PromptPage {
   sourceLabel?: string;
 }
 
-/** One page, whole: no cut, no other page. */
-export function renderResearch(page: PromptPage): string {
+/**
+ * One page, whole: no cut, no other page. `compareCompany` is set for a page of a "compare" section (the company
+ * that owns the site): the page then carries the COMPARISON PAGE line — only that company's own claims are listed.
+ */
+export function renderResearch(page: PromptPage, opts: { compareCompany?: string | null } = {}): string {
   const meta = pageMeta(page);
-  return `PAGE ${page.url}\nTitle: ${page.title}${meta ? `\nSource: ${meta}` : ""}\n\n${page.text}`;
+  const company = opts.compareCompany?.replace(/\s+/g, " ").trim();
+  const compare = company ? `\nCOMPARISON PAGE: this page compares ${company} with another company. List only what it says ${company} itself offers; ignore every statement about the other company.` : "";
+  return `PAGE ${page.url}\nTitle: ${page.title}${meta ? `\nSource: ${meta}` : ""}${compare}\n\n${page.text}`;
 }
 
 export interface ResearchFinding {
@@ -223,6 +233,8 @@ export interface ResearchFinding {
   parentWording: string | null;
   quote: string;
   reasoning: string;
+  /** One plain sentence of what it does, from this page only; null when the page does not say. */
+  description: string | null;
 }
 
 export interface ResearchDropped {
@@ -235,6 +247,8 @@ export interface ResearchDropped {
 }
 
 const piiIn = (...texts: string[]) => texts.some((t) => checkPii(t).hit);
+/** A text that names a person is emptied. */
+const clean = (text: string): string => (checkPii(text).hit ? "" : text);
 
 export function parseResearch(value: unknown, pageText: string): { findings: ResearchFinding[]; dropped: ResearchDropped } {
   const findings: ResearchFinding[] = [];
@@ -243,7 +257,7 @@ export function parseResearch(value: unknown, pageText: string): { findings: Res
   /** capability wording key → the wording that won; its features hang under that wording. */
   const capabilityByKey = new Map<string, string>();
   const featureKeys = new Set<string>();
-  const one = (o: Record<string, unknown>): { name: string; quote: string; reasoning: string } | null => {
+  const one = (o: Record<string, unknown>): { name: string; quote: string; reasoning: string; description: string | null } | null => {
     const name = str(o.name, 80);
     if (!name || !wordingKey(name)) return null;
     const quote = typeof o.quote === "string" ? check(o.quote) : null;
@@ -256,7 +270,8 @@ export function parseResearch(value: unknown, pageText: string): { findings: Res
       dropped.pii++;
       return null;
     }
-    return { name, quote, reasoning };
+    // A description that names a person is emptied; the finding stays (its quote was checked above).
+    return { name, quote, reasoning, description: clean(str(o.description, MAX_DESCRIPTION_CHARS)) || null };
   };
   const capabilities = arr((value as Record<string, unknown> | null)?.capabilities);
   dropped.over += Math.max(0, capabilities.length - MAX_CAPABILITIES_PER_PAGE);
@@ -270,7 +285,7 @@ export function parseResearch(value: unknown, pageText: string): { findings: Res
       const cap = one(o);
       if (!cap) continue;
       capabilityByKey.set(key, cap.name);
-      findings.push({ kind: "capability", wording: cap.name, parentWording: null, quote: cap.quote, reasoning: cap.reasoning });
+      findings.push({ kind: "capability", wording: cap.name, parentWording: null, quote: cap.quote, reasoning: cap.reasoning, description: cap.description });
       parentWording = cap.name;
     }
     const features = arr(o.features);
@@ -283,7 +298,7 @@ export function parseResearch(value: unknown, pageText: string): { findings: Res
       const feature = one(fo);
       if (!feature) continue;
       featureKeys.add(fkey);
-      findings.push({ kind: "feature", wording: feature.name, parentWording, quote: feature.quote, reasoning: feature.reasoning });
+      findings.push({ kind: "feature", wording: feature.name, parentWording, quote: feature.quote, reasoning: feature.reasoning, description: feature.description });
     }
   }
   return { findings, dropped };
@@ -482,8 +497,6 @@ export interface Placement {
 export type MatchAnswer =
   | { entry: string; ours: { kind: "capability" | "feature"; id: string }; placement: null }
   | { entry: string; ours: null; placement: Placement };
-
-const clean = (text: string): string => (checkPii(text).hit ? "" : text);
 
 /**
  * The answers of one batch. An entry outside the batch is dropped; a duplicate entry keeps the first; an `ours`
