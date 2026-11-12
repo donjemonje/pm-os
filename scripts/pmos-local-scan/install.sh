@@ -30,3 +30,6 @@ echo "first check-in now:"
 "$NODE" "$REPO/scripts/pmos-local-scan/poller.mjs" --app-url "$APP_URL" --state-dir "$STATE_DIR"
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 echo "installed: $PLIST (checks in every 15 min; log: $STATE_DIR/local-scan.log)"
+
+# The menu bar indicator: one icon for every environment (skipped with a note when swiftc is missing).
+sh "$REPO/scripts/pmos-local-scan/install-menu.sh"

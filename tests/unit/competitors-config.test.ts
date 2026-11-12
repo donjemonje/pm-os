@@ -10,7 +10,7 @@ import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    const defaults = { manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null, readWeakPages: false, minPagesForNewRow: 1, secondLooksPerRun: 30 };
+    const defaults = { notifyUserIds: [], baselineUntil: null, readWeakPages: false, minPagesForNewRow: 1, secondLooksPerRun: 30 };
     expect(mergeCompetitorsConfig(null)).toEqual(defaults);
     expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual(defaults);
     expect(mergeCompetitorsConfig("junk")).toEqual(defaults);

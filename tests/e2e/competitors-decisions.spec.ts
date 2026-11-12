@@ -95,7 +95,7 @@ const CONTROL_QUOTE = "Scoring is limited to the Team plan.";
 
 // ————— Environment gate (same knobs as the Website Scanning rows) —————
 const envProblems: string[] = [];
-for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_RESCAN_LIMIT", "on"], ["COMPETITORS_AI", "off"]] as const) {
+for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_AI", "off"]] as const) {
   if (RESOLVED_ENV[k]?.trim() !== want) envProblems.push(`${k} must be "${want}" in test-apphosting.yaml (got ${RESOLVED_ENV[k] ?? "<unset>"})`);
 }
 
@@ -246,7 +246,7 @@ async function injectedScan(c: Cmp, extra: { statuses?: AiStatus[]; suggestions?
   const res = await scanNow(by, c.id);
   expect(res.status(), `Scan now on ${c.name}: ${await res.text()}`).toBe(202);
   const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-  const r = await runStationPoller({ mac: "locked", key: keyFile });
+  const r = await runStationPoller({ key: keyFile });
   expect(r.code, r.stdout).toBe(0);
   const done = await waitForScanEnd(pending.id);
   // The admin scan log of every injected scan is kept with the test result.
@@ -453,7 +453,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     alpha = await addCompetitor(pmApi, await startSite(fileSites), ALPHA);
     beta = await addCompetitor(pmApi, await startSite(fileSites), BETA);
     const pending = [await waitForScanWithStatus(alpha.sourceId, "pending_local"), await waitForScanWithStatus(beta.sourceId, "pending_local")];
-    const r = await runStationPoller({ mac: "locked", key: keyFile });
+    const r = await runStationPoller({ key: keyFile });
     expect(r.code, r.stdout).toBe(0);
     for (const [i, c] of [alpha, beta].entries()) {
       const done = await waitForScanEnd(pending[i].id);
@@ -1183,17 +1183,17 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     const configOf = async (api: APIRequestContext) => {
       const res = await api.get("/api/competitors");
       await ok(res);
-      return ((await res.json()) as { state: { config: { manualRescansPerDay: number } } }).state.config;
+      return ((await res.json()) as { state: { config: { notifyUserIds: string[] } } }).state.config;
     };
-    const rescansBefore = (await configOf(pmApi)).manualRescansPerDay;
-    const rescansChanged = rescansBefore >= 50 ? rescansBefore - 1 : rescansBefore + 1;
+    const notifyBefore = (await configOf(pmApi)).notifyUserIds;
+    const notifyChanged = notifyBefore.includes(memberId) ? notifyBefore.filter((id) => id !== memberId) : [...notifyBefore, memberId];
     try {
-      await ok(await memberApi.patch("/api/competitors/settings", { data: { manualRescansPerDay: rescansChanged } }));
-      expect((await configOf(pmApi)).manualRescansPerDay, "save a setting").toBe(rescansChanged);
+      await ok(await memberApi.patch("/api/competitors/settings", { data: { notifyUserIds: notifyChanged } }));
+      expect((await configOf(pmApi)).notifyUserIds, "save a setting").toEqual(notifyChanged);
     } finally {
-      await ok(await memberApi.patch("/api/competitors/settings", { data: { manualRescansPerDay: rescansBefore } }));
+      await ok(await memberApi.patch("/api/competitors/settings", { data: { notifyUserIds: notifyBefore } }));
     }
-    expect((await configOf(pmApi)).manualRescansPerDay).toBe(rescansBefore);
+    expect((await configOf(pmApi)).notifyUserIds).toEqual(notifyBefore);
     // Add a competitor (its first scan waits for the station) and remove it again.
     const rival = await addCompetitor(memberApi, await startSite(rowSites), "QA-CA Member Rival");
     await waitForScanWithStatus(rival.sourceId, "pending_local");
@@ -1211,7 +1211,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
       ["cmp_catalog_edited", { entity: "domain", action: "create", name: "Member domain" }, 1],
       ["cmp_catalog_edited", { entity: "domain", action: "remove", entityId: dom.Feedback, moveTo: dom.Planning }, 1],
       ["cmp_catalog_edited", { entity: "domain", action: "restore", entityId: removedDomainId }, 1],
-      ["cmp_settings_changed", { setting: "manualRescansPerDay" }, 2],
+      ["cmp_settings_changed", { setting: "notifyUserIds" }, 2],
       ["cmp_competitor_added", { competitorId: rival.id }, 1],
       ["cmp_competitor_removed", { competitorId: rival.id }, 1],
     ];
@@ -1244,7 +1244,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     try {
       gamma = await addCompetitor(pm2Api, await startSite(rowSites), "QA-CA Gamma");
       const onboarding = await waitForScanWithStatus(gamma.sourceId, "pending_local");
-      expect((await runStationPoller({ mac: "locked", key: keyFile })).code).toBe(0);
+      expect((await runStationPoller({ key: keyFile })).code).toBe(0);
       const first = await waitForScanEnd(onboarding.id);
       expect(first.status, `QA-CA Gamma onboarding: ${first.error ?? ""}`).toBe("ok");
       const gammaId = gamma.id;

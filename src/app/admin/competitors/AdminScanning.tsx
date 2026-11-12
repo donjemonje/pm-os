@@ -14,7 +14,7 @@ import type { ScannerKeyRow } from "@/lib/competitors/local";
  */
 
 interface Payload {
-  settings: { remoteScanEnabled: boolean };
+  settings: { remoteScanEnabled: boolean; analysisDisabled: boolean };
   keys: ScannerKeyRow[];
   sources: AdminSourceRow[];
   testKnobs: boolean;
@@ -110,6 +110,14 @@ export function AdminScanning() {
               <span className="font-medium">Remote scan</span>
               <span className="ml-2 rounded-full bg-slate-100 px-2 py-px text-[11px] font-semibold text-slate-600">{data.settings.remoteScanEnabled ? "ON" : "OFF"}</span>
               <span className="block text-xs text-slate-500">Default OFF for now (Daniel, 2026-11-04). When off, every scan is parked for the local station.</span>
+            </span>
+          </label>
+          <label className="flex items-center gap-3 text-sm">
+            <input type="checkbox" checked={data.settings.analysisDisabled} disabled={busy} onChange={(e) => void patch({ analysisDisabled: e.target.checked })} className="h-4 w-4" data-testid="admin-analysis-toggle" />
+            <span>
+              <span className="font-medium">Disable analysis</span>
+              <span className="ml-2 rounded-full bg-slate-100 px-2 py-px text-[11px] font-semibold text-slate-600">{data.settings.analysisDisabled ? "ON" : "OFF"}</span>
+              <span className="block text-xs text-slate-500">Default OFF. When on, a scan ends after its pages are saved: PMOS AI is not called and nothing changes in the matrix or the feed.</span>
             </span>
           </label>
           {data.testKnobs && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800" title="COMPETITORS_TEST_KNOBS=on — the clock and the scheduler tick can be set from the tests. Never in production.">Test knobs on</span>}

@@ -22,17 +22,19 @@ export function decodeEntities(s: string): string {
 }
 
 /**
- * Strip chrome (scripts, styles, nav, footer, form controls) and flatten to text with line breaks at block ends.
+ * Strip what is not readable text (scripts, styles, drawings, frames, form controls) and flatten to text with line
+ * breaks at block ends. <header>, <footer> and <nav> are KEPT (Daniel 2026-11-12): dropping them was a guess about how
+ * a site is built — Bagel AI puts a page's whole hero (headline, intro, sample report) inside a <header>, and its menu
+ * in neither tag, so the rule lost the content and kept the menu. Everything a person reads on the page is stored.
  * A form's controls go (select options, buttons, inputs), its text stays: marketing sites put real copy inside
  * forms — ZeroFox's pricing page describes each use case in a checkbox label (round-2 check, 2026-11-10).
  */
 export function htmlToText(html: string): string {
   let s = html
     .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(script|style|noscript|svg|iframe|template|select|textarea|button|datalist)\b[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<(nav|footer|header)\b[\s\S]*?<\/\1>/gi, " ");
+    .replace(/<(script|style|noscript|svg|iframe|template|select|textarea|button|datalist)\b[\s\S]*?<\/\1>/gi, " ");
   // Block boundaries become newlines so headings and list items stay separable.
-  s = s.replace(/<\/(p|div|section|article|li|h[1-6]|tr|td|th|dt|dd|blockquote|figcaption|main|aside)>|<br\s*\/?>/gi, "\n");
+  s = s.replace(/<\/(p|div|section|article|li|h[1-6]|tr|td|th|dt|dd|blockquote|figcaption|main|aside|header|footer|nav)>|<br\s*\/?>/gi, "\n");
   s = s.replace(/<[^>]+>/g, " ");
   s = decodeEntities(s);
   return s

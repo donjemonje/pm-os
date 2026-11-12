@@ -212,13 +212,6 @@ export async function createScan(
   return { scanId: scan.id };
 }
 
-/** Manual scans of a source since local midnight (scanner clock) — the per-day limit (PM-OS admins are exempt). */
-export async function manualScansToday(sourceId: string): Promise<number> {
-  const start = await now();
-  start.setHours(0, 0, 0, 0);
-  return db.competitorScan.count({ where: { sourceId, trigger: "manual", startedAt: { gte: start }, status: { not: "cancelled" } } });
-}
-
 // ————— Collect —————
 
 interface CollectContext {
@@ -589,6 +582,11 @@ export async function runScan(scanId: string): Promise<void> {
       finalStatus = "failed";
       errorKind = errorKind ?? "other";
       error = error ?? "no page could be read";
+    } else if ((await getGlobalScanSettings()).analysisDisabled) {
+      // Administration → Competitors → "Disable analysis" (Daniel 2026-11-11): the scan ends here, with its pages saved.
+      // No analysis is queued; the pages stay unread until a later analysis (page hash) picks them up.
+      log.add("info", "Analysis is disabled in Administration — the scan ends after saving the pages; PMOS AI not called");
+      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
     } else {
       // The scan ends at the pages. What they say is read by the analysis: its own queued run, after the scan.
       // Queued after every scan that read a page, also when no page changed — such a run makes no research call and

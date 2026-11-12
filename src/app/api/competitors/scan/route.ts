@@ -3,15 +3,11 @@ import { db } from "@/lib/db";
 import { bad, competitorsGuard, readJson } from "@/lib/competitors/api";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { failStaleScans } from "@/lib/competitors/run";
-import { createAndRouteScan, manualScansToday } from "@/lib/competitors/scan";
-import { getCompetitorsConfig } from "@/lib/competitors/store";
-import { rescanLimitEnforced } from "@/lib/competitors/config";
-import { isPmosAdmin } from "@/lib/admin-auth";
-import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { createAndRouteScan } from "@/lib/competitors/scan";
 
 /**
- * POST {competitorId}: Scan now — any member of the org, within the org's
- * manual-rescans-per-site-per-day limit (PM-OS admins are exempt). A site that
+ * POST {competitorId}: Scan now — any member of the org, as often as they
+ * like (no daily limit, Daniel 2026-11-12). A site that
  * is already scanning gets the new scan queued behind the running one (PRD:
  * never two scans on one site). Answers at once with the scan id and where it
  * went; the page polls the state until nothing is active.
@@ -24,14 +20,6 @@ export async function POST(req: Request) {
   const competitorId = typeof body.competitorId === "string" ? body.competitorId : "";
   const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null }, select: { id: true, sources: { where: { type: "website" }, select: { id: true } } } });
   if (!competitor) return bad("Not found", 404);
-  if (rescanLimitEnforced() && !isPmosAdmin(ctx.user) && competitor.sources[0]) {
-    const config = await getCompetitorsConfig(ctx.workspaceId);
-    const today = await manualScansToday(competitor.sources[0].id);
-    if (today >= config.manualRescansPerDay) {
-      await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_rescan_limited", { competitorId: competitor.id, limit: config.manualRescansPerDay });
-      return bad(C.settings.rescanLimited, 429);
-    }
-  }
   await failStaleScans();
   try {
     const created = await createAndRouteScan(ctx.workspaceId, competitor.id, "manual", ctx.user.id);

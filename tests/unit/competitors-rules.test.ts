@@ -70,12 +70,9 @@ describe("text is normalized before hashing (dates and tracking strings are not 
   });
 });
 
-describe("rescan limit and pacing defaults", () => {
-  it("defaults to 1 manual rescan per site per day and clamps the setting", () => {
-    expect(mergeCompetitorsConfig(null).manualRescansPerDay).toBe(1);
-    expect(mergeCompetitorsConfig({ manualRescansPerDay: 0 }).manualRescansPerDay).toBe(1);
-    expect(mergeCompetitorsConfig({ manualRescansPerDay: 99 }).manualRescansPerDay).toBe(50);
-    expect(mergeCompetitorsConfig({ manualRescansPerDay: 3 }).manualRescansPerDay).toBe(3);
+describe("pacing defaults", () => {
+  it("has no daily manual-scan limit: an old stored value is dropped from the config", () => {
+    expect(mergeCompetitorsConfig({ manualRescansPerDay: 3 })).not.toHaveProperty("manualRescansPerDay");
   });
   it("paces at 2 s and caps a site's Crawl-delay at 10 s", () => {
     expect(scanPauseMs()).toBe(2000);

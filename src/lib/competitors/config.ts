@@ -7,18 +7,16 @@
  * Per-workspace settings (Workspace.competitorsConfig). Since the Website
  * Scanning PRD (2026-11-04) the scan frequency lives per source
  * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
- * what remains here is the manual-rescan limit, the notification recipients,
- * the news baseline and the three analysis settings.
+ * what remains here is the notification recipients, the news baseline and
+ * the three analysis settings (the daily manual-scan limit was removed,
+ * Daniel 2026-11-12).
  */
-export const DEFAULT_MANUAL_RESCANS_PER_DAY = 1;
 /** Scan frequency per source, in days (PRD: once every 2 days). */
 export const DEFAULT_SCAN_EVERY_DAYS = 2;
 export const MIN_SCAN_EVERY_DAYS = 1;
 export const MAX_SCAN_EVERY_DAYS = 90;
 
 export interface CompetitorsConfig {
-  /** "Scan now" presses allowed per site per day (PM-OS admins are exempt). */
-  manualRescansPerDay: number;
   /** Users (ids, same organization) who receive the scan notification email. */
   notifyUserIds: string[];
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
@@ -38,7 +36,6 @@ export interface CompetitorsConfig {
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
-  manualRescansPerDay: DEFAULT_MANUAL_RESCANS_PER_DAY,
   notifyUserIds: [],
   baselineUntil: null,
   readWeakPages: false,
@@ -47,17 +44,6 @@ export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
 };
 
 // ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————
-/**
- * The manual-rescan limit is a production rule; local dev scans a site as
- * often as needed. Enforced when NODE_ENV is production, or whenever
- * COMPETITORS_RESCAN_LIMIT=on (to test the limit locally).
- */
-export function rescanLimitEnforced(): boolean {
-  const v = process.env.COMPETITORS_RESCAN_LIMIT?.trim().toLowerCase();
-  if (v === "on" || v === "true" || v === "1") return true;
-  if (v === "off" || v === "false" || v === "0") return false;
-  return process.env.NODE_ENV === "production";
-}
 /** Pause between two requests to the same site (remote lane). Tests may set COMPETITORS_PAUSE_MS=0 (with COMPETITORS_TEST_KNOBS=on) and say so. */
 export function scanPauseMs(): number {
   if (!knobsOn()) return 2000;
@@ -98,6 +84,10 @@ export const HEARTBEAT_MS = 30_000;
 export const MAX_PARALLEL_REMOTE = 8;
 /** A local-scan request older than this emails support@pm-os.io once and keeps waiting. */
 export const LOCAL_ALERT_MS = 24 * 3600_000;
+/** The station checks in every 15 minutes: no check-in for this long (and no scan being read) means it is off. */
+export const STATION_ONLINE_MS = 20 * 60_000;
+/** The "station is off" email goes out when a scan starts, at most once per this long. */
+export const STATION_OFF_ALERT_EVERY_MS = 3600_000;
 /** A scan token stays valid this long after its scan reached a final state. */
 export const SCAN_TOKEN_GRACE_MS = 15 * 60_000;
 /** The poller rotates its machine key this often (no expiry; rotation is automatic). */
@@ -134,11 +124,7 @@ export type ScanLane = (typeof SCAN_LANES)[number];
 
 export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
-  const rescans = typeof r.manualRescansPerDay === "number" && Number.isFinite(r.manualRescansPerDay)
-    ? Math.min(50, Math.max(1, Math.round(r.manualRescansPerDay)))
-    : DEFAULT_MANUAL_RESCANS_PER_DAY;
   return {
-    manualRescansPerDay: rescans,
     notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
     baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
     readWeakPages: typeof r.readWeakPages === "boolean" ? r.readWeakPages : DEFAULT_COMPETITORS_CONFIG.readWeakPages,

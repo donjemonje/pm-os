@@ -9,8 +9,8 @@ import { getGlobalScanSettings, setGlobalScanSettings, testKnobsEnabled } from "
  * Administration → Competitors → Scanning (PM-OS admin only). The global
  * switches of the Website Scanning story and every source's frequency:
  *
- *   GET   → { settings: { remoteScanEnabled }, keys, sources, testKnobs }
- *   PATCH { remoteScanEnabled? }                           → the switch
+ *   GET   → { settings: { remoteScanEnabled, analysisDisabled }, keys, sources, testKnobs }
+ *   PATCH { remoteScanEnabled?, analysisDisabled? }        → the switches
  *   PATCH { sourceId, scanEveryDays }                      → one source's frequency (days)
  */
 export interface AdminSourceRow {
@@ -74,7 +74,11 @@ export async function PATCH(req: Request) {
     if (!r.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(await payload());
   }
-  const patch: { remoteScanEnabled?: boolean } = {};
+  const patch: { remoteScanEnabled?: boolean; analysisDisabled?: boolean } = {};
+  if (body.analysisDisabled !== undefined) {
+    if (typeof body.analysisDisabled !== "boolean") return NextResponse.json({ error: "analysisDisabled must be true or false" }, { status: 400 });
+    patch.analysisDisabled = body.analysisDisabled;
+  }
   if (body.remoteScanEnabled !== undefined) {
     if (typeof body.remoteScanEnabled !== "boolean") return NextResponse.json({ error: "remoteScanEnabled must be true or false" }, { status: 400 });
     patch.remoteScanEnabled = body.remoteScanEnabled;

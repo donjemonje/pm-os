@@ -141,8 +141,6 @@ export async function waitForScanEnd(scanId: string, timeout = 120_000) {
 // ————— The poller —————
 
 export interface PollerOpts {
-  mac: "locked" | "active";
-  answer?: "approve" | "later";
   stateDir?: string;
   pauseMs?: number;
   /** Time knob: the station's own stop, in minutes (fractions allowed). */
@@ -154,7 +152,7 @@ export interface PollerOpts {
 export function pollerArgs(o: PollerOpts & { key: string }): string[] {
   return [
     POLLER, "--app-url", LOCAL_BASE_URL, "--key-file", o.key, "--state-dir", o.stateDir ?? freshStateDir(),
-    "--runner", "fetch", "--mac-state", o.mac, "--answer", o.answer ?? "approve", "--pause-ms", String(o.pauseMs ?? 0),
+    "--runner", "fetch", "--pause-ms", String(o.pauseMs ?? 0),
     ...(o.maxMinutes ? ["--max-minutes", String(o.maxMinutes)] : []),
   ];
 }
@@ -165,7 +163,7 @@ export function freshStateDir(): string {
   return dir;
 }
 
-/** One check-in ("run once"): the real poller, fetch runner, Mac state and dialog answer as flags. */
+/** One check-in ("run once"): the real poller, fetch runner. Waiting scans start without asking. */
 export function runStationPoller(o: PollerOpts & { key: string }, timeoutMs = 150_000): Promise<{ stdout: string; code: number }> {
   return new Promise((resolve, reject) => {
     execFile("node", pollerArgs(o), { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {

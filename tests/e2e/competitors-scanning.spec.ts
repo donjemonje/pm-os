@@ -1,12 +1,12 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
-import type { ChildProcess } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
 import { BIG_PAGE_MARKERS, PAGE_PATHS, type FakeSite } from "../fixtures/fake-site/fake-site";
 import {
-  addCompetitor, cleanupCompetitorsOf, createStationKey, FINAL, freshStateDir, isolateOtherOrgs, pagesOf, pathOf, postKnob, requestOf, restoreOtherOrgs,
+  addCompetitor, cleanupCompetitorsOf, createStationKey, FINAL, freshStateDir, isolateOtherOrgs, pagesOf, pathOf, pollerArgs as stationPollerArgs, postKnob, requestOf, restoreOtherOrgs,
   runStationPoller, scanNow, scanRow, scansOf, SCRATCH, SITE_HOST, spawnStationPoller, startSite, waitForScanEnd, waitForScanWithStatus,
   type Cmp, type PollerOpts,
 } from "./competitors-helpers";
@@ -26,9 +26,9 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   tick     POST /api/admin/competitors/knobs {tick: true}     (the hourly scheduler, once)
  *   remote   PATCH /api/admin/competitors/settings {remoteScanEnabled}  (default OFF)
  *   limits   POST /api/admin/competitors/knobs {ceilingMs} | {storageLimitChars} (null = default) — WS-17, WS-36
- *   poller   --mac-state locked|active, --answer approve|later, --runner fetch, --pause-ms, --max-minutes,
+ *   poller   --runner fetch, --pause-ms, --max-minutes,
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
- *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on,
+ *            COMPETITORS_BROWSER=on,
  *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
  *            COMPETITORS_AI=off (the PMOS AI step is skipped; badges come from pages — analysis is the next story).
  *
@@ -72,11 +72,10 @@ const KEY_LABEL = "QA-WS station";
 const KEYS_SNAPSHOT = join(SCRATCH, "station-keys-snapshot.json");
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const RESCAN_LIMITED = "Daily manual scan limit reached for this site — next manual scan tomorrow.";
 
 // ————— Environment gate —————
 const envProblems: string[] = [];
-for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_RESCAN_LIMIT", "on"], ["COMPETITORS_AI", "off"]] as const) {
+for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_AI", "off"]] as const) {
   if (RESOLVED_ENV[k]?.trim() !== want) envProblems.push(`${k} must be "${want}" in test-apphosting.yaml (got ${RESOLVED_ENV[k] ?? "<unset>"})`);
 }
 const BROWSER_ON = RESOLVED_ENV.COMPETITORS_BROWSER?.trim() === "on";
@@ -153,6 +152,11 @@ async function setRemote(on: boolean): Promise<void> {
   expect(res.status(), await res.text()).toBe(200);
   expect(((await res.json()) as { settings: { remoteScanEnabled: boolean } }).settings.remoteScanEnabled).toBe(on);
 }
+async function setAnalysisDisabled(on: boolean): Promise<void> {
+  const res = await adminApi.patch("/api/admin/competitors/settings", { data: { analysisDisabled: on } });
+  expect(res.status(), await res.text()).toBe(200);
+  expect(((await res.json()) as { settings: { analysisDisabled: boolean } }).settings.analysisDisabled).toBe(on);
+}
 const createKey = (label: string) => createStationKey(adminApi, label);
 
 // ————— Sites and competitors —————
@@ -168,8 +172,9 @@ async function scannerPageRequests(site: FakeSite) {
 }
 
 // ————— The poller —————
-/** One check-in ("run once") with this file's station key unless the row brings its own. */
-const runPoller = (o: PollerOpts, timeoutMs = 150_000) => runStationPoller({ ...o, key: o.key ?? keyFile }, timeoutMs);
+/** One check-in ("run once") with this file's station key unless the row brings its own. Waiting scans start without asking. */
+const pollerArgs = (o: PollerOpts): string[] => stationPollerArgs({ ...o, key: o.key ?? keyFile });
+const runPoller = (o: PollerOpts = {}, timeoutMs = 150_000) => runStationPoller({ ...o, key: o.key ?? keyFile }, timeoutMs);
 const spawnPoller = (o: PollerOpts): ChildProcess => spawnStationPoller({ ...o, key: o.key ?? keyFile });
 
 // ————— UI —————
@@ -264,12 +269,12 @@ test.describe("Website Scanning rows", () => {
     const pending = await waitForScanWithStatus(sourceId, "pending_local");
     expect(pending.lane).toBe("local");
 
-    // Mac locked: the poller runs without asking. Paced so the page's 3-second poll sees "in progress".
-    const run = runPoller({ mac: "locked", pauseMs: 600 });
+    // The poller runs without asking. Paced so the page's 3-second poll sees "in progress".
+    const run = runPoller({ pauseMs: 600 });
     await expect(pill(page, name)).toHaveText(/^Scan in progress · ([1-9]|1[0-2]) pages? so far$/, { timeout: 30_000 });
     const poller = await run;
     expect(poller.code, poller.stdout).toBe(0);
-    expect(poller.stdout).toMatch(/screen locked/);
+    expect(poller.stdout).toMatch(/1 waiting \(/);
     const done = await waitForScanEnd(pending.id);
     expect(done.status).toBe("ok");
     expect(done.badge).toBe("full");
@@ -296,9 +301,9 @@ test.describe("Website Scanning rows", () => {
     await expect(row.locator("td").nth(9)).toHaveText("12");
   });
 
-  test("WS-02 nothing in queue: poller once (Mac locked) → empty list, exits; no scan, no token", async () => {
+  test("WS-02 nothing in queue: poller once → empty list, exits; no scan, no token", async () => {
     const before = await withTestDb(async (db) => ({ tokens: await db.scanToken.count(), scans: await db.competitorScan.count({ where: { workspaceId } }) }));
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     expect(r.stdout).toMatch(/check-in as QA-WS station: nothing waiting/);
     expect(r.stdout).not.toMatch(/waiting \(|Later|scan [0-9a-f-]+ —/);
@@ -313,9 +318,9 @@ test.describe("Website Scanning rows", () => {
     for (const name of names) cmps.push(await addCompetitor(pmApi, await newSite(), name));
     const pending = [];
     for (const c of cmps) pending.push(await waitForScanWithStatus(c.sourceId, "pending_local"));
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
-    expect(r.stdout).toMatch(/3 waiting \(QA-WS Alpha, QA-WS Beta, QA-WS Gamma\) — screen locked/);
+    expect(r.stdout).toMatch(/3 waiting \(QA-WS Alpha, QA-WS Beta, QA-WS Gamma\) /);
     const scans = [];
     for (const p of pending) scans.push(await waitForScanEnd(p.id));
     for (const s of scans) {
@@ -334,48 +339,62 @@ test.describe("Website Scanning rows", () => {
     }
   });
 
-  test("WS-04 Mac active, answer Approve: the dialog names the site, the scan runs after Approve, Full", async () => {
+  test("WS-04 the station starts a waiting scan without asking (no dialog, no snooze) and reports what it does in its status file: scanning with the site and the pages read, then idle with the last scan", async () => {
     test.setTimeout(120_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Delta");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "active", answer: "approve" });
+    const stateDir = freshStateDir();
+    const statusFile = join(stateDir, "status.json");
+    const status = () => (existsSync(statusFile) ? (JSON.parse(readFileSync(statusFile, "utf8")) as { state: string; competitor?: string | null; site?: string | null; pagesRead?: number | null; lastCheckIn?: string; message?: string; lastScan?: { competitor: string; pagesRead: number; finishedAt: string; result: string } }) : null);
+    const t0 = Date.now();
+    // Paced (300 ms a page) so the status file is seen while the scan is read.
+    const run = runPoller({ stateDir, pauseMs: 300 });
+    await expect.poll(() => status()?.state ?? null, { timeout: 30_000, intervals: [100] }).toBe("scanning");
+    expect(status()!.competitor).toBe("QA-WS Delta");
+    expect(status()!.site).toContain(c.site.host);
+    await expect.poll(() => status()?.pagesRead ?? 0, { timeout: 30_000, intervals: [100] }).toBeGreaterThanOrEqual(3);
+    const r = await run;
     expect(r.code, r.stdout).toBe(0);
-    expect(r.stdout).toMatch(/1 waiting \(QA-WS Delta\) — screen active/);
-    expect(r.stdout).not.toMatch(/Later/);
+    expect(r.stdout).toMatch(/1 waiting \(QA-WS Delta\)/);
+    // Nothing is asked and nothing is put off.
+    expect(r.stdout).not.toMatch(/Later|snoozed|screen (locked|active)|Approve/);
+    expect(existsSync(join(stateDir, "snooze-until"))).toBe(false);
     const done = await waitForScanEnd(pending.id);
     expect(done.status).toBe("ok");
     expect(done.badge).toBe("full");
     expect(done.pagesFetched).toBe(12);
+    const end = status()!;
+    expect(end.state).toBe("idle");
+    expect(end.competitor ?? null).toBeNull();
+    expect(new Date(end.lastCheckIn!).getTime()).toBeGreaterThanOrEqual(t0);
+    expect(end.lastScan).toMatchObject({ competitor: "QA-WS Delta", pagesRead: 12, result: "handed in" });
   });
 
-  test("WS-05 Mac active, answer Later: no scan, still pending, snoozed 2 h; next check-in with the screen locked runs without asking, Full", async ({ browser }) => {
+  test("WS-05 the station cannot reach PM-OS: its status file says so (the menu bar icon shows a warning), nothing is scanned, the request keeps waiting; the next check-in that reaches PM-OS runs the scan", async () => {
     test.setTimeout(150_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Epsilon");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
     const stateDir = freshStateDir();
-    const t0 = Date.now();
-    const r1 = await runPoller({ mac: "active", answer: "later", stateDir });
-    expect(r1.code, r1.stdout).toBe(0);
-    expect(r1.stdout).toMatch(/1 waiting \(QA-WS Epsilon\) — screen active/);
-    expect(r1.stdout).toMatch(/Later — snoozed for 2 hours/);
-    expect(r1.stdout).not.toMatch(/scan [0-9a-f-]+ —/);
-    const snoozeUntil = Number(readFileSync(join(stateDir, "snooze-until"), "utf8"));
-    expect(snoozeUntil).toBeGreaterThanOrEqual(t0 + 2 * HOUR);
-    expect(snoozeUntil).toBeLessThanOrEqual(Date.now() + 2 * HOUR);
+    const statusFile = join(stateDir, "status.json");
+    // Check-in 1 against an address nothing listens on.
+    const dead = await new Promise<{ stdout: string; code: number }>((resolve) => {
+      const a = pollerArgs({ stateDir });
+      a[a.indexOf("--app-url") + 1] = "http://127.0.0.1:9";
+      execFile("node", a, { timeout: 60_000 }, (err, stdout, stderr) => resolve({ stdout: `${stdout}${stderr}`, code: err ? ((err as { code?: number }).code ?? 1) : 0 }));
+    });
+    expect(dead.code, dead.stdout).not.toBe(0);
+    const off = JSON.parse(readFileSync(statusFile, "utf8")) as { state: string; message: string };
+    expect(off.state).toBe("unreachable");
+    expect(off.message).toMatch(/^Check-in failed: /);
     expect((await scanRow(pending.id)).status).toBe("pending_local");
-    const page = await newPage(browser, "pm");
-    await openSettings(page, c.name);
-    await expect(pill(page, c.name)).toHaveText(/^Scan pending · since /);
-
-    // Run 2, same station state (still snoozed), screen locked → runs anyway.
-    const r2 = await runPoller({ mac: "locked", stateDir });
+    // Check-in 2 reaches PM-OS: the scan runs, the status is back to idle.
+    const r2 = await runPoller({ stateDir });
     expect(r2.code, r2.stdout).toBe(0);
-    expect(r2.stdout).toMatch(/screen locked/);
-    expect(r2.stdout).not.toMatch(/snoozed \(Later\)/);
     const done = await waitForScanEnd(pending.id);
     expect(done.status).toBe("ok");
     expect(done.badge).toBe("full");
     expect(done.pagesFetched).toBe(12);
+    expect((JSON.parse(readFileSync(statusFile, "utf8")) as { state: string }).state).toBe("idle");
   });
 
   test("WS-06 request waits 25 h, no poller: hourly check keeps it pending (red, with age), one email to support, not Blocked", async ({ browser }) => {
@@ -408,15 +427,15 @@ test.describe("Website Scanning rows", () => {
     await expect(pill(page, c.name)).not.toHaveText(/Blocked/);
   });
 
-  test("WS-07 re-scan with no change + daily limit: 12 fetched, hashes equal, Full, 0 changed; 2nd Scan now refused for the PM with the limit message, allowed for the admin", async ({ browser }) => {
+  test("WS-07 re-scan with no change, no daily limit: 12 fetched, hashes equal, Full, 0 changed; a 2nd Scan now the same day is accepted for the PM and the button stays Scan now", async ({ browser }) => {
     test.setTimeout(180_000);
     const c = await onboardLocal("QA-WS Eta");
     const before = await pagesOf(c.sourceId);
-    // PRD: one manual rescan per site per day. The onboarding scan is not a rescan — the PM's Scan now is allowed.
+    // PRD (Daniel 2026-11-12): no daily manual-scan limit. Scan now is always allowed when no scan is active on the site.
     const first = await scanNow(pmApi, c.id);
     expect(first.status(), `PM's first Scan now after onboarding: ${await first.text()}`).toBe(202);
     const second = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(second.id);
     expect(done.status).toBe("ok");
@@ -427,18 +446,16 @@ test.describe("Website Scanning rows", () => {
     expect(after.map((p) => [pathOf(p.url), p.hash])).toEqual(before.map((p) => [pathOf(p.url), p.hash]));
     for (const p of after) expect(p.changedAt, `${p.url} unchanged`).toBeNull();
 
-    // The limit: a second manual scan today is refused for the PM, allowed for a PM-OS admin.
-    const refused = await scanNow(pmApi, c.id);
-    expect(refused.status()).toBe(429);
-    expect(((await refused.json()) as { error: string }).error).toBe(RESCAN_LIMITED);
+    // No limit: the button is Scan now (enabled) after today's manual scan, and a second manual scan today is accepted.
     const page = await newPage(browser, "pm");
     await openSettings(page, c.name);
-    const btn = competitorLine(page, c.name).getByRole("button", { name: "Next manual scan tomorrow" });
+    const btn = competitorLine(page, c.name).getByRole("button", { name: "Scan now" });
     await expect(btn).toBeVisible();
-    await expect(btn).toBeDisabled();
-    const allowed = await scanNow(adminApi, c.id);
-    expect(allowed.status(), await allowed.text()).toBe(202);
-    expect(((await allowed.json()) as { state: string }).state).toBe("pending_local");
+    await expect(btn).toBeEnabled();
+    await expect(page.getByText("Manual scans per site per day")).toHaveCount(0);
+    const again = await scanNow(pmApi, c.id);
+    expect(again.status(), await again.text()).toBe(202);
+    expect(((await again.json()) as { state: string }).state).toBe("pending_local");
   });
 
   test("WS-08 re-scan with changes: pricing changed (previous text handed to analysis, then dropped), new product page → 13 pages, home footer date only → unchanged", async () => {
@@ -449,7 +466,7 @@ test.describe("Website Scanning rows", () => {
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const second = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(second.id);
     expect(done.status).toBe("ok");
@@ -477,7 +494,7 @@ test.describe("Website Scanning rows", () => {
       expect(byPath[path].hash, `${path} hash`).toBe(before[path]);
       expect(byPath[path].changedAt, `${path} unchanged`).toBeNull();
     }
-    // (The footer is not part of the stored text — htmlToText drops <nav>/<footer> — so the date edit leaves text and hash alone.)
+    // (The footer is part of the stored text since 2026-11-12; its date is normalized away before hashing, so the hash stays.)
   });
 
   test("WS-09 page removed needs proof: not found once → missing; twice → removed; answers again → cleared", async ({ browser }) => {
@@ -492,7 +509,7 @@ test.describe("Website Scanning rows", () => {
     const s1 = await scanNow(pmApi, c.id);
     expect(s1.status(), await s1.text()).toBe(202);
     const scan1 = await waitForScanWithStatus(c.sourceId, "pending_local");
-    expect((await runPoller({ mac: "locked" })).code).toBe(0);
+    expect((await runPoller({})).code).toBe(0);
     const done1 = await waitForScanEnd(scan1.id);
     expect(done1.badge).toBe("full"); // not found is not "not read"
     expect(done1.pagesFetched).toBe(11);
@@ -506,7 +523,7 @@ test.describe("Website Scanning rows", () => {
     const s2 = await scanNow(adminApi, c.id);
     expect(s2.status(), await s2.text()).toBe(202);
     const scan2 = await waitForScanWithStatus(c.sourceId, "pending_local");
-    expect((await runPoller({ mac: "locked" })).code).toBe(0);
+    expect((await runPoller({})).code).toBe(0);
     const done2 = await waitForScanEnd(scan2.id);
     p = await people();
     expect(p.state).toBe("removed");
@@ -522,7 +539,7 @@ test.describe("Website Scanning rows", () => {
     const s3 = await scanNow(adminApi, c.id);
     expect(s3.status(), await s3.text()).toBe(202);
     const scan3 = await waitForScanWithStatus(c.sourceId, "pending_local");
-    expect((await runPoller({ mac: "locked" })).code).toBe(0);
+    expect((await runPoller({})).code).toBe(0);
     const done3 = await waitForScanEnd(scan3.id);
     expect(done3.pagesFetched).toBe(12);
     p = await people();
@@ -538,7 +555,7 @@ test.describe("Website Scanning rows", () => {
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" }, 200_000);
+    const r = await runPoller({}, 200_000);
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(scan.id);
     // PRD: every page is a pending task until done; retries allowed (1–3), local scanning included.
@@ -555,7 +572,7 @@ test.describe("Website Scanning rows", () => {
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" }, 200_000);
+    const r = await runPoller({}, 200_000);
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(scan.id);
     expect(done.badge).toBe("incomplete");
@@ -609,7 +626,7 @@ test.describe("Website Scanning rows", () => {
     expect((await scanRow(scanB.id)).status).toBe("running");
 
     // Finish A on the station; the token then lives 15 more minutes (the scan ended → 409), not longer (→ 401).
-    const r = await runPoller({ mac: "locked", key: key.file });
+    const r = await runPoller({ key: key.file });
     expect(r.code, r.stdout).toBe(0);
     const doneA = await waitForScanEnd(scanA.id);
     expect(doneA.status).toBe("ok");
@@ -633,7 +650,7 @@ test.describe("Website Scanning rows", () => {
     await expect(keyRow.getByRole("button", { name: "Revoke" })).toHaveCount(0);
     res = await pmApi.get("/api/competitors/local/waiting", { headers: { authorization: `Bearer ${key.secret}` } });
     expect(res.status()).toBe(401);
-    const r2 = await runPoller({ mac: "locked", key: key.file });
+    const r2 = await runPoller({ key: key.file });
     expect(r2.code).not.toBe(0);
     expect(r2.stdout).toMatch(/401/);
     // B's own token still posts into B (the revoked key never touches scan tokens).
@@ -645,7 +662,7 @@ test.describe("Website Scanning rows", () => {
     test.setTimeout(200_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Xi");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const child = spawnPoller({ mac: "locked", pauseMs: 500 });
+    const child = spawnPoller({ pauseMs: 500 });
     let out = "";
     child.stdout?.on("data", (d) => (out += d));
     child.stderr?.on("data", (d) => (out += d));
@@ -672,7 +689,7 @@ test.describe("Website Scanning rows", () => {
     expect((await requestOf(pending.id)).state).toBe("waiting");
     await page.reload();
     await expect(pill(page, c.name)).toHaveText(/^Scan pending · since /);
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(pending.id);
     expect(done.status).toBe("ok");
@@ -688,7 +705,7 @@ test.describe("Website Scanning rows", () => {
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
-    expect((await runPoller({ mac: "locked" }, 200_000)).code).toBe(0);
+    expect((await runPoller({}, 200_000)).code).toBe(0);
     const done = await waitForScanEnd(scan.id);
     expect(done.badge).toBe("incomplete");
 
@@ -742,7 +759,7 @@ test.describe("Website Scanning rows", () => {
     expect(scans[0].status).toBe("ok");
     expect(scans[1].status).toBe("cancelled");
     expect((await requestOf(pending.id)).state).toBe("cancelled");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     expect(r.stdout).toMatch(/nothing waiting/);
     const state = (await (await pmApi.get("/api/competitors")).json()) as { state: { competitors: { id: string }[] } };
@@ -756,7 +773,7 @@ test.describe("Website Scanning rows", () => {
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
-    expect((await runPoller({ mac: "locked" })).code).toBe(0);
+    expect((await runPoller({})).code).toBe(0);
     const done = await waitForScanEnd(scan.id);
     expect(done.badge).toBe("full");
     expect(done.pagesFetched).toBe(12);
@@ -768,14 +785,14 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-28 page PM-OS cannot take: a 2.6 MB HTML page is read with its text cut at 2 MB; a .pdf that is not a PDF has no text and the scan log names the reason; every other page read; Incomplete, 1 not read (PRD 2026-11-09)", async () => {
-    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // Knobs: run-once (one poller check-in), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
     // scripted site pages (fake-site variants bigPage = /big, 2.6 MB of HTML, and bogusPdf = /files/report.pdf, plain text under a .pdf name).
     test.setTimeout(150_000);
     const site = await newSite();
     await site.control({ bigPage: true, bogusPdf: true });
     const c = await addCompetitor(pmApi, site, "QA-WS Odd");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(pending.id);
     const bigUrl = `${site.url}/big`;
@@ -847,7 +864,7 @@ test.describe("Website Scanning rows", () => {
     expect(await tokenRows(), "one token row for the scan").toBe(1);
 
     // Finish the scan on the station (its own check-in issues the same token again).
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(pending.id);
     expect(done.status).toBe("ok");
@@ -955,7 +972,7 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-32 website address changed: after the edit all 12 site A pages are removed with no text; one poller run onboards site B as a whole and never requests a site A URL", async () => {
-    // Knobs: run-once (one poller check-in per scan), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // Knobs: run-once (one poller check-in per scan), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
     // request log (both fake sites log every request with its host).
     test.setTimeout(200_000);
     const c = await onboardLocal("QA-WS Move"); // WS-01 done: 12 pages of site A
@@ -982,7 +999,7 @@ test.describe("Website Scanning rows", () => {
       next = (await scansOf(c.sourceId)).slice(scansBefore).find((s) => s.status === "pending_local");
       return next?.id ?? null;
     }, { timeout: 30_000, intervals: [250, 500], message: "a website change queues the onboarding scan of the new site" }).not.toBeNull();
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(next!.id);
     expect(done.status, done.error ?? "").toBe("ok");
@@ -1017,7 +1034,7 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-33 sitemap entry counts as a link: /whitepaper is listed only in /sitemap.xml and linked from no page → present, not unlinked; 13 pages, Full, no 'unlinked' log line", async () => {
-    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // Knobs: run-once (one poller check-in), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
     // scripted site (fake-site variant sitemapOnly = /whitepaper served and listed in /sitemap.xml, no <a> to it on any page).
     test.setTimeout(150_000);
     const site = await newSite();
@@ -1028,7 +1045,7 @@ test.describe("Website Scanning rows", () => {
     expect(await (await fetch(`${site.url}/`)).text()).not.toContain("/whitepaper");
     const c = await addCompetitor(pmApi, site, "QA-WS Sitemap");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     // The station found the page in the sitemap: 13 URLs to start with (12 pages + /whitepaper).
     expect(r.stdout).toMatch(/sitemaps: 1 sitemap file, 13 URLs/);
@@ -1051,7 +1068,7 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-34 one page, one row (local lane): home links /pricing/ and /product/features/ with a trailing slash and /about under www.<host> → 12 rows, none ending with '/', no www row, 12 fetched, Full; a hand-in under a variant spelling lands on the existing row", async () => {
-    // Knobs: run-once (one poller check-in), Mac state (--mac-state locked), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
+    // Knobs: run-once (one poller check-in), fetcher runner (--runner fetch), pause 0 (--pause-ms 0),
     // scripted site (fake-site variant variantLinks: home links the same pages under other spellings), request log (host per request).
     test.setTimeout(200_000);
     const site = await newSite();
@@ -1065,7 +1082,7 @@ test.describe("Website Scanning rows", () => {
 
     const c = await addCompetitor(pmApi, site, "QA-WS OneRow");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(pending.id);
     expect(done.status, done.error ?? "").toBe("ok");
@@ -1140,14 +1157,14 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-35 hand-in acknowledged at once: the station's done call is answered before processing, in every environment → the station exits saying PM-OS is processing, nothing 'failed on the station', and the scan ends Full 12 on its own", async () => {
-    // Knobs: run-once, Mac locked, fetch runner, pause 0. No server knob: the done route has one path (answer, then launch the
+    // Knobs: run-once, fetch runner, pause 0. No server knob: the done route has one path (answer, then launch the
     // runner) in dev and prod alike. Round 2 (2026-11-09): dev processed ZeroFox's 1,717 pages inside the call for 31 min and
     // the station gave up at 20 — Daniel 2026-11-10: dev and prod behave the same, the server answers first.
     test.setTimeout(150_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Patient");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
     const t0 = Date.now();
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     const stationMs = Date.now() - t0;
     expect(r.code, r.stdout).toBe(0);
     expect(r.stdout).not.toMatch(/failed on the station/);
@@ -1162,13 +1179,13 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-37 processing dies after the hand-in: the request is handed_in with no heartbeat → the tick processes it again (the station gets nothing to re-read); after 3 attempts the scan is failed with support named", async () => {
-    // Knobs: run-once, Mac locked, fetch runner, pause 0, tick (scheduler, once). The failure is injected as its end state: the
+    // Knobs: run-once, fetch runner, pause 0, tick (scheduler, once). The failure is injected as its end state: the
     // request put back to handed_in and the scan's heartbeat aged past 10 minutes — exactly what a runner crash or a dev-server
     // restart leaves behind. Tomer's review 2026-11-10 (item 1): before, the sweep sent the station back to re-read the whole site.
     test.setTimeout(200_000);
     const c = await addCompetitor(pmApi, await newSite(), "QA-WS Relaunch");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    expect((await runPoller({ mac: "locked" })).code).toBe(0);
+    expect((await runPoller({})).code).toBe(0);
     const first = await waitForScanEnd(pending.id);
     expect(first.status).toBe("ok");
     const stale = new Date(Date.now() - 11 * 60_000);
@@ -1185,7 +1202,7 @@ test.describe("Website Scanning rows", () => {
     const req = await withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId: pending.id } }));
     expect(req.state).toBe("done");
     expect(req.processAttempts).toBe(1);
-    const idle = await runPoller({ mac: "locked" });
+    const idle = await runPoller({});
     expect(idle.stdout).toMatch(/nothing waiting/);
     expect((await pagesOf(c.sourceId)).length, "no page was read twice into a new row").toBe(12);
     // 2. Processing died for the fourth time: the scan is failed, support is named, the station still gets nothing.
@@ -1199,18 +1216,100 @@ test.describe("Website Scanning rows", () => {
     expect(failed.badge).toBe("incomplete");
     expect(failed.error).toMatch(/processing failed 3 times after the station handed the pages in — contact support@pm-os.io/);
     expect((await withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId: pending.id } }))).state).toBe("failed");
-    expect((await runPoller({ mac: "locked" })).stdout).toMatch(/nothing waiting/);
+    expect((await runPoller({})).stdout).toMatch(/nothing waiting/);
+  });
+
+  test("WS-38 Disable analysis (Administration switch, default OFF): ON → the scan ends after saving the pages — Full 12, 12 rows with text, 0 AI calls, the log says analysis is disabled; OFF again → the next scan takes the analysis path", async ({ browser }) => {
+    // Knobs: run-once, fetch runner, pause 0. The switch itself is the product (AppSetting competitors.analysisDisabled), not a knob.
+    test.setTimeout(200_000);
+    const admin = await newPage(browser, "admin");
+    await admin.goto("/admin/competitors");
+    const toggle = admin.getByTestId("admin-analysis-toggle");
+    await expect(toggle).not.toBeChecked();
+    await toggle.check();
+    await expect(toggle).toBeChecked();
+    try {
+      const site = await newSite();
+      const c = await addCompetitor(pmApi, site, "QA-WS No Analysis");
+      const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
+      expect((await runPoller({})).code).toBe(0);
+      const done = await waitForScanEnd(pending.id);
+      expect(done.status).toBe("ok");
+      expect(done.badge).toBe("full");
+      expect(done.pagesFetched).toBe(12);
+      expect(done.aiCalls).toBe(0);
+      const msgs = (done.log as { msg: string }[]).map((l) => l.msg);
+      expect(msgs, JSON.stringify(msgs)).toContain("Analysis is disabled in Administration — the scan ends after saving the pages; PMOS AI not called");
+      expect(msgs.some((m) => /PMOS AI skipped/.test(m))).toBe(false);
+      const rows = await pagesOf(c.sourceId);
+      expect(rows.length).toBe(12);
+      expect(rows.every((r) => r.text && r.hash)).toBe(true);
+      // OFF again: the next scan of a changed site goes down the analysis path (here the test environment's AI-off knob answers).
+      await setAnalysisDisabled(false);
+      await site.control({ footerDate: "2031-01-01" });
+      const s2 = await scanNow(adminApi, c.id);
+      expect(s2.status(), await s2.text()).toBeLessThan(300);
+      const next = await waitForScanWithStatus(c.sourceId, "pending_local");
+      expect((await runPoller({})).code).toBe(0);
+      const done2 = await waitForScanEnd(next.id);
+      const msgs2 = (done2.log as { msg: string }[]).map((l) => l.msg);
+      expect(msgs2.some((m) => /Analysis is disabled/.test(m)), JSON.stringify(msgs2)).toBe(false);
+    } finally {
+      await setAnalysisDisabled(false);
+    }
+  });
+
+  test("WS-39 a scan starts while the station is off: support is emailed at once, at most one email an hour; with the station on, no email", async () => {
+    test.setTimeout(120_000);
+    const KEY = "competitors.stationOffAlert";
+    const alert = () => withTestDb(async (db) => ((await db.appSetting.findUnique({ where: { key: KEY } }))?.value ?? null) as { at: string; scanId: string } | null);
+    const stationLastSeen = (at: Date) => withTestDb((db) => db.scannerKey.updateMany({ where: { revokedAt: null }, data: { lastUsedAt: at } }));
+    const settle = () => new Promise((r) => setTimeout(r, 2000));
+    // Setup: the station last checked in 2 hours ago, reads nothing right now, and no alert is on record.
+    await stationLastSeen(new Date(Date.now() - 2 * HOUR));
+    await withTestDb(async (db) => {
+      await db.competitorScan.updateMany({ where: { lane: "local", status: "running" }, data: { heartbeatAt: new Date(Date.now() - HOUR) } });
+      await db.appSetting.deleteMany({ where: { key: KEY } });
+    });
+
+    // 1. Station off → the email goes out when the scan starts (not after 24 hours).
+    const a = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off A");
+    const scanA = await waitForScanWithStatus(a.sourceId, "pending_local");
+    await expect.poll(async () => (await alert())?.scanId ?? null, { timeout: 15_000, intervals: [250, 500] }).toBe(scanA.id);
+    const first = (await alert())!;
+    expect((await requestOf(scanA.id)).state, "the scan keeps waiting").toBe("waiting");
+
+    // 2. A second scan within the hour sends nothing more.
+    const b = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off B");
+    await waitForScanWithStatus(b.sourceId, "pending_local");
+    await settle();
+    expect(await alert(), "still the first email only").toEqual(first);
+
+    // 3. More than an hour later, but the station is on (checked in just now) → no email.
+    const old = { at: new Date(Date.now() - 2 * HOUR).toISOString(), scanId: scanA.id };
+    await withTestDb((db) => db.appSetting.update({ where: { key: KEY }, data: { value: old } }));
+    await stationLastSeen(new Date());
+    const c = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off C");
+    await waitForScanWithStatus(c.sourceId, "pending_local");
+    await settle();
+    expect(await alert(), "station on: nothing sent").toEqual(old);
+
+    // 4. The station is off again and the hour has passed → the next scan emails again.
+    await stationLastSeen(new Date(Date.now() - 2 * HOUR));
+    const d = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off D");
+    const scanD = await waitForScanWithStatus(d.sourceId, "pending_local");
+    await expect.poll(async () => (await alert())?.scanId ?? null, { timeout: 15_000, intervals: [250, 500] }).toBe(scanD.id);
   });
 
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
-    // Knobs: run-once, Mac locked, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
+    // Knobs: run-once, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
     // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".
     test.setTimeout(200_000);
     const site = await newSite();
     await site.control({ slowdownAfter: 5 });
     const c = await addCompetitor(pmApi, site, "QA-WS Omega Local");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     expect(r.stdout).toMatch(/slow down \(429\) \S+ — stopping this scan, \d+ pages left for the next one/);
     const done = await waitForScanEnd(pending.id);
@@ -1238,7 +1337,7 @@ test.describe("Website Scanning rows", () => {
     const res = await scanNow(adminApi, c.id);
     expect(res.status(), await res.text()).toBe(202);
     const next = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r2 = await runPoller({ mac: "locked" });
+    const r2 = await runPoller({});
     expect(r2.code, r2.stdout).toBe(0);
     const done2 = await waitForScanEnd(next.id);
     expect(done2.badge).toBe("full");
@@ -1266,7 +1365,7 @@ test.describe("Website Scanning rows", () => {
     await openSettings(page, c.name);
     await expect(pill(page, c.name)).toHaveText(/^Scan pending · since /);
     await expect(competitorLine(page, c.name)).not.toContainText(/\b(remote|local|lane|browser|station)\b/i);
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(local.id);
     expect(done.status).toBe("ok");
@@ -1305,14 +1404,14 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-17 time limit (local lane, --max-minutes 0.25): stops after 15 s, Incomplete, the rest not attempted, plain message — no page limit (Daniel 2026-11-09)", async ({ browser }) => {
-    // Knobs: run-once, Mac locked, fetch runner, pause 0, fake-site infiniteLinks, the station's own time stop at 15 s (the server's is 8 h).
+    // Knobs: run-once, fetch runner, pause 0, fake-site infiniteLinks, the station's own time stop at 15 s (the server's is 8 h).
     test.setTimeout(150_000);
     const site = await newSite();
     await site.control({ infiniteLinks: true });
     const c = await addCompetitor(pmApi, site, "QA-WS Upsilon");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
     const t0 = Date.now();
-    const r = await runPoller({ mac: "locked", maxMinutes: 0.25 });
+    const r = await runPoller({ maxMinutes: 0.25 });
     expect(r.code, r.stdout).toBe(0);
     expect(Date.now() - t0, "the station stopped on time, not on a page count").toBeGreaterThanOrEqual(15_000);
     const done = await waitForScanEnd(pending.id);
@@ -1360,7 +1459,7 @@ test.describe("Website Scanning rows", () => {
   });
 
   test("WS-36 storage limit (local lane, storageLimitChars knob): the store fills after the first page → the scan stops, Incomplete, 11 not attempted with the reason, support named in the log", async ({ browser }) => {
-    // Knobs: run-once, Mac locked, fetch runner, pause 0; PM-OS store limit set to what is stored now + 1 character (default 10 GB):
+    // Knobs: run-once, fetch runner, pause 0; PM-OS store limit set to what is stored now + 1 character (default 10 GB):
     // the first page still fits (the store is below the limit when it lands), the second finds the store full.
     test.setTimeout(150_000);
     const site = await newSite();
@@ -1369,7 +1468,7 @@ test.describe("Website Scanning rows", () => {
     const before = await storedTextChars();
     await setStorageLimit(before + 1);
     try {
-      const r = await runPoller({ mac: "locked" });
+      const r = await runPoller({});
       expect(r.code, r.stdout).toBe(0);
       expect(r.stdout).toMatch(/PM-OS stopped the scan \(storage\)/);
       const done = await waitForScanEnd(pending.id);
@@ -1678,7 +1777,7 @@ test.describe("Website Scanning rows", () => {
   async function onboardLocal(name: string): Promise<Cmp> {
     const c = await addCompetitor(pmApi, await newSite(), name);
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
-    const r = await runPoller({ mac: "locked" });
+    const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
     const done = await waitForScanEnd(pending.id);
     expect(done.status, `${name} onboarding: ${done.error ?? ""}`).toBe("ok");

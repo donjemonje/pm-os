@@ -82,8 +82,6 @@ env:
     value: "0"
   - variable: COMPETITORS_ALLOW_PRIVATE_HOSTS
     value: "on"
-  - variable: COMPETITORS_RESCAN_LIMIT
-    value: "on"
   - variable: COMPETITORS_BROWSER
     value: "on"
 

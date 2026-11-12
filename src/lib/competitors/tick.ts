@@ -1,7 +1,7 @@
 import { db } from "../db";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { ACTIVE_SCAN_STATUSES, MAX_PARALLEL_REMOTE, MAX_PROCESS_ATTEMPTS, STALE_MS } from "./config";
-import { alertOldRequests, cleanupScanTokens, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
+import { alertOldRequests, appUrl, cleanupScanTokens, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
 import { getGlobalScanSettings, now } from "./settings";
 
 /**
@@ -55,10 +55,6 @@ export async function runTick(launch: Launcher, log: (msg: string) => void = () 
   if (alerts) log(`${alerts} waiting-request alert${alerts === 1 ? "" : "s"} sent to support`);
   await cleanupScanTokens(t);
   return { stale, due, started, alerts };
-}
-
-function appUrl(): string {
-  return (process.env.NEXT_PUBLIC_APP_URL?.trim() || "http://localhost:3000").replace(/\/+$/, "");
 }
 
 /** Stale = running with no heartbeat for STALE_MS. Decided here and at read time (store.ts) from the same rule. */

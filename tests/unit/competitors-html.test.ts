@@ -16,15 +16,28 @@ const PAGE = `<!doctype html><html><head><title>Acme &amp; Co — Platform</titl
 <footer>© 2026 Acme</footer></body></html>`;
 
 describe("htmlToText", () => {
-  it("keeps the content, drops scripts, styles, nav and footer, and separates blocks by line", () => {
+  it("keeps the content, nav and footer included, drops scripts and styles, and separates blocks by line", () => {
     const text = htmlToText(PAGE);
     expect(text).toContain("Dark web monitoring");
     expect(text).toContain("We watch closed forums 24/7.");
     expect(text.split("\n")).toContain("Takedown requests");
     expect(text).not.toContain("var a");
     expect(text).not.toContain("color:red");
-    expect(text).not.toContain("Pricing"); // nav is chrome
-    expect(text).not.toContain("© 2026");
+    expect(text.split("\n")).toContain("Pricing"); // the menu is text a person reads: kept
+    expect(text).toContain("© 2026 Acme");
+  });
+  it("keeps a hero block inside <header> (Bagel AI, 2026-11-12: headline, intro and sample rows sat in a <header> within <main>)", () => {
+    const html = `<body><header><a href="/">Home</a></header><main><header class="hero"><h1>See which features landed</h1>
+<p>After a feature ships, it reads feedback, usage and revenue.</p>
+<div class="row"><span>Renewal note</span><span>Renewed for two years. Audit log export was on their list.</span></div></header>
+<section><p>Body copy.</p></section></main><footer><p>Privacy</p></footer></body>`;
+    const lines = htmlToText(html).split("\n");
+    expect(lines).toContain("See which features landed");
+    expect(lines).toContain("After a feature ships, it reads feedback, usage and revenue.");
+    expect(lines.join(" ")).toContain("Renewed for two years. Audit log export was on their list.");
+    expect(lines).toContain("Home");
+    expect(lines).toContain("Privacy");
+    expect(lines).toContain("Body copy.");
   });
   it("keeps the text inside a form (a use-case description in a checkbox label), drops its controls", () => {
     // ZeroFox's pricing page (round-2 check, 2026-11-10): the copy that matters sits in <label><p>…</p></label> inside a <form>.

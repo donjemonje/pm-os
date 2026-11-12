@@ -288,8 +288,6 @@ export const COMPETITORS_COPY = {
     scanNow: "Scan now",
     scanning: "Scanning…",
     scanRunning: "A scan is running",
-    rescanLimited: "Daily manual scan limit reached for this site — next manual scan tomorrow.",
-    rescanLimitedShort: "Next manual scan tomorrow",
     badges: { full: "Full", incomplete: "Incomplete", blocked: "Blocked", unreachable: "Unreachable", stale: "Stale", pending: "Scan pending", running: "Scan in progress" } as Record<string, string>,
     badgeHint: {
       full: "Every page we could reach was read.",
@@ -414,14 +412,10 @@ export const COMPETITORS_COPY = {
     suggestedBy: (name: string) => `Seen at ${name}`,
     removeCapabilityTitle: (name: string) => `Remove ${name}?`,
     removeCapabilityBody: "It leaves the table and scans will not add it back. You can restore it under Removed, with everything scans found for it.",
-    scheduleTitle: "Scanning",
-    scheduleBlurb: "PM-OS re-reads every tracked website on a schedule. Scan now runs one competitor immediately.",
     frequency: "Scan frequency",
     frequencies: { daily: "Daily", weekly: "Weekly", monthly: "Monthly" } as Record<string, string>,
     maxPages: "Pages per competitor per scan",
     maxPagesHint: "The most useful pages come first: product, platform, pricing, integrations, trust, customers. 2 s between requests; a site's own Crawl-delay is honoured (up to 10 s); a scan stops after 15 min.",
-    manualRescans: "Manual scans per site per day",
-    manualRescansHint: "PM-OS admins are not limited.",
     saved: "Saved",
   },
   notify: {

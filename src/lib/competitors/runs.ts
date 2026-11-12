@@ -9,11 +9,9 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { recordCompetitorEvent } from "./analytics";
-import { rescanLimitEnforced } from "./config";
 import { notifyRun, runEmailDue } from "./notify";
 import { failStaleScans } from "./run";
-import { createScan, manualScansToday, runScan } from "./scan";
-import { getCompetitorsConfig } from "./store";
+import { createScan, runScan } from "./scan";
 import { routeScan } from "./tick";
 
 interface PlanItem {
@@ -23,7 +21,7 @@ interface PlanItem {
 }
 
 /** Which competitors a run would scan, in matrix order, and which it leaves out (with the reason). */
-async function planRun(workspaceId: string, opts: { exemptFromLimit: boolean }): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
+async function planRun(workspaceId: string): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
   const competitors = await db.competitor.findMany({
     where: { workspaceId, deletedAt: null },
     orderBy: [{ position: "asc" }, { name: "asc" }],
@@ -31,15 +29,10 @@ async function planRun(workspaceId: string, opts: { exemptFromLimit: boolean }):
   });
   const plan: PlanItem[] = [];
   const skipped: { name: string; reason: string }[] = [];
-  const config = await getCompetitorsConfig(workspaceId);
   for (const c of competitors) {
     const website = c.sources[0];
     if (!website) {
       skipped.push({ name: c.name, reason: "no website" });
-      continue;
-    }
-    if (rescanLimitEnforced() && !opts.exemptFromLimit && (await manualScansToday(website.id)) >= config.manualRescansPerDay) {
-      skipped.push({ name: c.name, reason: "daily manual scan limit" });
       continue;
     }
     plan.push({ competitorId: c.id, name: c.name, host: c.host });
@@ -53,7 +46,7 @@ export type StartRunResult = { runId: string; total: number } | { error: "runnin
 export async function startRun(
   workspaceId: string,
   startedById: string | null,
-  opts: { trigger: "manual" | "scheduled"; exemptFromLimit: boolean },
+  opts: { trigger: "manual" | "scheduled" },
 ): Promise<StartRunResult> {
   // A press must never be blocked by a run whose runner died (dev server reload, crash): 10 min without a heartbeat = stale.
   await failStaleScans();
@@ -62,7 +55,7 @@ export async function startRun(
     db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, select: { id: true } }),
   ]);
   if (activeScan || activeRun) return { error: "running" };
-  const { plan, skipped } = await planRun(workspaceId, opts);
+  const { plan, skipped } = await planRun(workspaceId);
   if (plan.length === 0) return { error: "nothing" };
   const run = await db.competitorScanRun.create({
     data: { workspaceId, trigger: opts.trigger, startedById, total: plan.length, summary: { skipped } as unknown as Prisma.InputJsonValue },
