@@ -617,7 +617,7 @@ test.describe("Website Scanning rows", () => {
       expect(byPath[path].hash, `${path} hash`).toBe(before[path]);
       expect(byPath[path].changedAt, `${path} unchanged`).toBeNull();
     }
-    // (The footer is not part of the stored text — htmlToText drops <nav>/<footer> — so the date edit leaves text and hash alone.)
+    // (The footer is part of the stored text since 2026-11-12; its date is normalized away before hashing, so the hash stays.)
   });
 
   test("WS-09 page removed needs proof: not found once → missing; twice → removed; answers again → cleared", async ({ browser }) => {
