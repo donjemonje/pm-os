@@ -12,7 +12,7 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
  * paths validate the answer field by field.
  *
  * This module is the model boundary: callTool (one structured call, with the tokens it used and typed errors),
- * the string cleaners, and the profile-facts prompt. The four prompts of the capability analysis (research,
+ * the string cleaners, and the profile-facts prompt. The five prompts of the capability analysis (map, research,
  * merge, match, second look) live in analysis/prompts.ts; who calls what, and when, is analysis/steps.ts.
  * The organization itself is never scanned: its catalog and own statuses are entered by its PMs.
  *

@@ -2,19 +2,24 @@ import { arr, pageMeta, str } from "../ai";
 import { checkPii } from "../pii";
 import { wordingKey } from "./items";
 import { quoteChecker, verifyQuote } from "./quotes";
+import { isSectionLabel, prefixPath, SECTION_LABELS, type Section, type SectionLabel } from "./sections";
 
 /**
- * The four prompts of the capability analysis (Capability Analysis, "How the analysis runs"). Each has a version,
+ * The five prompts of the capability analysis (Capability Analysis, "How the analysis runs"). Each has a version,
  * the system text, the tool (the JSON schema the answer is held to), a render function for the user content and a
  * parse function that validates the answer field by field and returns typed, cleaned data. A parser never throws
  * on a bad field: it drops it and counts it.
  *
- * PMOS AI never decides a cell. Research lists what a page offers, in the page's words, with a quote; the quote is
- * checked in code. Merge groups wordings. Match answers with OUR codes (a closed set), never free names. The
- * second look answers one capability from its most likely pages. The cells are filled by fixed rules (cells.ts).
+ * PMOS AI never decides a cell. The map labels the sections of the site that code built (closed codes, closed
+ * labels). Research lists what a page offers, in the page's words, with a quote; the quote is checked in code.
+ * Merge groups wordings. Match answers with OUR codes (a closed set), never free names. The second look answers
+ * one capability from its most likely pages. The cells are filled by fixed rules (cells.ts).
  *
  * Pure: no database, no network.
  */
+
+/** Bumping MAP_VERSION invalidates nothing: a saved section label is a decision. It is stored with every label it gave. */
+export const MAP_VERSION = "map-1";
 
 /** Bumping RESEARCH_VERSION makes every page of every competitor due again (it is part of SourcePage.analyzedKey). */
 export const RESEARCH_VERSION = "research-1";
@@ -31,6 +36,122 @@ export const MAX_ENUM = 120;
  * word instead. The parsers read it, like an empty string, as nothing.
  */
 export const NO_VALUE = "none";
+
+// ————— 0. Map: the sections of the site —————
+
+export const MAP_SYSTEM_PROMPT = `A product team studies one company to learn what its product does. Below are the sections of the company's website: for each section its code, its address prefix, how many pages it holds, and a few sample page titles and addresses. Label every section with exactly one label.
+
+Labels:
+- product: pages that describe what the company sells and what it does — products, platform, features, solutions, use cases, integrations, security of the product. Products are often named by brand, not by the word "product": a section named after a product is a product section.
+- pricing: prices, plans and editions.
+- compare: pages where the company compares itself with another company.
+- help: the help center — user guides, how-to articles, knowledge base, support articles, FAQ.
+- release_notes: release notes, changelog, what is new in the product.
+- api_docs: developer documentation and API reference.
+- news: blog, news, press releases, announcements.
+- noise: everything that says nothing about what the product does — customers and case studies, landing pages, events, webinars, the company and its people, careers, legal, press kits, prompt libraries, glossaries, general articles about the industry.
+
+Rules:
+- Answer once for every section code you were given. Use only the codes and the labels given.
+- Decide from the address and the sample titles. When a section mixes kinds, give the label of most of its pages.
+- When you cannot tell whether a section is product or noise, answer product.
+- LLMS.TXT, when given, is the site's own description of its content: use it.`;
+
+export const MAP_MAX_TOKENS = 4000;
+/** Sections per map call; a longer list is asked in consecutive calls. At most MAX_ENUM, so the codes always ride in the schema as a closed set. */
+export const MAP_MAX_SECTIONS = 120;
+/** The site's /llms.txt is cut to this many characters. */
+export const LLMS_TXT_MAX_CHARS = 20_000;
+
+/** The tool of one map call: the section codes and the labels are closed sets. */
+export function mapTool(codes: string[]): Record<string, unknown> {
+  return {
+    name: "label_sections",
+    description: "Record the label of every section.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        sections: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              code: { type: "string", description: "A section code, e.g. S7.", ...(codes.length <= MAX_ENUM ? { enum: codes } : {}) },
+              label: { type: "string", enum: [...SECTION_LABELS] },
+            },
+            required: ["code", "label"],
+          },
+        },
+      },
+      required: ["sections"],
+    },
+  };
+}
+
+export interface MapEntry {
+  /** "S1" … in the order of the call. */
+  code: string;
+  section: Pick<Section, "prefix" | "pages" | "sampleTitles" | "sampleUrls"> & { /** Source type label when the pages are not the website's ("Help center"). */ sourceLabel?: string | null };
+}
+
+/** "/products/core" — an address as a sample: the path, without the host the prefix already shows. */
+function samplePath(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname || "/";
+  } catch {
+    return url;
+  }
+}
+
+export function renderMap(company: { name: string; site: string }, entries: MapEntry[], llmsTxt: string | null): string {
+  const lines = entries.map((e) => {
+    const s = e.section;
+    const titles = s.sampleTitles.map((t) => `"${short(t, 80)}"`).join("; ");
+    const urls = s.sampleUrls.map(samplePath).join(", ");
+    return `${e.code} | ${s.prefix} | ${s.pages} page${s.pages === 1 ? "" : "s"}${s.sourceLabel ? ` | source: ${s.sourceLabel}` : ""} | titles: ${titles || "none"} | addresses: ${urls}`;
+  });
+  const llms = llmsTxt?.trim() ? `\n\nLLMS.TXT:\n${llmsTxt.trim().slice(0, LLMS_TXT_MAX_CHARS)}` : "";
+  return `COMPANY: ${company.name}\nSITE: ${company.site}${llms}\n\nSECTIONS:\n${lines.join("\n")}`;
+}
+
+/**
+ * The labels of one map answer, by section code. A code that was not asked and a label outside the closed set are
+ * reported, never guessed: the step treats either as an unusable answer and fails the run. A code answered twice
+ * keeps its first label; a code the answer leaves out is simply not in the result (the step asks it again).
+ */
+export function parseMap(value: unknown, codes: string[]): { labels: Map<string, SectionLabel>; unknownCodes: string[]; unknownLabels: string[] } {
+  const asked = new Set(codes);
+  const labels = new Map<string, SectionLabel>();
+  const unknownCodes: string[] = [];
+  const unknownLabels: string[] = [];
+  for (const row of arr((value as Record<string, unknown> | null)?.sections)) {
+    const o = (row ?? {}) as Record<string, unknown>;
+    const code = typeof o.code === "string" ? o.code.trim() : "";
+    const label = typeof o.label === "string" ? o.label.trim().toLowerCase() : "";
+    if (!asked.has(code)) {
+      unknownCodes.push(code || "(none)");
+      continue;
+    }
+    if (!isSectionLabel(label)) {
+      unknownLabels.push(label || "(none)");
+      continue;
+    }
+    if (!labels.has(code)) labels.set(code, label);
+  }
+  return { labels, unknownCodes, unknownLabels };
+}
+
+/**
+ * TEST KNOB: the JSON text PMOS AI would have answered for a map call, built from a test's labels by section
+ * address (settings.ts TestAiAnswers.map): the full prefix ("acme.example/blog") or its path ("/blog"), "*" for
+ * every other section; a section no entry names is "product".
+ */
+export function injectedMapAnswer(labels: Record<string, string> | undefined, entries: MapEntry[]): string {
+  return JSON.stringify({
+    sections: entries.map((e) => ({ code: e.code, label: labels?.[e.section.prefix] ?? labels?.[prefixPath(e.section.prefix)] ?? labels?.["*"] ?? "product" })),
+  });
+}
 
 // ————— 1. Research: one call per page —————
 

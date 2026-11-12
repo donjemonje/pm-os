@@ -179,6 +179,13 @@ export async function storageFull(): Promise<boolean> {
  * unchanged. Nothing but the model call is replaced.
  */
 export interface TestAiAnswers {
+  /**
+   * Map: the label of a section, by its address — the full prefix ("acme.example/blog") or its path ("/blog"); "*" =
+   * every other section. A section no entry names is "product" (it is read). The values are label words, not JSON:
+   * the JSON answer is built from them per call (analysis/prompts.ts injectedMapAnswer) and goes through the same
+   * parser — a word outside the closed set of labels fails the run, as a real answer would.
+   */
+  map?: Record<string, string>;
   /** Research: the answer for a page, by its address; "*" = every page not listed. A page with no answer gets {"capabilities": []}. */
   research?: Record<string, string>;
   /** Merge: the answer of the n-th merge call of a run. Missing → {"groups": []}. */
@@ -207,8 +214,13 @@ const isJson = (v: unknown): v is string => {
 export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "answers must be an object" };
   const r = raw as Record<string, unknown>;
-  if ("classify" in r) return { error: "the classify / facts shape is gone: use research, merge, match, secondLook, facts, rateLimit" };
+  if ("classify" in r) return { error: "the classify / facts shape is gone: use map, research, merge, match, secondLook, facts, rateLimit" };
   const out: TestAiAnswers = {};
+  if (r.map !== undefined) {
+    const m = r.map;
+    if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every((v) => typeof v === "string")) return { error: "map must be an object of section address → label" };
+    out.map = m as Record<string, string>;
+  }
   for (const key of ["research", "secondLook"] as const) {
     if (r[key] === undefined) continue;
     const m = r[key];

@@ -7,9 +7,9 @@ import { aliasList, judgeNewRow, NameIndex, placeInDomain, type Resolved } from 
 import { cellFromEvidence, type CellFromEvidence, type Evidence } from "./cells";
 import { AnalysisError, queueCatalogAnalyses, type RunContext } from "./engine";
 import { canonicalName, findItem, itemKey, ownKey, planChildMerges, planMerges, wordingKey, type ItemLite, type MergePlan } from "./items";
-import { pageTier, pickPages } from "./kinds";
 import { batchItems, buildCatalog, type Catalog } from "./match";
 import { analysisConcurrency, estimateTokens, OUTPUT_RESERVE } from "./pacing";
+import { loadPages, planOf, type StoredPage } from "./plan";
 import {
   LOOK_MAX_TOKENS,
   LOOK_SYSTEM_PROMPT,
@@ -40,67 +40,53 @@ import {
   type Placement,
 } from "./prompts";
 import { capLooks, indexPages, lookKey, pagesFor, type LookPage } from "./secondlook";
+import { pickReadable, sortForReading, type PageRead, type ReadingPlan } from "./sections";
 import { readKey, researchTodo, rowsSince, tooManyFailed } from "./todo";
 
 /**
- * The database side of the six steps of an analysis run (Capability Analysis, "How the analysis runs").
- * Every step computes its to-do from the tables and saves each unit of work in one transaction, so a run that
- * stopped continues with exactly what is left. The rules themselves are the pure modules next to this file.
+ * The database side of the steps of an analysis run after the map (Capability Analysis, "How the analysis runs";
+ * the map step is analysis/plan.ts). Every step computes its to-do from the tables and saves each unit of work in
+ * one transaction, so a run that stopped continues with exactly what is left. The rules themselves are the pure
+ * modules next to this file.
  */
 
 /** Tokens of instructions and schema a research call carries besides the page. */
 const RESEARCH_OVERHEAD_TOKENS = 450;
 const CHUNK = 1000;
 
-export interface StoredPage {
-  id: string;
-  url: string;
-  hash: string;
-  chars: number;
-  state: string;
-  kind: string;
-  sourceId: string;
-  sourceType: string;
-  hasText: boolean;
-  analyzedKey: string | null;
-  factsKey: string | null;
-}
+/** A stored page the analysis may read, with how it is read (sections.ts PageRead). */
+export type ReadablePage = StoredPage & { read: PageRead };
 
-/** Every stored page of the competitor, all its sources, without the text. */
-export async function loadPages(competitorId: string): Promise<StoredPage[]> {
-  const rows = await db.sourcePage.findMany({
-    where: { source: { competitorId } },
-    select: { id: true, url: true, hash: true, chars: true, state: true, kind: true, sourceId: true, analyzedKey: true, factsKey: true, source: { select: { type: true } } },
-  });
-  // "Has text" without loading it: a page that was read has characters; a page whose text was dropped has none.
-  const textless = new Set((await db.sourcePage.findMany({ where: { source: { competitorId }, text: null }, select: { id: true } })).map((p) => p.id));
-  return rows.map((r) => ({ id: r.id, url: r.url, hash: r.hash, chars: r.chars, state: r.state, kind: r.kind, sourceId: r.sourceId, sourceType: r.source.type, hasText: !textless.has(r.id), analyzedKey: r.analyzedKey, factsKey: r.factsKey }));
-}
-
-/** The pages the analysis reads (kinds.ts): strong, plus weak when the workspace reads them. */
-export async function pickedPages(ctx: RunContext): Promise<Array<StoredPage & { tier: "strong" | "weak"; pageKind: string }>> {
-  return pickPages(await loadPages(ctx.competitor.id), { readWeak: ctx.readWeak });
+/** The pages the analysis may read (sections.ts): broad and deep pages, plus weak ones when the workspace reads them. */
+export async function readablePages(ctx: RunContext): Promise<ReadablePage[]> {
+  return pickReadable(await loadPages(ctx.competitor.id), await planOf(ctx), { readWeak: ctx.readWeak });
 }
 
 // ————— 1. Research: one call per page —————
 
 export interface ResearchPlan {
-  /** Pages the analysis reads at all. */
+  /** Pages of the broad read. */
   picked: number;
-  /** Of those, the pages whose current text was not read yet, in address order. */
-  todo: Array<StoredPage & { tier: "strong" | "weak"; pageKind: string }>;
+  /** Deep pages: read only when the run goes back for a gap. */
+  deep: number;
+  /** The pages whose current text was not read yet, in reading order (sections.ts sortForReading). */
+  todo: ReadablePage[];
 }
 
 /**
- * Clean-up (code only, every run) and the to-do. A finding lives only while its page is read and its text is the
- * text it was read from: findings of pages that left the picked set (removed, text gone, kind now skipped, weak
- * pages switched off) are deleted and the page is marked not analyzed.
+ * Clean-up (code only, every run) and the to-do of the broad read. A finding lives only while its page may be read
+ * and its text is the text it was read from: findings of pages that left the readable set (removed, text gone, a
+ * section that is not read, weak pages switched off) are deleted and the page is marked not analyzed.
+ *
+ * The to-do: the broad pages whose current text was not read — and the deep pages that WERE read before (a go-back
+ * of an earlier run) and changed since, so what is shown from them stays true. A deep page nobody went back for is
+ * never on it.
  */
 export async function planResearch(ctx: RunContext): Promise<ResearchPlan> {
   const pages = await loadPages(ctx.competitor.id);
-  const picked = pickPages(pages, { readWeak: ctx.readWeak });
-  const pickedIds = new Set(picked.map((p) => p.id));
-  const dropped = pages.filter((p) => !pickedIds.has(p.id)).map((p) => p.id);
+  const readable = pickReadable(pages, await planOf(ctx), { readWeak: ctx.readWeak });
+  const readableIds = new Set(readable.map((p) => p.id));
+  const dropped = pages.filter((p) => !readableIds.has(p.id)).map((p) => p.id);
   let removed = 0;
   for (let i = 0; i < dropped.length; i += CHUNK) {
     const ids = dropped.slice(i, i + CHUNK);
@@ -109,16 +95,18 @@ export async function planResearch(ctx: RunContext): Promise<ResearchPlan> {
   }
   if (removed) {
     ctx.counters.findingsRemoved += removed;
-    ctx.log("info", `${removed} finding${removed === 1 ? "" : "s"} removed: their pages are no longer read (removed, emptied, or of a kind that is skipped)`);
+    ctx.log("info", `${removed} finding${removed === 1 ? "" : "s"} removed: their pages are no longer read (removed, emptied, or in a section that is not read)`);
   }
-  const todo = researchTodo(picked, RESEARCH_VERSION);
+  const broad = readable.filter((p) => p.read.role !== "deep");
+  const deep = readable.length - broad.length;
+  const todo = sortForReading(researchTodo(readable.filter((p) => p.read.role !== "deep" || p.analyzedKey != null), RESEARCH_VERSION));
   if (ctx.progress.pagesTotal === 0) {
     ctx.progress.pagesTotal = todo.length;
     ctx.progress.pagesDone = 0;
   }
-  ctx.log("info", `${pages.length} stored page${pages.length === 1 ? "" : "s"}: ${picked.length} read by the analysis${ctx.readWeak ? " (blog, news and press included)" : ""}, ${todo.length} new or changed since they were last read`);
+  ctx.log("info", `${pages.length} stored page${pages.length === 1 ? "" : "s"}: ${broad.length} in the broad read${ctx.readWeak ? " (news sections included)" : ""}, ${deep} deep page${deep === 1 ? "" : "s"} (read only when the run goes back for a gap), ${todo.length} new or changed since they were last read`);
   await ctx.flush();
-  return { picked: picked.length, todo };
+  return { picked: broad.length, deep, todo };
 }
 
 function injectedResearch(ctx: RunContext, url: string): string | undefined {
@@ -126,61 +114,72 @@ function injectedResearch(ctx: RunContext, url: string): string | undefined {
   return ctx.answers.research?.[url] ?? ctx.answers.research?.["*"] ?? '{"capabilities": []}';
 }
 
-export async function researchStep(ctx: RunContext, plan: ResearchPlan): Promise<void> {
+/**
+ * The research call for each page of a to-do, in its order: the broad read and the pages a go-back round chose
+ * read through here. One call per page; the findings and the mark on the page are saved in one transaction.
+ */
+async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<{ read: number; failed: number }> {
   const competitorId = ctx.competitor.id;
   let failed = 0;
+  if (!todo.length) return { read: 0, failed };
+  await ctx.paced({
+    items: todo,
+    concurrency: analysisConcurrency(),
+    estimate: (p) => estimateTokens(p.chars) + RESEARCH_OVERHEAD_TOKENS + OUTPUT_RESERVE,
+    work: async (p) => {
+      // The text and its hash in one read: the key written below is the hash of the text that was read, so a page
+      // a scan changes meanwhile is simply due again.
+      const page = await db.sourcePage.findUnique({ where: { id: p.id }, select: { text: true, hash: true, title: true, kind: true } });
+      if (!page || page.text == null) return 0;
+      const r = await ctx.call<Record<string, unknown>>(
+        RESEARCH_SYSTEM_PROMPT,
+        "",
+        renderResearch({ url: p.url, title: page.title ?? "", text: page.text, kind: page.kind, sourceLabel: C.profile.sourceTypes[p.sourceType] ?? p.sourceType }),
+        RESEARCH_TOOL,
+        { maxTokens: RESEARCH_MAX_TOKENS, thinking: "low", injected: injectedResearch(ctx, p.url) },
+      );
+      const parsed = parseResearch(r.value, page.text);
+      await db.$transaction([
+        db.pageFinding.deleteMany({ where: { pageId: p.id } }),
+        db.pageFinding.createMany({
+          data: parsed.findings.map((f) => ({
+            workspaceId: ctx.run.workspaceId, competitorId, pageId: p.id, pageHash: page.hash, analysisId: ctx.run.id, origin: "research",
+            kind: f.kind, wording: f.wording, parentWording: f.parentWording, quote: f.quote, reasoning: f.reasoning,
+          })),
+        }),
+        db.sourcePage.update({ where: { id: p.id }, data: { analyzedKey: readKey(RESEARCH_VERSION, page.hash), analyzedAt: new Date(), analysisError: null } }),
+      ]);
+      ctx.progress.pagesDone++;
+      ctx.counters.pagesRead++;
+      ctx.counters.findings += parsed.findings.length;
+      ctx.counters.quotesDropped += parsed.dropped.noQuote;
+      ctx.counters.piiHits += parsed.dropped.pii;
+      if (parsed.dropped.over) ctx.log("warn", `${parsed.dropped.over} item${parsed.dropped.over === 1 ? "" : "s"} beyond the per-page limit were left out`, p.url);
+      return r.tokens;
+    },
+    // A page whose answer is unusable is recorded and skipped: it is asked again only when its text or the prompt changes.
+    onAnswerError: async (p, e: AnswerError) => {
+      await db.$transaction([
+        db.pageFinding.deleteMany({ where: { pageId: p.id } }),
+        db.sourcePage.update({ where: { id: p.id }, data: { analyzedKey: readKey(RESEARCH_VERSION, p.hash), analyzedAt: new Date(), analysisError: e.message.slice(0, 300) } }),
+      ]);
+      failed++;
+      ctx.progress.pagesDone++;
+      ctx.counters.pagesFailed++;
+      ctx.log("warn", `Page skipped — PMOS AI's answer was unusable: ${e.message.slice(0, 200)}`, p.url);
+      // Many unusable answers are the model's or the prompt's problem, not a page's.
+      if (tooManyFailed(failed, todo.length)) throw new AnalysisError("answer", `${failed} of ${todo.length} pages got an unusable answer from PMOS AI — stopping`);
+    },
+  });
+  return { read: todo.length - failed, failed };
+}
+
+/** The broad read: every page of the plan's to-do. */
+export async function researchStep(ctx: RunContext, plan: ResearchPlan): Promise<void> {
+  const competitorId = ctx.competitor.id;
   if (plan.todo.length) {
-    await ctx.paced({
-      items: plan.todo,
-      concurrency: analysisConcurrency(),
-      estimate: (p) => estimateTokens(p.chars) + RESEARCH_OVERHEAD_TOKENS + OUTPUT_RESERVE,
-      work: async (p) => {
-        // The text and its hash in one read: the key written below is the hash of the text that was read, so a page
-        // a scan changes meanwhile is simply due again.
-        const page = await db.sourcePage.findUnique({ where: { id: p.id }, select: { text: true, hash: true, title: true, kind: true } });
-        if (!page || page.text == null) return 0;
-        const r = await ctx.call<Record<string, unknown>>(
-          RESEARCH_SYSTEM_PROMPT,
-          "",
-          renderResearch({ url: p.url, title: page.title ?? "", text: page.text, kind: page.kind, sourceLabel: C.profile.sourceTypes[p.sourceType] ?? p.sourceType }),
-          RESEARCH_TOOL,
-          { maxTokens: RESEARCH_MAX_TOKENS, thinking: "low", injected: injectedResearch(ctx, p.url) },
-        );
-        const parsed = parseResearch(r.value, page.text);
-        await db.$transaction([
-          db.pageFinding.deleteMany({ where: { pageId: p.id } }),
-          db.pageFinding.createMany({
-            data: parsed.findings.map((f) => ({
-              workspaceId: ctx.run.workspaceId, competitorId, pageId: p.id, pageHash: page.hash, analysisId: ctx.run.id, origin: "research",
-              kind: f.kind, wording: f.wording, parentWording: f.parentWording, quote: f.quote, reasoning: f.reasoning,
-            })),
-          }),
-          db.sourcePage.update({ where: { id: p.id }, data: { analyzedKey: readKey(RESEARCH_VERSION, page.hash), analyzedAt: new Date(), analysisError: null } }),
-        ]);
-        ctx.progress.pagesDone++;
-        ctx.counters.pagesRead++;
-        ctx.counters.findings += parsed.findings.length;
-        ctx.counters.quotesDropped += parsed.dropped.noQuote;
-        ctx.counters.piiHits += parsed.dropped.pii;
-        if (parsed.dropped.over) ctx.log("warn", `${parsed.dropped.over} item${parsed.dropped.over === 1 ? "" : "s"} beyond the per-page limit were left out`, p.url);
-        return r.tokens;
-      },
-      // A page whose answer is unusable is recorded and skipped: it is asked again only when its text or the prompt changes.
-      onAnswerError: async (p, e: AnswerError) => {
-        await db.$transaction([
-          db.pageFinding.deleteMany({ where: { pageId: p.id } }),
-          db.sourcePage.update({ where: { id: p.id }, data: { analyzedKey: readKey(RESEARCH_VERSION, p.hash), analyzedAt: new Date(), analysisError: e.message.slice(0, 300) } }),
-        ]);
-        failed++;
-        ctx.progress.pagesDone++;
-        ctx.counters.pagesFailed++;
-        ctx.log("warn", `Page skipped — PMOS AI's answer was unusable: ${e.message.slice(0, 200)}`, p.url);
-        // Many unusable answers are the model's or the prompt's problem, not a page's.
-        if (tooManyFailed(failed, plan.todo.length)) throw new AnalysisError("answer", `${failed} of ${plan.todo.length} pages got an unusable answer from PMOS AI — stopping`);
-      },
-    });
-    const read = plan.todo.length - failed;
-    ctx.log("info", `Research: ${read} page${read === 1 ? "" : "s"} read${failed ? `, ${failed} skipped (unusable answer)` : ""}`);
+    const r = await readPages(ctx, plan.todo);
+    ctx.log("info", `Research: ${r.read} page${r.read === 1 ? "" : "s"} read${r.failed ? `, ${r.failed} skipped (unusable answer)` : ""}`);
     const total = ctx.counters.findings + ctx.counters.quotesDropped;
     if (total > 0 && ctx.counters.quotesDropped > total / 4) ctx.log("warn", `${ctx.counters.quotesDropped} of ${total} findings were dropped because their quote is not on the page — more than a quarter`);
   }
@@ -215,7 +214,7 @@ interface ItemStats {
   quote: string;
   /** The spellings as the pages have them. */
   spellings: string[];
-  /** At least one of its findings is on a strong page (kinds.ts) — what the cell rules call found. */
+  /** At least one of its findings is on a strong page (the reading plan, sections.ts) — what the cell rules call found. */
   strong: boolean;
 }
 
@@ -229,8 +228,10 @@ async function loadItems(competitorId: string): Promise<DbItem[]> {
   }));
 }
 
-async function loadItemStats(competitorId: string): Promise<Map<string, ItemStats>> {
-  const findings = await db.pageFinding.findMany({ where: { competitorId, itemId: { not: null } }, select: { itemId: true, pageId: true, quote: true, wording: true, page: { select: { url: true, kind: true, source: { select: { type: true } } } } } });
+async function loadItemStats(ctx: RunContext): Promise<Map<string, ItemStats>> {
+  const competitorId = ctx.competitor.id;
+  const plan = await planOf(ctx);
+  const findings = await db.pageFinding.findMany({ where: { competitorId, itemId: { not: null } }, select: { itemId: true, pageId: true, quote: true, wording: true, page: { select: { url: true, kind: true, sourceId: true, source: { select: { type: true } } } } } });
   findings.sort((a, b) => (a.page.url < b.page.url ? -1 : a.page.url > b.page.url ? 1 : a.quote < b.quote ? -1 : a.quote > b.quote ? 1 : 0));
   const pages = new Map<string, Set<string>>();
   const out = new Map<string, ItemStats>();
@@ -238,7 +239,7 @@ async function loadItemStats(competitorId: string): Promise<Map<string, ItemStat
     const id = f.itemId!;
     const s = out.get(id) ?? { findings: 0, pages: 0, quote: f.quote, spellings: [], strong: false };
     s.findings++;
-    if (!s.strong && pageTier(f.page.url, f.page.source.type, f.page.kind).tier === "strong") s.strong = true;
+    if (!s.strong && plan.read({ url: f.page.url, sourceId: f.page.sourceId, sourceType: f.page.source.type, kind: f.page.kind }).tier === "strong") s.strong = true;
     if (!s.spellings.includes(f.wording)) s.spellings.push(f.wording);
     const set = pages.get(id) ?? new Set<string>();
     set.add(f.pageId);
@@ -415,7 +416,7 @@ export async function mergeStep(ctx: RunContext): Promise<void> {
   // 2–3. PMOS AI, capabilities: only items it never saw, together with the lists merged by earlier runs (KNOWN).
   let calls = 0;
   for (;;) {
-    const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(competitorId)]);
+    const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(ctx)]);
     const capabilities = items.filter((i) => i.kind === "capability");
     const todo = capabilities.filter((i) => !i.mergeChecked);
     if (!todo.length) break;
@@ -432,7 +433,7 @@ export async function mergeStep(ctx: RunContext): Promise<void> {
 
   // 4. PMOS AI, features: per capability — features merge only inside one capability, so nothing is lost by packing.
   for (;;) {
-    const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(competitorId)]);
+    const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(ctx)]);
     const features = items.filter((i) => i.kind === "feature");
     const parents = new Map(items.filter((i) => i.kind === "capability").map((i) => [i.id, i]));
     const byParent = new Map<string, DbItem[]>();
@@ -463,7 +464,7 @@ export async function mergeStep(ctx: RunContext): Promise<void> {
   }
 
   // 5. An item is called what most of its pages call it.
-  const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(competitorId)]);
+  const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(ctx)]);
   const spellings = await db.pageFinding.findMany({ where: { competitorId, itemId: { not: null } }, select: { itemId: true, wording: true } });
   const wordingsOf = new Map<string, string[]>();
   for (const f of spellings) wordingsOf.set(f.itemId!, [...(wordingsOf.get(f.itemId!) ?? []), f.wording]);
@@ -501,7 +502,7 @@ export async function matchStep(ctx: RunContext): Promise<void> {
   // 1. Repair: a saved match whose row of ours was hard-deleted is no match any more.
   await db.competitorItem.updateMany({ where: { competitorId, matchedAt: { not: null }, capabilityId: null, featureId: null, placement: { equals: Prisma.DbNull } }, data: { matchedAt: null, matchedBy: null, matchAnalysisId: null } });
 
-  const [items, stats, ours] = await Promise.all([loadItems(competitorId), loadItemStats(competitorId), loadCatalog(workspaceId)]);
+  const [items, stats, ours] = await Promise.all([loadItems(competitorId), loadItemStats(ctx), loadCatalog(workspaceId)]);
   const byId = new Map(items.map((i) => [i.id, i]));
   const todo = items.filter((i) => i.matchedAt == null);
   if (!todo.length) {
@@ -627,13 +628,13 @@ interface EvidenceMaps {
  * No table of its own. For a competitor and a capability of ours: the findings of their items matched to it, the
  * findings of items matched to one of its active features (a feature of ours found there is evidence for the
  * capability), and second-look findings that answer it. For a feature: the findings of items matched to it.
- * A finding's tier is computed here, from its page's address and source with the current page kinds.
+ * A finding's tier is computed here, from its page's place in the competitor's reading plan (sections.ts).
  */
-async function loadEvidence(workspaceId: string, competitorId: string): Promise<EvidenceMaps> {
+async function loadEvidence(workspaceId: string, competitorId: string, plan: ReadingPlan): Promise<EvidenceMaps> {
   const [findings, features] = await Promise.all([
     db.pageFinding.findMany({
       where: { competitorId, OR: [{ itemId: { not: null } }, { capabilityId: { not: null } }] },
-      select: { id: true, origin: true, quote: true, reasoning: true, wording: true, capabilityId: true, item: { select: { capabilityId: true, featureId: true, name: true } }, page: { select: { url: true, kind: true, source: { select: { type: true } } } } },
+      select: { id: true, origin: true, quote: true, reasoning: true, wording: true, capabilityId: true, item: { select: { capabilityId: true, featureId: true, name: true } }, page: { select: { url: true, kind: true, sourceId: true, source: { select: { type: true } } } } },
     }),
     db.feature.findMany({ where: { workspaceId, state: "active" }, select: { id: true, capabilityId: true } }),
   ]);
@@ -641,7 +642,7 @@ async function loadEvidence(workspaceId: string, competitorId: string): Promise<
   const out: EvidenceMaps = { byCapability: new Map(), byFeature: new Map() };
   const add = (map: Map<string, Evidence[]>, id: string, e: Evidence) => map.set(id, [...(map.get(id) ?? []), e]);
   for (const f of findings) {
-    const t = pageTier(f.page.url, f.page.source.type, f.page.kind);
+    const t = plan.read({ url: f.page.url, sourceId: f.page.sourceId, sourceType: f.page.source.type, kind: f.page.kind });
     if (t.tier === "skip") continue;
     const e: Evidence = { findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording };
     if (f.origin === "second_look") {
@@ -681,12 +682,13 @@ export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
   const workspaceId = ctx.run.workspaceId;
   const waiting = new Set<string>();
   ctx.counters.secondLooksWaiting = 0;
-  const [{ capabilities }, evidence] = await Promise.all([tableRows(workspaceId), loadEvidence(workspaceId, competitorId)]);
+  const [{ capabilities }, evidence] = await Promise.all([tableRows(workspaceId), loadEvidence(workspaceId, competitorId, await planOf(ctx))]);
   const candidates = capabilities.filter((k) => !evidence.byCapability.get(k.id)?.length);
   if (!candidates.length) return waiting;
 
-  // The pool: the pages the analysis reads, with their texts.
-  const picked = await pickedPages(ctx);
+  // The pool: every page the analysis may read, with its text — the deep pages (help articles, release notes, API
+  // docs below the index) included: a capability of ours that no read page offers may be told there.
+  const picked = await readablePages(ctx);
   const sourceTypeOf = new Map(picked.map((p) => [p.id, p.sourceType]));
   const pool: Array<LookPage & { kind: string }> = [];
   for (let i = 0; i < picked.length; i += CHUNK) {
@@ -772,7 +774,7 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
     recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity, entityId: row.id, name: row.name, found, reason: row.state, competitorId, analysisId: ctx.run.id });
 
   // ——— A. Rows: their items that are none of ours become capabilities and features — through decisions.ts, so a PM's decision is never reopened ———
-  const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(competitorId)]);
+  const [items, stats] = await Promise.all([loadItems(competitorId), loadItemStats(ctx)]);
   const byId = new Map(items.map((i) => [i.id, i]));
   const byName = (a: DbItem, b: DbItem) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const todo = items.filter((i) => i.placement && !i.capabilityId && !i.featureId);
@@ -911,7 +913,7 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
   // ——— B. Cells: by fixed rules from the evidence. A PM's correction is never read or written here ———
   const [{ capabilities, features }, evidence, storedCells, storedFeatureCells] = await Promise.all([
     tableRows(workspaceId),
-    loadEvidence(workspaceId, competitorId),
+    loadEvidence(workspaceId, competitorId, await planOf(ctx)),
     db.capabilityStatus.findMany({ where: { competitorId }, select: { id: true, capabilityId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, evidenceCount: true, scanId: true } }),
     db.featureStatus.findMany({ where: { competitorId }, select: { id: true, featureId: true, value: true, quote: true, sourceUrl: true, reasoning: true, wording: true, evidenceCount: true } }),
   ]);

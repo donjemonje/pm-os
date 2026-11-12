@@ -5,7 +5,7 @@ import { COMPETITORS_COPY as C } from "../copy";
 import { checkPii } from "../pii";
 import type { RunContext } from "./engine";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
-import { loadPages } from "./steps";
+import { loadPages } from "./plan";
 import { carriedFactsBaseline, factsBaseline, factsTodo, readKey } from "./todo";
 
 /**

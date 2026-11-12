@@ -15,8 +15,9 @@ import { clockOffsetMs, scanTimeLimitMs, setClockOffsetMs, readTestAiAnswers, se
  *   POST { ceilingMs }      → a shorter time limit per scan (null = the default); WS-17
  *   POST { storageLimitChars } → a smaller PM-OS store limit (null = the default); WS-36
  *   POST { aiAnswers: { competitorId, answers } } → the model's raw answers for that competitor's analysis runs
- *                             (settings.ts TestAiAnswers: research by page address, merge and match by call number,
- *                             secondLook by capability name, facts, rateLimit; every answer is JSON text). A run with
+ *                             (settings.ts TestAiAnswers: map by section address (label words), research by page
+ *                             address, merge and match by call number, secondLook by capability name, facts,
+ *                             rateLimit; every answer but map's is JSON text). A run with
  *                             injected answers never calls a model, also when COMPETITORS_AI=off. answers: null clears.
  */
 export async function GET() {

@@ -9,8 +9,9 @@ import { KIND_RANK } from "./kinds";
  *   findings, all from weak pages             → low (low confidence)
  *   none (after the second look found nothing) → not_found
  *
- * A finding's tier is computed when the cell is filled, from its page's address and source with the current page
- * kinds (kinds.ts) — editing the kind lists changes cells on the next run with no page read again.
+ * A finding's tier and kind are computed when the cell is filled, from its page's place in the competitor's reading
+ * plan (sections.ts: the section's label → tier and kind) — editing the label rules changes cells on the next run
+ * with no page read again.
  * A PM's correction wins at read time and is never touched here.
  *
  * Pure: no database, no network.
@@ -20,7 +21,7 @@ export interface Evidence {
   findingId: string;
   pageUrl: string;
   tier: "strong" | "weak";
-  /** The page's kind (kinds.ts): pricing, docs, product, content, news … */
+  /** The page's kind (sections.ts LABEL_RULES): pricing, docs, product, content, news … */
   pageKind: string;
   origin: "research" | "second_look";
   quote: string;

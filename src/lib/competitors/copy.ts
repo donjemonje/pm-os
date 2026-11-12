@@ -312,9 +312,11 @@ export const COMPETITORS_COPY = {
     scanPendingSince: (ago: string) => `Scan pending · since ${ago}`,
     analyzingPages: (done: number, total: number) => `Analyzing · ${done} of ${total} pages`,
     analysisStep: {
+      map: "Analyzing · mapping the site",
       research: "Analyzing · reading pages",
       merge: "Analyzing · merging",
       match: "Analyzing · matching to your capabilities",
+      go_back: "Analyzing · reading more pages",
       second_look: "Analyzing · second look",
       apply: "Analyzing · filling the table",
       facts: "Analyzing · profile facts",

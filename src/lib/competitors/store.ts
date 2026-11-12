@@ -73,7 +73,7 @@ export interface AnalysisRow {
   id: string;
   /** "queued" | "running" | "waiting" | "done" | "failed" | "cancelled" */
   status: string;
-  /** "research" | "merge" | "match" | "second_look" | "apply" | "facts" | "done" */
+  /** "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts" | "done" */
   step: string;
   pagesDone: number;
   pagesTotal: number;

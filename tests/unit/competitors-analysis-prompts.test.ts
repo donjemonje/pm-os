@@ -1,22 +1,30 @@
-/** Capability Analysis — the parsers of the four prompts (analysis/prompts.ts): bad fields are dropped and counted, never thrown. Pure module. */
+/** Capability Analysis — the parsers of the five prompts (analysis/prompts.ts): bad fields are dropped and counted, never thrown. Pure module. */
 import { describe, expect, it } from "vitest";
 import {
+  injectedMapAnswer,
+  LLMS_TXT_MAX_CHARS,
   lookTool,
+  MAP_MAX_SECTIONS,
+  mapTool,
   MAX_CAPABILITIES_PER_PAGE,
   MAX_ENUM,
   matchTool,
   MERGE_TOOL,
+  parseMap,
   parseMatch,
   parseMerge,
   parseResearch,
   parseSecondLook,
+  renderMap,
   renderMatchTail,
   renderMergeCapabilities,
   renderResearch,
   RESEARCH_TOOL,
+  type MapEntry,
   type MatchCatalog,
   type MergeEntry,
 } from "@/lib/competitors/analysis/prompts";
+import { SECTION_LABELS } from "@/lib/competitors/analysis/sections";
 import { FACTS_TOOL } from "@/lib/competitors/ai";
 
 const PAGE = `Acme Core
@@ -200,6 +208,70 @@ describe("parseSecondLook", () => {
   });
 });
 
+describe("the map — parseMap, renderMap", () => {
+  const entry = (code: string, path: string, pages = 3, extra: Partial<MapEntry["section"]> = {}): MapEntry => ({
+    code,
+    section: { prefix: `acme.example${path}`, pages, sampleTitles: [`Title of ${path}`], sampleUrls: [`https://www.acme.example${path}`, `https://www.acme.example${path}/a`], ...extra },
+  });
+  const codes = ["S1", "S2", "S3"];
+  const answer = (...rows: Array<[string, string]>) => ({ sections: rows.map(([code, label]) => ({ code, label })) });
+
+  it("a label per asked code", () => {
+    const r = parseMap(answer(["S1", "product"], ["S2", "noise"], ["S3", "release_notes"]), codes);
+    expect([...r.labels.entries()]).toEqual([["S1", "product"], ["S2", "noise"], ["S3", "release_notes"]]);
+    expect(r.unknownCodes).toEqual([]);
+    expect(r.unknownLabels).toEqual([]);
+  });
+  it("a code that was not asked is reported, never saved — the step fails the run on it", () => {
+    const r = parseMap(answer(["S1", "product"], ["S9", "help"], ["", "help"]), codes);
+    expect([...r.labels.keys()]).toEqual(["S1"]);
+    expect(r.unknownCodes).toEqual(["S9", "(none)"]);
+  });
+  it("a label outside the closed set is reported, never guessed", () => {
+    const r = parseMap(answer(["S1", "products"], ["S2", "documentation"], ["S3", ""]), codes);
+    expect(r.labels.size).toBe(0);
+    expect(r.unknownLabels).toEqual(["products", "documentation", "(none)"]);
+  });
+  it("a code answered twice keeps its first label; a code left out is simply missing", () => {
+    const r = parseMap(answer(["S1", "pricing"], ["S1", "noise"]), codes);
+    expect([...r.labels.entries()]).toEqual([["S1", "pricing"]]);
+    expect(r.unknownCodes).toEqual([]);
+  });
+  it("never throws on a malformed answer", () => {
+    for (const bad of [null, undefined, "text", 5, {}, { sections: "no" }, { sections: [null, 7, "x"] }]) expect(() => parseMap(bad, codes)).not.toThrow();
+    expect(parseMap({ sections: [null] }, codes).unknownCodes).toEqual(["(none)"]);
+  });
+  it("renders the company, the site and one line per section: code, prefix, pages, sample titles and addresses", () => {
+    const text = renderMap({ name: "Acme", site: "https://www.acme.example" }, [entry("S1", "/prisma", 34), entry("S2", "/hc", 1, { sourceLabel: "Help center", sampleTitles: [] })], null);
+    expect(text).toContain("COMPANY: Acme\nSITE: https://www.acme.example\n\nSECTIONS:\n");
+    expect(text).toContain('S1 | acme.example/prisma | 34 pages | titles: "Title of /prisma" | addresses: /prisma, /prisma/a');
+    expect(text).toContain("S2 | acme.example/hc | 1 page | source: Help center | titles: none | addresses: /hc, /hc/a");
+    expect(text).not.toContain("LLMS.TXT");
+  });
+  it("carries the site's llms.txt when there is one, cut to the limit", () => {
+    const text = renderMap({ name: "Acme", site: "https://www.acme.example" }, [entry("S1", "/prisma")], `# Acme\n${"x".repeat(LLMS_TXT_MAX_CHARS)}`);
+    expect(text).toContain("LLMS.TXT:\n# Acme\n");
+    expect(text.indexOf("LLMS.TXT:")).toBeLessThan(text.indexOf("SECTIONS:"));
+    const llms = text.slice(text.indexOf("LLMS.TXT:\n") + 10, text.indexOf("\n\nSECTIONS:"));
+    expect(llms.length).toBe(LLMS_TXT_MAX_CHARS);
+    expect(renderMap({ name: "Acme", site: "s" }, [entry("S1", "/prisma")], "   ")).not.toContain("LLMS.TXT");
+  });
+  it("the codes and the labels ride in the schema as closed sets — a call never asks more sections than an enum holds", () => {
+    const tool = mapTool(["S1", "S2"]) as { input_schema: { properties: { sections: { items: { properties: { code: { enum?: string[] }; label: { enum?: string[] } } } } } } };
+    expect(tool.input_schema.properties.sections.items.properties.code.enum).toEqual(["S1", "S2"]);
+    expect(tool.input_schema.properties.sections.items.properties.label.enum).toEqual([...SECTION_LABELS]);
+    expect(MAP_MAX_SECTIONS).toBeLessThanOrEqual(MAX_ENUM);
+  });
+  it("TEST KNOB: the injected answer is built from labels by section address — full prefix, path, or * — and unnamed sections are product", () => {
+    const entries = [entry("S1", "/blog"), entry("S2", "/customers"), entry("S3", "/prisma")];
+    expect(JSON.parse(injectedMapAnswer({ "acme.example/blog": "news", "/customers": "noise" }, entries))).toEqual(answer(["S1", "news"], ["S2", "noise"], ["S3", "product"]));
+    expect(JSON.parse(injectedMapAnswer({ "*": "help", "/prisma": "product" }, entries))).toEqual(answer(["S1", "help"], ["S2", "help"], ["S3", "product"]));
+    expect(JSON.parse(injectedMapAnswer(undefined, entries))).toEqual(answer(["S1", "product"], ["S2", "product"], ["S3", "product"]));
+    // It goes through the same parser: a word outside the labels is an unusable answer.
+    expect(parseMap(JSON.parse(injectedMapAnswer({ "/blog": "bogus" }, entries)), ["S1", "S2", "S3"]).unknownLabels).toEqual(["bogus"]);
+  });
+});
+
 describe("the response schemas a model is sent", () => {
   /** Every enum in a schema, wherever it sits. */
   const enums = (node: unknown, path = "$"): Array<{ path: string; values: unknown[] }> => {
@@ -213,6 +285,7 @@ describe("the response schemas a model is sent", () => {
     domains: new Map([["D-11111111", { id: "dom-active", state: "active" }]]),
   };
   const tools: Array<[string, Record<string, unknown>]> = [
+    ["map", mapTool(["S1", "S2"])],
     ["research", RESEARCH_TOOL],
     ["merge", MERGE_TOOL],
     ["match", matchTool(["T1", "T2"], catalog)],

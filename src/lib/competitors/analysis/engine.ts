@@ -9,6 +9,8 @@ import { getCompetitorsConfig } from "../store";
 import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
 import { factsStep } from "./facts";
 import { analysisMayRun, queueFilter } from "./gate";
+import { mapStep } from "./plan";
+import type { ReadingPlan } from "./sections";
 import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
 
 /**
@@ -23,13 +25,18 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  *                      process sleeps) ──sleep over──▶ running
  *   running | waiting ──no heartbeat for 10 min──▶ queued (staleCount + 1; at 3 → failed "stale"); the worker that
  *                      held it, if it is still alive, finds it is no longer the owner and stops without writing
- *   running ──all six steps done──▶ done
- *   running ──an unusable answer in merge / match, too many failed pages, 24 h of waiting for capacity, an endpoint
+ *   running ──all steps done──▶ done
+ *   running ──an unusable answer in map / merge / match, too many failed pages, 24 h of waiting for capacity, an endpoint
  *                      that failed 7 times in a row (6 waits, 45 min), any other error──▶ failed
  *   queued | running | waiting ──the competitor was removed──▶ cancelled
  *
- * The run keeps no cursor: every start walks the six steps from the first, and each step computes its to-do from
- * the tables (analysis/steps.ts). A run that stopped — rate limit, crash, deploy — continues with what is left.
+ * The steps of one run ("Map, read, go back"):
+ *   map (label the sections of the site: the reading plan) → research (the broad read) → merge → match →
+ *   go back for the gaps (at most 2 rounds: pick pages → research → merge → match) → second look → apply → facts.
+ *
+ * The run keeps no fragile state: every start walks the steps from the first, and each step computes its to-do from
+ * the tables (analysis/plan.ts, analysis/steps.ts). A run that stopped — rate limit, crash, deploy — continues with
+ * what is left. The cursor holds only what cannot be derived: the pages each go-back round chose, and the facts baseline.
  *
  * Where it executes: local dev and the e2e server run it in the app's Node process (inline runner), like scans;
  * production runs it in the scanner job (`--analysis <id>`), one execution per run. A failed run is not retried by
@@ -37,7 +44,7 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  */
 
 export type AnalysisTrigger = "scan" | "catalog" | "manual";
-export type AnalysisStepName = "research" | "merge" | "match" | "second_look" | "apply" | "facts";
+export type AnalysisStepName = "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts";
 export const ACTIVE_ANALYSIS_STATUSES = ["queued", "running", "waiting"] as const;
 /** A run whose runner stopped reporting this many times fails. */
 export const MAX_STALE = 3;
@@ -66,6 +73,10 @@ class RunLost extends Error {}
 
 /** Everything a run counts. Stored on the run (counters) and sent with cmp_analysis_finished. */
 export interface Counters {
+  /** The map step: sections in the reading plan that hold pages (set by the step), sections PMOS AI labeled in this run, and its calls. */
+  mapSections: number;
+  mapLabeled: number;
+  mapCalls: number;
   pagesRead: number;
   pagesFailed: number;
   /** Model calls that were made and billed — the ones whose answer was unusable included. */
@@ -104,6 +115,7 @@ export interface Counters {
 
 export function emptyCounters(): Counters {
   return {
+    mapSections: 0, mapLabeled: 0, mapCalls: 0,
     pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
@@ -132,7 +144,9 @@ export interface AnalysisLogLine {
 /** What a step gets: the run, its settings, and the engine's accounting around every call and every loop. */
 export interface RunContext {
   run: { id: string; workspaceId: string; competitorId: string; trigger: string; scanId: string | null; startedById: string | null; cursor: Record<string, unknown> };
-  competitor: { id: string; name: string; host: string };
+  competitor: { id: string; name: string; host: string; websiteUrl: string };
+  /** The competitor's reading plan (sections.ts): set by the map step, read by every later step (plan.ts planOf). */
+  plan: ReadingPlan | null;
   /** Workspace settings, read once at the claim. */
   readWeak: boolean;
   minPagesForNewRow: number;
@@ -317,7 +331,7 @@ export async function runAnalysis(id: string): Promise<void> {
   });
   if (!claimed) return;
 
-  const row = await db.competitorAnalysis.findUnique({ where: { id }, include: { competitor: { select: { id: true, name: true, host: true, deletedAt: true } } } });
+  const row = await db.competitorAnalysis.findUnique({ where: { id }, include: { competitor: { select: { id: true, name: true, host: true, websiteUrl: true, deletedAt: true } } } });
   if (!row) return;
   const t0 = Date.now();
   const counters = readCounters(row.counters);
@@ -326,7 +340,7 @@ export async function runAnalysis(id: string): Promise<void> {
   const log: RunContext["log"] = (level, msg, url) => {
     lines.push({ at: new Date().toISOString(), level, msg, ...(url ? { url } : {}) });
   };
-  let step: AnalysisStepName = "research";
+  let step: AnalysisStepName = "map";
   let lost = false;
   /** Every write to the run row goes through here: it names the claim, and zero rows means the run is no longer this worker's. */
   const own = async (data: Prisma.CompetitorAnalysisUpdateManyMutationInput): Promise<boolean> => {
@@ -372,7 +386,8 @@ export async function runAnalysis(id: string): Promise<void> {
     const cursor = row.cursor && typeof row.cursor === "object" && !Array.isArray(row.cursor) ? { ...(row.cursor as Record<string, unknown>) } : {};
     const ctx: RunContext = {
       run: { id, workspaceId: row.workspaceId, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, startedById: row.startedById, cursor },
-      competitor: { id: row.competitor.id, name: row.competitor.name, host: row.competitor.host },
+      competitor: { id: row.competitor.id, name: row.competitor.name, host: row.competitor.host, websiteUrl: row.competitor.websiteUrl },
+      plan: null,
       readWeak: config.readWeakPages,
       minPagesForNewRow: config.minPagesForNewRow,
       maxSecondLooks: config.secondLooksPerRun,
@@ -466,11 +481,13 @@ export async function runAnalysis(id: string): Promise<void> {
         }
       }
     };
+    // The map first: what is read follows from the reading plan. No plan, no read — a failed map fails the run.
+    await inStep("map", () => mapStep(ctx));
     await setStep("research");
     const plan = await planResearch(ctx);
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_started", {
       analysisId: id, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, resumed: claimed.resumed,
-      pagesPicked: plan.picked, pagesToRead: plan.todo.length, readWeak: config.readWeakPages, model, injected: Boolean(answers),
+      mapSections: counters.mapSections, pagesPicked: plan.picked, pagesDeep: plan.deep, pagesToRead: plan.todo.length, readWeak: config.readWeakPages, model, injected: Boolean(answers),
     });
     await inStep("research", () => researchStep(ctx, plan));
     await inStep("merge", () => mergeStep(ctx));
