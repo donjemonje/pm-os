@@ -57,12 +57,6 @@ env:
     value: "projects/pm-os-9d992/locations/us-east4/jobs/pmos-competitors-scanner"
     availability:
       - RUNTIME
-  # Scanner rule: one manual rescan per site per day (per-org setting; PM-OS
-  # admins exempt). Enforced in production; local dev leaves it unset (= off).
-  - variable: COMPETITORS_RESCAN_LIMIT
-    value: "on"
-    availability:
-      - RUNTIME
   # PMOS AI model for competitors (Gemini — covered by the GCP credits). A
   # gemini-* id runs on Gemini with a response schema; anything else on Claude.
   - variable: COMPETITORS_MODEL

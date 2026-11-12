@@ -14,12 +14,10 @@ import { db } from "../db";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
 import { recordCompetitorEvent } from "./analytics";
 import { bundleForHost, hasBundleForHost } from "./bundle";
-import { rescanLimitEnforced } from "./config";
 import { importPages } from "./import";
 import { notifyRun } from "./notify";
 import { failStaleScans } from "./run";
-import { createScan, manualScansToday, runScan } from "./scan";
-import { getCompetitorsConfig } from "./store";
+import { createScan, runScan } from "./scan";
 import { routeScan } from "./tick";
 
 export type RunMode = "live" | "bundle";
@@ -36,7 +34,7 @@ interface PlanItem {
 }
 
 /** Which competitors a run would scan, in matrix order, and which it leaves out (with the reason). */
-async function planRun(workspaceId: string, mode: RunMode, opts: { exemptFromLimit: boolean }): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
+async function planRun(workspaceId: string, mode: RunMode): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
   const competitors = await db.competitor.findMany({
     where: { workspaceId, deletedAt: null },
     orderBy: [{ position: "asc" }, { name: "asc" }],
@@ -44,7 +42,6 @@ async function planRun(workspaceId: string, mode: RunMode, opts: { exemptFromLim
   });
   const plan: PlanItem[] = [];
   const skipped: { name: string; reason: string }[] = [];
-  const config = mode === "live" ? await getCompetitorsConfig(workspaceId) : null;
   for (const c of competitors) {
     if (mode === "bundle") {
       if (hasBundleForHost(c.host)) plan.push({ competitorId: c.id, name: c.name, host: c.host });
@@ -54,10 +51,6 @@ async function planRun(workspaceId: string, mode: RunMode, opts: { exemptFromLim
     const website = c.sources[0];
     if (!website) {
       skipped.push({ name: c.name, reason: "no website" });
-      continue;
-    }
-    if (config && rescanLimitEnforced() && !opts.exemptFromLimit && (await manualScansToday(website.id)) >= config.manualRescansPerDay) {
-      skipped.push({ name: c.name, reason: "daily manual scan limit" });
       continue;
     }
     plan.push({ competitorId: c.id, name: c.name, host: c.host });
@@ -71,7 +64,7 @@ export type StartRunResult = { runId: string; total: number; mode: RunMode } | {
 export async function startRun(
   workspaceId: string,
   startedById: string | null,
-  opts: { trigger: "manual" | "scheduled"; exemptFromLimit: boolean },
+  opts: { trigger: "manual" | "scheduled" },
 ): Promise<StartRunResult> {
   // A press must never be blocked by a run whose runner died (dev server reload, crash): 10 min without a heartbeat = stale.
   await failStaleScans();
@@ -86,7 +79,7 @@ export async function startRun(
     const undone = await undoDemoRuns(workspaceId);
     if (undone.runs) await recordCompetitorEvent(workspaceId, startedById, "cmp_demo_reset", { runs: undone.runs, statuses: undone.statuses, facts: undone.facts, suggestions: undone.suggestions });
   }
-  const { plan, skipped } = await planRun(workspaceId, mode, opts);
+  const { plan, skipped } = await planRun(workspaceId, mode);
   if (plan.length === 0) return { error: "nothing" };
   const run = await db.competitorScanRun.create({
     data: { workspaceId, trigger: opts.trigger, startedById, mode, total: plan.length, summary: { skipped } as unknown as Prisma.InputJsonValue },
@@ -127,7 +120,7 @@ export async function executeRun(runId: string): Promise<void> {
         done++;
       }
     } else {
-      const { plan } = await planRun(run.workspaceId, "bundle", { exemptFromLimit: true });
+      const { plan } = await planRun(run.workspaceId, "bundle");
       for (const item of plan) {
         await progress(item.name);
         const bundle = bundleForHost(item.host);

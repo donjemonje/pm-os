@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { CompetitorsSettings } from "@/components/competitors/CompetitorsSettings";
-import { canManageOrgSettings, isPmosAdmin } from "@/lib/admin-auth";
+import { canManageOrgSettings } from "@/lib/admin-auth";
 import { PageView } from "@/lib/analytics/PageView";
 import { getCompetitorsState } from "@/lib/competitors/store";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
@@ -20,7 +20,7 @@ export default async function CompetitorsSettingsPage() {
   return (
     <>
       <PageView name="settings_competitors" />
-      <CompetitorsSettings initialState={state} canEdit={canManageOrgSettings(user)} isPmosAdmin={isPmosAdmin(user)} />
+      <CompetitorsSettings initialState={state} canEdit={canManageOrgSettings(user)} />
     </>
   );
 }

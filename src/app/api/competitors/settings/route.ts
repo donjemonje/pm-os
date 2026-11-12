@@ -5,9 +5,10 @@ import { getCompetitorsConfig, saveCompetitorsConfig } from "@/lib/competitors/s
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
 /**
- * PATCH {manualRescansPerDay?, notifyUserIds?} — customer admin. The scan
- * frequency is set per source in Administration and there is no page cap
- * (Website Scanning PRD 2026-11-04); both are ignored here if sent.
+ * PATCH {notifyUserIds?} — customer admin. The scan frequency is set per
+ * source in Administration, there is no page cap (Website Scanning PRD
+ * 2026-11-04) and no daily manual-scan limit (Daniel 2026-11-12); those are
+ * ignored here if sent.
  */
 export async function PATCH(req: Request) {
   const ctx = await competitorsGuard({ admin: true });
@@ -16,11 +17,6 @@ export async function PATCH(req: Request) {
   if (body instanceof NextResponse) return body;
   const current = await getCompetitorsConfig(ctx.workspaceId);
   const next = { ...current };
-  if (body.manualRescansPerDay !== undefined) {
-    const n = typeof body.manualRescansPerDay === "number" ? Math.round(body.manualRescansPerDay) : NaN;
-    if (!Number.isFinite(n) || n < 1 || n > 50) return bad("Manual rescans per day must be between 1 and 50.");
-    next.manualRescansPerDay = n;
-  }
   if (body.notifyUserIds !== undefined) {
     if (!Array.isArray(body.notifyUserIds) || !body.notifyUserIds.every((x) => typeof x === "string")) return bad("Pick users from the list.");
     const ids = [...new Set(body.notifyUserIds as string[])];
@@ -33,9 +29,6 @@ export async function PATCH(req: Request) {
   await saveCompetitorsConfig(ctx.workspaceId, next);
   if (next.notifyUserIds.join(",") !== current.notifyUserIds.join(",")) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_settings_changed", { setting: "notifyUserIds", from: current.notifyUserIds.length, to: next.notifyUserIds.length });
-  }
-  if (next.manualRescansPerDay !== current.manualRescansPerDay) {
-    await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_settings_changed", { setting: "manualRescansPerDay", from: current.manualRescansPerDay, to: next.manualRescansPerDay });
   }
   return stateResponse(ctx);
 }

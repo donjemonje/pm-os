@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
-import { LOW_CONFIDENCE, mergeCompetitorsConfig, rescanLimitEnforced, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
+import { LOW_CONFIDENCE, mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type ScanBadge, type StatusValue } from "./config";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -61,8 +61,6 @@ export interface CompetitorRow {
   lastGoodScanAt: string | null;
   /** Most recent finished scan of any source. */
   lastAnyScanAt: string | null;
-  /** Manual scans started today (the per-day limit applies to these). */
-  manualScansToday: number;
   /** Scan currently queued or running, if any. */
   activeScanId: string | null;
   media: MediaRow[];
@@ -157,8 +155,6 @@ export interface CompetitorsState {
   /** Most recent finished scan across the workspace (header "scanned X ago"). */
   lastScanAt: string | null;
   scanning: boolean;
-  /** False in local dev: Scan now is never limited there. */
-  rescanLimitEnforced: boolean;
   /** Active users of the organization — the notification recipients list. */
   members: { id: string; name: string; email: string }[];
   /** The Scan run in progress (header progress), if any. */
@@ -174,8 +170,6 @@ function asStringArray(v: unknown): string[] {
 }
 
 export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null): Promise<CompetitorsState> {
-  const dayStart = new Date();
-  dayStart.setHours(0, 0, 0, 0);
   const [workspace, productLines, competitors, domains, capabilities, statuses, facts, activeScans, recentScans] = await Promise.all([
     db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
@@ -314,7 +308,6 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
           : null,
         lastGoodScanAt: websiteScans.find((s) => s.badge === "full" || s.badge === "incomplete")?.startedAt.toISOString() ?? null,
         lastAnyScanAt: lastAny?.toISOString() ?? null,
-        manualScansToday: website ? websiteScans.filter((s) => s.trigger === "manual" && s.startedAt >= dayStart).length + (activeBySource.has(website.id) ? 1 : 0) : 0,
         activeScanId: website ? activeBySource.get(website.id)?.id ?? null : null,
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
@@ -380,7 +373,6 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     }),
     lastScanAt: lastScanAt?.toISOString() ?? null,
     scanning: activeScans.length > 0 || activeRun != null,
-    rescanLimitEnforced: rescanLimitEnforced(),
     members,
     activeRun,
     feed,

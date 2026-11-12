@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
@@ -43,17 +43,37 @@ const POLL_MS = 3000;
 /**
  * Settings → Competitors: competitors (with Scan now and the scan log),
  * suggestions waiting for review, domains (with the definition text PMOS AI
- * reads), the capability catalog with the org's own status per row, and the
- * scan schedule. The organization itself is never scanned. Reads are for everyone; catalog and schedule writes
- * need a customer admin (the API enforces the same). Scan now and the log are
- * for every member.
+ * reads), the capability catalog with the org's own status per row, and who
+ * is notified. Every section opens and closes; only Competitors starts open
+ * (Daniel 2026-11-12: the page was crowded). The organization itself is never
+ * scanned. Reads are for everyone; catalog writes need a customer admin (the
+ * API enforces the same). Scan now and the log are for every member.
  */
-export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false }: { initialState: CompetitorsState; canEdit: boolean; isPmosAdmin?: boolean }) {
+type SectionKey = "competitors" | "suggestions" | "domains" | "capabilities" | "notifications";
+
+/** A section's title row: click to open or close. The count says what is inside while it is closed. */
+function SectionToggle({ section, title, count, open, onToggle, heading = false }: { section: SectionKey; title: string; count?: number; open: boolean; onToggle: () => void; heading?: boolean }) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} data-testid={`cmp-section-${section}`}
+      className={cn("-ml-1 flex min-w-0 items-center gap-1.5 rounded-md px-1 text-left text-foreground hover:text-primary", heading ? "font-title text-[15px] font-semibold" : "font-medium")}>
+      <ChevronRight size={15} className={cn("shrink-0 text-fg-muted transition-transform", open && "rotate-90")} />
+      <span>{title}</span>
+      {count !== undefined && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10.5px] font-normal text-fg-muted">{count}</span>}
+    </button>
+  );
+}
+
+export function CompetitorsSettings({ initialState, canEdit }: { initialState: CompetitorsState; canEdit: boolean }) {
   const { confirm } = useConfirm();
   const [state, setState] = useState(initialState);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [logFor, setLogFor] = useState<CompetitorRow | null>(null);
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({ competitors: true, suggestions: false, domains: false, capabilities: false, notifications: false });
+  const [addingCompetitor, setAddingCompetitor] = useState(false);
+  const isOpen = (k: SectionKey) => openSections[k];
+  const toggle = (k: SectionKey) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
+  const openSection = (k: SectionKey) => setOpenSections((o) => ({ ...o, [k]: true }));
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -147,20 +167,28 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
       {!canEdit && <div className="text-[12.5px] text-fg-muted">{C.settings.viewOnly}</div>}
 
       {/* Competitors */}
-      <section className="rounded-xl border border-border bg-card">
-        <div className="border-b border-border px-5 py-4">
-          <div className="font-medium text-foreground">{C.settings.competitorsTitle}</div>
-          <p className="mt-1 text-sm text-muted">{C.settings.competitorsBlurb}</p>
+      <section className="rounded-xl border border-border bg-card" data-testid="cmp-competitors">
+        <div className={cn("px-5 py-4", isOpen("competitors") && "border-b border-border")}>
+          <div className="flex items-start justify-between gap-4">
+            <SectionToggle section="competitors" title={C.settings.competitorsTitle} count={competitors.length} open={isOpen("competitors")} onToggle={() => toggle("competitors")} />
+            {canEdit && !addingCompetitor && (
+              <button type="button" onClick={() => { openSection("competitors"); setAddingCompetitor(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCompetitor}</button>
+            )}
+          </div>
+          {isOpen("competitors") && <p className="mt-1 text-sm text-muted">{C.settings.competitorsBlurb}</p>}
         </div>
-        {canEdit && <AddCompetitorForm busy={busy} onAdd={(body) => call("POST", "/api/competitors", body)} />}
-        {competitors.length === 0 ? (
-          <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCompetitors}</div>
-        ) : (
-          competitors.map((c) => (
-            <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)}
-              rescanLimited={state.rescanLimitEnforced && !isPmosAdmin && c.manualScansToday >= state.config.manualRescansPerDay}
-              onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
-          ))
+        {isOpen("competitors") && (
+          <>
+            {canEdit && addingCompetitor && <AddCompetitorForm busy={busy} onAdd={(body) => call("POST", "/api/competitors", body)} onClose={() => setAddingCompetitor(false)} />}
+            {competitors.length === 0 ? (
+              <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCompetitors}</div>
+            ) : (
+              competitors.map((c) => (
+                <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)}
+                  onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
+              ))
+            )}
+          </>
         )}
       </section>
 
@@ -172,12 +200,15 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
           competitors={state.competitors}
           canEdit={canEdit}
           busy={busy}
+          open={isOpen("suggestions")}
+          onToggle={() => toggle("suggestions")}
           onDecide={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
         />
       )}
 
       {/* Domains */}
       <DomainsPanel domains={activeDomains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
+        open={isOpen("domains")} onToggle={() => toggle("domains")} onOpen={() => openSection("domains")}
         onAdd={(body) => call("POST", "/api/competitors/domains", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/domains/${id}`, body)}
         onRename={async (d, body) => {
@@ -205,6 +236,7 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
 
       {/* Capabilities */}
       <CapabilitiesPanel capabilities={active} domains={activeDomains} productLines={state.productLines} canEdit={canEdit} busy={busy}
+        open={isOpen("capabilities")} onToggle={() => toggle("capabilities")} onOpen={() => openSection("capabilities")}
         onAdd={(body) => call("POST", "/api/competitors/capabilities", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
         onRemove={async (k) => {
@@ -213,11 +245,8 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
         }}
       />
 
-      {/* Schedule */}
-      <SchedulePanel config={state.config} canEdit={canEdit} busy={busy} onSave={(body) => call("PATCH", "/api/competitors/settings", body)} />
-
       {/* Notifications */}
-      <NotificationsPanel members={state.members} selected={state.config.notifyUserIds} canEdit={canEdit} busy={busy} onSave={(ids) => call("PATCH", "/api/competitors/settings", { notifyUserIds: ids })} />
+      <NotificationsPanel members={state.members} selected={state.config.notifyUserIds} canEdit={canEdit} busy={busy} open={isOpen("notifications")} onToggle={() => toggle("notifications")} onSave={(ids) => call("PATCH", "/api/competitors/settings", { notifyUserIds: ids })} />
 
       {logFor && <ScanLogDrawer competitorId={logFor.id} competitorName={logFor.name} onClose={() => setLogFor(null)} />}
     </div>
@@ -226,14 +255,13 @@ export function CompetitorsSettings({ initialState, canEdit, isPmosAdmin = false
 
 // ————— Competitor row —————
 
-function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited, onScan, onLog, onRemove, onSave }: {
+function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog, onRemove, onSave }: {
   c: CompetitorRow;
   busy: boolean;
   scanning: boolean;
   canEdit: boolean;
   nextScanAt: string | null;
   /** Today's manual scans reached the org's per-site limit (PM-OS admins never are). */
-  rescanLimited: boolean;
   onScan: (c: CompetitorRow) => Promise<void>;
   onLog: (c: CompetitorRow) => void;
   onRemove: (c: CompetitorRow) => Promise<void>;
@@ -294,14 +322,14 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
       )}
       {!editing && (
         <>
-          <span title={c.running || c.pending ? C.settings.scanRunning : rescanLimited ? C.settings.rescanLimited : undefined}>
+          <span title={c.running || c.pending ? C.settings.scanRunning : undefined}>
             <button
               onClick={async () => { setStarting(true); await onScan(c); setStarting(false); }}
-              disabled={Boolean(c.running || c.pending) || starting || busy || rescanLimited}
+              disabled={Boolean(c.running || c.pending) || starting || busy}
               className={SMALL_BTN}
             >
               {c.running || starting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-              {c.running ? C.settings.scanning : rescanLimited ? C.settings.rescanLimitedShort : C.settings.scanNow}
+              {c.running ? C.settings.scanning : C.settings.scanNow}
             </button>
           </span>
           <button onClick={() => onLog(c)} className={SMALL_BTN} title={C.settings.viewLog}>
@@ -319,29 +347,22 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, rescanLimited,
   );
 }
 
-function AddCompetitorForm({ busy, onAdd }: { busy: boolean; onAdd: (body: unknown) => Promise<boolean> }) {
-  const [open, setOpen] = useState(false);
+/** The add form of the Competitors section; its "Add competitor" button sits in the section's title row, like the other sections. */
+function AddCompetitorForm({ busy, onAdd, onClose }: { busy: boolean; onAdd: (body: unknown) => Promise<boolean>; onClose: () => void }) {
   const [website, setWebsite] = useState("");
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!website.trim()) return;
     if (await onAdd({ website })) {
       setWebsite("");
-      setOpen(false);
+      onClose();
       track("cmp_competitor_added_ui", {});
     }
   }
-  if (!open) {
-    return (
-      <div className="border-b border-border px-5 py-3">
-        <button type="button" onClick={() => setOpen(true)} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCompetitor}</button>
-      </div>
-    );
-  }
   return (
-    <form onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setOpen(false); } }} className="flex items-start gap-2 border-b border-border px-5 py-4">
+    <form onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }} className="flex items-start gap-2 border-b border-border px-5 py-4">
       <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder={C.settings.websitePlaceholder} className={INPUT} disabled={busy} autoFocus aria-label={C.settings.website} />
-      <Button type="button" onClick={() => setOpen(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+      <Button type="button" onClick={onClose} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
       <Button type="submit" variant="primary" disabled={busy || !website.trim()}>
         {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
       </Button>
@@ -351,7 +372,9 @@ function AddCompetitorForm({ busy, onAdd }: { busy: boolean; onAdd: (body: unkno
 
 // ————— Suggestions —————
 
-function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, onDecide }: {
+function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, open, onToggle, onDecide }: {
+  open: boolean;
+  onToggle: () => void;
   suggested: CapabilityRow[];
   domains: DomainRow[];
   competitors: CompetitorRow[];
@@ -366,13 +389,11 @@ function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, onDe
 
   return (
     <section className="rounded-xl border border-primary/40 bg-card shadow-[0_0_0_3px_rgba(36,87,245,.06)]">
-      <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-        <div>
-          <div className="font-medium text-foreground">{C.settings.suggestionsTitle}</div>
-          <p className="mt-1 text-sm text-muted">{C.settings.suggestionsBlurb}</p>
-        </div>
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
+        <SectionToggle section="suggestions" title={C.settings.suggestionsTitle} count={suggested.length} open={open} onToggle={onToggle} />
+        {open && <p className="mt-1 text-sm text-muted">{C.settings.suggestionsBlurb}</p>}
       </div>
-      {suggested.map((k) => {
+      {open && suggested.map((k) => {
         const quote = k.suggestedQuote?.split(" — https") ?? [];
         return (
           <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3 last:border-b-0">
@@ -424,7 +445,10 @@ const FIELD_LABEL = "mb-1 block text-[12px] font-medium text-fg-3";
 const EDITOR_BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary";
 const EDITOR_PRIMARY = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50";
 
-function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, onAdd, onSave, onRename, onReorder, onRemove }: {
+function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, open, onToggle, onOpen, onAdd, onSave, onRename, onReorder, onRemove }: {
+  open: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
   domains: DomainRow[];
   capabilities: CapabilityRow[];
   cells: CellRow[];
@@ -496,14 +520,18 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
   );
 
   return (
-    <section>
-      <div className="mb-1 flex items-end justify-between gap-4">
-        <h2 className="font-title m-0 text-[15px] font-semibold">{C.settings.domainsTitle}</h2>
-        {canEdit && !adding && (
-          <button onClick={() => setAdding(true)} className={SMALL_BTN}><Plus size={13} /> {C.settings.addDomain}</button>
-        )}
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-domains">
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
+        <div className="flex items-start justify-between gap-4">
+          <SectionToggle section="domains" title={C.settings.domainsTitle} count={domains.length} open={open} onToggle={onToggle} />
+          {canEdit && !(adding && open) && (
+            <button onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addDomain}</button>
+          )}
+        </div>
+        {open && <p className="mt-1 text-sm text-muted">{C.settings.domainsBlurb} {canEdit && C.settings.domainsDrag}</p>}
       </div>
-      <p className="mb-4 text-sm text-muted">{C.settings.domainsBlurb} {canEdit && C.settings.domainsDrag}</p>
+      {open && (
+      <div className="px-5 py-4">
 
       {canEdit && adding && (
         <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
@@ -602,13 +630,18 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
           );
         })}
       </div>
+      </div>
+      )}
     </section>
   );
 }
 
 // ————— Capabilities —————
 
-function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy, onAdd, onSave, onRemove }: {
+function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy, open, onToggle, onOpen, onAdd, onSave, onRemove }: {
+  open: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
   capabilities: CapabilityRow[];
   domains: DomainRow[];
   productLines: string[];
@@ -673,24 +706,24 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   }
 
   return (
-    <section className="rounded-xl border border-border bg-card">
-      <div className="border-b border-border px-5 py-4">
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-capabilities">
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
         <div className="flex items-start justify-between gap-4">
-          <div className="font-medium text-foreground">{C.settings.capabilitiesTitle}</div>
-          {canEdit && !adding && domains.length > 0 && <button type="button" onClick={() => setAdding(true)} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
+          <SectionToggle section="capabilities" title={C.settings.capabilitiesTitle} count={capabilities.length} open={open} onToggle={onToggle} />
+          {canEdit && !(adding && open) && domains.length > 0 && <button type="button" onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
         </div>
-        <p className="mt-1 text-sm text-muted">{C.settings.capabilitiesBlurb}</p>
-        {productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
+        {open && <p className="mt-1 text-sm text-muted">{C.settings.capabilitiesBlurb}</p>}
+        {open && productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
       </div>
-      {adding && (
+      {open && adding && (
         <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void add(e); } }} className="flex items-end gap-2 border-b border-border px-5 py-4">
           {fields({ name, domainId, description, ownProduct }, { name: setName, domainId: setDomainId, description: setDescription, ownProduct: setOwnProduct })}
           <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || !domainId}><Check size={13} /> {C.settings.save}</Button>
         </form>
       )}
-      {capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCapabilities}</div>}
-      {domains.map((d) => {
+      {open && capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCapabilities}</div>}
+      {open && domains.map((d) => {
         const rows = capabilities.filter((k) => k.domainId === d.id);
         if (rows.length === 0) return null;
         return (
@@ -772,36 +805,12 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   );
 }
 
-// ————— Schedule —————
-
-function SchedulePanel({ config, canEdit, busy, onSave }: {
-  config: CompetitorsState["config"];
-  canEdit: boolean;
-  busy: boolean;
-  onSave: (body: unknown) => Promise<boolean>;
-}) {
-  return (
-    <section className="rounded-xl border border-border bg-card">
-      <div className="border-b border-border px-5 py-4">
-        <div className="font-medium text-foreground">{C.settings.scheduleTitle}</div>
-        <p className="mt-1 text-sm text-muted">{C.settings.scheduleBlurb}</p>
-      </div>
-      <div className="flex flex-wrap items-end gap-6 px-5 py-4">
-        <label className="block">
-          <span className="mb-1 block text-[12px] font-medium text-fg-3">{C.settings.manualRescans}</span>
-          <select value={config.manualRescansPerDay} onChange={(e) => void onSave({ manualRescansPerDay: Number(e.target.value) })} className={cn(SELECT, "w-44")} disabled={!canEdit || busy} title={C.settings.manualRescansHint}>
-            {[1, 2, 3, 5, 10].map((n) => <option key={n} value={n}>{n} per day</option>)}
-          </select>
-        </label>
-      </div>
-    </section>
-  );
-}
-
 // ————— Notifications —————
 
 /** Who receives the scan notification email: every active user of the organization, ticked or not. */
-function NotificationsPanel({ members, selected, canEdit, busy, onSave }: {
+function NotificationsPanel({ members, selected, canEdit, busy, open, onToggle, onSave }: {
+  open: boolean;
+  onToggle: () => void;
   members: CompetitorsState["members"];
   selected: string[];
   canEdit: boolean;
@@ -815,14 +824,14 @@ function NotificationsPanel({ members, selected, canEdit, busy, onSave }: {
   }
   return (
     <section className="rounded-xl border border-border bg-card" data-testid="cmp-notifications">
-      <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+      <div className={cn("flex items-start justify-between gap-4 px-5 py-4", open && "border-b border-border")}>
         <div>
-          <div className="font-medium text-foreground">{C.notify.title}</div>
-          <p className="mt-1 text-sm text-muted">{C.notify.blurb}</p>
+          <SectionToggle section="notifications" title={C.notify.title} open={open} onToggle={onToggle} />
+          {open && <p className="mt-1 text-sm text-muted">{C.notify.blurb}</p>}
         </div>
         <span className="shrink-0 text-[12px] text-fg-muted">{C.notify.selected(selected.filter((id) => members.some((m) => m.id === id)).length)}</span>
       </div>
-      {members.length === 0 ? (
+      {!open ? null : members.length === 0 ? (
         <div className="px-5 py-4 text-sm text-muted">{C.notify.empty}</div>
       ) : (
         <ul className="divide-y divide-border">

@@ -24,7 +24,7 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   limits   POST /api/admin/competitors/knobs {ceilingMs} | {storageLimitChars} (null = default) — WS-17, WS-36
  *   poller   --runner fetch, --pause-ms, --max-minutes,
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
- *            COMPETITORS_RESCAN_LIMIT=on, COMPETITORS_BROWSER=on,
+ *            COMPETITORS_BROWSER=on,
  *            COMPETITORS_ALLOW_PRIVATE_HOSTS=on (a local site may be a competitor),
  *            COMPETITORS_AI=off (the PMOS AI step is skipped; badges come from pages — analysis is the next story).
  *
@@ -72,11 +72,10 @@ const FAR_FUTURE = new Date("2126-01-01T00:00:00Z");
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const FINAL = /^(ok|partial|failed|stale|cancelled)$/;
-const RESCAN_LIMITED = "Daily manual scan limit reached for this site — next manual scan tomorrow.";
 
 // ————— Environment gate —————
 const envProblems: string[] = [];
-for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_RESCAN_LIMIT", "on"], ["COMPETITORS_AI", "off"]] as const) {
+for (const [k, want] of [["COMPETITORS_TEST_KNOBS", "on"], ["COMPETITORS_ALLOW_PRIVATE_HOSTS", "on"], ["COMPETITORS_PAUSE_MS", "0"], ["COMPETITORS_AI", "off"]] as const) {
   if (RESOLVED_ENV[k]?.trim() !== want) envProblems.push(`${k} must be "${want}" in test-apphosting.yaml (got ${RESOLVED_ENV[k] ?? "<unset>"})`);
 }
 const BROWSER_ON = RESOLVED_ENV.COMPETITORS_BROWSER?.trim() === "on";
@@ -551,11 +550,11 @@ test.describe("Website Scanning rows", () => {
     await expect(pill(page, c.name)).not.toHaveText(/Blocked/);
   });
 
-  test("WS-07 re-scan with no change + daily limit: 12 fetched, hashes equal, Full, 0 changed; 2nd Scan now refused for the PM with the limit message, allowed for the admin", async ({ browser }) => {
+  test("WS-07 re-scan with no change, no daily limit: 12 fetched, hashes equal, Full, 0 changed; a 2nd Scan now the same day is accepted for the PM and the button stays Scan now", async ({ browser }) => {
     test.setTimeout(180_000);
     const c = await onboardLocal("QA-WS Eta");
     const before = await pagesOf(c.sourceId);
-    // PRD: one manual rescan per site per day. The onboarding scan is not a rescan — the PM's Scan now is allowed.
+    // PRD (Daniel 2026-11-12): no daily manual-scan limit. Scan now is always allowed when no scan is active on the site.
     const first = await scanNow(pmApi, c.id);
     expect(first.status(), `PM's first Scan now after onboarding: ${await first.text()}`).toBe(202);
     const second = await waitForScanWithStatus(c.sourceId, "pending_local");
@@ -570,18 +569,16 @@ test.describe("Website Scanning rows", () => {
     expect(after.map((p) => [pathOf(p.url), p.hash])).toEqual(before.map((p) => [pathOf(p.url), p.hash]));
     for (const p of after) expect(p.changedAt, `${p.url} unchanged`).toBeNull();
 
-    // The limit: a second manual scan today is refused for the PM, allowed for a PM-OS admin.
-    const refused = await scanNow(pmApi, c.id);
-    expect(refused.status()).toBe(429);
-    expect(((await refused.json()) as { error: string }).error).toBe(RESCAN_LIMITED);
+    // No limit: the button is Scan now (enabled) after today's manual scan, and a second manual scan today is accepted.
     const page = await newPage(browser, "pm");
     await openSettings(page, c.name);
-    const btn = competitorLine(page, c.name).getByRole("button", { name: "Next manual scan tomorrow" });
+    const btn = competitorLine(page, c.name).getByRole("button", { name: "Scan now" });
     await expect(btn).toBeVisible();
-    await expect(btn).toBeDisabled();
-    const allowed = await scanNow(adminApi, c.id);
-    expect(allowed.status(), await allowed.text()).toBe(202);
-    expect(((await allowed.json()) as { state: string }).state).toBe("pending_local");
+    await expect(btn).toBeEnabled();
+    await expect(page.getByText("Manual scans per site per day")).toHaveCount(0);
+    const again = await scanNow(pmApi, c.id);
+    expect(again.status(), await again.text()).toBe(202);
+    expect(((await again.json()) as { state: string }).state).toBe("pending_local");
   });
 
   test("WS-08 re-scan with changes: pricing changed (previous text handed to analysis, then dropped), new product page → 13 pages, home footer date only → unchanged", async () => {

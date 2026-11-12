@@ -7,18 +7,15 @@
  * Per-workspace settings (Workspace.competitorsConfig). Since the Website
  * Scanning PRD (2026-11-04) the scan frequency lives per source
  * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
- * what remains here is the manual-rescan limit, the notification recipients
- * and the news baseline.
+ * what remains here is the notification recipients and the news baseline
+ * (the daily manual-scan limit was removed, Daniel 2026-11-12).
  */
-export const DEFAULT_MANUAL_RESCANS_PER_DAY = 1;
 /** Scan frequency per source, in days (PRD: once every 2 days). */
 export const DEFAULT_SCAN_EVERY_DAYS = 2;
 export const MIN_SCAN_EVERY_DAYS = 1;
 export const MAX_SCAN_EVERY_DAYS = 90;
 
 export interface CompetitorsConfig {
-  /** "Scan now" presses allowed per site per day (PM-OS admins are exempt). */
-  manualRescansPerDay: number;
   /** Users (ids, same organization) who receive the scan notification email. */
   notifyUserIds: string[];
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
@@ -26,23 +23,11 @@ export interface CompetitorsConfig {
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
-  manualRescansPerDay: DEFAULT_MANUAL_RESCANS_PER_DAY,
   notifyUserIds: [],
   baselineUntil: null,
 };
 
 // ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————
-/**
- * The manual-rescan limit is a production rule; local dev scans a site as
- * often as needed. Enforced when NODE_ENV is production, or whenever
- * COMPETITORS_RESCAN_LIMIT=on (to test the limit locally).
- */
-export function rescanLimitEnforced(): boolean {
-  const v = process.env.COMPETITORS_RESCAN_LIMIT?.trim().toLowerCase();
-  if (v === "on" || v === "true" || v === "1") return true;
-  if (v === "off" || v === "false" || v === "0") return false;
-  return process.env.NODE_ENV === "production";
-}
 /** Pause between two requests to the same site (remote lane). Tests may set COMPETITORS_PAUSE_MS=0 (with COMPETITORS_TEST_KNOBS=on) and say so. */
 export function scanPauseMs(): number {
   if (!knobsOn()) return 2000;
@@ -119,11 +104,7 @@ export type ScanLane = (typeof SCAN_LANES)[number];
 
 export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
-  const rescans = typeof r.manualRescansPerDay === "number" && Number.isFinite(r.manualRescansPerDay)
-    ? Math.min(50, Math.max(1, Math.round(r.manualRescansPerDay)))
-    : DEFAULT_MANUAL_RESCANS_PER_DAY;
   return {
-    manualRescansPerDay: rescans,
     notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
     baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
   };

@@ -218,13 +218,6 @@ export async function createScan(
   return { scanId: scan.id };
 }
 
-/** Manual scans of a source since local midnight (scanner clock) — the per-day limit (PM-OS admins are exempt). */
-export async function manualScansToday(sourceId: string): Promise<number> {
-  const start = await now();
-  start.setHours(0, 0, 0, 0);
-  return db.competitorScan.count({ where: { sourceId, trigger: "manual", startedAt: { gte: start }, status: { not: "cancelled" } } });
-}
-
 // ————— Collect —————
 
 interface CollectContext {

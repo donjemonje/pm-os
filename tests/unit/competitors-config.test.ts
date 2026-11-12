@@ -10,9 +10,9 @@ import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    expect(mergeCompetitorsConfig(null)).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig("junk")).toEqual({ manualRescansPerDay: 1, notifyUserIds: [], baselineUntil: null });
+    expect(mergeCompetitorsConfig(null)).toEqual({ notifyUserIds: [], baselineUntil: null });
+    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ notifyUserIds: [], baselineUntil: null });
+    expect(mergeCompetitorsConfig("junk")).toEqual({ notifyUserIds: [], baselineUntil: null });
     expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] }).notifyUserIds).toEqual(["u1", "u2"]);
     expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
     expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
