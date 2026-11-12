@@ -275,6 +275,42 @@ export async function requeueLocalScan(scanId: string): Promise<void> {
   await db.competitorScan.update({ where: { id: scanId }, data: { status: "pending_local" } });
 }
 
+/** Why a station stopped in the middle of a scan, as the station itself reports it at its next check-in. */
+export const STATION_STOP_REASONS: Record<string, string> = {
+  network: "the network was lost",
+  shutdown: "the Mac shut down or the station was stopped",
+  crash: "the station crashed or lost power",
+  error: "the station hit an error",
+};
+
+/**
+ * A station checks in holding the saved place of a scan it did not finish (Daniel 2026-11-12): the scan goes back to
+ * waiting at once — no 10-minute stale wait — and its log says why it stopped, when, and how far it got. Only the
+ * station that took the scan may ask, and only while the scan is still being read. Returns true when it was requeued.
+ */
+export async function resumeLocalScan(scanId: string, keyId: string, report: { reason: string; stoppedAt: string | null; pagesRead: number; pagesLeft: number }): Promise<boolean> {
+  const req = await db.localScanRequest.findUnique({ where: { scanId }, select: { state: true, keyId: true, scan: { select: { status: true, lane: true, log: true } } } });
+  if (!req || req.scan.lane !== "local") return false;
+  if (req.keyId && req.keyId !== keyId) return false;
+  const running = req.state === "running" && req.scan.status === "running";
+  // Already back to waiting (the stale sweep got there first): only the reason is added to the log.
+  const requeued = req.state === "waiting" && req.scan.status === "pending_local";
+  if (!running && !requeued) return false;
+  const why = STATION_STOP_REASONS[report.reason] ?? STATION_STOP_REASONS.crash;
+  const at = report.stoppedAt && !Number.isNaN(Date.parse(report.stoppedAt)) ? new Date(report.stoppedAt).toISOString() : null;
+  const line = {
+    at: new Date().toISOString(),
+    level: "warn" as const,
+    msg: `The station stopped in the middle of the scan${at ? ` at ${at}` : ""}: ${why}. ${report.pagesRead} pages were already read, ${report.pagesLeft} left — it continues from the page it stopped on.`,
+  };
+  const earlier = Array.isArray(req.scan.log) ? (req.scan.log as unknown as { msg?: string }[]) : [];
+  // One line per stop: a station that checks in twice before it can start (PM-OS busy) does not repeat it.
+  if (!earlier.some((l) => l.msg === line.msg)) await db.competitorScan.update({ where: { id: scanId }, data: { log: [...earlier, line] as never } });
+  if (running) await requeueLocalScan(scanId);
+  console.warn(`[competitors] scan ${scanId}: ${line.msg}`);
+  return running;
+}
+
 export async function finishLocalRequest(scanId: string): Promise<void> {
   await db.localScanRequest.updateMany({ where: { scanId }, data: { state: "done", finishedAt: await now() } });
 }
