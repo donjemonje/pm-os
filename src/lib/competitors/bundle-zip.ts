@@ -10,18 +10,9 @@
  */
 import { unzipSync } from "fflate";
 import { bundleEntryPath, parseBundleManifest, type Bundle } from "./bundle";
+import { MAX_UNPACKED_BYTES, MAX_ZIP_BYTES, MAX_ZIP_ENTRIES } from "./config";
 
-/**
- * The largest zip accepted. Production serves the app from Cloud Run, which
- * refuses a request over 32 MB before it reaches the app; this leaves room
- * for the form around the file. next.config.ts (proxyClientMaxBodySize) lets
- * a body of this size through the proxy whole.
- */
-export const MAX_ZIP_BYTES = 30 * 1024 * 1024;
-/** The largest total size of a zip's files once unpacked, as the zip states it. */
-export const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
-/** The most entries (files and folders) a zip may hold. */
-export const MAX_ZIP_ENTRIES = 5_000;
+export { MAX_UNPACKED_BYTES, MAX_ZIP_BYTES, MAX_ZIP_ENTRIES };
 
 export interface ZipLimits {
   maxZipBytes: number;

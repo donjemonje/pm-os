@@ -238,3 +238,19 @@ export type PageKind = (typeof PAGE_KINDS)[number];
 export function isPageKind(v: unknown): v is PageKind {
   return typeof v === "string" && (PAGE_KINDS as readonly string[]).includes(v);
 }
+
+/**
+ * Limits of a collector bundle uploaded as one zip (Admin → Competitors →
+ * Import pages; read by lib/competitors/bundle-zip.ts, checked on the screen
+ * before the upload starts).
+ *
+ * The largest zip accepted: production serves the app from Cloud Run, which
+ * refuses a request over 32 MB before it reaches the app; this leaves room
+ * for the form around the file. next.config.ts (proxyClientMaxBodySize) lets
+ * a body of this size through the proxy whole.
+ */
+export const MAX_ZIP_BYTES = 30 * 1024 * 1024;
+/** The largest total size of a zip's files once unpacked, as the zip states it. */
+export const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
+/** The most entries (files and folders) a zip may hold. */
+export const MAX_ZIP_ENTRIES = 5_000;

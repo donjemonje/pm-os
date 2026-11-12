@@ -36,7 +36,7 @@ function when(iso: string): string {
 type Page = { url: string; status: number; outcome: string; chars: number; ms: number; via: string; error?: string };
 type Line = { at: string; level: string; msg: string; url?: string };
 
-export function AdminScans() {
+export function AdminScans({ reloadKey = 0 }: { /** Changes when the list must be read again (an import ended). */ reloadKey?: number }) {
   const [rows, setRows] = useState<AdminScanRow[] | null>(null);
   const [metrics, setMetrics] = useState<AdminScanMetrics | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +61,7 @@ export function AdminScans() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   return (
     <>
