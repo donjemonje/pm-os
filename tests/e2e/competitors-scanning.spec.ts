@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
-import { execFile, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
@@ -176,6 +177,25 @@ async function scannerPageRequests(site: FakeSite) {
 const pollerArgs = (o: PollerOpts): string[] => stationPollerArgs({ ...o, key: o.key ?? keyFile });
 const runPoller = (o: PollerOpts = {}, timeoutMs = 150_000) => runStationPoller({ ...o, key: o.key ?? keyFile }, timeoutMs);
 const spawnPoller = (o: PollerOpts): ChildProcess => spawnStationPoller({ ...o, key: o.key ?? keyFile });
+/** The "internet" the station probes: on = answers, off = the connection is dropped (what a lost network looks like). */
+async function startProbe(): Promise<{ url: string; set(on: boolean): void; close(): Promise<void> }> {
+  let on = true;
+  const server = createServer((req, res) => {
+    if (!on) return void req.socket.destroy();
+    res.writeHead(204).end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as { port: number };
+  return { url: `http://127.0.0.1:${port}/`, set: (v) => void (on = v), close: () => new Promise((r) => server.close(() => r())) };
+}
+/** The station's own files in its state dir: what the menu bar icon reads, and the scan's saved place. */
+const stationStatus = (dir: string) => JSON.parse(readFileSync(join(dir, "status.json"), "utf8")) as { state: string; message: string; pagesRead: number | null };
+const savedPlace = (dir: string) =>
+  existsSync(join(dir, "scan-state.json")) ? (JSON.parse(readFileSync(join(dir, "scan-state.json"), "utf8")) as { scanId: string; queue: string[]; pagesRead: number; stopped?: { reason: string; at: string } }) : null;
+const logOf = (scan: { log: unknown }) => (Array.isArray(scan.log) ? (scan.log as { msg: string; level?: string }[]) : []).map((l) => l.msg);
+function exited(child: ChildProcess): Promise<number | null> {
+  return new Promise((r) => child.once("exit", (code) => r(code)));
+}
 
 // ————— UI —————
 async function newPage(browser: Browser, who: "pm" | "admin"): Promise<Page> {
@@ -1299,6 +1319,165 @@ test.describe("Website Scanning rows", () => {
     const d = await addCompetitor(pmApi, await newSite(), "QA-WS Station Off D");
     const scanD = await waitForScanWithStatus(d.sourceId, "pending_local");
     await expect.poll(async () => (await alert())?.scanId ?? null, { timeout: 15_000, intervals: [250, 500] }).toBe(scanD.id);
+  });
+
+  // ————— A scan that stops in the middle (Daniel 2026-11-12): the station saves its place and continues —————
+
+  /** Starts the first scan of a new competitor on a station that is stopped with `signal` once 6 pages are in. */
+  async function stopMidScan(name: string, signal: NodeJS.Signals) {
+    const c = await addCompetitor(pmApi, await newSite(), name);
+    const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
+    const stateDir = freshStateDir();
+    const child = spawnPoller({ stateDir, pauseMs: 500 });
+    await expect.poll(async () => (await scanRow(scan.id)).pagesFetched, { timeout: 60_000, intervals: [100] }).toBeGreaterThanOrEqual(6);
+    const gone = exited(child);
+    child.kill(signal);
+    await gone;
+    const mid = await scanRow(scan.id);
+    expect(mid.status).toBe("running");
+    expect(mid.pagesFetched).toBeLessThan(12);
+    return { c, scan, stateDir, mid };
+  }
+  /** The next check-in of the same station: no clock change, no tick — the station itself asks for its scan back. */
+  async function continueAndCheck(x: Awaited<ReturnType<typeof stopMidScan>>, reason: RegExp) {
+    const place = savedPlace(x.stateDir);
+    expect(place?.scanId, "the scan's place is saved on the station").toBe(x.scan.id);
+    const r = await runPoller({ stateDir: x.stateDir });
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).toMatch(/continuing where the scan stopped/);
+    const done = await waitForScanEnd(x.scan.id);
+    expect(done.status).toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+    expect((await scansOf(x.c.sourceId)).length, "the same scan continues — no second scan").toBe(1);
+    const stop = logOf(done).filter((m) => /^The station stopped in the middle of the scan/.test(m));
+    expect(stop.length, `one stop line in the scan log: ${JSON.stringify(logOf(done))}`).toBe(1);
+    expect(stop[0]).toMatch(reason);
+    expect(stop[0]).toMatch(/it continues from the page it stopped on/);
+    // Nothing is read twice, except the one page the station was on when it stopped.
+    const counts = new Map<string, number>();
+    for (const q of await scannerPageRequests(x.c.site)) counts.set(q.path, (counts.get(q.path) ?? 0) + 1);
+    const twice = [...counts].filter(([path, n]) => n > 1 && (PAGE_PATHS as readonly string[]).includes(path));
+    expect(twice.length, `pages read twice: ${JSON.stringify(twice)}`).toBeLessThanOrEqual(1);
+    for (const [, n] of twice) expect(n).toBe(2);
+    expect(savedPlace(x.stateDir), "the saved place is removed once the scan is handed in").toBeNull();
+    return done;
+  }
+
+  test("WS-40 the station crashes mid-scan (kill -9): the next check-in continues the same scan from the page it stopped on — no 10-minute wait, no page read twice but the one in flight; the scan log says the station crashed or lost power; Full 12", async () => {
+    test.setTimeout(200_000);
+    const x = await stopMidScan("QA-WS Resume Crash", "SIGKILL");
+    expect(savedPlace(x.stateDir)?.stopped, "a crash leaves no reason on the saved place").toBeUndefined();
+    await continueAndCheck(x, /the station crashed or lost power/);
+  });
+
+  test("WS-41 the Mac shuts down mid-scan (SIGTERM): the station records the reason before it exits; the next check-in continues the same scan; the scan log says the Mac shut down or the station was stopped; Full 12", async () => {
+    test.setTimeout(200_000);
+    const x = await stopMidScan("QA-WS Resume Shutdown", "SIGTERM");
+    expect(savedPlace(x.stateDir)?.stopped?.reason).toBe("shutdown");
+    await continueAndCheck(x, /the Mac shut down or the station was stopped/);
+  });
+
+  test("WS-42 the network drops mid-scan and comes back within the wait: the station waits (status offline, 'Network lost — the scan waits'), reads the same page again and finishes — Full 12, zero pages 'not read', no stop line in the log", async () => {
+    test.setTimeout(200_000);
+    const probe = await startProbe();
+    try {
+      const c = await addCompetitor(pmApi, await newSite(), "QA-WS Net Blip");
+      const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
+      const stateDir = freshStateDir();
+      const child = spawnPoller({ stateDir, pauseMs: 500, probeUrl: probe.url, offlineWaitMs: 60_000, offlineProbeMs: 500 });
+      let out = "";
+      child.stdout?.on("data", (d) => (out += d));
+      child.stderr?.on("data", (d) => (out += d));
+      const gone = exited(child);
+      await expect.poll(async () => (await scanRow(scan.id)).pagesFetched, { timeout: 60_000, intervals: [100] }).toBeGreaterThanOrEqual(4);
+      // The network is gone: the site does not answer and neither does the internet probe.
+      probe.set(false);
+      await c.site.control({ down: true });
+      await expect.poll(() => stationStatus(stateDir).state, { timeout: 60_000, intervals: [200] }).toBe("offline");
+      expect(stationStatus(stateDir).message).toBe("Network lost — the scan waits");
+      const during = await scanRow(scan.id);
+      expect(during.status).toBe("running");
+      // The network is back.
+      await c.site.control({ down: false });
+      probe.set(true);
+      expect(await gone, out).toBe(0);
+      expect(out).toMatch(/network back after/);
+      const done = await waitForScanEnd(scan.id);
+      expect(done.status).toBe("ok");
+      expect(done.badge).toBe("full");
+      expect(done.pagesFetched).toBe(12);
+      expect(done.outcomes ?? {}, "no page is marked not read").toEqual({});
+      expect(logOf(done).some((m) => /giving up|stopped in the middle/.test(m)), JSON.stringify(logOf(done))).toBe(false);
+      expect(savedPlace(stateDir)).toBeNull();
+    } finally {
+      await probe.close();
+    }
+  });
+
+  test("WS-43 the network stays down past the wait: the scan is parked with reason network and its place saved (no page 'not read'); once the network is back the next check-in continues it — the scan log says the network was lost; Full 12", async () => {
+    test.setTimeout(200_000);
+    const probe = await startProbe();
+    try {
+      const c = await addCompetitor(pmApi, await newSite(), "QA-WS Net Down");
+      const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
+      const stateDir = freshStateDir();
+      const child = spawnPoller({ stateDir, pauseMs: 500, probeUrl: probe.url, offlineWaitMs: 3_000, offlineProbeMs: 500 });
+      let out = "";
+      child.stdout?.on("data", (d) => (out += d));
+      child.stderr?.on("data", (d) => (out += d));
+      const gone = exited(child);
+      await expect.poll(async () => (await scanRow(scan.id)).pagesFetched, { timeout: 60_000, intervals: [100] }).toBeGreaterThanOrEqual(4);
+      probe.set(false);
+      await c.site.control({ down: true });
+      expect(await gone, out).toBe(0);
+      expect(out).toMatch(/network still down .* scan parked/);
+      const place = savedPlace(stateDir);
+      expect(place?.scanId).toBe(scan.id);
+      expect(place?.stopped?.reason).toBe("network");
+      expect(place!.queue.length).toBeGreaterThan(0);
+      expect(stationStatus(stateDir).message).toMatch(/paused, network lost — continues at the next check-in/);
+      const parked = await scanRow(scan.id);
+      expect(parked.status, "the scan is not failed and not ended").toBe("running");
+      expect(parked.outcomes ?? {}).toEqual({});
+      // The network is back; the next check-in asks for the scan and continues it.
+      await c.site.control({ down: false });
+      probe.set(true);
+      const r = await runPoller({ stateDir, probeUrl: probe.url });
+      expect(r.code, r.stdout).toBe(0);
+      expect(r.stdout).toMatch(/continuing where the scan stopped \(network\)/);
+      const done = await waitForScanEnd(scan.id);
+      expect(done.status).toBe("ok");
+      expect(done.badge).toBe("full");
+      expect(done.pagesFetched).toBe(12);
+      expect(done.outcomes ?? {}).toEqual({});
+      expect(logOf(done).filter((m) => /^The station stopped in the middle of the scan.*the network was lost/.test(m)).length).toBe(1);
+      expect(savedPlace(stateDir)).toBeNull();
+    } finally {
+      await probe.close();
+    }
+  });
+
+  test("WS-44 the site fails but the internet is there: nothing waits — /docs is not read after 3 tries as before (reason timeout), the scan goes on, Incomplete 11/12, no 'network lost' on the station", async () => {
+    test.setTimeout(240_000);
+    const probe = await startProbe();
+    try {
+      const c = await addCompetitor(pmApi, await newSite(), "QA-WS Site Fails Online");
+      await c.site.control({ docsTimeoutAlways: true });
+      const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
+      const stateDir = freshStateDir();
+      const r = await runPoller({ stateDir, probeUrl: probe.url }, 200_000);
+      expect(r.code, r.stdout).toBe(0);
+      expect(r.stdout).not.toMatch(/network lost/);
+      expect(r.stdout).toMatch(/retry 2 after timeout/);
+      const done = await waitForScanEnd(scan.id);
+      expect(done.badge).toBe("incomplete");
+      expect(done.pagesFetched).toBe(11);
+      expect((done.outcomes as Record<string, number>).timeout).toBe(1);
+      expect(savedPlace(stateDir)).toBeNull();
+    } finally {
+      await probe.close();
+    }
   });
 
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {

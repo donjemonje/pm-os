@@ -3,7 +3,7 @@
  * detection of the website scanner (src/lib/competitors/html.ts). Pure module.
  */
 import { describe, expect, it } from "vitest";
-import { contentHash, extractLinks, htmlToText, looksEmptyWithoutJs, looksLikeBotWall, metaDescription, siteNameOf, titleOf } from "@/lib/competitors/html";
+import { contentHash, extractLinks, htmlToText, looksEmptyWithoutJs, looksLikeBotWall, metaDescription, siteNameOf, titleOf, hintsOf } from "@/lib/competitors/html";
 import { Frontier, isAllowed, orderCandidates } from "@/lib/competitors/crawl";
 
 const PAGE = `<!doctype html><html><head><title>Acme &amp; Co — Platform</title>
@@ -141,5 +141,18 @@ describe("siteNameOf", () => {
     expect(siteNameOf("<title>Flashpoint | Threat Intelligence With Industry-Best Data</title>", "flashpoint.io")).toBe("Flashpoint");
     expect(siteNameOf("<title>Check Point Exposure Management | Formerly Cyberint</title>", "cyberint.com")).toBe("Formerly Cyberint");
     expect(siteNameOf("<html></html>", "intel471.com")).toBe("Intel471");
+  });
+
+  it("keeps hover hints, named by their row, and nothing else of a script (Daniel 2026-11-12)", () => {
+    // Next.js page data: the pricing rows live in an escaped string inside a script.
+    const next = `<p>Email integration</p><script>self.__next_f.push([1,"{\\"features\\":[{\\"name\\":\\"Workplace collaboration (Slack, Microsoft Teams)\\",\\"values\\":[{\\"planId\\":\\"pro\\",\\"type\\":\\"check\\"}],\\"tooltip\\":\\"Push messages containing product feedback into the product.\\"},{\\"name\\":\\"SSO\\",\\"tooltip\\":\\"\\",\\"secret\\":\\"internal page data that is not a hint\\"}]}"])</script>`;
+    const text = htmlToText(next);
+    expect(text).toContain("Hints shown on hover:\nWorkplace collaboration (Slack, Microsoft Teams): Push messages containing product feedback into the product.");
+    expect(text).not.toContain("internal page data");
+    expect(text).not.toContain("planId");
+    // Plain JSON and element attributes; a link's title and a one-word value are not hints.
+    const plain = `<script type="application/json">{"label":"Audit log","helpText":"Every change is recorded for 12 months."}</script><span data-tooltip="Billed once a year, per maker.">i</span><a href="/x" title="Read the full story here">x</a><i title="info">i</i>`;
+    expect(hintsOf(plain)).toEqual(["Audit log: Every change is recorded for 12 months.", "Billed once a year, per maker."]);
+    expect(htmlToText("<p>No hints here</p><script>var a = 1;</script>")).toBe("No hints here");
   });
 });

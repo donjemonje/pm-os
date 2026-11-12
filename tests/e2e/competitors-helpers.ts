@@ -147,6 +147,11 @@ export interface PollerOpts {
   maxMinutes?: number;
   /** The station key file. */
   key?: string;
+  /** Network knob: the address the station asks "is the internet there". Default: the app itself, so no test depends on the real internet. */
+  probeUrl?: string;
+  /** Time knobs: how long the station waits for the network before it parks the scan, and how often it asks. */
+  offlineWaitMs?: number;
+  offlineProbeMs?: number;
 }
 
 export function pollerArgs(o: PollerOpts & { key: string }): string[] {
@@ -154,6 +159,9 @@ export function pollerArgs(o: PollerOpts & { key: string }): string[] {
     POLLER, "--app-url", LOCAL_BASE_URL, "--key-file", o.key, "--state-dir", o.stateDir ?? freshStateDir(),
     "--runner", "fetch", "--pause-ms", String(o.pauseMs ?? 0),
     ...(o.maxMinutes ? ["--max-minutes", String(o.maxMinutes)] : []),
+    "--probe-urls", o.probeUrl ?? LOCAL_BASE_URL,
+    ...(o.offlineWaitMs !== undefined ? ["--offline-wait-ms", String(o.offlineWaitMs)] : []),
+    ...(o.offlineProbeMs !== undefined ? ["--offline-probe-ms", String(o.offlineProbeMs)] : []),
   ];
 }
 

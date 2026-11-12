@@ -77,6 +77,8 @@ func health(_ s: Status?) -> Health {
         return .scanning
     }
     if s.state == "unreachable" { return .warning }
+    // The scan waits for the network (up to 5 minutes, then it is parked for the next check-in).
+    if s.state == "offline" { return .warning }
     guard let seen = date(s.lastCheckIn), Date().timeIntervalSince(seen) <= silentAfter else { return .warning }
     return .idle
 }
@@ -91,6 +93,7 @@ func line(_ e: Env) -> String {
         return "\(e.name): on · last check-in \(clock(date(s.lastCheckIn)))"
     case .warning:
         if s.state == "scanning" { return "\(e.name): scan of \(s.competitor ?? "a site") stopped · no page since \(clock(date(s.updatedAt)))" }
+        if s.state == "offline" { return "\(e.name): network lost · scan of \(s.competitor ?? "a site") waits · \(s.pagesRead ?? 0) pages read" }
         if s.state == "unreachable" { return "\(e.name): PM-OS not reachable · last check-in \(clock(date(s.lastCheckIn)))" }
         return "\(e.name): not running · last check-in \(clock(date(s.lastCheckIn)))"
     }

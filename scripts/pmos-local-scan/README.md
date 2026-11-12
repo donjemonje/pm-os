@@ -26,3 +26,14 @@ The local lane of competitor website scanning (Website Scanning PRD, 2026-11-04)
       --runner fetch --pause-ms 0 --max-minutes 5
 
 `--render off` disables headless Chrome; `--loop` keeps running instead of one check-in. Log: `~/.pmos/<env>/local-scan.log`; status for the menu bar icon: `~/.pmos/<env>/status.json`.
+
+## A scan that stops in the middle (2026-11-12)
+
+The station saves the scan's place in `<state-dir>/scan-state.json` before every page (pages left, pages seen, counters).
+
+- **Network lost:** a failed read is checked against two neutral addresses. Offline → the station waits up to 5 minutes and reads the same page again (no page is marked "not read"). Still offline → the scan is parked with reason `network`.
+- **Shutdown / logout / station stopped:** the signal handler marks the place `shutdown`.
+- **Crash / power cut:** the place has no reason → reported as `crash`.
+- **Mac asleep:** the process freezes and continues; a read that slept is read again, not counted as a failure.
+
+At the next check-in the station reports the scan, the reason, the time and the page counts (`?resume=…`). PM-OS puts the scan back to waiting at once, writes the reason into the scan log, and the station continues from the page it stopped on. The file is deleted when the scan is handed in or no longer wanted by PM-OS.
