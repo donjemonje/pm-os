@@ -633,6 +633,7 @@ model Competitor {
   items           CompetitorItem[]
   findings        PageFinding[]
   featureStatuses FeatureStatus[]
+  sections        CompetitorSection[]
 
   @@unique([workspaceId, host])
   @@index([workspaceId])
@@ -759,6 +760,8 @@ model CapabilityStatus {
   sourceUrl    String?
   reasoning    String?
   wording      String?
+  /// One plain sentence of what it does at this competitor: the description of the best-ranked evidence that has one.
+  description  String?
   /// Distinct pages that carry evidence for the cell.
   evidenceCount Int       @default(0)
   /// The analysis run that last wrote the cell.
@@ -816,10 +819,11 @@ model CompetitorAnalysis {
   startedById  String?
   /// "queued" | "running" | "waiting" (PMOS AI has no capacity; sleeping until resumeAt) | "done" | "failed" | "cancelled"
   status       String     @default("queued")
-  /// Display only — where the run is: "research" | "merge" | "match" | "second_look" | "apply" | "facts" | "done".
+  /// Display only — where the run is: "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts" | "done".
   /// A resumed run never trusts it: every step recomputes its own to-do from the tables.
   step         String     @default("research")
-  /// The one thing that cannot be derived: { factsBaselineSources: string[] }.
+  /// What cannot be derived: { factsBaselineSources: string[], goBack: { rounds: string[][] } } — the sources whose
+  /// first facts read this is, and the pages each go-back round chose (page ids), so a run that stopped reads the same pages.
   cursor       Json       @default("{}")
   /// Set while status = "waiting".
   resumeAt     DateTime?
@@ -857,6 +861,37 @@ model CompetitorAnalysis {
   @@index([workspaceId, createdAt])
 }
 
+/// One section of a competitor's READING PLAN (analysis/sections.ts): the stored pages under one address prefix of
+/// one source. Code builds the sections; PMOS AI labels each one once (the analysis run's map step), the home page
+/// is labeled in code. A saved label is kept like a decision: a later run asks only about sections with no row yet.
+model CompetitorSection {
+  id           String           @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  sourceId     String
+  source       CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// Address prefix without the scheme: "acme.com/" (the home page), "acme.com/products", "acme.com/docs/api".
+  prefix       String
+  /// product | pricing | compare | help | release_notes | api_docs | news | noise
+  label        String
+  /// Pages and characters of text under the prefix when the plan was last computed (0 = no page there any more).
+  pages        Int              @default(0)
+  chars        Int              @default(0)
+  /// "ai" (the map call) | "code" (the home page)
+  labeledBy    String           @default("ai")
+  labeledAt    DateTime         @default(now())
+  /// MAP_VERSION of the prompt that labeled it; null when code did.
+  mapVersion   String?
+  /// The run that labeled it (plain id, no relation).
+  analysisId   String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([competitorId, sourceId, prefix])
+  @@index([workspaceId])
+}
+
 /// One thing a page says the competitor offers, with the quote that proves it. Written by the research step (one call per
 /// page) and by the second look. A finding exists only while its page text is the text it was read from: when the page
 /// changes or is removed, its findings are deleted and the page is read again.
@@ -883,6 +918,8 @@ model PageFinding {
   quote         String
   /// One sentence: why this quote means the capability exists.
   reasoning     String
+  /// One plain sentence of what it does, taken only from this page; null when the page does not say.
+  description   String?
   /// The competitor's merged item this finding belongs to (set by the merge step; null for second-look findings).
   itemId        String?
   item          CompetitorItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
@@ -929,6 +966,9 @@ model CompetitorItem {
   /// The match call's answer for an item that is none of ours, kept until the apply step turns it into a row:
   /// { domainId, newDomainName, newDomainDefinition, closestDomainId, marketName, description }
   placement       Json?
+  /// When a run last went back for this item's gaps to the end (analysis/gaps.ts). The item is gone back for again
+  /// only when it got a finding after this moment — so a run with nothing new to read reads nothing for it.
+  gapCheckedAt    DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -983,6 +1023,8 @@ model FeatureStatus {
   sourceUrl      String?
   reasoning      String?
   wording        String?
+  /// The description of the best-ranked evidence that has one.
+  description    String?
   evidenceCount  Int        @default(0)
   analysisId     String?
   changedAt      DateTime?
@@ -1070,6 +1112,7 @@ model CompetitorSource {
   scans         CompetitorScan[]
   pages         SourcePage[]
   localRequests LocalScanRequest[]
+  sections      CompetitorSection[]
 
   @@unique([competitorId, type])
   @@index([workspaceId])
