@@ -5,7 +5,8 @@
 # Compare: npm run env:diff
 
 runConfig:
-  minInstances: 0
+  # One instance stays on: no cold start after idle (Daniel 2026-11-12). Costs one always-on instance.
+  minInstances: 1
 
 env:
   # --- Auth gates ---
