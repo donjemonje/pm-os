@@ -22,8 +22,9 @@ export interface CompetitorsConfig {
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
   baselineUntil: string | null;
   /**
-   * Analysis: are weak pages (blog, news, press, content marketing) read? Off = only strong pages (product, features,
-   * pricing, docs, help, integrations) are read and "low confidence" is not produced (Daniel 2026-11-11: start lean).
+   * Analysis: are weak pages read — the sections of a site the reading plan labels "news" (blog, news, press;
+   * analysis/sections.ts)? Off = only strong pages (product, pricing, compare, help, release notes, API docs) are
+   * read and "low confidence" is not produced (Daniel 2026-11-11: start lean).
    */
   readWeakPages: boolean;
   /** Analysis: how many distinct pages must carry an item that is none of our rows before it becomes a new row (1–5). */
