@@ -33,6 +33,7 @@
 import { Prisma } from "@prisma/client";
 import { db } from "../src/lib/db";
 import { readBundleManifest } from "../src/lib/competitors/bundle";
+import { MANUAL_IMPORT_ENABLED, MANUAL_IMPORT_OFF_NOTE } from "../src/lib/competitors/config";
 import { importPages } from "../src/lib/competitors/import";
 import { queueAnalysis, runAnalysis } from "../src/lib/competitors/analysis/engine";
 import { recordCompetitorEvent } from "../src/lib/competitors/analytics";
@@ -41,6 +42,11 @@ import { executeRun } from "../src/lib/competitors/runs";
 import { runScan } from "../src/lib/competitors/scan";
 
 async function runImport(manifestPath: string): Promise<void> {
+  if (!MANUAL_IMPORT_ENABLED) {
+    console.error(`[scanner] ${MANUAL_IMPORT_OFF_NOTE}`);
+    process.exitCode = 1;
+    return;
+  }
   const bundle = readBundleManifest(manifestPath);
   const { host } = bundle;
   for (const type of bundle.skipped) console.error(`[scanner] skipped source "${type}": not a source type`);

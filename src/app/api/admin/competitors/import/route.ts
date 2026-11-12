@@ -3,6 +3,7 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { BundleZipError, MAX_ZIP_BYTES, readBundleZip } from "@/lib/competitors/bundle-zip";
 import type { Bundle } from "@/lib/competitors/bundle";
+import { MANUAL_IMPORT_ENABLED, MANUAL_IMPORT_OFF_NOTE } from "@/lib/competitors/config";
 import { importPages } from "@/lib/competitors/import";
 import { runScan } from "@/lib/competitors/scan";
 
@@ -61,6 +62,7 @@ function refuse(status: number, error: string) {
 export async function POST(req: Request) {
   const admin = await apiAdmin();
   if (admin instanceof NextResponse) return admin;
+  if (!MANUAL_IMPORT_ENABLED) return refuse(403, MANUAL_IMPORT_OFF_NOTE);
 
   // Refused before the body is read: a larger body does not reach the route whole.
   if (Number(req.headers.get("content-length") ?? 0) > MAX_ZIP_BYTES + FORM_OVERHEAD_BYTES) return refuse(413, TOO_LARGE);

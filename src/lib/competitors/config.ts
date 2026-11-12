@@ -254,3 +254,12 @@ export const MAX_ZIP_BYTES = 30 * 1024 * 1024;
 export const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
 /** The most entries (files and folders) a zip may hold. */
 export const MAX_ZIP_ENTRIES = 5_000;
+
+/**
+ * Manual import of pages (Admin → Competitors → Import pages, its route, and
+ * the command line `--import`). OFF: it requires testing (Daniel 2026-11-12).
+ * A constant on purpose — no setting, environment variable or admin switch
+ * turns it on; it is switched on in code once it has been tested.
+ */
+export const MANUAL_IMPORT_ENABLED: boolean = false;
+export const MANUAL_IMPORT_OFF_NOTE = "Manual import is off. It requires testing.";

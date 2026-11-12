@@ -3,7 +3,7 @@
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Loader2, Upload } from "lucide-react";
 import type { AdminImportResult, AdminImportSource } from "@/app/api/admin/competitors/import/route";
-import { MAX_ZIP_BYTES } from "@/lib/competitors/config";
+import { MANUAL_IMPORT_ENABLED, MANUAL_IMPORT_OFF_NOTE, MAX_ZIP_BYTES } from "@/lib/competitors/config";
 import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import { AdminScans } from "./AdminScans";
 
@@ -60,7 +60,22 @@ function sourceLine(s: AdminImportSource): string {
   return `${name}: ${COPY.stored(s.pages)} · ${COPY.dropped(s.dropped)} · ${COPY.scan(s.status)}`;
 }
 
-export function AdminImport({ orgs, currentOrgId, onImported }: { orgs: ImportOrg[]; currentOrgId: string | null; onImported?: () => void }) {
+type AdminImportProps = { orgs: ImportOrg[]; currentOrgId: string | null; onImported?: () => void };
+
+/** The section. While manual import is off it shows the note only: no form, no control that turns it on. */
+export function AdminImport(props: AdminImportProps) {
+  if (!MANUAL_IMPORT_ENABLED) {
+    return (
+      <section className="rounded-xl border border-slate-200 bg-white p-5" data-testid="admin-import-off">
+        <h2 className="text-sm font-bold">{COPY.title}</h2>
+        <p className="mt-0.5 text-xs text-slate-500">{MANUAL_IMPORT_OFF_NOTE}</p>
+      </section>
+    );
+  }
+  return <AdminImportForm {...props} />;
+}
+
+function AdminImportForm({ orgs, currentOrgId, onImported }: AdminImportProps) {
   const [orgId, setOrgId] = useState(orgs.some((o) => o.id === currentOrgId) ? (currentOrgId as string) : (orgs[0]?.id ?? ""));
   const [competitorId, setCompetitorId] = useState("");
   const [file, setFile] = useState<File | null>(null);
