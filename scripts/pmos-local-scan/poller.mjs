@@ -4,10 +4,11 @@
  *
  * Runs on a PM's Mac (for now Daniel's, as PM-OS operator for every
  * customer). Every 15 minutes it asks PM-OS which competitor scans are
- * waiting for a station; when the screen is locked it runs them without
- * asking, when the PM is working it shows ONE dialog listing every waiting
- * site (Approve runs them all, Later snoozes two hours — a locked screen
- * overrides the snooze). Scans run one at a time. The station is a server:
+ * waiting for a station and runs them, without asking (Daniel 2026-11-12:
+ * the scan reads the site in the background, not in the PM's browser, so
+ * there is nothing to approve). Scans run one at a time. What the station is
+ * doing is written to <state-dir>/status.json, which the menu bar indicator
+ * (menubar.swift) shows. The station is a server:
  * it holds a machine key with no expiry (~/.pmos/station-key), which PM-OS
  * rotates on its own every 30 days through the check-in call.
  *
@@ -35,14 +36,12 @@
  *   --runner fetch|claude (default fetch)
  *   --render auto|off    headless Chrome for empty pages and JS-built navigation (default auto; off = plain fetch only)
  *   --chrome PATH        the Chrome binary (default: PMOS_CHROME, else the Mac's /Applications path)
- *   --mac-state auto|active|locked   (default auto — reads the real lock state)
- *   --answer ask|approve|later       (default ask — the real dialog)
  *   --pause-ms N         pause between pages in the fetch runner (default 2000)
  *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit)
- *   --state-dir PATH     where the snooze file and the log live (default ~/.pmos)
+ *   --state-dir PATH     where the status file and the log live (default ~/.pmos)
  */
 import { execFile, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,10 +58,9 @@ const has = (name) => args.includes(`--${name}`);
 const STATE_DIR = flag("state-dir", join(homedir(), ".pmos"));
 const KEY_FILE = flag("key-file", join(STATE_DIR, "station-key"));
 const APP_URL = (flag("app-url", process.env.PMOS_APP_URL || "https://app.pm-os.io")).replace(/\/+$/, "");
-const SNOOZE_FILE = join(STATE_DIR, "snooze-until");
+const STATUS_FILE = join(STATE_DIR, "status.json");
 const LOG_FILE = join(STATE_DIR, "local-scan.log");
 const POLL_MS = 15 * 60_000;
-const SNOOZE_MS = 2 * 3600_000;
 const PAUSE_MS = Number(flag("pause-ms", "2000"));
 const RENDER = flag("render", "auto");
 const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
@@ -70,8 +68,6 @@ const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google C
 const MAX_RENDERS = 40;
 /** The render's own Chrome profile (never the PM's). */
 const CHROME_PROFILE = join(STATE_DIR, "chrome-profile");
-const MAC_STATE = flag("mac-state", "auto");
-const ANSWER = flag("answer", "ask");
 const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
 /** A browser's own identity — this is a person's machine, not the PM-OS crawler. */
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -87,6 +83,29 @@ function log(msg) {
     appendFileSync(LOG_FILE, line + "\n");
   } catch {
     // no log file, fine
+  }
+}
+
+/**
+ * What the station is doing, for the menu bar indicator: one small JSON file, replaced whole on every change.
+ *   state      "idle" | "scanning" | "unreachable"
+ *   lastCheckIn, message, and while scanning: competitor, site, pagesRead, scanStartedAt, waiting (scans after this one)
+ *   lastScan   { competitor, pagesRead, finishedAt, result } of the scan that ended last
+ */
+let station = { appUrl: APP_URL, state: "idle" };
+try {
+  const prev = JSON.parse(readFileSync(STATUS_FILE, "utf8"));
+  if (prev && typeof prev === "object") station = { ...station, lastCheckIn: prev.lastCheckIn, lastScan: prev.lastScan, station: prev.station };
+} catch {
+  // first run, or an unreadable file: start clean
+}
+function status(patch) {
+  station = { ...station, ...patch, appUrl: APP_URL, updatedAt: new Date().toISOString() };
+  try {
+    writeFileSync(`${STATUS_FILE}.tmp`, JSON.stringify(station, null, 1));
+    renameSync(`${STATUS_FILE}.tmp`, STATUS_FILE);
+  } catch {
+    // the indicator is a convenience: a status file that cannot be written never stops a scan
   }
 }
 
@@ -109,45 +128,6 @@ async function whichRunner() {
     }
   }
   return "fetch";
-}
-
-// ————— Mac state —————
-
-async function screenLocked() {
-  if (MAC_STATE === "locked") return true;
-  if (MAC_STATE === "active") return false;
-  try {
-    const { stdout } = await run("ioreg", ["-n", "Root", "-d1", "-a"]);
-    return /CGSSessionScreenIsLocked/.test(stdout);
-  } catch {
-    return false;
-  }
-}
-
-function snoozed() {
-  try {
-    const until = Number(readFileSync(SNOOZE_FILE, "utf8").trim());
-    return Number.isFinite(until) && until > Date.now();
-  } catch {
-    return false;
-  }
-}
-
-/** One dialog for every waiting site. Approve runs them all; Later snoozes two hours; no answer = Later. */
-async function askUser(sites) {
-  if (ANSWER === "approve") return true;
-  if (ANSWER === "later") return false;
-  const list = sites.map((s) => `• ${s}`).join("\n");
-  const script = `display dialog "PM-OS wants to scan ${sites.length === 1 ? "this site" : `${sites.length} sites`} from your browser:\n\n${list.replace(/"/g, '\\"')}" with title "PM-OS competitor scan" buttons {"Later", "Approve"} default button "Approve" giving up after 120`;
-  // The station is a background service: without "activate" its dialog opens BEHIND the open windows and times out
-  // unseen (Daniel 2026-11-11). It comes to the front, with a sound.
-  run("afplay", ["/System/Library/Sounds/Glass.aiff"]).catch(() => undefined);
-  try {
-    const { stdout } = await run("osascript", ["-e", "activate", "-e", script]);
-    return /button returned:Approve/.test(stdout) && !/gave up:true/.test(stdout);
-  } catch {
-    return false; // Cancel / Esc = Later
-  }
 }
 
 // ————— PM-OS API —————
@@ -531,10 +511,13 @@ async function runJob(job, runner, key) {
    * (400/413/422: a bad URL, a body too large) is skipped and the scan goes on — one odd page must never cost the
    * site (Tomer's review). Anything else (network, 5xx) is retried a few times, then skipped too.
    */
+  let pagesRead = 0;
   const post = async (body) => {
     for (let attempt = 1; ; attempt++) {
       try {
-        return await api(`/api/competitors/local/scans/${job.scanId}/pages`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+        const answer = await api(`/api/competitors/local/scans/${job.scanId}/pages`, { method: "POST", headers: auth, body: JSON.stringify(body) });
+        if (body.status === "ok") status({ pagesRead: ++pagesRead });
+        return answer;
       } catch (e) {
         const m = /→ (\d{3}) (.*)$/.exec(e instanceof Error ? e.message : String(e));
         const status = m ? Number(m[1]) : 0;
@@ -546,6 +529,7 @@ async function runJob(job, runner, key) {
     }
   };
   const result = runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post);
+  job.pagesRead = pagesRead;
   if (result.ended) return;
   // PM-OS answers "received" at once, in every environment, and processes the pages (hash compare, page states, badge) in its
   // own runner — a Cloud Run job in production, a background task in local dev. A network blip or a 5xx is retried three
@@ -576,31 +560,25 @@ async function once() {
   const runner = await whichRunner();
   const data = await checkIn(key);
   const waiting = data.waiting ?? [];
+  status({ state: "idle", station: data.station, lastCheckIn: new Date().toISOString(), message: waiting.length ? `${waiting.length} waiting` : "Nothing waiting", competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 });
   if (!waiting.length) {
     log(`check-in as ${data.station}: nothing waiting`);
     return;
   }
-  const locked = await screenLocked();
-  log(`check-in as ${data.station}: ${waiting.length} waiting (${waiting.map((w) => w.competitorName).join(", ")}) — screen ${locked ? "locked" : "active"}`);
-  if (!locked) {
-    if (snoozed()) {
-      log("snoozed (Later) — skipping this check-in");
-      return;
-    }
-    const approved = await askUser(waiting.map((w) => w.competitorName));
-    if (!approved) {
-      writeFileSync(SNOOZE_FILE, String(Date.now() + SNOOZE_MS));
-      log("Later — snoozed for 2 hours (a locked screen runs anyway)");
-      return;
-    }
-  }
-  for (const job of waiting) {
+  // No dialog, no snooze (Daniel 2026-11-12): the scan runs in the background, so the station starts it at once.
+  log(`check-in as ${data.station}: ${waiting.length} waiting (${waiting.map((w) => w.competitorName).join(", ")})`);
+  for (const [i, job] of waiting.entries()) {
+    status({ state: "scanning", competitor: job.competitorName, site: job.siteUrl, pagesRead: 0, scanStartedAt: new Date().toISOString(), waiting: waiting.length - i - 1, message: `Scanning ${job.competitorName}` });
+    let result = "handed in";
     try {
       await runJob(job, runner, key);
     } catch (e) {
+      result = `failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200);
       log(`scan ${job.scanId} failed on the station: ${e instanceof Error ? e.message : String(e)}`);
     }
+    status({ lastScan: { competitor: job.competitorName, pagesRead: job.pagesRead ?? station.pagesRead ?? 0, finishedAt: new Date().toISOString(), result } });
   }
+  status({ state: "idle", message: "Nothing waiting", competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 });
 }
 
 async function main() {
@@ -612,6 +590,7 @@ async function main() {
     try {
       await once();
     } catch (e) {
+      status({ state: "unreachable", message: `Check-in failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) });
       log(`check-in failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     await new Promise((r) => setTimeout(r, POLL_MS));
@@ -619,6 +598,7 @@ async function main() {
 }
 
 main().catch((e) => {
+  status({ state: "unreachable", message: `Check-in failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) });
   log(`fatal: ${e instanceof Error ? e.stack ?? e.message : String(e)}`);
   process.exit(1);
 });

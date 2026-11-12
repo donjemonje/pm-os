@@ -14,8 +14,8 @@ The local lane of competitor website scanning (Website Scanning PRD, 2026-11-04)
 
 ## What happens
 
-- Screen locked → waiting scans run without asking.
-- Screen active → one dialog lists every waiting site: **Approve** runs them all, **Later** snoozes two hours. A locked screen runs them anyway.
+- Waiting scans start at the next check-in, without asking (Daniel 2026-11-12): the scan reads the site in the background, not in the PM's browser, so there is no dialog and no snooze.
+- A small icon in the menu bar shows the station: dimmed when idle, the icon plus the page count while a scan is read, a warning sign when a station has not checked in for 20 minutes or cannot reach PM-OS. Its menu has one line per environment, the last scan, **Check in now** and **Open log**. It reads `~/.pmos/<env>/status.json`, which the poller writes. Installed by `install.sh` (or alone: `sh scripts/pmos-local-scan/install-menu.sh`); needs the Xcode command line tools.
 - One scan at a time. The station reads the site itself (v1, Daniel 2026-11-08): sitemap plus the links on every page, same site only, a browser identity, 2 s between pages, stop on 429. Pages with no text, and home/hub pages whose menus are built by JavaScript, are rendered with the installed Chrome headless. PDFs are downloaded and handed in as documents. Each page is handed in as it is read; PM-OS extracts the text, normalizes, hashes and decides new / changed / unchanged.
 - The local lane reads robots.txt only for its Sitemap lines (then /sitemap.xml and /sitemap_index.xml, indexes followed). Its crawl restrictions are never obeyed: it is a person's machine acting on a person's intent, and pages a site hides from bots are brought too.
 - `--runner claude` (Claude Code + Claude in Chrome) stays available for later judgment work; it cannot export a real page's HTML unattended, so it is not the default.
@@ -23,6 +23,6 @@ The local lane of competitor website scanning (Website Scanning PRD, 2026-11-04)
 ## Flags (tests and troubleshooting)
 
     node scripts/pmos-local-scan/poller.mjs --app-url http://localhost:3205 --key-file /tmp/key \
-      --runner fetch --mac-state locked --answer approve --pause-ms 0 --max-pages 20
+      --runner fetch --pause-ms 0 --max-minutes 5
 
-`--mac-state active|locked` and `--answer approve|later` replace the real lock state and dialog; `--render off` disables headless Chrome; `--loop` keeps running instead of one check-in. Log: `~/.pmos/<env>/local-scan.log`.
+`--render off` disables headless Chrome; `--loop` keeps running instead of one check-in. Log: `~/.pmos/<env>/local-scan.log`; status for the menu bar icon: `~/.pmos/<env>/status.json`.
