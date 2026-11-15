@@ -45,7 +45,7 @@ import { db } from "../src/lib/db";
 import { readBundleManifest } from "../src/lib/competitors/bundle";
 import { MANUAL_IMPORT_ENABLED, MANUAL_IMPORT_OFF_NOTE } from "../src/lib/competitors/config";
 import { importPages } from "../src/lib/competitors/import";
-import { queueAnalysis, readCounters, runAnalysis } from "../src/lib/competitors/analysis/engine";
+import { echoRunLog, queueAnalysis, readCounters, runAnalysis } from "../src/lib/competitors/analysis/engine";
 import { queueSetup } from "../src/lib/competitors/analysis/setup";
 import { readSetupProgress } from "../src/lib/competitors/analysis/setup-rules";
 import { addOwnSite } from "../src/lib/competitors/own-site";
@@ -109,6 +109,9 @@ async function runOwnSite(workspaceId: string, url: string): Promise<void> {
 
 /** `--setup <workspaceId>`: queue the setup run (or continue the one that failed) and run it in this process (analysis/setup.ts). */
 async function runSetup(workspaceId: string): Promise<void> {
+  // The run's log on the console as it is written (it is also on the run row, for Administration → Competitors). Set
+  // before the run is queued: queueing starts it in this process when nothing else is running.
+  echoRunLog((l) => console.log(`[setup ${l.at.slice(11, 19)}] ${l.level === "info" ? "" : `${l.level.toUpperCase()} `}${l.msg}${l.url ? ` — ${l.url}` : ""}`));
   const q = await queueSetup(workspaceId);
   if ("refused" in q) {
     console.error(`[scanner] setup run refused: ${q.message}`);

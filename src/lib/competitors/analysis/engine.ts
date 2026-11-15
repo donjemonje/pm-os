@@ -289,6 +289,15 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 // ————— Run —————
 
+/**
+ * Where a run's log lines go besides the run row, in this process: the scanner CLI sets it for `--setup`, so a run of
+ * hours shows on the console line by line. Null (the default, and always in the app server) = the run row only.
+ */
+let echo: ((line: AnalysisLogLine) => void) | null = null;
+export function echoRunLog(to: ((line: AnalysisLogLine) => void) | null): void {
+  echo = to;
+}
+
 /** What the setup walk (analysis/setup.ts) gets from the engine: the run, its accounting, and one context per company. */
 export interface SetupEnv {
   run: { id: string; workspaceId: string; ownCompetitorId: string; startedById: string | null; startedAt: Date; injected: boolean; resumed: boolean };
@@ -343,7 +352,9 @@ export async function runAnalysis(id: string): Promise<void> {
     progress.pagesDone = t.pagesDone;
   };
   const log: RunContext["log"] = (level, msg, url) => {
-    lines.push({ at: new Date().toISOString(), level, msg, ...(url ? { url } : {}) });
+    const line: AnalysisLogLine = { at: new Date().toISOString(), level, msg, ...(url ? { url } : {}) };
+    lines.push(line);
+    echo?.(line);
   };
   let step: AnalysisStepName = "map";
   let lost = false;
