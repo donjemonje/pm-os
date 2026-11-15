@@ -168,6 +168,8 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   }
 
   const competitors = state.competitors;
+  /** The organization's setup is not done: its catalog is built by the setup run, not typed in. */
+  const settingUp = state.setup !== "done";
   const active = state.capabilities.filter((k) => k.state === "active");
   // A suggested domain is approved or declined in the matrix (dashed group); the catalog panels show the domains in the table.
   const activeDomains = state.domains.filter((d) => d.state === "active");
@@ -179,6 +181,13 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       {error && <div className="rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">{error}</div>}
       {note && <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#0f7a47]"><Check size={12} strokeWidth={2.5} />{note}</div>}
       {!canEdit && <div className="text-[12.5px] text-fg-muted">{C.settings.viewOnly}</div>}
+      {/* Competitors needs its initial setup before it works: said plainly while the organization's setup is not done. */}
+      {settingUp && (
+        <div className="rounded-inner border border-border bg-card px-4 py-3" data-testid="cmp-being-set-up">
+          <div className="text-[13.5px] font-semibold text-foreground">{C.setup.title}</div>
+          <div className="mt-0.5 text-[12.5px] leading-relaxed text-fg-3">{C.setup.body}</div>
+        </div>
+      )}
 
       {/* Your company */}
       <OwnCompanyPanel own={state.own} orgName={state.orgName} productLines={state.productLines.length} canEdit={canEdit} busy={busy}
@@ -219,7 +228,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       </section>
 
       {/* Domains */}
-      <DomainsPanel domains={activeDomains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
+      <DomainsPanel domains={activeDomains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy} settingUp={settingUp}
         open={isOpen("domains")} onToggle={() => toggle("domains")} onOpen={() => openSection("domains")}
         onAdd={(body) => call("POST", "/api/competitors/domains", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/domains/${id}`, body)}
@@ -257,7 +266,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       />
 
       {/* Capabilities */}
-      <CapabilitiesPanel capabilities={active} domains={activeDomains} productLines={state.productLines} canEdit={canEdit} busy={busy}
+      <CapabilitiesPanel capabilities={active} domains={activeDomains} productLines={state.productLines} canEdit={canEdit} busy={busy} settingUp={settingUp}
         open={isOpen("capabilities")} onToggle={() => toggle("capabilities")} onOpen={() => openSection("capabilities")}
         onAdd={(body) => call("POST", "/api/competitors/capabilities", body)}
         onSave={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
@@ -717,7 +726,9 @@ const FIELD_LABEL = "mb-1 block text-[12px] font-medium text-fg-3";
 const EDITOR_BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary";
 const EDITOR_PRIMARY = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50";
 
-function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, open, onToggle, onOpen, onAdd, onSave, onRename, onReorder, onRemove }: {
+function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, settingUp, open, onToggle, onOpen, onAdd, onSave, onRename, onReorder, onRemove }: {
+  /** The organization's setup is not done: nothing is added by hand, and the empty list says why. */
+  settingUp: boolean;
   open: boolean;
   onToggle: () => void;
   onOpen: () => void;
@@ -796,7 +807,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
       <div className={cn("px-5 py-4", open && "border-b border-border")}>
         <div className="flex items-start justify-between gap-4">
           <SectionToggle section="domains" title={C.settings.domainsTitle} count={domains.length} open={open} onToggle={onToggle} />
-          {canEdit && !(adding && open) && (
+          {canEdit && !settingUp && !(adding && open) && (
             <button onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addDomain}</button>
           )}
         </div>
@@ -805,7 +816,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
       {open && (
       <div className="px-5 py-4">
 
-      {canEdit && adding && (
+      {canEdit && !settingUp && adding && (
         <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
           <label className="block">
             <span className={FIELD_LABEL}>{C.settings.domainName}</span>
@@ -828,7 +839,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
         </div>
       )}
 
-      {domains.length === 0 && !adding && <div className="rounded-xl border border-border bg-white px-5 py-4 text-sm text-muted">{C.settings.emptyDomains}</div>}
+      {domains.length === 0 && (settingUp || !adding) && <div className="rounded-xl border border-border bg-white px-5 py-4 text-sm text-muted">{settingUp ? C.setup.catalogNote : C.settings.emptyDomains}</div>}
 
       <div className="flex flex-col gap-3">
         {domains.map((d) => {
@@ -910,7 +921,9 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
 // ————— Capabilities —————
 
-function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy, open, onToggle, onOpen, onAdd, onSave, onRemove }: {
+function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy, settingUp, open, onToggle, onOpen, onAdd, onSave, onRemove }: {
+  /** The organization's setup is not done: nothing is added by hand, and the empty list says why. */
+  settingUp: boolean;
   open: boolean;
   onToggle: () => void;
   onOpen: () => void;
@@ -982,19 +995,19 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
       <div className={cn("px-5 py-4", open && "border-b border-border")}>
         <div className="flex items-start justify-between gap-4">
           <SectionToggle section="capabilities" title={C.settings.capabilitiesTitle} count={capabilities.length} open={open} onToggle={onToggle} />
-          {canEdit && !(adding && open) && domains.length > 0 && <button type="button" onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
+          {canEdit && !settingUp && !(adding && open) && domains.length > 0 && <button type="button" onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
         </div>
         {open && <p className="mt-1 text-sm text-muted">{C.settings.capabilitiesBlurb}</p>}
         {open && productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
       </div>
-      {open && adding && (
+      {open && adding && !settingUp && (
         <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void add(e); } }} className="flex items-end gap-2 border-b border-border px-5 py-4">
           {fields({ name, domainId, description, ownProduct }, { name: setName, domainId: setDomainId, description: setDescription, ownProduct: setOwnProduct })}
           <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || !domainId}><Check size={13} /> {C.settings.save}</Button>
         </form>
       )}
-      {open && capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCapabilities}</div>}
+      {open && capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{settingUp ? C.setup.catalogNote : C.settings.emptyCapabilities}</div>}
       {open && domains.map((d) => {
         const rows = capabilities.filter((k) => k.domainId === d.id);
         if (rows.length === 0) return null;

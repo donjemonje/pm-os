@@ -4,9 +4,14 @@ import { emptyCounters, readCounters, sumCounters } from "@/lib/competitors/anal
 import { analysisMayRun, queueFilter } from "@/lib/competitors/analysis/gate";
 import {
   analysisFillsTable,
+  catalogEditable,
   companiesInSetup,
   emptySetupProgress,
+  isOrgSetupState,
+  nextSetupState,
+  ORG_SETUP_STATES,
   orderCompanies,
+  orgSetupState,
   readSetupProgress,
   setupRefusal,
   setupStateOf,
@@ -15,7 +20,7 @@ import {
   type SetupRequest,
 } from "@/lib/competitors/analysis/setup-rules";
 
-describe("the definition of set up", () => {
+describe("what an organization's data says about setup (organizations that were never given a state)", () => {
   it("no domain and no capability, in any state, and no setup run → not set up", () => {
     expect(setupStateOf({ domains: 0, capabilities: 0, lastSetupStatus: null })).toBe("not_set_up");
   });
@@ -36,23 +41,74 @@ describe("the definition of set up", () => {
   it("a finished setup run whose catalog was erased → not set up again", () => {
     expect(setupStateOf({ domains: 0, capabilities: 0, lastSetupStatus: "done" })).toBe("not_set_up");
   });
-  it("an analysis run fills the table only in a workspace that is set up", () => {
-    expect(analysisFillsTable("set_up")).toBe(true);
-    expect(analysisFillsTable("not_set_up")).toBe(false);
+});
+
+describe("setup is an explicit state of the organization: required → in setup → done", () => {
+  const EMPTY = { domains: 0, capabilities: 0, lastSetupStatus: null };
+  const CATALOG = { domains: 12, capabilities: 138, lastSetupStatus: null };
+
+  it("the stored state wins over whatever the data says", () => {
+    expect(orgSetupState("required", CATALOG)).toBe("required");
+    expect(orgSetupState("in_setup", EMPTY)).toBe("in_setup");
+    expect(orgSetupState("done", EMPTY)).toBe("done");
+    expect(orgSetupState("done", { domains: 0, capabilities: 0, lastSetupStatus: "failed" })).toBe("done");
+  });
+  it("the rule for existing organizations: never given a state and already has a catalog → done, with no manual step", () => {
+    expect(orgSetupState(null, CATALOG)).toBe("done");
+    expect(orgSetupState(undefined, { domains: 7, capabilities: 47, lastSetupStatus: "done" })).toBe("done");
+    expect(orgSetupState(null, { domains: 1, capabilities: 0, lastSetupStatus: null })).toBe("done");
+  });
+  it("never given a state, a setup run that did not finish → in setup; nothing at all → required", () => {
+    for (const status of ["queued", "running", "waiting", "failed", "cancelled"]) expect(orgSetupState(null, { domains: 0, capabilities: 0, lastSetupStatus: status })).toBe("in_setup");
+    expect(orgSetupState(null, EMPTY)).toBe("required");
+    expect(orgSetupState(null, { domains: 0, capabilities: 0, lastSetupStatus: "done" })).toBe("required");
+  });
+  it("a stored value that is not a state is not one: the data decides", () => {
+    expect(orgSetupState("set_up", CATALOG)).toBe("done");
+    expect(orgSetupState("", EMPTY)).toBe("required");
+    expect(orgSetupState(true, EMPTY)).toBe("required");
+    expect(isOrgSetupState("done")).toBe(true);
+    expect(isOrgSetupState("not_set_up")).toBe(false);
+    expect(ORG_SETUP_STATES).toEqual(["required", "in_setup", "done"]);
+  });
+  it("turning Competitors on keeps the state: a new organization is required, a set-up one stays done", () => {
+    expect(nextSetupState(orgSetupState(null, EMPTY), "enabled")).toBe("required");
+    expect(nextSetupState(orgSetupState(null, CATALOG), "enabled")).toBe("done");
+    expect(nextSetupState("in_setup", "enabled")).toBe("in_setup");
+  });
+  it("the setup run moves it: queued → in setup, finished → done; a run that stopped stays in setup and is continued", () => {
+    expect(nextSetupState("required", "run_queued")).toBe("in_setup");
+    expect(nextSetupState("in_setup", "run_queued")).toBe("in_setup");
+    expect(nextSetupState("in_setup", "run_stopped")).toBe("in_setup");
+    expect(nextSetupState("in_setup", "run_done")).toBe("done");
+    expect(nextSetupState("required", "run_done")).toBe("done");
+  });
+  it("done is never left by an event — only a PM-OS admin sets it back by hand", () => {
+    for (const event of ["enabled", "run_queued", "run_done", "run_stopped"] as const) expect(nextSetupState("done", event)).toBe("done");
+  });
+  it("until it is done: an analysis creates no row, and the catalog cannot be typed in by hand", () => {
+    expect(analysisFillsTable("done")).toBe(true);
+    expect(analysisFillsTable("required")).toBe(false);
     expect(analysisFillsTable("in_setup")).toBe(false);
+    expect(catalogEditable("done")).toBe(true);
+    expect(catalogEditable("required")).toBe(false);
+    expect(catalogEditable("in_setup")).toBe(false);
   });
 });
 
 describe("why a setup run is refused", () => {
-  const ok: SetupRequest = { domains: 0, capabilities: 0, lastSetupStatus: null, hasOwnSource: true, activeScans: [], competitorsWithPages: 4 };
+  const ok: SetupRequest = { state: "required", domains: 0, capabilities: 0, lastSetupStatus: null, hasOwnSource: true, activeScans: [], competitorsWithPages: 4 };
   it("nothing in the way → it may be queued", () => {
     expect(setupRefusal(ok)).toBeNull();
   });
-  it("the workspace is already set up", () => {
-    const r = setupRefusal({ ...ok, domains: 7, capabilities: 47 });
+  it("the organization's setup is done — the state decides, not the catalog", () => {
+    const r = setupRefusal({ ...ok, state: "done", domains: 7, capabilities: 47 });
     expect(r?.reason).toBe("set_up");
     expect(r?.message).toContain("7 domains, 47 capabilities");
-    expect(setupRefusal({ ...ok, domains: 3, capabilities: 40, lastSetupStatus: "done" })?.reason).toBe("set_up");
+    expect(setupRefusal({ ...ok, state: "done", domains: 3, capabilities: 40, lastSetupStatus: "done" })?.reason).toBe("set_up");
+    expect(setupRefusal({ ...ok, state: "done" })?.reason).toBe("set_up");
+    // A PM-OS admin set an organization that has a catalog back to "required": the setup run may be queued.
+    expect(setupRefusal({ ...ok, state: "required", domains: 7, capabilities: 47 })).toBeNull();
   });
   it("there is no own source", () => {
     const r = setupRefusal({ ...ok, hasOwnSource: false });
@@ -73,17 +129,17 @@ describe("why a setup run is refused", () => {
     for (const status of ["queued", "running", "waiting"]) expect(setupRefusal({ ...ok, lastSetupStatus: status })?.reason).toBe("active");
   });
   it("a setup run that failed or was cancelled is not a refusal: it is continued — with the same checks", () => {
-    expect(setupRefusal({ ...ok, lastSetupStatus: "failed" })).toBeNull();
-    expect(setupRefusal({ ...ok, lastSetupStatus: "cancelled", domains: 9, capabilities: 120 })).toBeNull();
-    expect(setupRefusal({ ...ok, lastSetupStatus: "failed", hasOwnSource: false })?.reason).toBe("no_own_source");
-    expect(setupRefusal({ ...ok, lastSetupStatus: "failed", activeScans: [{ company: "Enterpret", status: "running" }] })?.reason).toBe("scan_active");
+    expect(setupRefusal({ ...ok, state: "in_setup", lastSetupStatus: "failed" })).toBeNull();
+    expect(setupRefusal({ ...ok, state: "in_setup", lastSetupStatus: "cancelled", domains: 9, capabilities: 120 })).toBeNull();
+    expect(setupRefusal({ ...ok, state: "in_setup", lastSetupStatus: "failed", hasOwnSource: false })?.reason).toBe("no_own_source");
+    expect(setupRefusal({ ...ok, state: "in_setup", lastSetupStatus: "failed", activeScans: [{ company: "Enterpret", status: "running" }] })?.reason).toBe("scan_active");
   });
   it("the reasons are checked in a fixed order: active, set up, own source, scans, pages", () => {
-    const all: SetupRequest = { domains: 2, capabilities: 2, lastSetupStatus: null, hasOwnSource: false, activeScans: [{ company: "X", status: "running" }], competitorsWithPages: 0 };
+    const all: SetupRequest = { state: "done", domains: 2, capabilities: 2, lastSetupStatus: null, hasOwnSource: false, activeScans: [{ company: "X", status: "running" }], competitorsWithPages: 0 };
     expect(setupRefusal(all)?.reason).toBe("set_up");
-    expect(setupRefusal({ ...all, domains: 0, capabilities: 0 })?.reason).toBe("no_own_source");
-    expect(setupRefusal({ ...all, domains: 0, capabilities: 0, hasOwnSource: true })?.reason).toBe("scan_active");
-    expect(setupRefusal({ ...all, domains: 0, capabilities: 0, hasOwnSource: true, activeScans: [] })?.reason).toBe("no_pages");
+    expect(setupRefusal({ ...all, state: "required", domains: 0, capabilities: 0 })?.reason).toBe("no_own_source");
+    expect(setupRefusal({ ...all, state: "required", domains: 0, capabilities: 0, hasOwnSource: true })?.reason).toBe("scan_active");
+    expect(setupRefusal({ ...all, state: "required", domains: 0, capabilities: 0, hasOwnSource: true, activeScans: [] })?.reason).toBe("no_pages");
     expect(setupRefusal({ ...all, lastSetupStatus: "running" })?.reason).toBe("active");
   });
 });

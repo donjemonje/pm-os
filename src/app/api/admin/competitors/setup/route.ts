@@ -3,14 +3,18 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { capLines, capsOf, readCaps } from "@/lib/competitors/analysis/caps";
 import { readCounters } from "@/lib/competitors/analysis/counters";
-import { readSetupProgress, setupStateOf, type SetupStage, type SetupState } from "@/lib/competitors/analysis/setup-rules";
+import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { setSetupState, workspaceSetup } from "@/lib/competitors/analysis/setup";
+import { isOrgSetupState, ORG_SETUP_STATES, readSetupProgress, type OrgSetupState, type SetupStage } from "@/lib/competitors/analysis/setup-rules";
 import { readUsage, sortUsage, type StepUsage } from "@/lib/competitors/analysis/usage";
 
 /**
- * Administration → Competitors → Setup runs (PM-OS admin only, read-only): an organization's setup state, its own
- * site, and its setup runs with the progress of every company (analysis/setup.ts).
+ * Administration → Competitors → Setup runs (PM-OS admin only): an organization's setup state, its own site, and
+ * its setup runs with the progress of every company (analysis/setup.ts).
  *
- *   GET ?organizationId=<id> → { state, ownSite, domains, capabilities, runs: AdminSetupRun[] }
+ *   GET   ?organizationId=<id>        → { state, stateSet, ownSite, domains, capabilities, runs: AdminSetupRun[] }
+ *   PATCH { organizationId, state }   → a PM-OS admin sets the setup state by hand: required | in_setup | done.
+ *                                       The customer never can (setup-rules.ts).
  *
  * Nothing here starts or changes a run: the setup run is started from the scanner CLI (--setup <workspaceId>).
  */
@@ -68,7 +72,10 @@ export interface AdminSetupRun {
 
 export interface AdminSetupState {
   workspaceId: string;
-  state: SetupState;
+  /** required | in_setup | done (setup-rules.ts orgSetupState). */
+  state: OrgSetupState;
+  /** The state is stored on the organization. False = it was never set: `state` is read from the organization's data. */
+  stateSet: boolean;
   ownSite: { name: string; host: string } | null;
   domains: number;
   capabilities: number;
@@ -82,9 +89,8 @@ export async function GET(req: Request) {
   const workspace = organizationId ? await db.workspace.findUnique({ where: { organizationId }, select: { id: true } }) : null;
   if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const workspaceId = workspace.id;
-  const [domains, capabilities, ownSite, runs] = await Promise.all([
-    db.competitorDomain.count({ where: { workspaceId } }),
-    db.capability.count({ where: { workspaceId } }),
+  const [setup, ownSite, runs] = await Promise.all([
+    workspaceSetup(workspaceId),
     db.competitor.findFirst({ where: { workspaceId, isOwn: true, deletedAt: null }, select: { name: true, host: true } }),
     db.competitorAnalysis.findMany({
       where: { workspaceId, kind: "setup" },
@@ -93,12 +99,14 @@ export async function GET(req: Request) {
       select: { id: true, status: true, step: true, counters: true, usage: true, caps: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
+  if (!setup) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const body: AdminSetupState = {
     workspaceId,
-    state: setupStateOf({ domains, capabilities, lastSetupStatus: runs[0]?.status ?? null }),
+    state: setup.state,
+    stateSet: setup.stored != null,
     ownSite,
-    domains,
-    capabilities,
+    domains: setup.facts.domains,
+    capabilities: setup.facts.capabilities,
     runs: runs.map((r): AdminSetupRun => {
       const c = readCounters(r.counters);
       const progress = readSetupProgress(r.setup);
@@ -117,4 +125,24 @@ export async function GET(req: Request) {
     }),
   };
   return NextResponse.json(body);
+}
+
+export async function PATCH(req: Request) {
+  const admin = await apiAdmin();
+  if (admin instanceof NextResponse) return admin;
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+    if (!body || typeof body !== "object") throw new Error();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  if (!isOrgSetupState(body.state)) return NextResponse.json({ error: `state must be one of ${ORG_SETUP_STATES.join(", ")}` }, { status: 400 });
+  const organizationId = typeof body.organizationId === "string" ? body.organizationId : "";
+  const workspace = organizationId ? await db.workspace.findUnique({ where: { organizationId }, select: { id: true } }) : null;
+  if (!workspace) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const before = await setSetupState(workspace.id, body.state);
+  if (before == null) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  await recordCompetitorEvent(workspace.id, admin.id, "cmp_setup_state_set", { from: before, to: body.state, by: "admin" });
+  return NextResponse.json({ state: body.state });
 }

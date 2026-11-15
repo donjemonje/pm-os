@@ -576,11 +576,21 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                     </tr>
                   </thead>
                   <tbody>
-                    {activeCaps.length === 0 || competitors.length === 0 ? (
+                    {state.setup !== "done" || activeCaps.length === 0 || competitors.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-14 text-center">
-                          <div className="font-title mb-1 text-[15px] font-bold">{activeCaps.length === 0 ? C.matrix.noCatalogTitle : C.matrix.emptyTitle}</div>
-                          <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{activeCaps.length === 0 ? C.matrix.noCatalogBody : C.matrix.emptyBody(own)}</div>
+                          {state.setup !== "done" ? (
+                            // Competitors needs its initial setup before it works: no empty table, no "add your domains".
+                            <div data-testid="cmp-being-set-up">
+                              <div className="font-title mb-1 text-[15px] font-bold">{C.setup.title}</div>
+                              <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{C.setup.body} {C.setup.settingsHint}</div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="font-title mb-1 text-[15px] font-bold">{activeCaps.length === 0 ? C.matrix.noCatalogTitle : C.matrix.emptyTitle}</div>
+                              <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{activeCaps.length === 0 ? C.matrix.noCatalogBody : C.matrix.emptyBody(own)}</div>
+                            </>
+                          )}
                         </td>
                       </tr>
                     ) : visibleCaps.length === 0 ? (

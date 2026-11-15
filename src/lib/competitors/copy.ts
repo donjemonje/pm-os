@@ -276,6 +276,14 @@ export const COMPETITORS_COPY = {
     ideaIntro: (org: string, capability: string, domain: string, own: string) => `Roadmap candidate from the competitor parity matrix: "${capability}" (${domain}). ${org} today: ${own.toLowerCase()}.`,
     ideaEvidence: (n: number) => `Evidence (${n} competitor${n === 1 ? "" : "s"}):`,
   },
+  // Competitors needs its initial setup before it works (analysis/setup-rules.ts): until the organization's setup is done.
+  setup: {
+    title: "Your competitor analysis is being set up",
+    body: "PM-OS is reading your website and your competitors' websites to build your first table: the capabilities, grouped by domain, and who offers which. It appears here when it is ready.",
+    settingsHint: "Meanwhile you can add your website and your competitors in Settings → Competitors.",
+    catalogNote: "Domains and capabilities are built during the setup and appear here when it is finished. Until then they cannot be added by hand.",
+    catalogLocked: "Your competitor analysis is being set up. Domains and capabilities can be added when it is finished.",
+  },
   settings: {
     tab: "Competitors",
     competitorsTitle: "Competitors",

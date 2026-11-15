@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { canManageOrgSettings } from "../admin-auth";
 import { orgFeatureDisabledResponse } from "../api-auth";
 import { getCurrentUser, type AuthUser } from "../auth";
+import { workspaceSetupState } from "./analysis/setup";
+import { catalogEditable } from "./analysis/setup-rules";
 import { MAX_CAPABILITY_DESCRIPTION } from "./config";
+import { COMPETITORS_COPY as C } from "./copy";
 import { getCompetitorsState, type CompetitorsState } from "./store";
 
 /**
@@ -27,6 +30,14 @@ export async function competitorsGuard(opts: { admin?: boolean } = {}): Promise<
     return NextResponse.json({ error: "Only an admin can change competitors settings" }, { status: 403 });
   }
   return { user, workspaceId: user.workspaceId, orgName: user.organizationName ?? "" };
+}
+
+/**
+ * The catalog is typed in by hand only in an organization whose setup is done (analysis/setup-rules.ts): until
+ * then the setup run builds the first catalog, and it builds it only in an empty one. Null = the team may add.
+ */
+export async function catalogLocked(ctx: CompetitorsApiContext): Promise<NextResponse | null> {
+  return catalogEditable(await workspaceSetupState(ctx.workspaceId)) ? null : bad(C.setup.catalogLocked, 409);
 }
 
 export async function stateResponse(ctx: CompetitorsApiContext, status = 200): Promise<NextResponse> {

@@ -15,6 +15,12 @@ model Organization {
   /// present wins; a missing key falls back to the env default (IDEAS_ENABLED
   /// etc.). Managed in PM-OS Admin → Configurations.
   features  Json     @default("{}")
+  /// The setup state of Competitors for this organization (lib/competitors/analysis/setup-rules.ts): "required" →
+  /// "in_setup" → "done". Set only by PM-OS — turning Competitors on in Admin → Enablements, the setup run, a PM-OS
+  /// admin by hand — never by the customer. Until it is "done" an analysis creates no row and the Competitors pages
+  /// say "being set up". Null = it was never set (an organization from before the state existed): the state is then
+  /// read from its data — a catalog means "done", a setup run that did not finish "in_setup", else "required".
+  competitorsSetup String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

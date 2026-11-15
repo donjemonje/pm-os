@@ -3,12 +3,13 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminSetupRun, AdminSetupState } from "@/app/api/admin/competitors/setup/route";
+import { ORG_SETUP_STATES, type OrgSetupState } from "@/lib/competitors/analysis/setup-rules";
 import type { ImportOrg } from "./AdminImport";
 import { RunCaps, RunUsage } from "./RunUsage";
 
 /**
- * Administration → Competitors → Setup runs (PM-OS admin only, read-only). Pick an organization: whether it is set
- * up, its own site, and its setup runs — status, step, what the run made, tokens, error, started and finished —
+ * Administration → Competitors → Setup runs (PM-OS admin only). Pick an organization: its setup state (required →
+ * in setup → done; it can be set by hand here — the customer never can), its own site, and its setup runs — status, step, what the run made, tokens, error, started and finished —
  * with the progress of every company (the own site first). Nothing is started here: the setup run is started from
  * the scanner command line. Customers never see this.
  */
@@ -16,18 +17,22 @@ import { RunCaps, RunUsage } from "./RunUsage";
 /** Every string of the section (admin screens keep their strings in the component). */
 const COPY = {
   title: "Setup runs",
-  intro: "Read-only. An organization with no domain and no capability is not set up: its first run is the setup run. It reads the organization's own site and every competitor, unifies their capabilities into rows, builds the domains from the rows and fills the table. It is started by hand from the scanner command line (--own-site <workspaceId> <url>, then --setup <workspaceId>), and a run that stopped is continued by the same command.",
+  intro: "Setup is a state of the organization: required → in setup → done. Turning Competitors on (Enablements) makes it required; the setup run moves it to in setup and, when it has finished, to done. Until it is done an analysis creates no row and the organization's Competitors pages say \"being set up\". The setup run reads the organization's own site and every competitor, unifies their capabilities into rows, builds the domains from the rows and fills the table. It is started by hand from the scanner command line (--own-site <workspaceId> <url>, then --setup <workspaceId>), and a run that stopped is continued by the same command. The runs below are read-only; the state can be set by hand.",
   organization: "Organization",
   noOrganizations: "No organization yet.",
   loading: "Loading the setup runs…",
   failed: "Could not load the setup runs. Try again.",
   refresh: "Refresh",
-  state: { set_up: "Set up", in_setup: "Setup not finished", not_set_up: "Not set up" } as Record<string, string>,
+  state: { done: "Done", in_setup: "In setup", required: "Required" } as Record<string, string>,
   stateHint: {
-    set_up: "Analysis runs create rows and fill cells.",
-    in_setup: "A setup run exists and did not finish. Until it does, analysis runs stop after the clean-up and create no row.",
-    not_set_up: "No domain and no capability. Analysis runs stop after the clean-up and create no row until the setup run has finished.",
+    done: "The organization is set up: analysis runs create rows and fill cells, and its pages show the table.",
+    in_setup: "A setup run was queued and has not finished. Until it has, analysis runs stop after the clean-up and create no row; the pages say \"being set up\".",
+    required: "Competitors is on and the setup run has not been started. Analysis runs stop after the clean-up and create no row; the pages say \"being set up\".",
   } as Record<string, string>,
+  stateFromData: "Never set — read from the organization's data: a catalog means done, a setup run that did not finish means in setup, anything else required.",
+  setState: "Set the state by hand",
+  setStateConfirm: (org: string, to: string) => `Set the setup state of ${org} to "${to}"? The customer sees the change at once: until the state is Done, the Competitors pages say "being set up" and no analysis creates a row.`,
+  setStateFailed: "Could not set the state. Try again.",
   ownSite: "Own site",
   noOwnSite: "none — the setup run needs one",
   catalog: (domains: number, capabilities: number) => `${domains} domain${domains === 1 ? "" : "s"} · ${capabilities} capabilit${capabilities === 1 ? "y" : "ies"} (any state)`,
@@ -59,9 +64,9 @@ const STATUS_CHIP: Record<string, string> = {
   cancelled: "bg-slate-50 text-slate-400 border-slate-200",
 };
 const STATE_CHIP: Record<string, string> = {
-  set_up: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  done: "bg-emerald-50 text-emerald-700 border-emerald-200",
   in_setup: "bg-amber-50 text-amber-800 border-amber-200",
-  not_set_up: "bg-slate-50 text-slate-600 border-slate-200",
+  required: "bg-slate-50 text-slate-600 border-slate-200",
 };
 
 function when(iso: string | null): string {
@@ -94,6 +99,25 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
     void load(orgId);
   }, [orgId, load]);
 
+  const [setting, setSetting] = useState(false);
+  const [setError, setSetError] = useState<string | null>(null);
+  /** A PM-OS admin sets the organization's setup state by hand — asked once, then written and read back. */
+  async function setSetup(to: OrgSetupState) {
+    const org = orgs.find((o) => o.id === orgId);
+    if (!org || !window.confirm(COPY.setStateConfirm(org.name, COPY.state[to]))) return;
+    setSetting(true);
+    setSetError(null);
+    try {
+      const res = await fetch("/api/admin/competitors/setup", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ organizationId: orgId, state: to }) });
+      if (!res.ok) throw new Error(((await res.json()) as { error?: string }).error ?? COPY.setStateFailed);
+      await load(orgId);
+    } catch (e) {
+      setSetError(e instanceof Error && e.message ? e.message : COPY.setStateFailed);
+    } finally {
+      setSetting(false);
+    }
+  }
+
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5" data-testid="admin-setup-runs">
       <div className="mb-3 flex items-start justify-between gap-4">
@@ -123,8 +147,16 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
           <dl className="mt-4 grid grid-cols-[140px_1fr] gap-y-1.5 text-sm">
             <dt className="text-slate-500">State</dt>
             <dd>
-              <span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATE_CHIP[state.data.state] ?? STATE_CHIP.not_set_up}`} data-testid="admin-setup-state">{COPY.state[state.data.state] ?? state.data.state}</span>
+              <span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATE_CHIP[state.data.state] ?? STATE_CHIP.required}`} data-testid="admin-setup-state">{COPY.state[state.data.state] ?? state.data.state}</span>
               <span className="ml-2 text-xs text-slate-500">{COPY.stateHint[state.data.state] ?? ""}</span>
+              {!state.data.stateSet && <div className="mt-1 text-xs text-slate-500" data-testid="admin-setup-state-from-data">{COPY.stateFromData}</div>}
+              <label className="mt-2 block max-w-[220px]">
+                <span className={LABEL}>{COPY.setState}</span>
+                <select value={state.data.state} disabled={setting} onChange={(e) => void setSetup(e.target.value as OrgSetupState)} className={INPUT} data-testid="admin-setup-set-state">
+                  {ORG_SETUP_STATES.map((v) => <option key={v} value={v}>{COPY.state[v]}</option>)}
+                </select>
+              </label>
+              {setError && <div className="mt-1 text-xs text-red-600" role="alert">{setError}</div>}
             </dd>
             <dt className="text-slate-500">{COPY.ownSite}</dt>
             <dd className="text-xs">{state.data.ownSite ? <>{state.data.ownSite.name} <span className="font-mono text-slate-500">({state.data.ownSite.host})</span></> : <span className="text-slate-500">{COPY.noOwnSite}</span>}</dd>

@@ -20,12 +20,16 @@
  *                                                      release notes — and queue a scan of each one found (the id of a competitor or
  *                                                      of an own site). The same search runs by itself when a company is added and
  *                                                      after every scan of its website; asked by hand it also runs with COMPETITORS_AI=off.
- *   npm run competitors:scan -- --setup <workspaceId>  queue THE SETUP RUN of an organization that has no domain and no capability
- *                                                      and run it here: map, research and merge for the own site and every competitor,
- *                                                      unify into rows, build the domains, fill the table. Refused (nothing written)
- *                                                      when the organization is set up, has no own site, a scan is still queued /
- *                                                      running / pending, or no competitor has stored pages. A setup run that failed
- *                                                      is continued by the same command.
+ *   npm run competitors:scan -- --setup <workspaceId>  queue THE SETUP RUN of an organization whose setup is not done (its state is
+ *                                                      "required" or "in setup") and run it here: map, research and merge for the own
+ *                                                      site and every competitor, unify into rows, build the domains, fill the table.
+ *                                                      Queueing it moves the organization to "in setup", finishing it to "done".
+ *                                                      Refused (nothing written) when the organization's setup is done, it has no own
+ *                                                      site, a scan is still queued / running / pending, or no competitor has stored
+ *                                                      pages. A setup run that failed is continued by the same command.
+ *   npm run competitors:scan -- --setup-state <workspaceId> [required|in_setup|done]   print the organization's setup state, or set it
+ *                                                      by hand (the customer never can). Until it is "done" an analysis creates no row
+ *                                                      and the organization's Competitors pages say "being set up".
  *
  * --import reads a manifest and runs one scan per source, in order:
  *   {
@@ -50,8 +54,8 @@ import { readBundleManifest } from "../src/lib/competitors/bundle";
 import { MANUAL_IMPORT_ENABLED, MANUAL_IMPORT_OFF_NOTE } from "../src/lib/competitors/config";
 import { importPages } from "../src/lib/competitors/import";
 import { echoRunLog, queueAnalysis, readCounters, runAnalysis } from "../src/lib/competitors/analysis/engine";
-import { queueSetup } from "../src/lib/competitors/analysis/setup";
-import { readSetupProgress } from "../src/lib/competitors/analysis/setup-rules";
+import { queueSetup, setSetupState, workspaceSetup } from "../src/lib/competitors/analysis/setup";
+import { isOrgSetupState, ORG_SETUP_STATES, readSetupProgress } from "../src/lib/competitors/analysis/setup-rules";
 import { searchAddresses, type SearchOutcome } from "../src/lib/competitors/address-search";
 import { addOwnSite } from "../src/lib/competitors/own-site";
 import { recordCompetitorEvent } from "../src/lib/competitors/analytics";
@@ -125,6 +129,25 @@ function printAddressSearch(r: SearchOutcome): void {
   else console.log(`[scanner] other addresses: ${r.added.map((a) => `${a.kind} ${a.url} (found by ${a.via})`).join(", ")} — a scan of each is queued (${seen})${r.note ? ` — ${r.note}` : ""}`);
 }
 
+/** `--setup-state <workspaceId> [state]`: the organization's setup state — printed, or set by hand (analysis/setup-rules.ts). */
+async function runSetupState(workspaceId: string, to: string | undefined): Promise<void> {
+  const setup = await workspaceSetup(workspaceId);
+  if (!setup) throw new Error(`no workspace with the id ${workspaceId}`);
+  const from = `${setup.state}${setup.stored ? "" : " (never set: read from the organization's data)"}`;
+  if (to === undefined || to.startsWith("--")) {
+    console.log(`[scanner] setup state: ${from} — ${setup.facts.domains} domain${setup.facts.domains === 1 ? "" : "s"}, ${setup.facts.capabilities} capabilit${setup.facts.capabilities === 1 ? "y" : "ies"}, latest setup run: ${setup.facts.lastSetupStatus ?? "none"}`);
+    return;
+  }
+  if (!isOrgSetupState(to)) {
+    console.error(`[scanner] the state must be one of ${ORG_SETUP_STATES.join(", ")}`);
+    process.exitCode = 2;
+    return;
+  }
+  await setSetupState(workspaceId, to);
+  await recordCompetitorEvent(workspaceId, null, "cmp_setup_state_set", { from: setup.state, to, by: "cli" });
+  console.log(`[scanner] setup state: ${from} → ${to}`);
+}
+
 /** `--addresses <competitorId>`: the search for a company's other addresses, asked by hand (lib/competitors/address-search.ts). */
 async function runAddresses(competitorId: string): Promise<void> {
   const company = await db.competitor.findUnique({ where: { id: competitorId }, select: { name: true, host: true, deletedAt: true } });
@@ -179,6 +202,7 @@ async function main() {
   const ownSiteIdx = args.indexOf("--own-site");
   const setupIdx = args.indexOf("--setup");
   const addressesIdx = args.indexOf("--addresses");
+  const setupStateIdx = args.indexOf("--setup-state");
   // The sweep belongs to the tick and the runs. A job started for one scan does not sweep: were it to start late, it would
   // mark the very scan it came to process as stale and relaunch it (Tomer's review 2026-11-10).
   if (scanIdx < 0 && analysisIdx < 0) {
@@ -213,6 +237,8 @@ async function main() {
     console.log(`[scanner] ${r.count} match${r.count === 1 ? "" : "es"} by PMOS AI forgotten — run --analyze ${args[rematchIdx + 1]} to match them again`);
   } else if (ownSiteIdx >= 0 && args[ownSiteIdx + 1] && args[ownSiteIdx + 2]) {
     await runOwnSite(args[ownSiteIdx + 1], args[ownSiteIdx + 2]);
+  } else if (setupStateIdx >= 0 && args[setupStateIdx + 1]) {
+    await runSetupState(args[setupStateIdx + 1], args[setupStateIdx + 2]);
   } else if (addressesIdx >= 0 && args[addressesIdx + 1]) {
     await runAddresses(args[addressesIdx + 1]);
   } else if (setupIdx >= 0 && args[setupIdx + 1]) {
@@ -220,7 +246,7 @@ async function main() {
   } else if (args.includes("--tick") || args.includes("--due")) {
     await tick((m) => console.log(`[scanner] ${m}`));
   } else {
-    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId> | --rematch <competitorId> | --own-site <workspaceId> <url> | --addresses <competitorId> | --setup <workspaceId>");
+    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId> | --rematch <competitorId> | --own-site <workspaceId> <url> | --addresses <competitorId> | --setup <workspaceId> | --setup-state <workspaceId> [required|in_setup|done]");
     process.exitCode = 2;
   }
 }

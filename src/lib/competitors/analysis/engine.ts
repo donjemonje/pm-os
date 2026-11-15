@@ -17,7 +17,7 @@ import { analysisMayRun, queueFilter } from "./gate";
 import { goBackStep } from "./goback";
 import { mapStep } from "./plan";
 import type { ReadingPlan } from "./sections";
-import { setupWalk, workspaceSetupState } from "./setup";
+import { moveSetupState, setupWalk, workspaceSetupState } from "./setup";
 import { analysisFillsTable, readSetupProgress, setupTotals, type SetupCompany, type SetupProgress, type SetupStage } from "./setup-rules";
 import { addUsage, readUsage, usageByModel, usageByModelText, usageLine, usageSince, type StepUsage } from "./usage";
 import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
@@ -53,9 +53,9 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  * The run ends "done" with budgetReached and the pages left unread in its counters; they stay due for the next run.
  *
  * Two things changed with the setup run (analysis/setup.ts, 2026-11-15):
- *   - A run fills the table only in a workspace that is SET UP (setup-rules.ts). In a workspace with no domain and
- *     no capability — or whose setup run did not finish — a run does map → research → merge and stops "done": the
- *     competitor's clean list is ready, and nothing lands in a catalog that has no domains.
+ *   - A run fills the table only in an organization whose SETUP IS DONE — an explicit state of the organization
+ *     (setup-rules.ts: required → in setup → done), not a guess from its catalog. Until then a run does
+ *     map → research → merge and stops "done": the competitor's clean list is ready, and no row is created.
  *   - The organization's own source (own.ts) is analysed like a competitor up to the match; then it fills OUR column
  *     (steps.ts applyOwnCells) instead of a competitor's cells, with no second look and no facts step.
  * The setup run itself is a row of this table (kind "setup", attached to the own source) and takes its turn in this
@@ -670,10 +670,10 @@ export async function runAnalysis(id: string): Promise<void> {
       });
       await inStep("research", () => researchStep(ctx, plan));
       await inStep("merge", () => mergeStep(ctx));
-      // A run fills the table only in a workspace that is set up: no row is created in a catalog that has no domains.
+      // A run fills the table only in an organization whose setup is done (an explicit state, setup-rules.ts): no row is created before.
       const setupState = await workspaceSetupState(row.workspaceId);
       if (!analysisFillsTable(setupState)) {
-        log("info", `${setupState === "in_setup" ? "The setup run of this organization has not finished" : "This organization is not set up yet (no domain, no capability)"}: the run stops after the clean-up. ${row.competitor.name}'s list is ready — it gets its rows and its cells in the setup run (--setup ${row.workspaceId})`);
+        log("info", `${setupState === "in_setup" ? "The setup run of this organization has not finished" : "The setup of this organization is required and has not been started"}: the run stops after the clean-up. ${row.competitor.name}'s list is ready — it gets its rows and its cells in the setup run (--setup ${row.workspaceId})`);
       } else {
         await inStep("match", () => matchStep(ctx));
         // Their capabilities that came out thin (no description beyond marketing pages, no feature …): read their most
@@ -728,6 +728,8 @@ export async function runAnalysis(id: string): Promise<void> {
     return;
   }
   if (setup) {
+    // A setup run that failed or was cancelled leaves the organization "in setup": the same run is continued (setup-rules.ts).
+    if (outcome !== "done") await moveSetupState(row.workspaceId, "run_stopped").catch((e) => console.error("[competitors] the setup state could not be written", id, e));
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_setup_finished", {
       analysisId: id, outcome, step, companies: setup.companies.length, rows: setup.rows, domains: setup.domains, features: setup.features,
       calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps),

@@ -13,12 +13,32 @@ import { readUsage, rollUp, type StepUsage } from "./usage";
  * Pure: no database, no network.
  */
 
-// ————— "Set up" —————
+// ————— The setup state of an organization —————
 
 /**
+ * Setup is an explicit state of the organization, not a guess (Daniel 2026-11-15): Competitors needs its initial
+ * setup run before it works, as Ideas on Jira needs a token.
+ *
+ *   required  Competitors is on and the setup run has not been started.
+ *   in_setup  a setup run was queued and has not finished — working, waiting, failed or cancelled; the same run is
+ *             continued from the CLI. The catalog may be half built.
+ *   done      the organization is set up: analyses create rows and fill cells, the pages show the table.
+ *
+ * It is stored on the organization (Organization.competitorsSetup) and set only by PM-OS — turning Competitors on
+ * in Admin → Enablements, the setup run, a PM-OS admin by hand — never by the customer. Until it is "done" an
+ * analysis creates no row, the catalog cannot be typed in by hand, and the Competitors pages say "being set up".
+ */
+export const ORG_SETUP_STATES = ["required", "in_setup", "done"] as const;
+export type OrgSetupState = (typeof ORG_SETUP_STATES)[number];
+export function isOrgSetupState(v: unknown): v is OrgSetupState {
+  return typeof v === "string" && (ORG_SETUP_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * What an organization's DATA says about setup — the rule from before the state was explicit, kept for the
+ * organizations that were never given one:
  * - not_set_up: the workspace has NO domain and NO capability, in any state, and no setup run is on its way.
- * - in_setup:   a setup run exists and did not finish (queued, running, waiting, failed, cancelled). The catalog may
- *               be half built; the same run is continued from the CLI.
+ * - in_setup:   a setup run exists and did not finish (queued, running, waiting, failed, cancelled).
  * - set_up:     everything else — a catalog exists (typed by hand, or built by a setup run that finished).
  *
  * There is no built-in "No Domain" row in PM-OS: a workspace with no domain has no CompetitorDomain row at all, so
@@ -41,11 +61,61 @@ export function setupStateOf(f: SetupFacts): SetupState {
 }
 
 /**
- * May an analysis run create rows and fill cells? Only in a workspace that is set up. Anywhere else a run does the
- * map, the research and the clean-up (merge) and stops: nothing lands in a catalog that has no domains.
+ * The state an organization is in — the rule at read time. What is stored wins. An organization that was never
+ * given a state (it is from before the state existed) is read from its data, so no organization needs a manual
+ * step: one that already has a catalog is "done", one whose setup run did not finish is "in_setup", any other is
+ * "required". The first write — Enablements, a setup run, an admin — makes it explicit from then on.
  */
-export function analysisFillsTable(state: SetupState): boolean {
-  return state === "set_up";
+export function orgSetupState(stored: unknown, facts: SetupFacts): OrgSetupState {
+  if (isOrgSetupState(stored)) return stored;
+  const data = setupStateOf(facts);
+  return data === "set_up" ? "done" : data === "in_setup" ? "in_setup" : "required";
+}
+
+/** What moves the state. A PM-OS admin setting it by hand is not here: that is a plain write of the state chosen. */
+export type SetupEvent =
+  /** Competitors was turned on for the organization (Admin → Enablements). */
+  | "enabled"
+  /** A setup run was queued, or a failed one was put back in the queue to continue. */
+  | "run_queued"
+  /** The setup run finished: the table is filled. */
+  | "run_done"
+  /** The setup run failed or was cancelled. */
+  | "run_stopped";
+
+/**
+ * The transitions: required → in_setup → done.
+ *   enabled      keeps the state the organization is in — a new organization is "required"; one that is set up
+ *                stays "done" when Competitors is turned off and on again.
+ *   run_queued   required → in_setup (and in_setup stays: the same run continues).
+ *   run_done     → done.
+ *   run_stopped  stays in_setup: the run is continued, not restarted.
+ * "done" is never left by an event — only a PM-OS admin sets a set-up organization back by hand.
+ */
+export function nextSetupState(current: OrgSetupState, event: SetupEvent): OrgSetupState {
+  if (current === "done") return "done";
+  switch (event) {
+    case "enabled":
+      return current;
+    case "run_queued":
+    case "run_stopped":
+      return "in_setup";
+    case "run_done":
+      return "done";
+  }
+}
+
+/**
+ * May an analysis run create rows and fill cells? Only in an organization whose setup is done. Anywhere else a run
+ * does the map, the research and the clean-up (merge) and stops: nothing lands in a catalog that has no domains.
+ */
+export function analysisFillsTable(state: OrgSetupState): boolean {
+  return state === "done";
+}
+
+/** May the team add a domain or a capability by hand? Only when setup is done: until then the setup run builds the first catalog, and it builds it only in an empty one. */
+export function catalogEditable(state: OrgSetupState): boolean {
+  return state === "done";
 }
 
 // ————— Refusals —————
@@ -53,6 +123,8 @@ export function analysisFillsTable(state: SetupState): boolean {
 export type SetupRefusal = "set_up" | "active" | "no_own_source" | "scan_active" | "no_pages";
 
 export interface SetupRequest extends SetupFacts {
+  /** The organization's setup state (orgSetupState). */
+  state: OrgSetupState;
   /** The workspace has an own source (own.ts) that was not removed. */
   hasOwnSource: boolean;
   /** Scans of the own source or of any competitor of the workspace that are queued, running or pending — with the company's name. */
@@ -64,17 +136,17 @@ export interface SetupRequest extends SetupFacts {
 /**
  * Why a setup run is refused — nothing is written — or null: it may be queued. In this order:
  *   1. a setup run of the workspace is queued or in progress;
- *   2. the workspace is already set up;
+ *   2. the organization's setup is done;
  *   3. it has no own source;
  *   4. a scan of the own source or of a competitor is still queued, running or pending;
  *   5. no competitor has stored pages.
- * A setup run that failed or was cancelled is not a refusal: it is continued (see setupStateOf "in_setup").
+ * A setup run that failed or was cancelled is not a refusal: it is continued (state "in_setup").
  */
 export function setupRefusal(r: SetupRequest): { reason: SetupRefusal; message: string } | null {
   if (r.lastSetupStatus === "queued" || r.lastSetupStatus === "running" || r.lastSetupStatus === "waiting") {
     return { reason: "active", message: `a setup run of this organization is already ${r.lastSetupStatus === "queued" ? "queued" : "in progress"}` };
   }
-  if (setupStateOf(r) === "set_up") {
+  if (r.state === "done") {
     return { reason: "set_up", message: `this organization is already set up (${r.domains} domain${r.domains === 1 ? "" : "s"}, ${r.capabilities} capabilit${r.capabilities === 1 ? "y" : "ies"}) — the setup run is the first run only` };
   }
   if (!r.hasOwnSource) return { reason: "no_own_source", message: "this organization has no own site yet — add it first: --own-site <workspaceId> <url>" };

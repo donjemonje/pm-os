@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { bad, cleanName, cleanText, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
+import { bad, catalogLocked, cleanName, cleanText, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
 import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
 import { nextChipColor } from "@/lib/ideas/colors";
 import { nextPosition } from "@/lib/competitors/store";
@@ -23,6 +23,9 @@ export async function releaseDomainAlias(workspaceId: string, name: string, exce
 export async function POST(req: Request) {
   const ctx = await competitorsGuard({ admin: true });
   if (ctx instanceof NextResponse) return ctx;
+  // Until the organization's setup is done, the setup run builds the catalog: nothing is added by hand.
+  const locked = await catalogLocked(ctx);
+  if (locked) return locked;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
   const name = cleanName(body.name);

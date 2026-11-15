@@ -3,6 +3,7 @@ import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
 import { mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
 import { isScannedAddress, readAddressSearch, searchRunning } from "./addresses";
+import { orgSetupState, type OrgSetupState } from "./analysis/setup-rules";
 import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
 import { siteHost } from "./url";
 
@@ -286,6 +287,11 @@ export interface CompetitorsState {
   /** Most recent finished scan across the workspace (header "scanned X ago"). */
   lastScanAt: string | null;
   scanning: boolean;
+  /**
+   * The setup state of the organization (analysis/setup-rules.ts): required | in_setup | done. Until it is "done"
+   * the pages say "being set up" instead of an empty table, and the catalog cannot be typed in by hand.
+   */
+  setup: OrgSetupState;
   /** An analysis run of the workspace is queued or in progress: the table is still being filled. */
   analyzing: boolean;
   /** A search for a company's other addresses is working: Settings keeps refreshing until it has ended. */
@@ -305,8 +311,8 @@ function asStringArray(v: unknown): string[] {
 }
 
 export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null, opts: { /** Settings → Removed is for admins: only they are sent the list. */ withRemoved?: boolean } = {}): Promise<CompetitorsState> {
-  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans, features, featureStatuses, activeAnalyses, finishedAnalyses, ownSite] = await Promise.all([
-    db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
+  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans, features, featureStatuses, activeAnalyses, finishedAnalyses, ownSite, lastSetupRun] = await Promise.all([
+    db.workspace.findUnique({ where: { id: workspaceId }, include: { organization: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
       where: { workspaceId, deletedAt: null, ...NOT_OWN },
@@ -354,6 +360,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       select: { id: true, competitorId: true, status: true, step: true, pagesDone: true, pagesTotal: true, resumeAt: true, error: true, finishedAt: true },
     }),
     db.competitor.findFirst({ where: { workspaceId, isOwn: true, deletedAt: null }, orderBy: { createdAt: "asc" }, include: { sources: { orderBy: { createdAt: "asc" } } } }),
+    db.competitorAnalysis.findFirst({ where: { workspaceId, kind: "setup" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { status: true } }),
   ]);
   const analysisRow = (a: (typeof activeAnalyses)[number]): AnalysisRow => ({ id: a.id, status: a.status, step: a.step, pagesDone: a.pagesDone, pagesTotal: a.pagesTotal, resumeAt: a.resumeAt?.toISOString() ?? null, error: a.error, finishedAt: a.finishedAt?.toISOString() ?? null });
   const analysisOf = (competitorId: string): AnalysisRow | null => {
@@ -493,6 +500,8 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     ownSite: ownSite != null,
     own,
     ownScanning: ownActive.length > 0,
+    // The stored state, else what the data says (domains and capabilities in any state, the latest setup run).
+    setup: orgSetupState(workspace?.organization.competitorsSetup, { domains: allDomains.length, capabilities: allCapabilities.length, lastSetupStatus: lastSetupRun?.status ?? null }),
     config,
     productLines: productLines.map((p) => p.name),
     competitors: competitors.map((c) => {

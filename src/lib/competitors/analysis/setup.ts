@@ -10,7 +10,7 @@ import { factsStep } from "./facts";
 import { EXCLUDED } from "./match";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import { mapStep } from "./plan";
-import { companiesInSetup, setupRefusal, setupStateOf, type SetupCompany, type SetupRefusal, type SetupState } from "./setup-rules";
+import { companiesInSetup, isOrgSetupState, nextSetupState, orgSetupState, setupRefusal, type OrgSetupState, type SetupCompany, type SetupEvent, type SetupFacts, type SetupRefusal } from "./setup-rules";
 import { applyCells, applyRows, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
 import {
   nextUnifyBatch,
@@ -37,9 +37,10 @@ import {
  * THE SETUP RUN — the first run of an organization (Capability Analysis, "The setup run"). The database side; the
  * rules are setup-rules.ts, unify.ts, domains.ts and own.ts.
  *
- * It runs for a workspace that has no domain and no capability, and it produces both — from the organization's own
- * site and its competitors' sites together. Started by hand (the scanner CLI `--setup <workspaceId>`), never by
- * itself. It is ONE row of CompetitorAnalysis (kind "setup", attached to the own source), so it takes its turn in
+ * It runs for an organization whose setup is not done (setup-rules.ts: required → in setup → done) and produces
+ * its domains and capabilities — from the organization's own site and its competitors' sites together. Queueing it
+ * moves the organization to "in setup"; finishing it, to "done". Started by hand (the scanner CLI
+ * `--setup <workspaceId>`), never by itself. It is ONE row of CompetitorAnalysis (kind "setup", attached to the own source), so it takes its turn in
  * the analysis queue — one run at a time in the installation — and the engine's claim, heartbeat, waiting, stale
  * sweep and close are its own (analysis/engine.ts runAnalysis).
  *
@@ -65,13 +66,51 @@ import {
 
 // ————— State and queue —————
 
-export async function workspaceSetupState(workspaceId: string): Promise<SetupState> {
-  const [domains, capabilities, last] = await Promise.all([
+/** What the state is read from: the organization's stored state and what its data says (setup-rules.ts orgSetupState). */
+export interface WorkspaceSetup {
+  organizationId: string;
+  state: OrgSetupState;
+  /** The stored state; null = never set — `state` was read from the data. */
+  stored: OrgSetupState | null;
+  facts: SetupFacts;
+}
+
+export async function workspaceSetup(workspaceId: string): Promise<WorkspaceSetup | null> {
+  const [workspace, domains, capabilities, last] = await Promise.all([
+    db.workspace.findUnique({ where: { id: workspaceId }, include: { organization: true } }),
     db.competitorDomain.count({ where: { workspaceId } }),
     db.capability.count({ where: { workspaceId } }),
     db.competitorAnalysis.findFirst({ where: { workspaceId, kind: "setup" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { status: true } }),
   ]);
-  return setupStateOf({ domains, capabilities, lastSetupStatus: last?.status ?? null });
+  if (!workspace) return null;
+  const facts: SetupFacts = { domains, capabilities, lastSetupStatus: last?.status ?? null };
+  const stored = isOrgSetupState(workspace.organization.competitorsSetup) ? workspace.organization.competitorsSetup : null;
+  return { organizationId: workspace.organizationId, state: orgSetupState(stored, facts), stored, facts };
+}
+
+/** The setup state of a workspace's organization. A workspace that does not exist is not set up. */
+export async function workspaceSetupState(workspaceId: string): Promise<OrgSetupState> {
+  return (await workspaceSetup(workspaceId))?.state ?? "required";
+}
+
+/**
+ * Something moved the state (setup-rules.ts nextSetupState): the organization's state is written — explicit from
+ * now on, whatever it was read from before. Returns the state after the event.
+ */
+export async function moveSetupState(workspaceId: string, event: SetupEvent): Promise<OrgSetupState | null> {
+  const setup = await workspaceSetup(workspaceId);
+  if (!setup) return null;
+  const next = nextSetupState(setup.state, event);
+  if (setup.stored !== next) await db.organization.update({ where: { id: setup.organizationId }, data: { competitorsSetup: next } });
+  return next;
+}
+
+/** A PM-OS admin sets the state by hand (Administration → Competitors → Setup runs). Returns the state it had. */
+export async function setSetupState(workspaceId: string, state: OrgSetupState): Promise<OrgSetupState | null> {
+  const setup = await workspaceSetup(workspaceId);
+  if (!setup) return null;
+  await db.organization.update({ where: { id: setup.organizationId }, data: { competitorsSetup: state } });
+  return setup.state;
 }
 
 /** The own source and every competitor of the workspace that was not removed, with their stored pages. */
@@ -90,15 +129,13 @@ export type QueueSetupResult =
 /**
  * Queue the setup run of a workspace — or continue the one that failed or was cancelled (the same row goes back to
  * the queue; nothing it wrote is redone). Refused, with a clear message and nothing written, when: a setup run of
- * the workspace is queued or in progress; the workspace is already set up; there is no own source; a scan of the
+ * the workspace is queued or in progress; the organization's setup is done; there is no own source; a scan of the
  * own source or of any competitor is still queued, running or pending; no competitor has stored pages
  * (setup-rules.ts setupRefusal).
  */
 export async function queueSetup(workspaceId: string, opts: { startedById?: string | null } = {}): Promise<QueueSetupResult> {
-  const [domains, capabilities, last, own, scans, all] = await Promise.all([
-    db.competitorDomain.count({ where: { workspaceId } }),
-    db.capability.count({ where: { workspaceId } }),
-    db.competitorAnalysis.findFirst({ where: { workspaceId, kind: "setup" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true, status: true } }),
+  const [setup, own, scans, all] = await Promise.all([
+    workspaceSetup(workspaceId),
     ownSourceOf(workspaceId),
     db.competitorScan.findMany({
       where: { workspaceId, status: { in: ["queued", "pending_local", "running"] }, source: { competitor: { deletedAt: null } } },
@@ -108,8 +145,9 @@ export async function queueSetup(workspaceId: string, opts: { startedById?: stri
     loadCompanies(workspaceId),
   ]);
   const { work, skipped } = companiesInSetup(all);
+  if (!setup) return { refused: "no_own_source", message: `no workspace with the id ${workspaceId}` };
   const refusal = setupRefusal({
-    domains, capabilities, lastSetupStatus: last?.status ?? null, hasOwnSource: Boolean(own),
+    ...setup.facts, state: setup.state, hasOwnSource: Boolean(own),
     activeScans: scans.map((s) => ({ company: s.source.competitor.name, status: s.status })),
     competitorsWithPages: work.filter((c) => !c.isOwn).length,
   });
@@ -137,6 +175,8 @@ export async function queueSetup(workspaceId: string, opts: { startedById?: stri
     return { id: run.id, created: true, continued: false };
   });
   if (result.created || result.continued) {
+    // required → in setup. It stays there until the run has finished, however often it is continued.
+    await moveSetupState(workspaceId, "run_queued");
     await recordCompetitorEvent(workspaceId, opts.startedById ?? null, "cmp_setup_queued", { analysisId: result.id, continued: result.continued, companies: work.length, skipped: skipped.length, injected });
   }
   await kickAnalyses();
@@ -513,6 +553,8 @@ export async function setupWalk(env: SetupEnv): Promise<void> {
   env.progress.rows = rowCount;
   env.progress.domains = domainCount;
   env.progress.features = featureCount;
+  // in setup → done: from now on analyses fill the table and the pages show it.
+  await moveSetupState(workspaceId, "run_done");
   env.log("info", `The organization is set up: ${domainCount} domain${domainCount === 1 ? "" : "s"}, ${rowCount} capabilit${rowCount === 1 ? "y" : "ies"}, ${featureCount} feature${featureCount === 1 ? "" : "s"}, ${work.length} compan${work.length === 1 ? "y" : "ies"}. From now on a scan of a competitor or of the own site queues an ordinary analysis`);
   await env.flush();
 }
