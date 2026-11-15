@@ -5,6 +5,9 @@ import { quoteChecker, verifyQuote } from "./quotes";
 import { isSectionLabel, prefixPath, SECTION_LABELS, type Section, type SectionLabel } from "./sections";
 
 /**
+ * The prompts of the setup run's two own steps live next to their rules: analysis/unify.ts (unify, unify review)
+ * and analysis/domains.ts (domains). Administration → Competitors lists every prompt, these included.
+ *
  * The five prompts of the capability analysis (Capability Analysis, "How the analysis runs"). Each has a version,
  * the system text, the tool (the JSON schema the answer is held to), a render function for the user content and a
  * parse function that validates the answer field by field and returns typed, cleaned data. A parser never throws
@@ -214,6 +217,11 @@ export interface PromptPage {
   sourceLabel?: string;
 }
 
+/** The extra instruction the research call gets on a page of a "compare" section: one line in the page's header, naming the company that owns the site. */
+export function comparePageLine(company: string): string {
+  return `COMPARISON PAGE: this page compares ${company} with another company. List only what it says ${company} itself offers; ignore every statement about the other company.`;
+}
+
 /**
  * One page, whole: no cut, no other page. `compareCompany` is set for a page of a "compare" section (the company
  * that owns the site): the page then carries the COMPARISON PAGE line — only that company's own claims are listed.
@@ -221,7 +229,7 @@ export interface PromptPage {
 export function renderResearch(page: PromptPage, opts: { compareCompany?: string | null } = {}): string {
   const meta = pageMeta(page);
   const company = opts.compareCompany?.replace(/\s+/g, " ").trim();
-  const compare = company ? `\nCOMPARISON PAGE: this page compares ${company} with another company. List only what it says ${company} itself offers; ignore every statement about the other company.` : "";
+  const compare = company ? `\n${comparePageLine(company)}` : "";
   return `PAGE ${page.url}\nTitle: ${page.title}${meta ? `\nSource: ${meta}` : ""}${compare}\n\n${page.text}`;
 }
 

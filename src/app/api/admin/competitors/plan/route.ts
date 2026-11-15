@@ -59,7 +59,8 @@ export async function GET(req: Request) {
   const [sections, runs] = await Promise.all([
     db.competitorSection.findMany({ where: { competitorId }, select: { id: true, prefix: true, label: true, pages: true, chars: true, labeledBy: true, labeledAt: true, source: { select: { type: true } } } }),
     db.competitorAnalysis.findMany({
-      where: { competitorId },
+      // A setup run is attached to the organization's own site and is not one company's run: it is listed under Setup runs.
+      where: { competitorId, kind: "analysis" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
       select: { id: true, trigger: true, status: true, step: true, counters: true, createdAt: true, startedAt: true, finishedAt: true, error: true },

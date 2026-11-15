@@ -16,10 +16,11 @@ import type { ImportOrg } from "./AdminImport";
 /** Every string of the section (admin screens keep their strings in the component). */
 const COPY = {
   title: "Reading plan and analysis runs",
-  intro: "Read-only. The analysis cuts a competitor's stored pages into sections and PMOS AI labels each section once; the label decides what is read. Product, pricing and compare sections are read whole. Help, release notes and API docs are read by their index pages; their deeper pages are read only when a run goes back for a gap. News is read only when the organization reads weak pages. Noise is never read.",
+  intro: "Read-only. An organization's own site is listed first, labeled; it is read like a competitor's. The analysis cuts a competitor's stored pages into sections and PMOS AI labels each section once; the label decides what is read. Product, pricing and compare sections are read whole. Help, release notes and API docs are read by their index pages; their deeper pages are read only when a run goes back for a gap. News is read only when the organization reads weak pages. Noise is never read.",
   organization: "Organization",
   competitor: "Competitor",
   pickCompetitor: "Pick a competitor",
+  ownSite: " — own site",
   noOrganizations: "No organization yet.",
   noCompetitors: "This organization has no competitors yet.",
   pick: "Pick a competitor to see its reading plan and its analysis runs.",
@@ -134,7 +135,7 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
             <select value={competitorId} disabled={competitors.length === 0} onChange={(e) => setCompetitorId(e.target.value)} className={INPUT} data-testid="admin-plan-competitor">
               <option value="">{COPY.pickCompetitor}</option>
               {competitors.map((c) => (
-                <option key={c.id} value={c.id}>{c.name} ({c.host})</option>
+                <option key={c.id} value={c.id}>{c.name} ({c.host}){c.isOwn ? COPY.ownSite : ""}</option>
               ))}
             </select>
           </label>

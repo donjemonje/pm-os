@@ -21,7 +21,8 @@ import { AdminScans } from "./AdminScans";
 export interface ImportOrg {
   id: string;
   name: string;
-  competitors: { id: string; name: string; host: string }[];
+  /** `isOwn` = the organization's own site (lib/competitors/own.ts): listed by the reading plan only, never by the import. */
+  competitors: { id: string; name: string; host: string; isOwn?: boolean }[];
 }
 
 const MAX_ZIP_MB = Math.round(MAX_ZIP_BYTES / (1024 * 1024));

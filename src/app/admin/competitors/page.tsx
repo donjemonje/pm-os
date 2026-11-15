@@ -8,7 +8,9 @@ import {
   getCompetitorsModel,
   getCompetitorsProvider,
 } from "@/lib/competitors/ai";
+import { DOMAINS_SYSTEM_PROMPT, DOMAINS_VERSION, domainsTool } from "@/lib/competitors/analysis/domains";
 import {
+  comparePageLine,
   LOOK_SYSTEM_PROMPT,
   LOOK_VERSION,
   lookTool,
@@ -25,33 +27,39 @@ import {
   RESEARCH_TOOL,
   RESEARCH_VERSION,
 } from "@/lib/competitors/analysis/prompts";
+import { UNIFY_BATCH, UNIFY_REVIEW_SYSTEM_PROMPT, UNIFY_SYSTEM_PROMPT, UNIFY_VERSION, unifyReviewTool, unifyTool } from "@/lib/competitors/analysis/unify";
 import { getCompetitorsVertexLocation } from "@/lib/competitors/vertex";
 import { db } from "@/lib/db";
 import { AdminShell } from "../AdminShell";
 import { AdminImportAndScans, type ImportOrg } from "./AdminImport";
 import { AdminReadingPlan } from "./AdminReadingPlan";
+import { AdminSetupRuns } from "./AdminSetupRuns";
 import { AdminScanning } from "./AdminScanning";
 
 /**
  * Admin → Competitors: the PMOS AI prompts of the competitors feature
  * (read-only, with the structured answer each call must return), the scanning
  * switches and the analysis token budget, one competitor's reading plan and
- * analysis runs (read-only), the import of a collector's pages for one
- * competitor, and every organization's scan runs. Daniel's rule: any new AI logic is visible here.
- * The organization itself is never scanned (2026-10-26): its catalog, domain
- * definitions and own statuses are entered by its PMs.
+ * analysis runs (read-only), every organization's setup runs (read-only), the
+ * import of a collector's pages for one competitor, and every organization's
+ * scan runs. Daniel's rule: any new AI logic is visible here.
+ * An organization may have its own site stored like a competitor's (the own
+ * source, lib/competitors/own.ts): the pickers here show it labeled "own site";
+ * it can never be imported into.
  */
 export default async function AdminCompetitorsPage() {
   const admin = await requireAdminPage("/admin/competitors");
   const org = await getAdminOrg(admin.organizationId);
   // Import pages and Reading plan: every organization with its competitors, read with the page so the pickers never wait for data.
-  const importOrgs: ImportOrg[] = (
+  // The reading plan also lists the organization's own site (first, labeled); the import never does.
+  const planOrgs: ImportOrg[] = (
     await db.organization.findMany({
       orderBy: { createdAt: "asc" },
-      select: { id: true, name: true, workspace: { select: { competitors: { where: { deletedAt: null }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { id: true, name: true, host: true } } } } },
+      select: { id: true, name: true, workspace: { select: { competitors: { where: { deletedAt: null }, orderBy: [{ isOwn: "desc" }, { position: "asc" }, { name: "asc" }], select: { id: true, name: true, host: true, isOwn: true } } } } },
     })
   ).map((o) => ({ id: o.id, name: o.name, competitors: o.workspace?.competitors ?? [] }));
-  const prompts = [
+  const importOrgs: ImportOrg[] = planOrgs.map((o) => ({ ...o, competitors: o.competitors.filter((c) => !c.isOwn) }));
+  const prompts: Array<{ id: string; title: string; note: string; text: string; tool: unknown; extra?: { label: string; text: string } }> = [
     {
       id: "map",
       title: `1 · Map — the sections of the site, one call per competitor (${MAP_VERSION})`,
@@ -65,6 +73,7 @@ export default async function AdminCompetitorsPage() {
       note: "Gets one stored page, whole: no cut, no other page, not our capability list. Returns every capability the page says the company offers and the features under each, in the page's words, each with an exact quote, one sentence of reasoning and a one-sentence description of what it does (empty when the page does not say). A page of a \"compare\" section carries a COMPARISON PAGE line: only what it says the company itself offers is listed. The quote is then checked in code against the stored page text: no quote on the page, no finding.",
       text: RESEARCH_SYSTEM_PROMPT,
       tool: RESEARCH_TOOL,
+      extra: { label: "Added to the page's header on a page of a \"compare\" section (the company is the one that owns the site)", text: comparePageLine("<the company>") },
     },
     {
       id: "merge",
@@ -74,23 +83,44 @@ export default async function AdminCompetitorsPage() {
       tool: MERGE_TOOL,
     },
     {
+      id: "unify",
+      title: `4 · Unify — setup run only: every company's capabilities into rows, ${UNIFY_BATCH} entries per call (${UNIFY_VERSION})`,
+      note: "The first run of an organization (the setup run) has no rows yet: this call makes them. Gets the rows made so far with codes and the next entries — each company's capability in its own words, with what it does — in a fixed order: the organization's own site first, then the competitors by position, entries by name. Returns, per entry, the row it belongs to: a row that exists, a row this answer creates (a name in the market's most common term and one sentence), or none — a commercial term or a marketing headline gets no row. Codes are closed sets: an entry code that was not asked, or a row code that is neither given nor created in the answer, makes the whole answer unusable and fails the run. A new row with the normalized name of an existing one is that row (decided in code). An item's row is saved once, like a match.",
+      text: UNIFY_SYSTEM_PROMPT,
+      tool: unifyTool(["I1", "I2", "…"], ["R1", "R2", "…"]),
+    },
+    {
+      id: "unify-review",
+      title: `5 · Unify review — setup run only: all rows together, once (${UNIFY_VERSION})`,
+      note: "After every entry has its row. Gets every row with its code, name, description and what each company calls it. Returns the rows that are the same capability (merged into the first of them), the rows that are no capability (dropped: their entries get no row) and the rows whose name is not the market's term (renamed). The guard against near-duplicate rows and umbrella rows. A code that was not given fails the run. Made once per setup run; a run that continues does not review twice.",
+      text: UNIFY_REVIEW_SYSTEM_PROMPT,
+      tool: unifyReviewTool(["R1", "R2", "…"]),
+    },
+    {
+      id: "domains",
+      title: `6 · Domains — setup run only: one call over all rows (${DOMAINS_VERSION})`,
+      note: "Gets every row (code, name, description, the companies that offer it, what the organization itself calls it) and the organization's product lines with their descriptions. Returns the domains — a name in market terms and a one-sentence definition — and the one domain of every row. No limit on the number of domains, no target, no \"other\" bucket. A row code or a domain code outside the closed sets, a row put in two domains, or a new domain without a name fails the run; rows an answer leaves out are asked again with the domains made so far. Then, in code and in one transaction: the domains and the rows are created as ordinary active catalog rows, in a stable order (domains by their first row; rows in the fixed order of the entries), and every entry's row is saved as its match.",
+      text: DOMAINS_SYSTEM_PROMPT,
+      tool: domainsTool(["R1", "R2", "…"]),
+    },
+    {
       id: "match",
-      title: `4 · Match and place — their list against ours, 100 entries per call (${MATCH_VERSION})`,
-      note: "Gets our domains with their definitions, our capabilities and features with codes (a closed set — the answer is one of our codes, never a free name), and their list. Returns, per entry: which of ours it is, or for none of ours a market name, a description, the domain of ours it belongs in or a new one, and the closest existing domain. A match is saved once and reused on later scans. Names are resolved in code first (name, alias, removed, dismissed).",
+      title: `7 · Match and place — their list against ours, 100 entries per call (${MATCH_VERSION})`,
+      note: "In a setup run this call places only the features (the capabilities got their rows from Unify). Gets our domains with their definitions, our capabilities and features with codes (a closed set — the answer is one of our codes, never a free name), and their list. Returns, per entry: which of ours it is, or for none of ours a market name, a description, the domain of ours it belongs in or a new one, and the closest existing domain. A match is saved once and reused on later scans. Names are resolved in code first (name, alias, removed, dismissed).",
       text: MATCH_SYSTEM_PROMPT,
       tool: matchTool(["T1", "T2", "…"], { ours: new Map(), domains: new Map() }),
     },
     {
       id: "look",
-      title: `5 · Second look — one call per capability of ours with no evidence (${LOOK_VERSION})`,
-      note: "Gets one capability of ours with its domain's definition and the pages most likely to mention it (picked in code, at most 4 pages / 80,000 characters). Returns found with a quote, the page and one sentence of reasoning, or not found. Only after it finds nothing does the cell say not found.",
+      title: `8 · Second look — one call per capability of ours with no evidence (${LOOK_VERSION})`,
+      note: "In a setup run: only for the capabilities the organization itself has. Never made on the organization's own site. Gets one capability of ours with its domain's definition and the pages most likely to mention it (picked in code, at most 4 pages / 80,000 characters). Returns found with a quote, the page and one sentence of reasoning, or not found. Only after it finds nothing does the cell say not found.",
       text: LOOK_SYSTEM_PROMPT,
       tool: lookTool(["https://…"]),
     },
     {
       id: "facts",
-      title: `6 · Profile facts — the last step of the run, one call per chunk of pages (${FACTS_VERSION})`,
-      note: "Reads the pages whose text changed since the last facts read and returns the lean profile: tagline, products, pricing tiers, integrations, certifications, named customers, verticals — each with its URL. Pages are cut to 6,000 characters and packed into chunks for this prompt only.",
+      title: `9 · Profile facts — the last step of the run, one call per chunk of pages (${FACTS_VERSION})`,
+      note: "Never made for the organization's own site. Reads the pages whose text changed since the last facts read and returns the lean profile: tagline, products, pricing tiers, integrations, certifications, named customers, verticals — each with its URL. Pages are cut to 6,000 characters and packed into chunks for this prompt only.",
       text: FACTS_SYSTEM_PROMPT,
       tool: FACTS_TOOL,
     },
@@ -101,7 +131,7 @@ export default async function AdminCompetitorsPage() {
       user={admin}
       org={org}
       title="Competitors"
-      description="The competitors feature's PMOS AI — model, region and the six prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
+      description="The competitors feature's PMOS AI — model, region and the nine prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, every organization's setup runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
     >
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -114,16 +144,16 @@ export default async function AdminCompetitorsPage() {
             <dt className="text-slate-500">Vertex region</dt>
             <dd className="font-mono text-xs">{getCompetitorsProvider() === "gemini" ? getCompetitorsGeminiLocation() : getCompetitorsVertexLocation()} <span className="font-sans text-slate-400">{getCompetitorsProvider() === "gemini" ? "(COMPETITORS_GEMINI_LOCATION → global; the newest Gemini models are served on the global endpoint only)" : "(COMPETITORS_VERTEX_LOCATION → IDEAS_VERTEX_LOCATION → eu)"}</span></dd>
             <dt className="text-slate-500">Prompt versions</dt>
-            <dd className="font-mono text-xs">{[MAP_VERSION, RESEARCH_VERSION, MERGE_VERSION, MATCH_VERSION, LOOK_VERSION, FACTS_VERSION].join(" · ")}</dd>
+            <dd className="font-mono text-xs">{[MAP_VERSION, RESEARCH_VERSION, MERGE_VERSION, UNIFY_VERSION, DOMAINS_VERSION, MATCH_VERSION, LOOK_VERSION, FACTS_VERSION].join(" · ")}</dd>
             <dt className="text-slate-500">Input</dt>
-            <dd className="text-xs text-slate-600">Page text only (no HTML, no images). The map sees section addresses and sample titles, never page text. Research reads the full text of one page per call. Our capability list is sent only to the match call, as a shared prefix. PMOS AI never decides a table cell: cells are filled in code, by fixed rules, from quotes that were checked against the stored page.</dd>
+            <dd className="text-xs text-slate-600">Page text only (no HTML, no images). The map sees section addresses and sample titles, never page text. Research reads the full text of one page per call. Our capability list is sent only to the match call, as a shared prefix. Unify and Domains (a setup run only) see names, one-sentence descriptions and company names — never page text. PMOS AI never decides a table cell: cells are filled in code, by fixed rules, from quotes that were checked against the stored page.</dd>
           </dl>
         </section>
 
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-sm font-bold">AI prompts</h2>
           <p className="mb-4 mt-0.5 text-xs text-slate-500">
-            The system prompt of each call of an analysis run, in the order they run, and the structured answer it is forced to return (a schema PMOS AI is held to; the model cannot answer in free text). Read-only; changing them is a code change and bumps the prompt version.
+            The system prompt of each call of an analysis run and of a setup run, in the order they run, and the structured answer it is forced to return (a schema PMOS AI is held to; the model cannot answer in free text). Read-only; changing them is a code change and bumps the prompt version.
           </p>
           <div className="space-y-2">
             {prompts.map((p) => (
@@ -133,6 +163,12 @@ export default async function AdminCompetitorsPage() {
                   <p className="mb-2 text-xs text-slate-500">{p.note}</p>
                   <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">System prompt</div>
                   <pre className="mb-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-800">{p.text}</pre>
+                  {p.extra && (
+                    <>
+                      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">{p.extra.label}</div>
+                      <pre className="mb-3 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-800" data-testid="admin-prompt-extra">{p.extra.text}</pre>
+                    </>
+                  )}
                   <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">Required answer (tool schema)</div>
                   <pre className="max-h-72 overflow-auto rounded-lg bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-800">{JSON.stringify(p.tool, null, 2)}</pre>
                 </div>
@@ -142,7 +178,8 @@ export default async function AdminCompetitorsPage() {
         </section>
 
         <AdminScanning />
-        <AdminReadingPlan orgs={importOrgs} currentOrgId={org.current?.id ?? null} />
+        <AdminReadingPlan orgs={planOrgs} currentOrgId={org.current?.id ?? null} />
+        <AdminSetupRuns orgs={planOrgs} currentOrgId={org.current?.id ?? null} />
         <AdminImportAndScans orgs={importOrgs} currentOrgId={org.current?.id ?? null} />
       </div>
     </AdminShell>

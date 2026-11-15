@@ -1,0 +1,176 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { Loader2, RefreshCw } from "lucide-react";
+import type { AdminSetupRun, AdminSetupState } from "@/app/api/admin/competitors/setup/route";
+import type { ImportOrg } from "./AdminImport";
+
+/**
+ * Administration → Competitors → Setup runs (PM-OS admin only, read-only). Pick an organization: whether it is set
+ * up, its own site, and its setup runs — status, step, what the run made, tokens, error, started and finished —
+ * with the progress of every company (the own site first). Nothing is started here: the setup run is started from
+ * the scanner command line. Customers never see this.
+ */
+
+/** Every string of the section (admin screens keep their strings in the component). */
+const COPY = {
+  title: "Setup runs",
+  intro: "Read-only. An organization with no domain and no capability is not set up: its first run is the setup run. It reads the organization's own site and every competitor, unifies their capabilities into rows, builds the domains from the rows and fills the table. It is started by hand from the scanner command line (--own-site <workspaceId> <url>, then --setup <workspaceId>), and a run that stopped is continued by the same command.",
+  organization: "Organization",
+  noOrganizations: "No organization yet.",
+  loading: "Loading the setup runs…",
+  failed: "Could not load the setup runs. Try again.",
+  refresh: "Refresh",
+  state: { set_up: "Set up", in_setup: "Setup not finished", not_set_up: "Not set up" } as Record<string, string>,
+  stateHint: {
+    set_up: "Analysis runs create rows and fill cells.",
+    in_setup: "A setup run exists and did not finish. Until it does, analysis runs stop after the clean-up and create no row.",
+    not_set_up: "No domain and no capability. Analysis runs stop after the clean-up and create no row until the setup run has finished.",
+  } as Record<string, string>,
+  ownSite: "Own site",
+  noOwnSite: "none — the setup run needs one",
+  catalog: (domains: number, capabilities: number) => `${domains} domain${domains === 1 ? "" : "s"} · ${capabilities} capabilit${capabilities === 1 ? "y" : "ies"} (any state)`,
+  workspace: "Workspace id",
+  noRuns: "No setup run yet.",
+  made: (r: AdminSetupRun) => `${r.domains} domain${r.domains === 1 ? "" : "s"} · ${r.rows} capabilit${r.rows === 1 ? "y" : "ies"} · ${r.features} feature${r.features === 1 ? "" : "s"}`,
+  budgetReached: "budget reached",
+  own: "own site",
+  stages: { waiting: "waiting", map: "map", research: "research", merge: "merge", unify: "unify", match: "match", second_look: "second look", apply: "apply", facts: "facts", done: "done" } as Record<string, string>,
+};
+
+const INPUT = "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-400 disabled:opacity-60";
+const LABEL = "mb-1 block text-xs font-medium text-slate-500";
+const BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-medium hover:bg-slate-50 disabled:opacity-50";
+const TH = "px-3 py-2";
+const TD = "px-3 py-2 align-top";
+
+const STATUS_CHIP: Record<string, string> = {
+  done: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  failed: "bg-red-50 text-red-700 border-red-200",
+  running: "bg-blue-50 text-blue-700 border-blue-200",
+  waiting: "bg-amber-50 text-amber-800 border-amber-200",
+  queued: "bg-slate-50 text-slate-600 border-slate-200",
+  cancelled: "bg-slate-50 text-slate-400 border-slate-200",
+};
+const STATE_CHIP: Record<string, string> = {
+  set_up: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  in_setup: "bg-amber-50 text-amber-800 border-amber-200",
+  not_set_up: "bg-slate-50 text-slate-600 border-slate-200",
+};
+
+function when(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
+}
+
+type State = { status: "idle" } | { status: "loading" } | { status: "failed"; error: string } | { status: "ready"; data: AdminSetupState };
+
+export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; currentOrgId: string | null }) {
+  const [orgId, setOrgId] = useState(() => (orgs.some((o) => o.id === currentOrgId) ? currentOrgId! : orgs[0]?.id ?? ""));
+  const [state, setState] = useState<State>({ status: "idle" });
+
+  const load = useCallback(async (id: string) => {
+    if (!id) {
+      setState({ status: "idle" });
+      return;
+    }
+    setState({ status: "loading" });
+    try {
+      const res = await fetch(`/api/admin/competitors/setup?organizationId=${encodeURIComponent(id)}`);
+      const json = await res.json();
+      if (!res.ok || !Array.isArray(json.runs)) throw new Error(json.error ?? COPY.failed);
+      setState({ status: "ready", data: json as AdminSetupState });
+    } catch (e) {
+      setState({ status: "failed", error: e instanceof Error && e.message ? e.message : COPY.failed });
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(orgId);
+  }, [orgId, load]);
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5" data-testid="admin-setup-runs">
+      <div className="mb-3 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-sm font-bold">{COPY.title}</h2>
+          <p className="mt-0.5 text-xs text-slate-500">{COPY.intro}</p>
+        </div>
+        <button onClick={() => void load(orgId)} disabled={!orgId || state.status === "loading"} className={`${BTN} shrink-0`}><RefreshCw size={13} /> {COPY.refresh}</button>
+      </div>
+      {orgs.length === 0 ? (
+        <div className="text-sm text-slate-500">{COPY.noOrganizations}</div>
+      ) : (
+        <label className="block max-w-sm">
+          <span className={LABEL}>{COPY.organization}</span>
+          <select value={orgId} onChange={(e) => setOrgId(e.target.value)} className={INPUT} data-testid="admin-setup-org">
+            {orgs.map((o) => (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {state.status === "loading" && <div className="mt-3 inline-flex items-center gap-2 text-sm text-slate-500" role="status"><Loader2 size={13} className="animate-spin" /> {COPY.loading}</div>}
+      {state.status === "failed" && <div className="mt-3 text-sm text-red-600" role="alert" data-testid="admin-setup-error">{state.error}</div>}
+
+      {state.status === "ready" && (
+        <>
+          <dl className="mt-4 grid grid-cols-[140px_1fr] gap-y-1.5 text-sm">
+            <dt className="text-slate-500">State</dt>
+            <dd>
+              <span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATE_CHIP[state.data.state] ?? STATE_CHIP.not_set_up}`} data-testid="admin-setup-state">{COPY.state[state.data.state] ?? state.data.state}</span>
+              <span className="ml-2 text-xs text-slate-500">{COPY.stateHint[state.data.state] ?? ""}</span>
+            </dd>
+            <dt className="text-slate-500">{COPY.ownSite}</dt>
+            <dd className="text-xs">{state.data.ownSite ? <>{state.data.ownSite.name} <span className="font-mono text-slate-500">({state.data.ownSite.host})</span></> : <span className="text-slate-500">{COPY.noOwnSite}</span>}</dd>
+            <dt className="text-slate-500">Catalog</dt>
+            <dd className="text-xs">{COPY.catalog(state.data.domains, state.data.capabilities)}</dd>
+            <dt className="text-slate-500">{COPY.workspace}</dt>
+            <dd className="font-mono text-xs">{state.data.workspaceId}</dd>
+          </dl>
+
+          {state.data.runs.length === 0 ? (
+            <div className="mt-4 text-sm text-slate-500" data-testid="admin-setup-no-runs">{COPY.noRuns}</div>
+          ) : (
+            state.data.runs.map((r) => (
+              <div key={r.id} className="mt-4 rounded-lg border border-slate-200" data-testid="admin-setup-run">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                  <span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span>
+                  <span>Step: <b>{r.step.replace("_", " ")}</b></span>
+                  <span>{COPY.made(r)}</span>
+                  <span className="tabular-nums">{r.calls.toLocaleString("en-US")} PMOS AI calls · {r.tokensUsed.toLocaleString("en-US")} tokens</span>
+                  <span>Started {when(r.startedAt)}</span>
+                  <span>Finished {when(r.finishedAt)}</span>
+                  <span className="font-mono text-slate-400">{r.id}</span>
+                </div>
+                {r.error && <div className="border-b border-slate-200 px-3 py-2 text-xs text-red-700" data-testid="admin-setup-run-error">{r.error}</div>}
+                {r.companies.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-slate-500">The run has not started on a company yet.</div>
+                ) : (
+                  <table className="w-full text-xs">
+                    <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+                      <tr><th className={TH}>Company</th><th className={TH}>Where it is</th><th className={`${TH} text-right`}>Pages read / left unread</th><th className={`${TH} text-right`}>PMOS AI calls</th><th className={`${TH} text-right`}>Tokens used of the budget per company</th></tr>
+                    </thead>
+                    <tbody>
+                      {r.companies.map((c) => (
+                        <tr key={c.competitorId} className="border-t border-slate-200" data-testid="admin-setup-company">
+                          <td className={TD}>{c.name}{c.own && <span className="ml-2 rounded-full border border-slate-200 bg-slate-50 px-2 py-px text-[11px] font-semibold text-slate-600">{COPY.own}</span>}</td>
+                          <td className={TD}>{COPY.stages[c.stage] ?? c.stage}</td>
+                          <td className={`${TD} text-right tabular-nums`}>{c.pagesRead.toLocaleString("en-US")} / {c.pagesUnread.toLocaleString("en-US")}</td>
+                          <td className={`${TD} text-right tabular-nums`}>{c.calls.toLocaleString("en-US")}</td>
+                          <td className={`${TD} text-right tabular-nums`}>
+                            {c.tokensUsed.toLocaleString("en-US")} of {r.budget ? r.budget.toLocaleString("en-US") : "–"}
+                            {c.budgetReached && <span className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800">{COPY.budgetReached}</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ))
+          )}
+        </>
+      )}
+    </section>
+  );
+}
