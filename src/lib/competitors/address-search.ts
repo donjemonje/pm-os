@@ -12,6 +12,7 @@ import {
   guessVerdict,
   injectedAddressPick,
   isScannedAddress,
+  knownAddresses,
   linkCandidates,
   linksWithText,
   llmsCandidates,
@@ -227,29 +228,20 @@ export type SearchOutcome =
   | { skipped: "no_company" | "running" }
   | { status: "done" | "undecided"; candidates: number; added: Array<{ sourceId: string; kind: AddressKind; url: string; via: FoundVia }>; alreadyThere: number; removedByPm: number; note: string };
 
-/** One source per site per company: look, then create, under a lock held to the end of the transaction. */
+/** One address per site per company (addresses.ts knownAddresses — a removed one counts): look, then create, under a lock held to the end of the transaction. */
 async function createAddressSource(
-  competitor: { id: string; workspaceId: string },
+  competitor: { id: string; workspaceId: string; host: string },
   address: { url: string; host: string; kind: AddressKind; foundVia: string; foundText: string | null },
 ): Promise<{ id: string } | null> {
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`competitor-sources:${competitor.id}`}))`;
-    const sources = await tx.competitorSource.findMany({ where: { competitorId: competitor.id }, select: { url: true } });
-    if (sources.some((s) => sourceHostOf(s.url) === address.host)) return null;
+    const sources = await tx.competitorSource.findMany({ where: { competitorId: competitor.id } });
+    if (knownAddresses(sources, competitor.host).some((k) => k.host === address.host)) return null;
     return tx.competitorSource.create({
       data: { workspaceId: competitor.workspaceId, competitorId: competitor.id, type: address.kind, url: address.url, foundVia: address.foundVia, foundText: address.foundText },
       select: { id: true },
     });
   });
-}
-
-/** siteHost of a source's address; "" when the stored address is not a URL (an old collector source). */
-function sourceHostOf(url: string): string {
-  try {
-    return siteHost(new URL(url));
-  } catch {
-    return "";
-  }
 }
 
 /** Queue a new address's first scan, like an onboarding scan. A scan that cannot be queued never undoes the add. */
@@ -308,8 +300,7 @@ export async function searchAddresses(
     try {
       finding = await findCandidates(site, opts.home ?? null);
       if (website) await storeLlmsTxt(competitor.workspaceId, website, finding.llms);
-      const known = competitor.sources.filter((s) => s.type !== "website").map((s) => ({ host: sourceHostOf(s.url), removed: s.removedAt != null })).filter((k) => k.host);
-      const screened = screenCandidates(finding.candidates, known);
+      const screened = screenCandidates(finding.candidates, knownAddresses(competitor.sources, competitor.host));
       result = { ...result, candidates: screened.fresh.length, alreadyThere: screened.alreadyThere.length, removedByPm: screened.removedByPm.length };
       if (screened.fresh.length) {
         // 4. PMOS AI says what each new address is. Closed sets; an unusable answer adds nothing.
@@ -385,8 +376,9 @@ export async function addAddress(competitor: { id: string; workspaceId: string; 
     return { error: e instanceof InvalidUrlError && e.reason === "private" ? "private" : "invalid" };
   }
   if (site.host === competitor.host) return { error: "main_site" };
-  const sources = await db.competitorSource.findMany({ where: { competitorId: competitor.id } });
-  const same = sources.filter((s) => sourceHostOf(s.url) === site.host);
+  const sources = await db.competitorSource.findMany({ where: { competitorId: competitor.id }, orderBy: { createdAt: "asc" } });
+  // Its other addresses on this site — never a source a collector fed (addresses.ts knownAddresses).
+  const same = sources.filter((s) => isScannedAddress({ ...s, removedAt: null }, competitor.host) && siteHost(new URL(s.url)) === site.host);
   if (same.some((s) => !s.removedAt)) return { error: "exists" };
   if (!(await isPublicWebsite(site.url))) return { error: "private" };
   const probe = await fetchPlain(site.url);

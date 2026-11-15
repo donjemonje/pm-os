@@ -408,8 +408,23 @@ export interface KnownAddress {
 }
 
 /**
- * What of a list is new to the company. A candidate whose site the company already has as a source — whatever its
- * kind, however it was added — is already there and is not added again. A candidate whose site a PM removed is
+ * The addresses a company already has, as a search sees them: its other addresses that are scanned (whatever
+ * their kind, however they were added — found, typed in by a PM, or put there before this was recorded), and the
+ * ones a PM removed. A source a collector fed is not an address: an imported document or a page deep inside a site
+ * (support.acme.com/hc/article-12) does not stand in the way of scanning that site.
+ */
+export function knownAddresses(sources: Array<{ type: string; url: string; removedAt?: Date | string | null }>, mainHost: string): KnownAddress[] {
+  const out: KnownAddress[] = [];
+  for (const s of sources) {
+    if (!isScannedAddress({ ...s, removedAt: null }, mainHost)) continue;
+    out.push({ host: siteHost(new URL(s.url)), removed: s.removedAt != null });
+  }
+  return out;
+}
+
+/**
+ * What of a list is new to the company. A candidate whose site the company already has as an address — whatever
+ * its kind, however it was added — is already there and is not added again. A candidate whose site a PM removed is
  * never added back: a PM's decision stands until a PM adds the address again by hand.
  */
 export function screenCandidates<T extends { host: string }>(candidates: T[], known: KnownAddress[]): { fresh: T[]; alreadyThere: T[]; removedByPm: T[] } {

@@ -15,6 +15,7 @@ import {
   isScannedAddress,
   isScannedSource,
   isSiteAddress,
+  knownAddresses,
   linkCandidates,
   linksWithText,
   llmsCandidates,
@@ -272,6 +273,22 @@ describe("de-duplication, and what is already there", () => {
     const r = screenCandidates([{ host: "support.acme.com" }, { host: "kb.acme.com" }], [{ host: "support.acme.com", removed: true }]);
     expect(r.removedByPm.map((c) => c.host)).toEqual(["support.acme.com"]);
     expect(r.fresh.map((c) => c.host)).toEqual(["kb.acme.com"]);
+  });
+  it("what the company already has: its scanned addresses and the ones a PM removed — never a source a collector fed", () => {
+    const known = knownAddresses([
+      { type: "website", url: "https://www.acme.com" },
+      { type: "helpcenter", url: "https://support.acme.com" },
+      { type: "apidocs", url: "https://developers.acme.com/", removedAt: new Date() },
+      { type: "helpcenter", url: "https://kb.acme.com/hc/article-12" },
+      { type: "changelog", url: "https://docs.acme.com/changelog/" },
+      { type: "reviews", url: "https://reviews.example.com" },
+      { type: "documents", url: "not a url" },
+    ], MAIN);
+    expect(known).toEqual([{ host: "support.acme.com", removed: false }, { host: "developers.acme.com", removed: true }]);
+    // A page of a help center that a collector imported does not stand in the way of scanning that help center.
+    expect(screenCandidates([{ host: "kb.acme.com" }, { host: "docs.acme.com" }, { host: "support.acme.com" }, { host: "developers.acme.com" }], known)).toMatchObject({
+      fresh: [{ host: "kb.acme.com" }, { host: "docs.acme.com" }], alreadyThere: [{ host: "support.acme.com" }], removedByPm: [{ host: "developers.acme.com" }],
+    });
   });
   it("an address that was removed and then added again by hand is there, not removed", () => {
     const r = screenCandidates([{ host: "support.acme.com" }], [{ host: "support.acme.com", removed: true }, { host: "support.acme.com", removed: false }]);

@@ -182,7 +182,7 @@ export async function createAndRouteScan(
     data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", startedAt: t, heartbeatAt: t },
     select: { id: true },
   });
-  await recordCompetitorEvent(workspaceId, startedById, "cmp_scan_started", { scanId: scan.id, competitorId, trigger });
+  await recordCompetitorEvent(workspaceId, startedById, "cmp_scan_started", { scanId: scan.id, competitorId, trigger, sourceType: source.type });
   if (active) {
     // Behind the running scan of the same site; the finishing scan (or the tick) picks it up.
     return { scanId: scan.id, state: "queued" };
