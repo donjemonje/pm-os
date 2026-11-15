@@ -57,6 +57,29 @@ export interface AddressSearchRow {
   status: "done" | "undecided" | null;
 }
 
+/**
+ * The organization's own website and its other addresses — "Your company" in Settings → Competitors. Stored and
+ * scanned like a competitor's site (lib/competitors/own.ts) and never one: it is in no list of competitors.
+ */
+export interface OwnSiteRow {
+  id: string;
+  name: string;
+  websiteUrl: string;
+  host: string;
+  /** Pages stored from the website that are there now. */
+  pages: number;
+  lastScanAt: string | null;
+  /** When the schedule scans it next; null before its first scan. */
+  nextScanAt: string | null;
+  pending: { since: string } | null;
+  running: { pagesSoFar: number; startedAt: string } | null;
+  /** How the last finished scan of the website ended, as users see it, and why when it did not end well. */
+  badge: ScanBadge | null;
+  lastError: string | null;
+  addresses: AddressRow[];
+  addressSearch: AddressSearchRow;
+}
+
 export interface CompetitorRow {
   id: string;
   name: string;
@@ -241,6 +264,10 @@ export interface CompetitorsState {
   orgName: string;
   /** The organization's own website is analysed (lib/competitors/own.ts): its own column is filled from it where no PM set a value. */
   ownSite: boolean;
+  /** The own website with its scan and its other addresses; null = the organization has not added it yet. */
+  own: OwnSiteRow | null;
+  /** A scan of the own site or of one of its addresses is waiting or reading: Settings keeps refreshing (it is not a competitor scan — `scanning` does not count it). */
+  ownScanning: boolean;
   config: CompetitorsConfig;
   productLines: string[];
   competitors: CompetitorRow[];
@@ -326,7 +353,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       distinct: ["competitorId"],
       select: { id: true, competitorId: true, status: true, step: true, pagesDone: true, pagesTotal: true, resumeAt: true, error: true, finishedAt: true },
     }),
-    db.competitor.count({ where: { workspaceId, isOwn: true, deletedAt: null } }),
+    db.competitor.findFirst({ where: { workspaceId, isOwn: true, deletedAt: null }, orderBy: { createdAt: "asc" }, include: { sources: { orderBy: { createdAt: "asc" } } } }),
   ]);
   const analysisRow = (a: (typeof activeAnalyses)[number]): AnalysisRow => ({ id: a.id, status: a.status, step: a.step, pagesDone: a.pagesDone, pagesTotal: a.pagesTotal, resumeAt: a.resumeAt?.toISOString() ?? null, error: a.error, finishedAt: a.finishedAt?.toISOString() ?? null });
   const analysisOf = (competitorId: string): AnalysisRow | null => {
@@ -372,11 +399,32 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     if (!cur || (s.status === "running" && cur.status !== "running")) activeBySource.set(s.sourceId, s);
   }
   const isStaleRow = (s: (typeof activeScans)[number]) => s.status === "running" && nowMs - s.heartbeatAt.getTime() > STALE_MS;
+  // The own site's scans are read apart — they are no competitor scans — and join the same maps: its row and its addresses are built like a competitor's.
+  const ownWebsite = ownSite?.sources.find((s) => s.type === "website") ?? null;
+  const ownSourceIds = ownSite ? ownSite.sources.filter((s) => s.type === "website" || isScannedAddress(s, ownSite.host)).map((s) => s.id) : [];
+  const [ownActive, ownFinished] = ownSourceIds.length
+    ? await Promise.all([
+        db.competitorScan.findMany({ where: { sourceId: { in: ownSourceIds }, status: { in: ["queued", "pending_local", "running"] } }, select: { id: true, sourceId: true, status: true, startedAt: true, heartbeatAt: true, pagesFetched: true }, orderBy: { startedAt: "asc" } }),
+        db.competitorScan.findMany({
+          where: { sourceId: { in: ownSourceIds }, status: { in: ["ok", "partial", "failed", "stale"] } },
+          orderBy: { startedAt: "desc" },
+          distinct: ["sourceId"],
+          select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
+        }),
+      ])
+    : [[], []];
+  for (const s of ownActive) {
+    const cur = activeBySource.get(s.sourceId);
+    if (!cur || (s.status === "running" && cur.status !== "running")) activeBySource.set(s.sourceId, s);
+  }
+  for (const s of ownFinished) scansBySource.set(s.sourceId, [s]);
   // A company's other addresses: its sources that are scanned besides the website, with the pages stored from each.
-  const addressSources = competitors.flatMap((c) => c.sources.filter((s) => isScannedAddress(s, c.host)));
+  const addressSources = [...competitors, ...(ownSite ? [ownSite] : [])].flatMap((c) => c.sources.filter((s) => isScannedAddress(s, c.host)));
+  const countedSources = [...addressSources.map((s) => s.id), ...(ownWebsite ? [ownWebsite.id] : [])];
   const pagesOfSource = new Map(
-    addressSources.length
-      ? (await db.sourcePage.groupBy({ by: ["sourceId"], where: { sourceId: { in: addressSources.map((s) => s.id) }, state: { not: "removed" } }, _count: { _all: true } })).map((g) => [g.sourceId, g._count._all])
+    countedSources.length
+      ? // Pages a scan stored: never the site's llms.txt, which the address search keeps for the map step.
+        (await db.sourcePage.groupBy({ by: ["sourceId"], where: { sourceId: { in: countedSources }, state: { not: "removed" }, discoveredVia: { not: "discovery" } }, _count: { _all: true } })).map((g) => [g.sourceId, g._count._all])
       : [],
   );
   const addressRow = (s: (typeof addressSources)[number]): AddressRow => {
@@ -422,9 +470,29 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       ? (await db.jiraIdeaSnapshot.findMany({ where: { workspaceId, key: { in: jiraKeys } }, select: { key: true, status: true } })).map((j) => [j.key, j.status])
       : [],
   );
+  const ownScan = ownWebsite ? activeBySource.get(ownWebsite.id) : undefined;
+  const own: OwnSiteRow | null = ownSite
+    ? {
+        id: ownSite.id,
+        name: ownSite.name,
+        websiteUrl: ownSite.websiteUrl,
+        host: ownSite.host,
+        pages: ownWebsite ? pagesOfSource.get(ownWebsite.id) ?? 0 : 0,
+        lastScanAt: ownWebsite?.lastScanAt?.toISOString() ?? null,
+        nextScanAt: ownWebsite?.lastScanAt ? new Date(ownWebsite.lastScanAt.getTime() + ownWebsite.scanEveryDays * 86_400_000).toISOString() : null,
+        pending: ownScan && (ownScan.status === "queued" || ownScan.status === "pending_local" || isStaleRow(ownScan)) ? { since: ownScan.startedAt.toISOString() } : null,
+        running: ownScan && ownScan.status === "running" && !isStaleRow(ownScan) ? { pagesSoFar: ownScan.pagesFetched, startedAt: ownScan.startedAt.toISOString() } : null,
+        badge: ownWebsite ? ((scansBySource.get(ownWebsite.id)?.[0]?.badge as ScanBadge | null) ?? null) : null,
+        lastError: ownWebsite ? scansBySource.get(ownWebsite.id)?.[0]?.error ?? null : null,
+        addresses: ownSite.sources.filter((s) => isScannedAddress(s, ownSite.host)).map(addressRow),
+        addressSearch: addressSearchRow(ownSite),
+      }
+    : null;
   return {
     orgName,
-    ownSite: ownSite > 0,
+    ownSite: ownSite != null,
+    own,
+    ownScanning: ownActive.length > 0,
     config,
     productLines: productLines.map((p) => p.name),
     competitors: competitors.map((c) => {
@@ -583,7 +651,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     lastScanAt: lastScanAt?.toISOString() ?? null,
     scanning: activeScans.length > 0 || activeRun != null,
     analyzing: activeAnalyses.length > 0,
-    searching: competitors.some((c) => searchRunning(c.addressSearchStartedAt, nowMs)),
+    searching: competitors.some((c) => searchRunning(c.addressSearchStartedAt, nowMs)) || searchRunning(ownSite?.addressSearchStartedAt, nowMs),
     members,
     activeRun,
     feed,

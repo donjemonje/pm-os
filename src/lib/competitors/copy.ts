@@ -356,6 +356,25 @@ export const COMPETITORS_COPY = {
     duplicateName: "A competitor with this name already exists.",
     privateHost: "That address points at a private network and cannot be scanned.",
     unreachable: "That website did not answer. Check the address and try again.",
+    // "Your company": the organization's own website, its other addresses and its product lines (own.ts, own-site.ts).
+    own: {
+      title: "Your company",
+      blurb: "Your own website, with its help center, docs and release notes. PM-OS reads them like a competitor's site to learn what your own product does. Your company is never shown as a competitor.",
+      empty: "Your website is not added yet. Add it so PM-OS can read what your own product does.",
+      addSite: "Add your website",
+      website: "Your website",
+      websitePlaceholder: "https://example.com",
+      changeSite: "Change website",
+      changeTitle: "Change your website?",
+      changeBody: "When the new address is another site, the pages stored from the current one are no longer read and the new site is scanned now.",
+      changeConfirm: "Change website",
+      pages: (n: number) => `${n.toLocaleString("en-US")} page${n === 1 ? "" : "s"} stored`,
+      productLines: (n: number) => (n === 0 ? "No product lines yet. Add them: they are read together with your site." : `${n} product line${n === 1 ? "" : "s"}, read together with your site.`),
+      productLinesLink: "Product Lines",
+      exists: "Your organization already has its website here. Change it instead.",
+      isCompetitor: "This website is tracked as a competitor. A site is either your own or a competitor's.",
+      noSite: "Add your website first.",
+    },
     // A company's other addresses — help center, developer docs, release notes — under its website line (addresses.ts).
     addresses: {
       kinds: { helpcenter: "Help center", apidocs: "Developer docs", changelog: "Release notes" } as Record<string, string>,

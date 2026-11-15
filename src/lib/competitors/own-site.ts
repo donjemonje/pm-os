@@ -5,13 +5,18 @@ import { contentHash, siteLogoOf, siteNameOf } from "./html";
 import { isPublicWebsite } from "./netguard";
 import { OWN_MATERIAL_SOURCE_TYPE, PRODUCT_LINES_PAGE_URL, productLinesPageText, productLinesPageTitle } from "./own";
 import type { CreateScanResult } from "./scan";
+import { rewriteSourceOrigin } from "./pages";
 import { noteStoredChars } from "./settings";
 import { InvalidUrlError, normalizeWebsite } from "./url";
 
 /**
- * The database side of the organization's own site (own.ts has the rules). No customer-facing screen in this build:
- * the own site is added from the scanner CLI (`--own-site <workspaceId> <url>`), so nothing here may import
- * next/headers (lib/auth.ts and what imports it).
+ * The database side of the organization's own site (own.ts has the rules). The own site is added and changed in
+ * Settings → Competitors → "Your company", and from the scanner CLI (`--own-site <workspaceId> <url>`) — so nothing
+ * here may import next/headers (lib/auth.ts and what imports it).
+ *
+ * Documents of the organization (PDFs: datasheets, a product guide) are NOT part of this build: whether they are
+ * uploaded or read from a drive is not decided. Until it is, the own material is the website, its other addresses
+ * and the product lines.
  */
 
 export interface OwnSource {
@@ -48,7 +53,9 @@ export type AddOwnSiteResult =
  * (address-search.ts searchAddresses, with the home page returned here): the CLI waits for the search, a route
  * runs it after its answer.
  */
-export async function addOwnSite(workspaceId: string, website: string): Promise<AddOwnSiteResult> {
+export async function addOwnSite(workspaceId: string, website: string, opts: { /** Where it was added. */ via?: "cli" | "settings"; userId?: string | null } = {}): Promise<AddOwnSiteResult> {
+  const via = opts.via ?? "cli";
+  const userId = opts.userId ?? null;
   const workspace = await db.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, organization: { select: { name: true } } } });
   if (!workspace) return { error: "no_workspace", message: `no workspace with the id ${workspaceId}` };
   let site: { url: string; host: string };
@@ -94,12 +101,70 @@ export async function addOwnSite(workspaceId: string, website: string): Promise<
     return { id: row.id, capabilities: capabilities.count, features: features.count };
   });
   if (!created) return (await refusal()) ?? { error: "exists", message: "this organization already has an own site — one per organization" };
-  await recordCompetitorEvent(workspaceId, null, "cmp_own_site_added", { competitorId: created.id, host: site.host, via: "cli", frozenCapabilities: created.capabilities, frozenFeatures: created.features });
+  await recordCompetitorEvent(workspaceId, userId, "cmp_own_site_added", { competitorId: created.id, host: site.host, via, frozenCapabilities: created.capabilities, frozenFeatures: created.features });
   // Loaded here, not at the top: the analysis engine imports this file (the product-lines page) and scan.ts imports the engine.
   const { createAndRouteScan } = await import("./scan");
-  const scan = await createAndRouteScan(workspaceId, created.id, "onboarding", null);
+  const scan = await createAndRouteScan(workspaceId, created.id, "onboarding", userId);
   const home = probe.html && !probe.error ? { html: probe.html, finalUrl: probe.finalUrl || site.url } : null;
   return { competitorId: created.id, name, host: site.host, websiteUrl: origin, scan, frozenCapabilities: created.capabilities, frozenFeatures: created.features, home };
+}
+
+export type ChangeOwnSiteResult =
+  | {
+      competitorId: string; host: string; websiteUrl: string;
+      /** The address is another site: the old site's pages left the picture and a scan of the new one was queued (`scan`). False = the same site under another spelling. */
+      newSite: boolean;
+      scan: CreateScanResult | null;
+      home: { html: string; finalUrl: string } | null;
+    }
+  | { error: "no_own_site" | "invalid_url" | "private" | "unreachable" | "is_competitor"; message: string };
+
+/**
+ * Change the organization's own website — the same rules as changing a competitor's website:
+ *   - the same site under another spelling (www., https): the stored pages move to the new address, nothing is scanned;
+ *   - another site: the old site's pages are never read again, so they leave the current picture now (marked
+ *     removed, text dropped, hash kept), and a scan of the new site is queued at once like a first add.
+ * Refused, with nothing written: there is no own site; the address is not a public website or does not answer; the
+ * site is tracked as a competitor. The site's other addresses stay as they are — the team removes what no longer
+ * belongs; the caller searches the new site's addresses next (address-search.ts).
+ */
+export async function changeOwnSite(workspaceId: string, website: string, opts: { userId?: string | null } = {}): Promise<ChangeOwnSiteResult> {
+  const userId = opts.userId ?? null;
+  const own = await ownSourceOf(workspaceId);
+  if (!own) return { error: "no_own_site", message: "this organization has no own site yet" };
+  let site: { url: string; host: string };
+  try {
+    site = normalizeWebsite(website);
+  } catch (e) {
+    return e instanceof InvalidUrlError && e.reason === "private"
+      ? { error: "private", message: `${website} is a private address, not a public website` }
+      : { error: "invalid_url", message: `${website} is not a website address` };
+  }
+  const competitor = await db.competitor.findFirst({ where: { workspaceId, host: site.host, id: { not: own.id } }, select: { name: true } });
+  if (competitor) return { error: "is_competitor", message: `${site.host} is a competitor of this organization (${competitor.name}) — a site is either the own site or a competitor` };
+  if (!(await isPublicWebsite(site.url))) return { error: "private", message: `${site.host} does not resolve to a public address` };
+  const probe = await fetchPlain(site.url);
+  if (probe.status === 0) return { error: "unreachable", message: `${site.url} does not answer` };
+  const origin = probe.finalUrl && probe.finalUrl.startsWith("http") ? new URL(probe.finalUrl).origin : site.url;
+  const home = probe.html && !probe.error ? { html: probe.html, finalUrl: probe.finalUrl || site.url } : null;
+  const newSite = site.host !== own.host;
+
+  const websiteSources = await db.competitorSource.findMany({ where: { competitorId: own.id, type: "website" }, select: { id: true, url: true } });
+  await db.competitor.update({ where: { id: own.id }, data: { websiteUrl: origin, host: site.host, ...(newSite ? { logoUrl: probe.html ? siteLogoOf(probe.html, origin) : null } : {}) } });
+  await db.competitorSource.updateMany({ where: { competitorId: own.id, type: "website" }, data: { url: site.url } });
+  let scan: CreateScanResult | null = null;
+  if (!newSite) {
+    for (const src of websiteSources) if (src.url !== site.url) await rewriteSourceOrigin([src.id], src.url, site.url);
+  } else {
+    await db.sourcePage.updateMany({
+      where: { source: { competitorId: own.id, type: "website" }, state: { not: "removed" } },
+      data: { state: "removed", removedAt: new Date(), text: null, previousText: null, previousHash: null },
+    });
+    const { createAndRouteScan } = await import("./scan");
+    scan = await createAndRouteScan(workspaceId, own.id, "onboarding", userId);
+  }
+  await recordCompetitorEvent(workspaceId, userId, "cmp_own_site_changed", { competitorId: own.id, fromHost: own.host, toHost: site.host, newSite });
+  return { competitorId: own.id, host: site.host, websiteUrl: origin, newSite, scan, home };
 }
 
 export type ProductLinesSync = "written" | "unchanged" | "removed" | "none";

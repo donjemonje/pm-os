@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Check, ChevronRight, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
@@ -9,7 +10,7 @@ import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
-import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
+import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, OwnSiteRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
 import { scanSummaryLine } from "@/lib/competitors/summary";
@@ -42,15 +43,16 @@ const PENDING_LATE_MS = 24 * 3600_000;
 const POLL_MS = 3000;
 
 /**
- * Settings → Competitors: competitors (with Scan now and the scan log),
+ * Settings → Competitors: your company first (the organization's own website,
+ * its other addresses, its product lines), then competitors (with Scan now and the scan log),
  * domains (with the definition text PMOS AI reads), the capability catalog
  * with the org's own status per row, what the team removed, and who is
- * notified. Every section opens and closes; only Competitors starts open
- * (Daniel 2026-11-12: the page was crowded). The organization itself is never
- * scanned. Reads are for everyone; catalog writes need a customer admin (the
- * API enforces the same). Scan now and the log are for every member.
+ * notified. Every section opens and closes; only Your company and Competitors
+ * start open (Daniel 2026-11-12: the page was crowded). Reads are for
+ * everyone; catalog writes need a customer admin (the API enforces the same).
+ * Scan now and the log are for every member.
  */
-type SectionKey = "competitors" | "domains" | "capabilities" | "notifications";
+type SectionKey = "own" | "competitors" | "domains" | "capabilities" | "notifications";
 
 /** A section's title row: click to open or close. The count says what is inside while it is closed. */
 function SectionToggle({ section, title, count, open, onToggle, heading = false }: { section: SectionKey; title: string; count?: number; open: boolean; onToggle: () => void; heading?: boolean }) {
@@ -72,7 +74,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   const [logFor, setLogFor] = useState<CompetitorRow | null>(null);
   /** The domain being removed while it still holds capabilities: the PM is asked once where they go. */
   const [movingOut, setMovingOut] = useState<{ domain: DomainRow; count: number } | null>(null);
-  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({ competitors: true, domains: false, capabilities: false, notifications: false });
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({ own: true, competitors: true, domains: false, capabilities: false, notifications: false });
   const [addingCompetitor, setAddingCompetitor] = useState(false);
   const isOpen = (k: SectionKey) => openSections[k];
   const toggle = (k: SectionKey) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
@@ -119,8 +121,9 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   const scanning = state.scanning;
   const analyzing = state.analyzing;
   const searching = state.searching;
+  const ownScanning = state.ownScanning;
   useEffect(() => {
-    if (!scanning && !analyzing && !searching) return;
+    if (!scanning && !analyzing && !searching && !ownScanning) return;
     const tick = async () => {
       await refresh();
       pollRef.current = setTimeout(tick, POLL_MS);
@@ -129,7 +132,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [scanning, analyzing, searching, refresh]);
+  }, [scanning, analyzing, searching, ownScanning, refresh]);
 
   async function scanNow(c: CompetitorRow) {
     setError(null);
@@ -176,6 +179,17 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
       {error && <div className="rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">{error}</div>}
       {note && <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#0f7a47]"><Check size={12} strokeWidth={2.5} />{note}</div>}
       {!canEdit && <div className="text-[12.5px] text-fg-muted">{C.settings.viewOnly}</div>}
+
+      {/* Your company */}
+      <OwnCompanyPanel own={state.own} orgName={state.orgName} productLines={state.productLines.length} canEdit={canEdit} busy={busy}
+        open={isOpen("own")} onToggle={() => toggle("own")}
+        onAdd={(website) => call("POST", "/api/competitors/own-site", { website })}
+        onChange={async (website) => {
+          if (!(await confirm({ title: C.settings.own.changeTitle, message: C.settings.own.changeBody, confirmLabel: C.settings.own.changeConfirm }))) return false;
+          return call("PATCH", "/api/competitors/own-site", { website });
+        }}
+        onScan={() => call("POST", "/api/competitors/own-site/scan")}
+        onAddAddress={addAddress} onRemoveAddress={removeAddress} />
 
       {/* Competitors */}
       <section className="rounded-xl border border-border bg-card" data-testid="cmp-competitors">
@@ -469,6 +483,127 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
     </div>
     <AddressList addresses={c.addresses} search={c.addressSearch} canEdit={canEdit} busy={busy} onAdd={(body) => onAddAddress(c.id, body)} onRemove={(a) => onRemoveAddress(c.id, a)} />
     </div>
+  );
+}
+
+// ————— Your company —————
+
+/**
+ * The first section: the organization's own material. Its website (add it, change it, where its scan stands, how
+ * many pages are stored, Scan now), its other addresses exactly as a competitor's (found the same way), and a link
+ * to Settings → Product Lines with their count — they are read together with the site. Adding the site here does
+ * what the scanner CLI `--own-site` does. The own site is never shown as a competitor.
+ *
+ * Documents (PDFs) have no place here yet: whether they are uploaded or read from a drive is not decided.
+ */
+function OwnCompanyPanel({ own, orgName, productLines, canEdit, busy, open, onToggle, onAdd, onChange, onScan, onAddAddress, onRemoveAddress }: {
+  own: OwnSiteRow | null;
+  orgName: string;
+  /** How many product lines the organization has (Settings → Product Lines). */
+  productLines: number;
+  canEdit: boolean;
+  busy: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onAdd: (website: string) => Promise<boolean>;
+  onChange: (website: string) => Promise<boolean>;
+  onScan: () => Promise<boolean>;
+  onAddAddress: (companyId: string, body: { address: string; kind: AddressKind }) => Promise<boolean>;
+  onRemoveAddress: (companyId: string, a: AddressRow) => Promise<void>;
+}) {
+  const O = C.settings.own;
+  const [website, setWebsite] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const pendingLate = own?.pending ? Date.now() - new Date(own.pending.since).getTime() > PENDING_LATE_MS : false;
+  const status = !own ? "never" : own.running ? "running" : own.pending ? (pendingLate ? "pendingLate" : "pending") : own.badge ?? (own.lastScanAt ? "incomplete" : "never");
+  const pillText = !own ? "" : own.running ? C.settings.scanInProgress(own.running.pagesSoFar) : own.pending ? C.settings.scanPendingSince(timeAgo(own.pending.since)) : status === "never" ? C.settings.neverScanned : C.settings.badges[status] ?? status;
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (!website.trim()) return;
+    if (await onAdd(website)) setWebsite("");
+  }
+  async function change(e: React.FormEvent) {
+    e.preventDefault();
+    if (!website.trim()) return;
+    if (await onChange(website)) setEditing(false);
+  }
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-own">
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
+        <SectionToggle section="own" title={O.title} open={open} onToggle={onToggle} />
+        {open && <p className="mt-1 text-sm text-muted">{O.blurb}</p>}
+      </div>
+      {open && (
+        <div className="px-5 py-3">
+          {!own ? (
+            <>
+              <div className="text-sm text-muted" data-testid="cmp-own-empty">{O.empty}</div>
+              {canEdit && (
+                <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setWebsite(""); } }} className="mt-3 flex items-end gap-2" data-testid="cmp-own-add">
+                  <label className="block min-w-[280px] flex-1">
+                    <span className={FIELD_LABEL}>{O.website}</span>
+                    <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder={O.websitePlaceholder} className={INPUT} disabled={busy} />
+                  </label>
+                  <Button type="submit" variant="primary" disabled={busy || !website.trim()}>
+                    {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} {O.addSite}
+                  </Button>
+                </form>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-3" data-testid="cmp-own-site">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-white text-fg-muted"><Globe size={14} /></span>
+                {editing ? (
+                  <form onSubmit={change} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setEditing(false); } }} className="flex min-w-0 flex-1 items-end gap-2" data-testid="cmp-own-change">
+                    <label className="block min-w-0 flex-1">
+                      <span className={FIELD_LABEL}>{O.website}</span>
+                      <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder={O.websitePlaceholder} className={INPUT} disabled={busy} autoFocus />
+                    </label>
+                    <Button type="button" onClick={() => setEditing(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+                    <Button type="submit" variant="primary" disabled={busy || !website.trim()}><Check size={13} /> {C.settings.save}</Button>
+                  </form>
+                ) : (
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[14px] font-medium">{own.name || orgName}</span>
+                      <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status === "pendingLate" ? "pending" : status]} data-testid="cmp-own-status">{pillText}</span>
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-fg-muted">
+                      <a href={own.websiteUrl} target="_blank" rel="noreferrer" className="hover:underline">{own.host}</a>
+                      <span data-testid="cmp-own-pages">· {O.pages(own.pages)}</span>
+                      {own.lastScanAt && <span>· {C.settings.lastScan(timeAgo(own.lastScanAt))}</span>}
+                      {own.nextScanAt && !own.running && !own.pending && <span>· {C.settings.nextScan(timeUntil(own.nextScanAt))}</span>}
+                    </div>
+                    {status === "unreachable" && own.lastError && <div className="mt-1 text-[12px] text-[#c23767]">{own.lastError}</div>}
+                  </div>
+                )}
+                {!editing && (
+                  <>
+                    <span title={own.running || own.pending ? C.settings.scanRunning : undefined}>
+                      <button onClick={async () => { setStarting(true); await onScan(); setStarting(false); }} disabled={Boolean(own.running || own.pending) || starting || busy} className={SMALL_BTN} data-testid="cmp-own-scan">
+                        {own.running || starting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        {own.running ? C.settings.scanning : C.settings.scanNow}
+                      </button>
+                    </span>
+                    {canEdit && (
+                      <button onClick={() => { setWebsite(own.websiteUrl); setEditing(true); }} className={ICON_BTN} aria-label={O.changeSite} title={O.changeSite} disabled={busy}><Pencil size={14} /></button>
+                    )}
+                  </>
+                )}
+              </div>
+              <AddressList addresses={own.addresses} search={own.addressSearch} canEdit={canEdit} busy={busy} onAdd={(body) => onAddAddress(own.id, body)} onRemove={(a) => onRemoveAddress(own.id, a)} />
+            </>
+          )}
+          <div className="mt-3 border-t border-border pt-3 text-[12.5px] text-fg-muted" data-testid="cmp-own-product-lines">
+            {O.productLines(productLines)}{" "}
+            <Link href="/settings/ideas/product-lines" className="font-medium text-primary hover:underline">{O.productLinesLink}</Link>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
