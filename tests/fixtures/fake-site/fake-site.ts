@@ -17,7 +17,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  *             `sitemapOnly` serves /whitepaper, listed in /sitemap.xml and
  *             linked from no page — WS-33. `variantLinks` makes home link
  *             the same pages under other spellings (trailing slash, www.
- *             host) — WS-34.
+ *             host) — WS-34. `hoverHints` turns /pricing into a plan table
+ *             whose row hints live only in embedded script data — WS-45.
  *
  * Variants are toggled through the control endpoint (same server, never a
  * second site) and every request is logged:
@@ -84,6 +85,12 @@ export interface Variants {
    * header, and *.localtest.me resolves to 127.0.0.1).
    */
   variantLinks: boolean;
+  /**
+   * /pricing is a plan table (WS-45): the visible HTML holds only the row names; the hint a person sees when hovering a
+   * row's "i" icon exists only in the page's embedded script data (Next.js-style escaped page data), next to data that
+   * is not a hint (plan ids, an internal note). HOVER_HINTS lists the rows.
+   */
+  hoverHints: boolean;
 }
 
 export const DEFAULT_VARIANTS: Variants = {
@@ -111,7 +118,31 @@ export const DEFAULT_VARIANTS: Variants = {
   bogusPdf: false,
   sitemapOnly: false,
   variantLinks: false,
+  hoverHints: false,
 };
+
+/** The plan-table rows of the `hoverHints` variant: the row name is visible, the hint only in the page's script data. */
+export const HOVER_HINTS = [
+  { name: "Single sign-on (SAML, OIDC)", hint: "Sign in through your company identity provider instead of a password." },
+  { name: "Audit log", hint: "Every change in the workspace is recorded and kept for 12 months." },
+  { name: "Takedown requests", hint: "Ask Acme to remove a fake domain or profile; 20 requests a month are included." },
+] as const;
+/** Page data of the `hoverHints` variant that is NOT a hint and must never reach the stored text. */
+export const HOVER_HINTS_NOT_A_HINT = "internal pricing experiment bucket B, not shown to visitors";
+
+/** /pricing with the `hoverHints` variant: row names in the table, hints only inside the script. */
+function hoverHintsPricing(pricingText: string): string {
+  const data = JSON.stringify({
+    plans: [{ planId: "starter" }, { planId: "team" }],
+    features: HOVER_HINTS.map((r) => ({ name: r.name, values: [{ planId: "starter", type: "none" }, { planId: "team", type: "check" }], tooltip: r.hint })),
+    note: HOVER_HINTS_NOT_A_HINT,
+  });
+  const rows = HOVER_HINTS.map((r) => `<tr><td>${r.name} <span class="info-icon" aria-hidden="true">i</span></td><td>—</td><td>✓</td></tr>`).join("");
+  // Next.js writes its page data as a JSON string inside a script call: every quote of the data arrives escaped.
+  return `<p>${pricingText}</p>
+<table><thead><tr><th>Feature</th><th>Starter</th><th>Team</th></tr></thead><tbody>${rows}</tbody></table>
+<script>self.__next_f.push([1,${JSON.stringify(data).replace(/</g, "\\u003c")}])</script>`;
+}
 
 /** The marker paragraphs of the `bigPage` variant (byte offsets in the served HTML, ASCII only). */
 export const BIG_PAGE_MARKERS = {
@@ -347,7 +378,7 @@ ${variants.linkPdf ? `<p>Read the <a href="${base}/files/brochure.pdf">brochure 
         if (variants.jsOnlyPricing) {
           return send(200, `<!doctype html><html><head><title>Pricing · Acme Fake</title></head><body><div id="root"></div><script>document.getElementById('root').innerHTML='<h1>Pricing</h1><p>${variants.pricingText.replace(/'/g, "\\'")}</p>'</script></body></html>`);
         }
-        return send(200, page("Pricing", `<p>${variants.pricingText}</p>`, nav, footerDate));
+        return send(200, page("Pricing", variants.hoverHints ? hoverHintsPricing(variants.pricingText) : `<p>${variants.pricingText}</p>`, nav, footerDate));
       case "/docs":
         if (variants.docsTimeoutAlways || (variants.docsTimeoutOnce && !docsTimedOutOnce)) {
           docsTimedOutOnce = true;
