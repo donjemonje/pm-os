@@ -74,7 +74,8 @@ export async function POST(req: Request) {
         ...(description !== undefined ? { description } : {}),
         ...(ownProduct !== undefined ? { ownProduct } : {}),
         ...(body.productLines !== undefined ? { productLines: productLines as unknown as Prisma.InputJsonValue } : {}),
-        ...(isOwnStatus(body.ourStatus) ? { ourStatus: body.ourStatus } : {}),
+        // An own status given by hand is the PM's value: no run of the organization's own site changes it (lib/competitors/own.ts).
+        ...(isOwnStatus(body.ourStatus) ? { ourStatus: body.ourStatus, ourStatusSetAt: new Date(), ourStatusSetById: ctx.user.id } : {}),
       },
     });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "capability", action: "restore", entityId: dup.id, field: "state", from: dup.state, to: "active", name, via: "add" });
@@ -91,6 +92,9 @@ export async function POST(req: Request) {
       ownProduct: cleanText(body.ownProduct, MAX_OWN_PRODUCT) ?? "",
       productLines: productLines as unknown as Prisma.InputJsonValue,
       ourStatus: isOwnStatus(body.ourStatus) ? body.ourStatus : "found",
+      // A row typed by hand carries the own status its PM gave it: the PM's value, never changed by a run (lib/competitors/own.ts).
+      ourStatusSetAt: new Date(),
+      ourStatusSetById: ctx.user.id,
       position: await nextPosition("capability", ctx.workspaceId),
       origin: "manual",
       state: "active",

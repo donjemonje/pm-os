@@ -12,6 +12,7 @@ import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
+import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -621,7 +622,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
-                                      <OwnCell row={k} kind="capability" org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
                                     </span>
                                   </td>
                                   {shownCompetitors.map((c) => {
@@ -642,7 +643,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                   </td>
                                 </tr>
                                 {featuresOpen && features.map((f) => (
-                                  <FeatureLine key={f.id} feature={f} org={own} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={(competitorId) => openProfile(competitorId, "cell")} />
+                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={(competitorId) => openProfile(competitorId, "cell")} />
                                 ))}
                                 </Fragment>
                               );
@@ -931,9 +932,10 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
 
 // ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
 
-function FeatureLine({ feature, org, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
+function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
   feature: FeatureRow;
   org: string;
+  ownSite: boolean;
   competitors: CompetitorRow[];
   cellOf: (competitorId: string) => CellRow | undefined;
   open: OpenCell | null;
@@ -947,7 +949,7 @@ function FeatureLine({ feature, org, competitors, cellOf, open, setOpen, onPatch
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]" title={feature.description || undefined}>{feature.name}</td>
       <td className="bg-[rgba(36,87,245,.06)] text-center">
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
-          <OwnCell row={feature} kind="feature" org={org} open={open} setOpen={setOpen} onPatch={onPatch} />
+          <OwnCell row={feature} kind="feature" org={org} ownSite={ownSite} open={open} setOpen={setOpen} onPatch={onPatch} />
         </span>
       </td>
       {competitors.map((c) => (
@@ -1308,19 +1310,47 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
   );
 }
 
-// ————— The org's own cell: its status on a capability, set by PMs —————
+// ————— The org's own cell: its status on a row — from its own website where it is analysed, or set by PMs —————
 
-function OwnCell({ row, kind, org, open, setOpen, onPatch }: {
-  /** The row: a capability or a feature, with the org's own mark on it. */
-  row: { id: string; name: string; ourStatus: OwnStatus };
+function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
+  /** The row: a capability or a feature, with the org's own mark on it and the evidence of its own website behind it. */
+  row: { id: string; name: string; ourStatus: OwnStatus; ourStatusByPm: boolean; ownEvidence: OwnEvidence | null };
   kind: "capability" | "feature";
   org: string;
+  /** The organization's own website is analysed: the value comes from it unless a PM set it. */
+  ownSite: boolean;
   open: OpenCell | null;
   setOpen: (v: OpenCell | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
 }) {
   const isOpen = open?.competitorId === "own" && open.rowId === row.id;
   const [busy, setBusy] = useState(false);
+  // Hover: the evidence of the own website, read-only, from the row already in the state — the same card as a competitor's cell.
+  const [hover, setHover] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTo = (next: boolean, ms: number) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHover(next), ms);
+  };
+  useEffect(() => () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
+  const evidence = row.ownEvidence;
+  const showHover = hover && !isOpen && ownSite && (Boolean(evidence) || row.ourStatus === "not_found");
+  useEffect(() => {
+    if (!showHover) return;
+    const key = `own|${row.id}`;
+    if (!hoverShown.has(key)) {
+      hoverShown.add(key);
+      track("cmp_cell_evidence_shown", { competitorId: "own", rowKind: kind, rowId: row.id, value: row.ourStatus, via: "hover", hasEvidence: Boolean(evidence) });
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHover(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHover]);
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1330,6 +1360,14 @@ function OwnCell({ row, kind, org, open, setOpen, onPatch }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
   const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, description: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
+  // A quote from the product lines has no page to open: the card says where it is from instead of linking an internal address.
+  const fromProductLines = isProductLinesPage(evidence?.sourceUrl);
+  const card = (
+    <>
+      <EvidenceCard quote={evidence?.quote ?? null} url={fromProductLines ? null : evidence?.sourceUrl ?? null} reasoning={evidence?.reasoning || null} wording={null} description={evidence?.description ?? null} count={evidence?.count ?? 0} empty={C.matrix.ownEvidenceEmpty} />
+      {evidence && fromProductLines && <div className="mt-1 text-[12px] text-fg-muted" data-testid="cmp-own-evidence-product-lines">{C.matrix.ownFromProductLines}</div>}
+    </>
+  );
   async function set(v: OwnStatus) {
     if (v === row.ourStatus) return;
     setBusy(true);
@@ -1338,26 +1376,37 @@ function OwnCell({ row, kind, org, open, setOpen, onPatch }: {
     if (ok) setOpen(null);
   }
   return (
-    <span className="relative inline-flex items-center justify-center">
+    <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
       <button
-        onClick={() => setOpen(isOpen ? null : { competitorId: "own", rowId: row.id })}
+        onClick={() => { setHover(false); setOpen(isOpen ? null : { competitorId: "own", rowId: row.id }); }}
         className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
         aria-label={`${row.name}: ${org} ${C.values[row.ourStatus]}`}
         aria-expanded={isOpen}
       >
         <CellValue cell={fake} />
       </button>
+      {showHover && (
+        <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-own-cell-hover">
+          {card}
+        </div>
+      )}
       {isOpen && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[280px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
+          <div className={cn("absolute left-1/2 top-[calc(100%+6px)] z-[25] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", ownSite ? "w-[340px]" : "w-[280px]")}>
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-bold">{row.name}</div>
-                <div className="mt-0.5 text-[11.5px] text-fg-muted">{C.matrix.ownCellTitle(org)} · {C.matrix.ownCellHint}</div>
+                <div className="mt-0.5 text-[11.5px] text-fg-muted" data-testid="cmp-own-cell-hint">{C.matrix.ownCellTitle(org)} · {!ownSite ? C.matrix.ownCellHint : row.ourStatusByPm ? C.matrix.ownCellByTeam : C.matrix.ownCellFromSite}</div>
               </div>
               <button onClick={() => setOpen(null)} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label="Close"><X size={14} /></button>
             </div>
+            {ownSite && (
+              <div className="mt-2 text-[12.5px] text-fg-2">
+                <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
+                {card}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {OWN_STATUS_VALUES.map((v) => (
                 <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", row.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>

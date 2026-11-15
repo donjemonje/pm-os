@@ -22,8 +22,9 @@ export async function PATCH(req: Request, { params }: Params) {
   const feature = await db.feature.findFirst({ where: { id, workspaceId: ctx.workspaceId, state: "active" }, select: { id: true, name: true, capabilityId: true, ourStatus: true } });
   if (!feature) return bad("Not found", 404);
   if (!isOwnStatus(body.ourStatus)) return bad(C.errors.pickOwnStatus);
+  // Set by hand: the PM's value is the truth — no run of the organization's own site changes it again (lib/competitors/own.ts).
+  await db.feature.update({ where: { id }, data: { ourStatus: body.ourStatus, ourStatusSetAt: new Date(), ourStatusSetById: ctx.user.id } });
   if (body.ourStatus !== feature.ourStatus) {
-    await db.feature.update({ where: { id }, data: { ourStatus: body.ourStatus } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "feature", entityId: id, action: "ourStatus", field: "ourStatus", from: feature.ourStatus, to: body.ourStatus, name: feature.name, capabilityId: feature.capabilityId });
   }
   return stateResponse(ctx);

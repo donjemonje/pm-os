@@ -15,7 +15,7 @@ type Params = { params: Promise<{ id: string }> };
 
 /**
  * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
- * org's own status (`ourStatus`: found / not_found — any member), or restore a removed row
+ * org's own status (`ourStatus`: found / not_found — any member; a value set here is the PM's and survives every run), or restore a removed row
  * (`state`: "active", with an active `domainId` when its own domain is not in the table).
  * There is nothing to accept or decline: a capability an analysis finds is just added to the table.
  * DELETE: the PM removes the row. It is not erased: it leaves the table, its statuses are kept,
@@ -104,6 +104,9 @@ export async function PATCH(req: Request, { params }: Params) {
   if (body.ourStatus !== undefined) {
     if (!isOwnStatus(body.ourStatus)) return bad(C.errors.pickOwnStatus);
     data.ourStatus = body.ourStatus;
+    // Set by hand: the PM's value is the truth — no run of the organization's own site changes it again (lib/competitors/own.ts).
+    data.ourStatusSetAt = new Date();
+    data.ourStatusSetById = ctx.user.id;
     if (body.ourStatus !== existing.ourStatus) events.push({ action: "ourStatus", field: "ourStatus", from: existing.ourStatus, to: body.ourStatus });
     field = "ourStatus";
   }
