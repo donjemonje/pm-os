@@ -4,6 +4,7 @@ import type { AnswerError } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
 import { COMPETITORS_COPY as C } from "../copy";
 import { aliasList, judgeNewRow, NameIndex, placeInDomain, type Resolved } from "../decisions";
+import { ownEvidenceOf, ownStatusAfterRun, readOwnEvidence } from "../own";
 import { cellFromEvidence, type CellFromEvidence, type Evidence } from "./cells";
 import { AnalysisError, queueCatalogAnalyses, type RunContext } from "./engine";
 import { canonicalName, findItem, itemKey, ownKey, planChildMerges, planMerges, wordingKey, type ItemLite, type MergePlan } from "./items";
@@ -509,7 +510,8 @@ export async function matchStep(ctx: RunContext): Promise<void> {
   const competitorId = ctx.competitor.id;
   const workspaceId = ctx.run.workspaceId;
   // 1. Repair: a saved match whose row of ours was hard-deleted is no match any more.
-  await db.competitorItem.updateMany({ where: { competitorId, matchedAt: { not: null }, capabilityId: null, featureId: null, placement: { equals: Prisma.DbNull } }, data: { matchedAt: null, matchedBy: null, matchAnalysisId: null } });
+  // Not an item the setup run's unify step excluded (no capability: a commercial term, a marketing headline): that is a saved decision too.
+  await db.competitorItem.updateMany({ where: { competitorId, matchedAt: { not: null }, matchedBy: { not: "excluded" }, capabilityId: null, featureId: null, placement: { equals: Prisma.DbNull } }, data: { matchedAt: null, matchedBy: null, matchAnalysisId: null } });
 
   const [items, stats, ours] = await Promise.all([loadItems(competitorId), loadItemStats(ctx), loadCatalog(workspaceId)]);
   const byId = new Map(items.map((i) => [i.id, i]));
@@ -686,13 +688,13 @@ const NOT_FOUND_ANSWER = '{"found": false, "quote": "", "url": "", "theirName": 
  * Returns the capabilities whose second look is due but was not made in this run (the per-run limit): the apply
  * step writes no cell for them — a cell says not found only after a look found nothing.
  */
-export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
+export async function secondLookStep(ctx: RunContext, opts: { /** Only these capabilities of ours are looked for (the setup run: the rows our own source has). */ only?: ReadonlySet<string> } = {}): Promise<Set<string>> {
   const competitorId = ctx.competitor.id;
   const workspaceId = ctx.run.workspaceId;
   const waiting = new Set<string>();
   ctx.counters.secondLooksWaiting = 0;
   const [{ capabilities }, evidence] = await Promise.all([tableRows(workspaceId), loadEvidence(workspaceId, competitorId, await planOf(ctx))]);
-  const candidates = capabilities.filter((k) => !evidence.byCapability.get(k.id)?.length);
+  const candidates = capabilities.filter((k) => !evidence.byCapability.get(k.id)?.length && (!opts.only || opts.only.has(k.id)));
   if (!candidates.length) return waiting;
 
   // The pool: every page the analysis may read, with its text — the deep pages (help articles, release notes, API
@@ -783,11 +785,21 @@ export async function secondLookStep(ctx: RunContext): Promise<Set<string>> {
 
 // ————— 5. Apply: rows, then cells — no AI —————
 
+/** The apply step of an analysis run: the rows, then the cells. A setup run calls the two halves apart (analysis/setup.ts). */
 export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string> = new Set()): Promise<void> {
+  await applyRows(ctx);
+  await applyCells(ctx, lookWaiting);
+}
+
+/**
+ * A. Rows: the company's items that are none of ours become capabilities and features — through decisions.ts, so a
+ * PM's decision is never reopened. A row made from an item of the organization's OWN source is ours: its own cell
+ * starts as found (own.ts); a row made from a competitor's item starts as not found for us.
+ */
+export async function applyRows(ctx: RunContext): Promise<void> {
   const competitorId = ctx.competitor.id;
   const workspaceId = ctx.run.workspaceId;
-  // The first analysis of a competitor sets the starting picture: values are replaced (POC cells included), nothing is "news".
-  const baseline = (await db.competitorAnalysis.count({ where: { competitorId, appliedAt: { not: null } } })) === 0;
+  const ourStatus = ctx.competitor.isOwn ? "found" : "not_found";
   const respected = (entity: "capability" | "feature" | "domain", row: Resolved, found: string) =>
     recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity, entityId: row.id, name: row.name, found, reason: row.state, competitorId, analysisId: ctx.run.id });
 
@@ -864,7 +876,7 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
           const inSuggestedDomain = place.action === "suggest" || domainState.get(domainId) === "suggested";
           const capability = await tx.capability.create({
             data: {
-              workspaceId, domainId, name: verdict.name, description: placement.description, ourStatus: "not_found", origin: "ai", state: "active", position,
+              workspaceId, domainId, name: verdict.name, description: placement.description, ourStatus, origin: "ai", state: "active", position,
               // Kept for a decline of the suggested domain: the row then moves to the closest existing domain.
               closestDomainId: inSuggestedDomain ? (place.action === "suggest" ? place.closestDomainId : closest ?? fallback) : null,
             },
@@ -913,7 +925,7 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
       const next = (featurePosition.get(home) ?? -1) + 1;
       featurePosition.set(home, next);
       const featureId = await db.$transaction(async (tx) => {
-        const feature = await tx.feature.create({ data: { workspaceId, capabilityId: home, name: verdict.name, description: placement.description, ourStatus: "not_found", origin: "ai", state: "active", position: next }, select: { id: true } });
+        const feature = await tx.feature.create({ data: { workspaceId, capabilityId: home, name: verdict.name, description: placement.description, ourStatus, origin: "ai", state: "active", position: next }, select: { id: true } });
         await tx.competitorItem.update({ where: { id: item.id }, data: { featureId: feature.id, matchedBy: "created" } });
         return feature.id;
       });
@@ -927,8 +939,22 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
     if (waiting) ctx.log("info", `${waiting} item${waiting === 1 ? "" : "s"} of theirs wait${waiting === 1 ? "s" : ""} for more pages before becoming a row (at least ${ctx.minPagesForNewRow} pages)`);
     if (noDomain) ctx.log("warn", `${noDomain} new capabilit${noDomain === 1 ? "y was" : "ies were"} not added: your catalog has no domain yet — add one in Settings → Competitors`);
   }
+  await ctx.flush();
+}
 
-  // ——— B. Cells: by fixed rules from the evidence. A PM's correction is never read or written here ———
+/**
+ * B. Cells: by fixed rules from the evidence. A PM's correction is never read or written here.
+ * The organization's own source fills OUR column instead (applyOwnCells): it never has a competitor's cell.
+ */
+export async function applyCells(ctx: RunContext, lookWaiting: ReadonlySet<string> = new Set()): Promise<void> {
+  const competitorId = ctx.competitor.id;
+  const workspaceId = ctx.run.workspaceId;
+  if (ctx.competitor.isOwn) {
+    await applyOwnCells(ctx);
+    return;
+  }
+  // The first analysis of a competitor sets the starting picture: values are replaced (POC cells included), nothing is "news".
+  const baseline = (await db.competitorAnalysis.count({ where: { competitorId, appliedAt: { not: null } } })) === 0;
   const [{ capabilities, features }, evidence, storedCells, storedFeatureCells] = await Promise.all([
     tableRows(workspaceId),
     loadEvidence(workspaceId, competitorId, await planOf(ctx)),
@@ -990,18 +1016,74 @@ export async function applyStep(ctx: RunContext, lookWaiting: ReadonlySet<string
   // finished run. So a run that crashed or failed after making a row (in this step, or later) still gets its
   // follow-up runs: from this run when it continues, or from the competitor's next run. Before the cells are marked
   // current, for the same reason.
+  // Not in a setup run: it fills every company itself.
+  if (!ctx.setup) await queueFollowUps(ctx);
+
+  // ——— D. The cells are current as of now ———
+  await ctx.markApplied(now);
+  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}${ctx.counters.secondLooksWaiting ? ` · ${ctx.counters.secondLooksWaiting} capabilit${ctx.counters.secondLooksWaiting === 1 ? "y waits" : "ies wait"} for a second look (next run)` : ""}`);
+  await ctx.flush();
+}
+
+/** C of the apply step — see the comment where it is called: the rows made from this company's items since its last finished run are looked for at the competitors. */
+async function queueFollowUps(ctx: RunContext): Promise<void> {
+  const competitorId = ctx.competitor.id;
   const [lastDone, made] = await Promise.all([
     db.competitorAnalysis.findFirst({ where: { competitorId, status: "done", appliedAt: { not: null } }, orderBy: { appliedAt: "desc" }, select: { appliedAt: true } }),
     db.competitorItem.findMany({ where: { competitorId, kind: "capability", matchedBy: "created", capability: { is: { state: "active" } } }, select: { capability: { select: { id: true, createdAt: true } } } }),
   ]);
   const fresh = rowsSince(made.flatMap((m) => (m.capability ? [m.capability] : [])), lastDone?.appliedAt ?? null);
-  if (fresh.length) {
-    const others = await queueCatalogAnalyses(workspaceId, { exceptCompetitorId: competitorId });
-    if (others) ctx.log("info", `${others} other competitor${others === 1 ? "" : "s"} queued: the new rows are looked for there too`);
-  }
+  if (!fresh.length) return;
+  const others = await queueCatalogAnalyses(ctx.run.workspaceId, { exceptCompetitorId: competitorId });
+  if (others) ctx.log("info", `${others} ${ctx.competitor.isOwn ? "" : "other "}competitor${others === 1 ? "" : "s"} queued: the new rows are looked for there too`);
+}
 
-  // ——— D. The cells are current as of now ———
-  await ctx.markApplied(now);
-  ctx.log("info", `Table filled${baseline ? " (first analysis of this competitor: the starting picture, nothing counts as a change)" : ""}: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsLow} low confidence, ${ctx.counters.cellsNotFound} not found${ctx.counters.cellsChanged ? ` · ${ctx.counters.cellsChanged} changed` : ""}${ctx.counters.newCapabilities ? ` · ${ctx.counters.newCapabilities} new capabilit${ctx.counters.newCapabilities === 1 ? "y" : "ies"}` : ""}${ctx.counters.newFeatures ? ` · ${ctx.counters.newFeatures} new feature${ctx.counters.newFeatures === 1 ? "" : "s"}` : ""}${ctx.counters.secondLooksWaiting ? ` · ${ctx.counters.secondLooksWaiting} capabilit${ctx.counters.secondLooksWaiting === 1 ? "y waits" : "ies wait"} for a second look (next run)` : ""}`);
+// ————— The organization's own source: OUR column —————
+
+/**
+ * The cells step of the own source (own.ts). For every row of the table: what the own source's items say — evidence
+ * of ours on a page that is read → found, none → not found, no confidence — is written to the row's own cell
+ * (ourStatus) ONLY where no PM set it by hand; a PM's value is the truth and survives every run. The top evidence
+ * is kept on the row (ourEvidence) either way: it is what the hover shows, and it never decides the value.
+ * No competitor cell is ever written for the own source, and it gets no second look.
+ */
+async function applyOwnCells(ctx: RunContext): Promise<void> {
+  const competitorId = ctx.competitor.id;
+  const workspaceId = ctx.run.workspaceId;
+  const [{ capabilities, features }, evidence] = await Promise.all([tableRows(workspaceId), loadEvidence(workspaceId, competitorId, await planOf(ctx))]);
+  const [storedCapabilities, storedFeatures] = await Promise.all([
+    db.capability.findMany({ where: { id: { in: capabilities.map((k) => k.id) } }, select: { id: true, ourStatus: true, ourStatusSetAt: true, ourEvidence: true } }),
+    db.feature.findMany({ where: { id: { in: features.map((f) => f.id) } }, select: { id: true, ourStatus: true, ourStatusSetAt: true, ourEvidence: true } }),
+  ]);
+  let changed = 0;
+  let kept = 0;
+  const one = async (entity: "capability" | "feature", row: { id: string; name: string }, stored: { ourStatus: string; ourStatusSetAt: Date | null; ourEvidence: unknown } | undefined, list: Evidence[]) => {
+    if (!stored) return;
+    const cell = cellFromEvidence(list);
+    const found = { best: cell.best, count: cell.count, description: cell.description };
+    const next = ownStatusAfterRun({ ourStatus: stored.ourStatus, setByPm: stored.ourStatusSetAt != null }, found);
+    const ours = ownEvidenceOf(found);
+    if (next.ourStatus === "found") ctx.counters.cellsFound++;
+    else ctx.counters.cellsNotFound++;
+    // A PM's value that differs from what the site says: kept, and counted so the log says so.
+    if (stored.ourStatusSetAt != null && (cell.count > 0 ? "found" : "not_found") !== next.ourStatus) kept++;
+    const sameEvidence = JSON.stringify(readOwnEvidence(stored.ourEvidence)) === JSON.stringify(ours);
+    if (!next.changed && sameEvidence) return;
+    const data = { ...(next.changed ? { ourStatus: next.ourStatus } : {}), ourEvidence: ours === null ? Prisma.DbNull : (ours as unknown as Prisma.InputJsonValue) };
+    if (entity === "capability") await db.capability.update({ where: { id: row.id }, data });
+    else await db.feature.update({ where: { id: row.id }, data });
+    if (next.changed) {
+      changed++;
+      ctx.counters.cellsChanged++;
+      await recordCompetitorEvent(workspaceId, null, "cmp_own_status_set", { entity, entityId: row.id, name: row.name, from: stored.ourStatus, to: next.ourStatus, analysisId: ctx.run.id, pages: cell.count });
+    }
+  };
+  const capabilityOf = new Map(storedCapabilities.map((k) => [k.id, k]));
+  for (const k of capabilities) await one("capability", k, capabilityOf.get(k.id), evidence.byCapability.get(k.id) ?? []);
+  const featureOf = new Map(storedFeatures.map((f) => [f.id, f]));
+  for (const f of features) await one("feature", f, featureOf.get(f.id), evidence.byFeature.get(f.id) ?? []);
+  if (!ctx.setup) await queueFollowUps(ctx);
+  await ctx.markApplied(new Date());
+  ctx.log("info", `Our own column filled from ${ctx.competitor.name}'s own site: ${ctx.counters.cellsFound} found, ${ctx.counters.cellsNotFound} not found${changed ? ` · ${changed} changed` : ""}${kept ? ` · ${kept} set by a PM differ from the site and were kept` : ""}`);
   await ctx.flush();
 }

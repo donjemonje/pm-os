@@ -7,6 +7,8 @@ import { MATCH_BATCH, type MatchCatalog } from "./prompts";
  * Our list goes to PMOS AI with codes — a closed set: the model answers with our codes, never with free names.
  * A match is saved on the competitor's item and reused on every later run. What invalidates it — the complete list:
  * the row of ours is hard-deleted; the item is absorbed by another in a merge; an admin asks for a rematch.
+ * In a setup run the capability items get their rows from the unify step instead (analysis/unify.ts) — saved the
+ * same way, matchedBy "ai" — and the match call places only what is left: the features.
  * Nothing else: not a rename, a move, a removal or restore of our row, not a new scan, not a prompt change.
  *
  * Pure: no database, no network.
@@ -94,9 +96,12 @@ export interface MatchItem {
   matchedAt: Date | null;
 }
 
-/** A saved match: our capability, our feature, or the placement answer the apply step turns into a row. */
-export function isSettled(item: Pick<MatchItem, "capabilityId" | "featureId" | "placement">): boolean {
-  return Boolean(item.capabilityId || item.featureId || item.placement);
+/** matchedBy of an item the setup run's unify step judged no capability (a commercial term, a marketing headline): it gets no row, and that is a saved decision. */
+export const EXCLUDED = "excluded";
+
+/** A saved match: our capability, our feature, the placement answer the apply step turns into a row — or the decision that it is no capability. */
+export function isSettled(item: Pick<MatchItem, "capabilityId" | "featureId" | "placement"> & { matchedBy?: string | null }): boolean {
+  return Boolean(item.capabilityId || item.featureId || item.placement) || item.matchedBy === EXCLUDED;
 }
 
 /** A match was saved but nothing is left of it: the row of ours was hard-deleted. The item goes back on the to-do. */

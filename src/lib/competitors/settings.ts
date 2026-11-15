@@ -211,6 +211,16 @@ export interface TestAiAnswers {
   secondLook?: Record<string, string>;
   /** Facts: every chunk gets this answer. Missing → {"facts": []}. */
   facts?: string;
+  /**
+   * A setup run only, read from the answers of the organization's OWN source (analysis/setup.ts) — every company of
+   * an injected setup run must have answers of its own for its map, research, merge, match, second looks and facts:
+   *   unify       — the answer of the n-th unify call. Missing while items still need a row → the run FAILS.
+   *   unifyReview — the answer of every review call. Missing → {"merge": [], "drop": [], "rename": []}.
+   *   domains     — the answer of the n-th domains call. Missing while rows still need a domain → the run FAILS.
+   */
+  unify?: string[];
+  unifyReview?: string;
+  domains?: string[];
   /** Capacity answers: after `afterCalls` successful calls of the run, the next `times` calls answer "no capacity". */
   rateLimit?: { afterCalls: number; times: number };
 }
@@ -242,7 +252,7 @@ export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string
     if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every(isJson)) return { error: `${key} must be an object of JSON texts` };
     out[key] = m as Record<string, string>;
   }
-  for (const key of ["merge", "match"] as const) {
+  for (const key of ["merge", "match", "unify", "domains"] as const) {
     if (r[key] === undefined) continue;
     if (!Array.isArray(r[key]) || !(r[key] as unknown[]).every(isJson)) return { error: `${key} must be a list of JSON texts` };
     out[key] = r[key] as string[];
@@ -250,6 +260,10 @@ export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string
   if (r.facts !== undefined) {
     if (!isJson(r.facts)) return { error: "facts must be JSON text" };
     out.facts = r.facts;
+  }
+  if (r.unifyReview !== undefined) {
+    if (!isJson(r.unifyReview)) return { error: "unifyReview must be JSON text" };
+    out.unifyReview = r.unifyReview;
   }
   if (r.rateLimit !== undefined) {
     const l = r.rateLimit as Record<string, unknown> | null;

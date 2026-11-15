@@ -1,5 +1,7 @@
 import { db } from "../../db";
 import { COMPETITORS_COPY as C } from "../copy";
+import { OWN_MATERIAL_SOURCE_TYPE } from "../own";
+import { syncProductLinesPage } from "../own-site";
 import { AnalysisError, type RunContext } from "./engine";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import { injectedMapAnswer, MAP_MAX_SECTIONS, MAP_MAX_TOKENS, MAP_SYSTEM_PROMPT, MAP_VERSION, mapTool, parseMap, renderMap, type MapEntry } from "./prompts";
@@ -13,6 +15,10 @@ import { buildSections, hostOf, isLlmsTxt, ReadingPlan, SECTION_LABELS, sectionK
  * asks PMOS AI only about the sections that have no saved label. A label is saved in the same transaction as the
  * call's other labels, so a run that stopped asks only what is left. There is no fallback: a map call that fails,
  * or whose answer names a code or a label outside the closed sets, fails the run.
+ *
+ * The organization's own source (own.ts): before its map, the organization's product lines are written as one
+ * stored page of it (own-site.ts syncProductLinesPage); that page's section is labeled "product" in code, like the
+ * home page — no map call is made for it.
  */
 
 /** Tokens of instructions and schema a map call carries besides the section list. */
@@ -68,6 +74,12 @@ const labelCounts = (rows: Array<{ label: string; pages: number }>): string =>
 export async function mapStep(ctx: RunContext): Promise<void> {
   const competitorId = ctx.competitor.id;
   const workspaceId = ctx.run.workspaceId;
+  if (ctx.competitor.isOwn) {
+    // The product lines are part of the own material: one stored page, due again whenever a product line changes.
+    const synced = await syncProductLinesPage(workspaceId, competitorId);
+    if (synced === "written") ctx.log("info", "Product lines written as a page of the own source (new or changed since they were last read)");
+    else if (synced === "removed") ctx.log("info", "The organization has no product line any more: their page was removed from the own source");
+  }
   const [pages, saved] = await Promise.all([
     loadPages(competitorId),
     db.competitorSection.findMany({ where: { competitorId }, select: { id: true, sourceId: true, prefix: true, pages: true, chars: true } }),
@@ -88,11 +100,13 @@ export async function mapStep(ctx: RunContext): Promise<void> {
   const row = (s: Section, label: SectionLabel, by: "ai" | "code") => ({
     workspaceId, competitorId, sourceId: s.sourceId, prefix: s.prefix, label, pages: s.pages, chars: s.chars, labeledBy: by, mapVersion: by === "ai" ? MAP_VERSION : null, analysisId: ctx.run.id,
   });
-  const home = fresh.filter((s) => s.home);
+  // So is the own material that is not on the website (the product-lines page of the organization's own source).
+  const byCode = (s: Section) => s.home || s.sourceType === OWN_MATERIAL_SOURCE_TYPE;
+  const home = fresh.filter(byCode);
   if (home.length) await db.competitorSection.createMany({ data: home.map((s) => row(s, "product", "code")), skipDuplicates: true });
 
   // 3. PMOS AI: only the sections with no label yet. No new section → no call.
-  let left = fresh.filter((s) => !s.home);
+  let left = fresh.filter((s) => !byCode(s));
   const asked = left.length;
   if (left.length) {
     const llms = await llmsTxt(pages);

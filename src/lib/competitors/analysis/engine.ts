@@ -8,11 +8,14 @@ import { aiStepEnabled, analysisTokenBudget, now, testAiAnswers, type TestAiAnsw
 import { getCompetitorsConfig } from "../store";
 import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
 import { ReadingBudget } from "./budget";
+import { emptyCounters, readCounters, type Counters } from "./counters";
 import { factsStep } from "./facts";
 import { analysisMayRun, queueFilter } from "./gate";
 import { goBackStep } from "./goback";
 import { mapStep } from "./plan";
 import type { ReadingPlan } from "./sections";
+import { setupWalk, workspaceSetupState } from "./setup";
+import { analysisFillsTable, readSetupProgress, setupTotals, type SetupCompany, type SetupProgress, type SetupStage } from "./setup-rules";
 import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
 
 /**
@@ -45,13 +48,24 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  * further reading call starts; merge, match, apply and facts still run, so the table is filled from what was read.
  * The run ends "done" with budgetReached and the pages left unread in its counters; they stay due for the next run.
  *
+ * Two things changed with the setup run (analysis/setup.ts, 2026-11-15):
+ *   - A run fills the table only in a workspace that is SET UP (setup-rules.ts). In a workspace with no domain and
+ *     no capability — or whose setup run did not finish — a run does map → research → merge and stops "done": the
+ *     competitor's clean list is ready, and nothing lands in a catalog that has no domains.
+ *   - The organization's own source (own.ts) is analysed like a competitor up to the match; then it fills OUR column
+ *     (steps.ts applyOwnCells) instead of a competitor's cells, with no second look and no facts step.
+ * The setup run itself is a row of this table (kind "setup", attached to the own source) and takes its turn in this
+ * queue: the claim, the heartbeat, the waiting, the stale sweep and the close below are shared; its steps are
+ * analysis/setup.ts.
+ *
  * Where it executes: local dev and the e2e server run it in the app's Node process (inline runner), like scans;
  * production runs it in the scanner job (`--analysis <id>`), one execution per run. A failed run is not retried by
  * itself: the competitor's next scan queues a new run, which starts from what is left.
  */
 
 export type AnalysisTrigger = "scan" | "catalog" | "manual";
-export type AnalysisStepName = "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts";
+/** "unify" and "domains" are steps of a setup run only. */
+export type AnalysisStepName = "map" | "research" | "merge" | "unify" | "domains" | "match" | "go_back" | "second_look" | "apply" | "facts";
 export const ACTIVE_ANALYSIS_STATUSES = ["queued", "running", "waiting"] as const;
 /** A run whose runner stopped reporting this many times fails. */
 export const MAX_STALE = 3;
@@ -78,76 +92,7 @@ class RunCancelled extends Error {}
  */
 class RunLost extends Error {}
 
-/** Everything a run counts. Stored on the run (counters) and sent with cmp_analysis_finished. */
-export interface Counters {
-  /** The map step: sections in the reading plan that hold pages (set by the step), sections PMOS AI labeled in this run, and its calls. */
-  mapSections: number;
-  mapLabeled: number;
-  mapCalls: number;
-  /** Going back for the gaps: the rounds this run made (set by the step) and the deep pages they chose. */
-  goBackRounds: number;
-  goBackPages: number;
-  /** The run's token budget (set at the claim), whether it was reached (1 / 0), and the pages left unread because of it (set by the steps of each walk, not added up). */
-  budget: number;
-  budgetReached: number;
-  pagesUnread: number;
-  pagesRead: number;
-  pagesFailed: number;
-  /** Model calls that were made and billed — the ones whose answer was unusable included. */
-  calls: number;
-  /** Of those, the calls whose answer was unusable (empty, cut off, invalid JSON). */
-  unusableAnswers: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-  waits: number;
-  waitedMs: number;
-  findings: number;
-  findingsRemoved: number;
-  quotesDropped: number;
-  piiHits: number;
-  itemsNew: number;
-  mergeCalls: number;
-  mergeSplits: number;
-  matchCalls: number;
-  matchedByName: number;
-  matchedByAi: number;
-  placed: number;
-  secondLooks: number;
-  secondLookFound: number;
-  /** Second looks that are due but over the run's limit or its token budget: they wait for the next run (set by the step, not added up). */
-  secondLooksWaiting: number;
-  newCapabilities: number;
-  newFeatures: number;
-  newDomains: number;
-  cellsFound: number;
-  cellsLow: number;
-  cellsNotFound: number;
-  cellsChanged: number;
-  factsNew: number;
-}
-
-export function emptyCounters(): Counters {
-  return {
-    mapSections: 0, mapLabeled: 0, mapCalls: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
-    pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
-    findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
-    matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
-    newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0, factsNew: 0,
-  };
-}
-
-/** A run's stored counters (CompetitorAnalysis.counters), every field a number: 0 for what an older run never counted. */
-export function readCounters(raw: unknown): Counters {
-  const out = emptyCounters();
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    for (const k of Object.keys(out) as (keyof Counters)[]) {
-      const v = (raw as Record<string, unknown>)[k];
-      if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
-    }
-  }
-  return out;
-}
+export { emptyCounters, readCounters, type Counters } from "./counters";
 
 export interface AnalysisLogLine {
   at: string;
@@ -159,7 +104,10 @@ export interface AnalysisLogLine {
 /** What a step gets: the run, its settings, and the engine's accounting around every call and every loop. */
 export interface RunContext {
   run: { id: string; workspaceId: string; competitorId: string; trigger: string; scanId: string | null; startedById: string | null; cursor: Record<string, unknown> };
-  competitor: { id: string; name: string; host: string; websiteUrl: string };
+  /** The company the steps work on. `isOwn` = the organization's own source (own.ts): it fills OUR column. */
+  competitor: { id: string; name: string; host: string; websiteUrl: string; isOwn: boolean };
+  /** The context belongs to a setup run (analysis/setup.ts): `run.id` is the setup run's, the company is one of several. */
+  setup: boolean;
   /** The competitor's reading plan (sections.ts): set by the map step, read by every later step (plan.ts planOf). */
   plan: ReadingPlan | null;
   /** Workspace settings, read once at the claim. */
@@ -221,7 +169,8 @@ export async function queueAnalysis(
   // instant (two scans ending, a scan and a catalog change) fold into one queued run instead of making two.
   const result = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`competitor-analysis-queue:${competitorId}`}))`;
-    const queued = await tx.competitorAnalysis.findFirst({ where: { competitorId, status: "queued" }, orderBy: { createdAt: "asc" }, select: { id: true } });
+    // Never a queued setup run (it is attached to the own source): a scan of the own source gets a run of its own, behind it.
+    const queued = await tx.competitorAnalysis.findFirst({ where: { competitorId, status: "queued", kind: "analysis" }, orderBy: { createdAt: "asc" }, select: { id: true } });
     if (queued) {
       if (opts.scanId || trigger === "manual") {
         await tx.competitorAnalysis.update({ where: { id: queued.id }, data: { ...(opts.scanId ? { scanId: opts.scanId } : {}), ...(trigger === "manual" ? { trigger: "manual" } : {}) } });
@@ -249,7 +198,8 @@ export async function queueAnalysis(
  */
 export async function queueCatalogAnalyses(workspaceId: string, opts: { exceptCompetitorId?: string; startedById?: string | null } = {}): Promise<number> {
   const competitors = await db.competitor.findMany({
-    where: { workspaceId, deletedAt: null, ...(opts.exceptCompetitorId ? { id: { not: opts.exceptCompetitorId } } : {}), analyses: { some: { status: "done" } } },
+    // Never the organization's own source: such a run only gives a row its second look, and the own source gets none (own.ts).
+    where: { workspaceId, deletedAt: null, isOwn: false, ...(opts.exceptCompetitorId ? { id: { not: opts.exceptCompetitorId } } : {}), analyses: { some: { status: "done" } } },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     select: { id: true },
   });
@@ -300,7 +250,7 @@ export async function sweepStaleAnalyses(t: Date): Promise<number> {
   const cutoff = new Date(t.getTime() - STALE_MS);
   const stale = await db.competitorAnalysis.findMany({
     where: { status: { in: ["running", "waiting"] }, heartbeatAt: { lt: cutoff } },
-    select: { id: true, staleCount: true, workspaceId: true, competitorId: true, trigger: true, step: true, scanId: true, startedById: true },
+    select: { id: true, kind: true, staleCount: true, workspaceId: true, competitorId: true, trigger: true, step: true, scanId: true, startedById: true },
   });
   let swept = 0;
   for (const s of stale) {
@@ -314,7 +264,7 @@ export async function sweepStaleAnalyses(t: Date): Promise<number> {
     if (!r.count) continue;
     swept++;
     if (gaveUp) {
-      await recordCompetitorEvent(s.workspaceId, s.startedById, "cmp_analysis_finished", { analysisId: s.id, competitorId: s.competitorId, trigger: s.trigger, outcome: "failed", step: s.step, errorKind: "stale" });
+      await recordCompetitorEvent(s.workspaceId, s.startedById, s.kind === "setup" ? "cmp_setup_finished" : "cmp_analysis_finished", { analysisId: s.id, competitorId: s.competitorId, trigger: s.trigger, outcome: "failed", step: s.step, errorKind: "stale" });
       await notifyScanRun(s.scanId);
     }
   }
@@ -336,28 +286,62 @@ async function notifyScanRun(scanId: string | null): Promise<void> {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+
 // ————— Run —————
+
+/** What the setup walk (analysis/setup.ts) gets from the engine: the run, its accounting, and one context per company. */
+export interface SetupEnv {
+  run: { id: string; workspaceId: string; ownCompetitorId: string; startedById: string | null; startedAt: Date; injected: boolean; resumed: boolean };
+  model: string;
+  /** The run's recorded progress (CompetitorAnalysis.setup): written with every heartbeat. */
+  progress: SetupProgress;
+  log: RunContext["log"];
+  /** One step of the run, with a log line of what it cost. */
+  inStep: <R>(name: AnalysisStepName, work: () => Promise<R>) => Promise<R>;
+  /**
+   * The context of one company — made once per company per walk: its own counters, page progress and cursor, and
+   * its own reading budget (the same token budget per company as an analysis run, counted over the whole setup run).
+   */
+  company: (c: SetupCompany) => Promise<RunContext>;
+  /** The context of the calls that belong to no company (unify, domains): the run's own cursor, the shared counters. */
+  shared: RunContext;
+  setStage: (competitorId: string, stage: SetupStage) => void;
+  flush: () => Promise<void>;
+}
 
 export async function runAnalysis(id: string): Promise<void> {
   const model = getCompetitorsModel();
   // The claim's owner token: every later write of this worker carries it in its `where`.
   const token = randomUUID();
   // The claim: only the head of the queue can be claimed, and only once — so two runs never execute together.
+  // `kind` is read inside the claim on purpose: a process whose database client predates the setup run (a server
+  // that was not restarted after the schema change) fails here, before it has claimed anything.
   const claimed = await db.$transaction(async (tx) => {
-    const head = await tx.competitorAnalysis.findFirst({ where: activeQueue(), orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, startedAt: true } });
+    const head = await tx.competitorAnalysis.findFirst({ where: activeQueue(), orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true, startedAt: true, kind: true } });
     if (!head || head.id !== id) return null;
     const t = new Date();
     const r = await tx.competitorAnalysis.updateMany({ where: { id, status: "queued" }, data: { status: "running", startedAt: head.startedAt ?? t, heartbeatAt: t, resumeAt: null, model, ownerToken: token } });
-    return r.count ? { resumed: head.startedAt != null } : null;
+    return r.count ? { resumed: head.startedAt != null, startedAt: head.startedAt ?? t } : null;
   });
   if (!claimed) return;
 
-  const row = await db.competitorAnalysis.findUnique({ where: { id }, include: { competitor: { select: { id: true, name: true, host: true, websiteUrl: true, deletedAt: true } } } });
+  const row = await db.competitorAnalysis.findUnique({ where: { id }, include: { competitor: { select: { id: true, name: true, host: true, websiteUrl: true, deletedAt: true, isOwn: true } } } });
   if (!row) return;
+  const isSetup = row.kind === "setup";
+  const what = isSetup ? "Setup run" : "Analysis";
   const t0 = Date.now();
   const counters = readCounters(row.counters);
   const lines: AnalysisLogLine[] = Array.isArray(row.log) ? (row.log as unknown as AnalysisLogLine[]) : [];
   const progress = { pagesTotal: row.pagesTotal, pagesDone: row.pagesDone };
+  /** A setup run: its per-company progress. The run's own counters and page progress are their sum (sync). */
+  const setup: SetupProgress | null = isSetup ? readSetupProgress(row.setup) : null;
+  const sync = () => {
+    if (!setup) return;
+    const t = setupTotals(setup);
+    Object.assign(counters, t.counters);
+    progress.pagesTotal = t.pagesTotal;
+    progress.pagesDone = t.pagesDone;
+  };
   const log: RunContext["log"] = (level, msg, url) => {
     lines.push({ at: new Date().toISOString(), level, msg, ...(url ? { url } : {}) });
   };
@@ -369,9 +353,17 @@ export async function runAnalysis(id: string): Promise<void> {
     if (!r.count) lost = true;
     return r.count > 0;
   };
+  /** What a heartbeat and the close write besides the status. */
+  const state = (): Prisma.CompetitorAnalysisUpdateManyMutationInput => {
+    sync();
+    return {
+      counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
+      ...(setup ? { setup: setup as unknown as Prisma.InputJsonValue } : {}),
+    };
+  };
   const flush = async () => {
     // A database error is not a lost claim: it is ignored here, and the next heartbeat tries again.
-    await own({ heartbeatAt: new Date(), counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone }).catch(() => undefined);
+    await own({ heartbeatAt: new Date(), ...state() }).catch(() => undefined);
   };
   const heartbeat = setInterval(() => void flush(), HEARTBEAT_MS);
   const setStep = async (s: AnalysisStepName) => {
@@ -383,17 +375,15 @@ export async function runAnalysis(id: string): Promise<void> {
   let errorKind: string | null = null;
   let error: string | null = null;
   try {
-    // The token budget of this run: every token it used so far counts (a run that continues keeps its counters).
-    // What the budget left unread is counted again by the steps of this walk.
-    counters.budget = await analysisTokenBudget();
-    counters.budgetReached = 0;
-    counters.pagesUnread = 0;
-    const reading = new ReadingBudget(counters.budget, () => counters.inputTokens + counters.outputTokens);
+    // The token budget: one number for the installation, read once. An analysis run counts every token it used so far
+    // (a run that continues keeps its counters); a setup run counts per company. What the budget left unread is
+    // counted again by the steps of this walk.
+    const budgetLimit = await analysisTokenBudget();
     // TEST KNOB, read ONCE per run: a run flagged injected whose answers are gone fails — it can never reach a real model.
     const answers = await testAiAnswers(row.competitorId);
     if (row.injected && !answers) throw new AnalysisError("other", "test answers were cleared before the run started (test knob) — no model is called");
     const config = await getCompetitorsConfig(row.workspaceId);
-    const budget = new TokenBudget(analysisTpm());
+    const pace = new TokenBudget(analysisTpm());
     let okCalls = 0;
     let refused = 0;
     let stopCheckedAt = 0;
@@ -411,99 +401,127 @@ export async function runAnalysis(id: string): Promise<void> {
       return stop || lost;
     };
     const cursor = row.cursor && typeof row.cursor === "object" && !Array.isArray(row.cursor) ? { ...(row.cursor as Record<string, unknown>) } : {};
-    const ctx: RunContext = {
-      run: { id, workspaceId: row.workspaceId, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, startedById: row.startedById, cursor },
-      competitor: { id: row.competitor.id, name: row.competitor.name, host: row.competitor.host, websiteUrl: row.competitor.websiteUrl },
-      plan: null,
-      readWeak: config.readWeakPages,
-      minPagesForNewRow: config.minPagesForNewRow,
-      maxSecondLooks: config.secondLooksPerRun,
-      model,
-      answers,
-      counters,
-      log,
-      progress,
-      reading,
-      call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => {
-        // A worker that lost the run spends nothing more.
-        if (lost) throw new RunLost();
-        if (answers && opts.injected === undefined) throw new AnalysisError("other", "this run takes injected answers (test knob) and a step asked for a model call");
-        if (answers?.rateLimit && okCalls >= answers.rateLimit.afterCalls && refused < answers.rateLimit.times) {
-          refused++;
-          throw new CapacityError("PMOS AI has no capacity (test knob)");
-        }
-        let r;
-        try {
-          r = await callTool<T>(system, shared, tail, tool, opts);
-        } catch (e) {
-          if (e instanceof AnswerError) {
-            // The call was made and is billed: its tokens count, whatever the step does with the failure.
-            counters.calls++;
-            counters.unusableAnswers++;
-            counters.inputTokens += e.usage.input;
-            counters.outputTokens += e.usage.output;
-            counters.cachedTokens += e.usage.cached;
-            throw e;
+    const persistCursor = async () => {
+      if (!(await own({ cursor: cursor as Prisma.InputJsonValue }))) throw new RunLost();
+    };
+    /** Every token of the run so far, and all it waited — a setup run's are the sums over its companies. */
+    const waitedMs = () => {
+      sync();
+      return counters.waitedMs;
+    };
+
+    /** What a context works on: one company with its own accounting. An analysis run has one; a setup run one per company and one shared. */
+    interface Target {
+      competitor: RunContext["competitor"];
+      counters: Counters;
+      progress: { pagesTotal: number; pagesDone: number };
+      answers: TestAiAnswers | null;
+      cursor: Record<string, unknown>;
+      markApplied: (at: Date) => Promise<void>;
+      /** Put before every log line of the context ("[Acme] "). */
+      prefix: string;
+    }
+    const contextFor = (t: Target): RunContext => {
+      const c = t.counters;
+      c.budget = budgetLimit;
+      c.budgetReached = 0;
+      c.pagesUnread = 0;
+      const reading = new ReadingBudget(budgetLimit, () => c.inputTokens + c.outputTokens);
+      const say: RunContext["log"] = (level, msg, url) => log(level, `${t.prefix}${msg}`, url);
+      return {
+        run: { id, workspaceId: row.workspaceId, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, startedById: row.startedById, cursor: t.cursor },
+        competitor: t.competitor,
+        setup: isSetup,
+        plan: null,
+        readWeak: config.readWeakPages,
+        minPagesForNewRow: config.minPagesForNewRow,
+        maxSecondLooks: config.secondLooksPerRun,
+        model,
+        answers: t.answers,
+        counters: c,
+        log: say,
+        progress: t.progress,
+        reading,
+        call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => {
+          // A worker that lost the run spends nothing more.
+          if (lost) throw new RunLost();
+          if (t.answers && opts.injected === undefined) throw new AnalysisError("other", "this run takes injected answers (test knob) and a step asked for a model call");
+          if (t.answers?.rateLimit && okCalls >= t.answers.rateLimit.afterCalls && refused < t.answers.rateLimit.times) {
+            refused++;
+            throw new CapacityError("PMOS AI has no capacity (test knob)");
           }
-          if (e instanceof CapacityError) throw e;
-          throw new AnalysisError("ai", e instanceof Error ? e.message.slice(0, 300) : String(e));
-        }
-        okCalls++;
-        counters.calls++;
-        counters.inputTokens += r.usage.input;
-        counters.outputTokens += r.usage.output;
-        counters.cachedTokens += r.usage.cached;
-        return { value: r.value, tokens: r.usage.input + r.usage.output };
-      },
-      paced: async <T>({ reading: isReading, ...o }: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => {
-        const r = await runPaced<T>({
-          ...o,
-          ...(isReading ? { admit: (item: T) => reading.admit(o.estimate(item)), release: (item: T) => reading.release(o.estimate(item)) } : {}),
-          budget,
-          sleep,
-          // 24 h of waiting in all, across the steps of the run.
-          maxWaitMs: Math.max(0, MAX_WAIT_MS - counters.waitedMs),
-          baseWaitMs: analysisBaseWaitMs(),
-          shouldStop,
-          onWait: async (ms, attempt, cause) => {
-            const resumeAt = new Date(Date.now() + ms);
-            counters.waits++;
-            counters.waitedMs += ms;
-            log("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, 160)})` : "PMOS AI has no capacity"} — waiting ${Math.round(ms / 1000)} s, then continuing from where it stopped (wait ${attempt} in a row)`);
-            await own({ status: "waiting", resumeAt });
-            await flush();
-            await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: row.competitorId, step, waitMs: ms, attempt, reason: cause.transient ? "endpoint" : "capacity" });
-          },
-          onResume: async () => {
-            if (!(await own({ status: "running", resumeAt: null, heartbeatAt: new Date() }))) throw new RunLost();
-            log("info", "Continuing");
-          },
-        });
-        if (lost) throw new RunLost();
-        if (r.stopped) throw new RunCancelled();
-        if (reading.reached) counters.budgetReached = 1;
-        return r;
-      },
-      saveCursor: async (patch) => {
-        Object.assign(cursor, patch);
-        if (!(await own({ cursor: cursor as Prisma.InputJsonValue }))) throw new RunLost();
-      },
-      markApplied: async (at) => {
-        if (!(await own({ appliedAt: at }))) throw new RunLost();
-      },
-      flush,
+          let r;
+          try {
+            r = await callTool<T>(system, shared, tail, tool, opts);
+          } catch (e) {
+            if (e instanceof AnswerError) {
+              // The call was made and is billed: its tokens count, whatever the step does with the failure.
+              c.calls++;
+              c.unusableAnswers++;
+              c.inputTokens += e.usage.input;
+              c.outputTokens += e.usage.output;
+              c.cachedTokens += e.usage.cached;
+              throw e;
+            }
+            if (e instanceof CapacityError) throw e;
+            throw new AnalysisError("ai", e instanceof Error ? e.message.slice(0, 300) : String(e));
+          }
+          okCalls++;
+          c.calls++;
+          c.inputTokens += r.usage.input;
+          c.outputTokens += r.usage.output;
+          c.cachedTokens += r.usage.cached;
+          return { value: r.value, tokens: r.usage.input + r.usage.output };
+        },
+        paced: async <T>({ reading: isReading, ...o }: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => {
+          const r = await runPaced<T>({
+            ...o,
+            ...(isReading ? { admit: (item: T) => reading.admit(o.estimate(item)), release: (item: T) => reading.release(o.estimate(item)) } : {}),
+            budget: pace,
+            sleep,
+            // 24 h of waiting in all, across the steps (and the companies) of the run.
+            maxWaitMs: Math.max(0, MAX_WAIT_MS - waitedMs()),
+            baseWaitMs: analysisBaseWaitMs(),
+            shouldStop,
+            onWait: async (ms, attempt, cause) => {
+              const resumeAt = new Date(Date.now() + ms);
+              c.waits++;
+              c.waitedMs += ms;
+              say("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, 160)})` : "PMOS AI has no capacity"} — waiting ${Math.round(ms / 1000)} s, then continuing from where it stopped (wait ${attempt} in a row)`);
+              await own({ status: "waiting", resumeAt });
+              await flush();
+              await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: t.competitor.id, kind: row.kind, step, waitMs: ms, attempt, reason: cause.transient ? "endpoint" : "capacity" });
+            },
+            onResume: async () => {
+              if (!(await own({ status: "running", resumeAt: null, heartbeatAt: new Date() }))) throw new RunLost();
+              say("info", "Continuing");
+            },
+          });
+          if (lost) throw new RunLost();
+          if (r.stopped) throw new RunCancelled();
+          if (reading.reached) c.budgetReached = 1;
+          return r;
+        },
+        saveCursor: async (patch) => {
+          Object.assign(t.cursor, patch);
+          await persistCursor();
+        },
+        markApplied: t.markApplied,
+        flush,
+      };
     };
     if (await shouldStop()) throw lost ? new RunLost() : new RunCancelled();
 
-    log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model}`}`);
     /** One step, with a log line of what it cost — also when it fails: the counters are totals, this is the split. */
     const inStep = async <R>(name: AnalysisStepName, work: () => Promise<R>): Promise<R> => {
       await setStep(name);
+      sync();
       const before = { ...counters };
       const started = Date.now();
       try {
         return await work();
       } finally {
+        sync();
         const calls = counters.calls - before.calls;
         if (calls > 0) {
           const unusable = counters.unusableAnswers - before.unusableAnswers;
@@ -511,38 +529,110 @@ export async function runAnalysis(id: string): Promise<void> {
         }
       }
     };
-    // The map first: what is read follows from the reading plan. No plan, no read — a failed map fails the run.
-    await inStep("map", () => mapStep(ctx));
-    await setStep("research");
-    const plan = await planResearch(ctx);
-    await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_started", {
-      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, resumed: claimed.resumed,
-      mapSections: counters.mapSections, pagesPicked: plan.picked, pagesDeep: plan.deep, pagesToRead: plan.todo.length, readWeak: config.readWeakPages, model, injected: Boolean(answers),
-    });
-    await inStep("research", () => researchStep(ctx, plan));
-    await inStep("merge", () => mergeStep(ctx));
-    await inStep("match", () => matchStep(ctx));
-    // Their capabilities that came out thin (no description beyond marketing pages, no feature …): read their most
-    // likely deep pages, then merge and match again — at most 2 rounds (analysis/gaps.ts).
-    await inStep("go_back", () => goBackStep(ctx));
-    const lookWaiting = await inStep("second_look", () => secondLookStep(ctx));
-    await inStep("apply", () => applyStep(ctx, lookWaiting));
-    await inStep("facts", () => factsStep(ctx));
-    if (reading.reached) {
-      log("warn", `The token budget of this run was reached (${(counters.inputTokens + counters.outputTokens).toLocaleString("en-US")} of ${counters.budget.toLocaleString("en-US")} tokens used): ${counters.pagesUnread} page${counters.pagesUnread === 1 ? "" : "s"} left unread${counters.secondLooksWaiting ? `, ${counters.secondLooksWaiting} second look${counters.secondLooksWaiting === 1 ? "" : "s"} not made` : ""}. They stay due — the next run of ${row.competitor.name} continues with a fresh budget`);
+    const company = (c: { id: string; name: string; host: string; websiteUrl: string; isOwn: boolean }): RunContext["competitor"] => ({ id: c.id, name: c.name, host: c.host, websiteUrl: c.websiteUrl, isOwn: c.isOwn });
+
+    if (setup) {
+      // ——— The setup run: the organization's own source and every competitor (analysis/setup.ts) ———
+      const made = new Map<string, RunContext>();
+      const companyCursors = (cursor.companies && typeof cursor.companies === "object" && !Array.isArray(cursor.companies) ? cursor.companies : (cursor.companies = {})) as Record<string, Record<string, unknown>>;
+      await setupWalk({
+        run: { id, workspaceId: row.workspaceId, ownCompetitorId: row.competitorId, startedById: row.startedById, startedAt: claimed.startedAt, injected: row.injected, resumed: claimed.resumed },
+        model,
+        progress: setup,
+        log,
+        inStep,
+        company: async (c) => {
+          const known = made.get(c.id);
+          if (known) return known;
+          let entry = setup.companies.find((x) => x.competitorId === c.id);
+          if (!entry) {
+            entry = { competitorId: c.id, name: c.name, own: c.isOwn, stage: "waiting", pagesTotal: 0, pagesDone: 0, appliedAt: null, counters: emptyCounters() };
+            setup.companies.push(entry);
+          }
+          entry.name = c.name;
+          const mine = entry;
+          // TEST KNOB: an injected setup run takes every company's answers from the knob and never calls a model; a real run never reads them.
+          const theirs = row.injected ? await testAiAnswers(c.id) : null;
+          if (row.injected && !theirs) throw new AnalysisError("other", `this setup run takes injected answers (test knob) and ${c.name} has none — no model is called`);
+          const ctx = contextFor({
+            competitor: company(c),
+            counters: mine.counters,
+            progress: mine,
+            answers: theirs,
+            cursor: (companyCursors[c.id] ??= {}),
+            markApplied: async (at) => {
+              mine.appliedAt = at.toISOString();
+              await flush();
+            },
+            prefix: `[${c.name}] `,
+          });
+          made.set(c.id, ctx);
+          return ctx;
+        },
+        shared: contextFor({ competitor: company(row.competitor), counters: setup.shared, progress: { pagesTotal: 0, pagesDone: 0 }, answers: row.injected ? answers : null, cursor, markApplied: async () => undefined, prefix: "" }),
+        setStage: (competitorId, stage) => {
+          const entry = setup.companies.find((x) => x.competitorId === competitorId);
+          if (entry) entry.stage = stage;
+        },
+        flush,
+      });
+    } else {
+      // ——— An analysis run: one company ———
+      const ctx = contextFor({
+        competitor: company(row.competitor),
+        counters,
+        progress,
+        answers,
+        cursor,
+        markApplied: async (at) => {
+          if (!(await own({ appliedAt: at }))) throw new RunLost();
+        },
+        prefix: "",
+      });
+      const reading = ctx.reading;
+      const isOwn = row.competitor.isOwn;
+      log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${isOwn ? " — the organization's own site" : ""}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model}`}`);
+      // The map first: what is read follows from the reading plan. No plan, no read — a failed map fails the run.
+      await inStep("map", () => mapStep(ctx));
+      await setStep("research");
+      const plan = await planResearch(ctx);
+      await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_started", {
+        analysisId: id, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, resumed: claimed.resumed, own: isOwn,
+        mapSections: counters.mapSections, pagesPicked: plan.picked, pagesDeep: plan.deep, pagesToRead: plan.todo.length, readWeak: config.readWeakPages, model, injected: Boolean(answers),
+      });
+      await inStep("research", () => researchStep(ctx, plan));
+      await inStep("merge", () => mergeStep(ctx));
+      // A run fills the table only in a workspace that is set up: no row is created in a catalog that has no domains.
+      const setupState = await workspaceSetupState(row.workspaceId);
+      if (!analysisFillsTable(setupState)) {
+        log("info", `${setupState === "in_setup" ? "The setup run of this organization has not finished" : "This organization is not set up yet (no domain, no capability)"}: the run stops after the clean-up. ${row.competitor.name}'s list is ready — it gets its rows and its cells in the setup run (--setup ${row.workspaceId})`);
+      } else {
+        await inStep("match", () => matchStep(ctx));
+        // Their capabilities that came out thin (no description beyond marketing pages, no feature …): read their most
+        // likely deep pages, then merge and match again — at most 2 rounds (analysis/gaps.ts).
+        await inStep("go_back", () => goBackStep(ctx));
+        // The own source: what its items say is ours — no second look, no profile facts (own.ts).
+        const lookWaiting = isOwn ? new Set<string>() : await inStep("second_look", () => secondLookStep(ctx));
+        await inStep("apply", () => applyStep(ctx, lookWaiting));
+        if (!isOwn) await inStep("facts", () => factsStep(ctx));
+      }
+      if (reading.reached) {
+        log("warn", `The token budget of this run was reached (${(counters.inputTokens + counters.outputTokens).toLocaleString("en-US")} of ${counters.budget.toLocaleString("en-US")} tokens used): ${counters.pagesUnread} page${counters.pagesUnread === 1 ? "" : "s"} left unread${counters.secondLooksWaiting ? `, ${counters.secondLooksWaiting} second look${counters.secondLooksWaiting === 1 ? "" : "s"} not made` : ""}. They stay due — the next run of ${row.competitor.name} continues with a fresh budget`);
+      }
     }
-    log("info", `Analysis done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);
+    sync();
+    log("info", `${what} done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);
   } catch (e) {
     if (lost || e instanceof RunLost) {
       lost = true;
     } else if (e instanceof RunCancelled) {
       outcome = "cancelled";
-      log("warn", "The competitor was removed — analysis cancelled");
+      log("warn", isSetup ? "The organization's own site was removed — setup run cancelled" : "The competitor was removed — analysis cancelled");
     } else {
       outcome = "failed";
       errorKind = e instanceof CapacityError ? "capacity" : e instanceof AnswerError ? "answer" : e instanceof EndpointError ? "ai" : e instanceof AnalysisError ? e.kind : "other";
       error = e instanceof Error ? e.message.slice(0, 300) : String(e);
-      log("error", `Analysis stopped in the ${step.replace("_", " ")} step: ${error}`);
+      log("error", `${what} stopped in the ${step.replace("_", " ")} step: ${error}`);
       if (!(e instanceof CapacityError || e instanceof AnswerError || e instanceof AnalysisError || e instanceof EndpointError)) console.error("[competitors] analysis failed", id, e);
     }
   } finally {
@@ -555,10 +645,7 @@ export async function runAnalysis(id: string): Promise<void> {
   if (!lost) {
     const finishedAt = new Date();
     try {
-      closed = await own({
-        status: outcome, step: outcome === "done" ? "done" : step, finishedAt, heartbeatAt: finishedAt, resumeAt: null, ownerToken: null, errorKind: errorKind ?? "none", error,
-        counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
-      });
+      closed = await own({ status: outcome, step: outcome === "done" ? "done" : step, finishedAt, heartbeatAt: finishedAt, resumeAt: null, ownerToken: null, errorKind: errorKind ?? "none", error, ...state() });
     } catch (e) {
       // The database refused the write: not a lost claim. The stale sweep will put the run back; the event and the kick below still go out.
       console.error("[competitors] could not close the analysis run", id, e);
@@ -569,9 +656,17 @@ export async function runAnalysis(id: string): Promise<void> {
     console.warn(`[competitors] analysis ${id}: this worker no longer owns the run (it was put back in the queue while this process was alive) — stopped in the ${step} step without writing; the run continues from the tables when it is claimed again`);
     return;
   }
-  await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-    analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, errorKind: errorKind ?? "none", error,
-  });
+  if (setup) {
+    await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_setup_finished", {
+      analysisId: id, outcome, step, companies: setup.companies.length, rows: setup.rows, domains: setup.domains, features: setup.features,
+      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, pagesRead: counters.pagesRead,
+      durationMs: Date.now() - t0, totalMs: Date.now() - claimed.startedAt.getTime(), resumed: claimed.resumed, errorKind: errorKind ?? "none", error,
+    });
+  } else {
+    await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
+      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, errorKind: errorKind ?? "none", error,
+    });
+  }
   await notifyScanRun(row.scanId);
   await kickAnalyses();
 }
