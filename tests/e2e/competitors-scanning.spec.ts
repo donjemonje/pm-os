@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
-import { BIG_PAGE_MARKERS, PAGE_PATHS, type FakeSite } from "../fixtures/fake-site/fake-site";
+import { BIG_PAGE_MARKERS, HOVER_HINTS, HOVER_HINTS_NOT_A_HINT, PAGE_PATHS, type FakeSite } from "../fixtures/fake-site/fake-site";
 import {
   addCompetitor, cleanupCompetitorsOf, createStationKey, FINAL, freshStateDir, isolateOtherOrgs, pagesOf, pathOf, pollerArgs as stationPollerArgs, postKnob, requestOf, restoreOtherOrgs,
   runStationPoller, scanNow, scanRow, scansOf, SCRATCH, SITE_HOST, spawnStationPoller, startSite, waitForScanEnd, waitForScanWithStatus,
@@ -16,7 +16,7 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
 /**
  * Competitors — Website Scanning (feature/competitors_v1_finalization, QA rows
- * WS-01 … WS-36 of the story tab, 2026-11-04; WS-28 … WS-36 added 2026-11-09). The fake competitor site is
+ * WS-01 … WS-45 of the story tab, 2026-11-04; WS-28 … WS-36 added 2026-11-09, WS-37 … WS-45 2026-11-12/15). The fake competitor site is
  * tests/fixtures/fake-site (12 pages, variants through its control endpoint,
  * one server per port); the local lane runs the real poller
  * (scripts/pmos-local-scan/poller.mjs) once per row with the plain fetch
@@ -26,6 +26,7 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  *   clock    POST /api/admin/competitors/knobs {clockOffsetMs}  (COMPETITORS_TEST_KNOBS=on)
  *   tick     POST /api/admin/competitors/knobs {tick: true}     (the hourly scheduler, once)
  *   remote   PATCH /api/admin/competitors/settings {remoteScanEnabled}  (default OFF)
+ *   site     tests/fixtures/fake-site variants through its control endpoint (WS-45: hoverHints)
  *   limits   POST /api/admin/competitors/knobs {ceilingMs} | {storageLimitChars} (null = default) — WS-17, WS-36
  *   poller   --runner fetch, --pause-ms, --max-minutes,
  *   env      COMPETITORS_PAUSE_MS=0 (robots Crawl-delay still honoured — WS-19 proves the pause rule),
@@ -132,6 +133,39 @@ async function restoreStationKeys(db: PrismaClient): Promise<void> {
   rmSync(KEYS_SNAPSHOT, { force: true });
 }
 
+/**
+ * Settings of the clone that the rows need at their default and that are not the suite's to keep: "Disable analysis"
+ * (the developer may have it ON — every scan would then end before the analysis step and keep its previous texts),
+ * the station-off alert record (WS-39 rewrites it) and each station key's last check-in (WS-39 moves it). The values
+ * found at the start are written to the OS temp dir and put back in afterAll (or at the next start if a run died).
+ */
+const SETTINGS_SNAPSHOT = join(SCRATCH, "settings-snapshot.json");
+const PARKED_SETTINGS = ["competitors.analysisDisabled", "competitors.stationOffAlert"];
+interface SettingsSnapshot {
+  settings: { key: string; value: unknown }[];
+  keys: { id: string; lastUsedAt: string | null }[];
+}
+async function parkSettings(db: PrismaClient): Promise<void> {
+  await restoreSettings(db); // a previous run that died mid-way
+  const rows = await db.appSetting.findMany({ where: { key: { in: PARKED_SETTINGS } } });
+  const keys = await db.scannerKey.findMany({ select: { id: true, lastUsedAt: true } });
+  const snap: SettingsSnapshot = { settings: rows.map((r) => ({ key: r.key, value: r.value })), keys: keys.map((k) => ({ id: k.id, lastUsedAt: k.lastUsedAt?.toISOString() ?? null })) };
+  mkdirSync(SCRATCH, { recursive: true });
+  writeFileSync(SETTINGS_SNAPSHOT, JSON.stringify(snap, null, 2));
+  await db.appSetting.upsert({ where: { key: "competitors.analysisDisabled" }, create: { key: "competitors.analysisDisabled", value: false }, update: { value: false } });
+}
+async function restoreSettings(db: PrismaClient): Promise<void> {
+  if (!existsSync(SETTINGS_SNAPSHOT)) return;
+  const snap = JSON.parse(readFileSync(SETTINGS_SNAPSHOT, "utf8")) as SettingsSnapshot;
+  for (const key of PARKED_SETTINGS) {
+    const was = snap.settings.find((r) => r.key === key);
+    if (was) await db.appSetting.upsert({ where: { key }, create: { key, value: was.value as never }, update: { value: was.value as never } });
+    else await db.appSetting.deleteMany({ where: { key } });
+  }
+  for (const k of snap.keys) await db.scannerKey.updateMany({ where: { id: k.id }, data: { lastUsedAt: k.lastUsedAt ? new Date(k.lastUsedAt) : null } });
+  rmSync(SETTINGS_SNAPSHOT, { force: true });
+}
+
 async function resetGlobalKnobs(db: PrismaClient): Promise<void> {
   await db.appSetting.upsert({ where: { key: "competitors.clockOffsetMs" }, create: { key: "competitors.clockOffsetMs", value: 0 }, update: { value: 0 } });
   await db.appSetting.upsert({ where: { key: "competitors.remoteScanEnabled" }, create: { key: "competitors.remoteScanEnabled", value: false }, update: { value: false } });
@@ -227,6 +261,7 @@ test.describe("Website Scanning rows", () => {
       await deleteFixtures(db);
       await seedFixtures(db);
       await isolateOtherOrgs(db, [workspaceId]);
+      await parkSettings(db);
       await resetGlobalKnobs(db);
     });
     mkdirSync(SCRATCH, { recursive: true });
@@ -264,6 +299,7 @@ test.describe("Website Scanning rows", () => {
       await resetGlobalKnobs(db);
       await restoreStationKeys(db);
       await restoreOtherOrgs(db);
+      await restoreSettings(db);
       await deleteFixtures(db);
     });
     await pmApi?.dispose();
@@ -340,7 +376,7 @@ test.describe("Website Scanning rows", () => {
     for (const c of cmps) pending.push(await waitForScanWithStatus(c.sourceId, "pending_local"));
     const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
-    expect(r.stdout).toMatch(/3 waiting \(QA-WS Alpha, QA-WS Beta, QA-WS Gamma\) /);
+    expect(r.stdout).toMatch(/3 waiting \(QA-WS Alpha, QA-WS Beta, QA-WS Gamma\)$/m);
     const scans = [];
     for (const p of pending) scans.push(await waitForScanEnd(p.id));
     for (const s of scans) {
@@ -1246,7 +1282,8 @@ test.describe("Website Scanning rows", () => {
     await admin.goto("/admin/competitors");
     const toggle = admin.getByTestId("admin-analysis-toggle");
     await expect(toggle).not.toBeChecked();
-    await toggle.check();
+    // A controlled checkbox: it turns only after the setting is saved, so click and wait (check() wants the state at once).
+    await toggle.click();
     await expect(toggle).toBeChecked();
     try {
       const site = await newSite();
@@ -1329,6 +1366,9 @@ test.describe("Website Scanning rows", () => {
     const scan = await waitForScanWithStatus(c.sourceId, "pending_local");
     const stateDir = freshStateDir();
     const child = spawnPoller({ stateDir, pauseMs: 500 });
+    let out = "";
+    child.stdout?.on("data", (d) => (out += d));
+    child.stderr?.on("data", (d) => (out += d));
     await expect.poll(async () => (await scanRow(scan.id)).pagesFetched, { timeout: 60_000, intervals: [100] }).toBeGreaterThanOrEqual(6);
     const gone = exited(child);
     child.kill(signal);
@@ -1336,7 +1376,7 @@ test.describe("Website Scanning rows", () => {
     const mid = await scanRow(scan.id);
     expect(mid.status).toBe("running");
     expect(mid.pagesFetched).toBeLessThan(12);
-    return { c, scan, stateDir, mid };
+    return { c, scan, stateDir, mid, out };
   }
   /** The next check-in of the same station: no clock change, no tick — the station itself asks for its scan back. */
   async function continueAndCheck(x: Awaited<ReturnType<typeof stopMidScan>>, reason: RegExp) {
@@ -1354,10 +1394,17 @@ test.describe("Website Scanning rows", () => {
     expect(stop.length, `one stop line in the scan log: ${JSON.stringify(logOf(done))}`).toBe(1);
     expect(stop[0]).toMatch(reason);
     expect(stop[0]).toMatch(/it continues from the page it stopped on/);
-    // Nothing is read twice, except the one page the station was on when it stopped.
-    const counts = new Map<string, number>();
-    for (const q of await scannerPageRequests(x.c.site)) counts.set(q.path, (counts.get(q.path) ?? 0) + 1);
-    const twice = [...counts].filter(([path, n]) => n > 1 && (PAGE_PATHS as readonly string[]).includes(path));
+    // Nothing is read twice, except the one page the station was on when it stopped. A read is one request of the
+    // station to the site; a page the station also opened in headless Chrome (a hub or near-empty page: "render attempt"
+    // / "rendered with Chrome" in its log, same user agent) costs one more request, which is not a second read.
+    const stationLog = `${x.out}\n${r.stdout}`;
+    const renders = new Map<string, number>();
+    for (const m of stationLog.matchAll(/ {2}(?:render attempt \(no gain\)|rendered with Chrome) (\S+)/g)) renders.set(pathOf(m[1]), (renders.get(pathOf(m[1])) ?? 0) + 1);
+    const requests = new Map<string, number>();
+    for (const q of await scannerPageRequests(x.c.site)) requests.set(q.path, (requests.get(q.path) ?? 0) + 1);
+    const reads = PAGE_PATHS.map((path) => [path, (requests.get(path) ?? 0) - (renders.get(path) ?? 0)] as const);
+    for (const [path, n] of reads) expect(n, `${path} was read (requests ${requests.get(path) ?? 0}, renders ${renders.get(path) ?? 0})`).toBeGreaterThanOrEqual(1);
+    const twice = reads.filter(([, n]) => n > 1);
     expect(twice.length, `pages read twice: ${JSON.stringify(twice)}`).toBeLessThanOrEqual(1);
     for (const [, n] of twice) expect(n).toBe(2);
     expect(savedPlace(x.stateDir), "the saved place is removed once the scan is handed in").toBeNull();
@@ -1948,6 +1995,66 @@ test.describe("Website Scanning rows", () => {
     const pressedScans = await withTestDb((db) => db.competitorScan.findMany({ where: { sourceId: { in: sourceIds }, source: { competitor: { name: pressed } } }, orderBy: { startedAt: "asc" } }));
     expect(pressedScans.length).toBe(2);
     expect(pressedScans[1].startedAt.getTime()).toBeGreaterThanOrEqual(pressedScans[0].finishedAt!.getTime());
+  });
+
+  // ————— Hover hints (Daniel 2026-11-12) —————
+
+  test("WS-45 hover hints: a pricing page whose hints exist only in embedded script data → the stored page text ends with 'Hints shown on hover:' and one line per hint, named by its row; no other script data is stored; both lanes", async () => {
+    // Knobs: fake site (hoverHints variant), run-once station with the fetch runner and pause 0, remote ON for the second half.
+    test.setTimeout(200_000);
+    const expected = `Hints shown on hover:\n${HOVER_HINTS.map((r) => `${r.name}: ${r.hint}`).join("\n")}`;
+    const check = async (c: Cmp, lane: string) => {
+      const rows = await pagesOf(c.sourceId);
+      expect(rows.length, `${lane}: 12 pages`).toBe(12);
+      const pricing = rows.find((p) => pathOf(p.url) === "/pricing")!;
+      const text = pricing.text ?? "";
+      // The page's own text is still there, the hints follow it as the last block: one line each, named by the row.
+      expect(text, lane).toContain("Starter $49 per month. Team $199 per month.");
+      for (const r of HOVER_HINTS) expect(text.split("Hints shown on hover:")[0], `${lane}: the row name is page text`).toContain(r.name);
+      expect(text.endsWith(expected), `${lane}: /pricing text ends with the hints block:\n${text}`).toBe(true);
+      expect(text.match(/Hints shown on hover:/g)?.length, `${lane}: one heading`).toBe(1);
+      // Nothing else of the script reaches the store.
+      expect(text, lane).not.toContain(HOVER_HINTS_NOT_A_HINT);
+      expect(text, lane).not.toMatch(/planId|__next_f|tooltip/);
+      // A page without hints has no heading.
+      for (const p of rows.filter((x) => x.id !== pricing.id)) expect(p.text ?? "", `${lane}: ${p.url}`).not.toContain("Hints shown on hover:");
+    };
+
+    // The fixture's promise: the hints are in the page's script data only — not in the HTML a person sees.
+    const site = await newSite();
+    await site.control({ hoverHints: true });
+    const html = await (await fetch(`${site.url}/pricing`)).text();
+    const visible = html.replace(/<script\b[\s\S]*?<\/script>/gi, " ");
+    for (const r of HOVER_HINTS) {
+      expect(html).toContain(r.hint);
+      expect(visible).not.toContain(r.hint);
+      expect(visible).toContain(r.name);
+    }
+
+    // Local lane (remote OFF): the station hands the page in, PM-OS extracts the text.
+    const local = await addCompetitor(pmApi, site, "QA-WS Hints Local");
+    const pending = await waitForScanWithStatus(local.sourceId, "pending_local");
+    const r = await runPoller({});
+    expect(r.code, r.stdout).toBe(0);
+    const done = await waitForScanEnd(pending.id);
+    expect(done.lane).toBe("local");
+    expect(done.status, done.error ?? "").toBe("ok");
+    expect(done.badge).toBe("full");
+    expect(done.pagesFetched).toBe(12);
+    await check(local, "local lane");
+
+    // Remote lane: the scanner reads the page itself.
+    await setRemote(true);
+    const site2 = await newSite();
+    await site2.control({ hoverHints: true });
+    const remote = await addCompetitor(pmApi, site2, "QA-WS Hints Remote");
+    const started = await waitForScanWithStatus(remote.sourceId, "running", 30_000).catch(async () => (await scansOf(remote.sourceId))[0]);
+    const done2 = await waitForScanEnd(started.id);
+    expect(done2.lane).toBe("remote");
+    expect(done2.status, done2.error ?? "").toBe("ok");
+    expect(done2.badge).toBe("full");
+    expect(done2.pagesFetched).toBe(12);
+    await check(remote, "remote lane");
   });
 
   // ————— Onboarding helpers (a row that starts from "WS-01 done") —————

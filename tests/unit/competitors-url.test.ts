@@ -14,6 +14,9 @@ import {
   registrableHost,
 } from "@/lib/competitors/url";
 
+// These tests check the product defaults: the e2e environment (CI sets it for the whole job) must not leak in.
+delete process.env.COMPETITORS_ALLOW_PRIVATE_HOSTS;
+
 describe("normalizeWebsite", () => {
   it("accepts a bare host, a www host and a URL with a path, and keeps the https origin", () => {
     expect(normalizeWebsite("recordedfuture.com")).toEqual({ url: "https://recordedfuture.com", host: "recordedfuture.com" });

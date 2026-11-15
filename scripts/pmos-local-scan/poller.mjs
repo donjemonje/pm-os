@@ -168,15 +168,40 @@ async function online() {
   return false;
 }
 
+// One station per state folder (Tomer's review 2026-11-15): a second poller on the same folder would report the live
+// scan's saved place as a dead one, PM-OS would hand the scan out again and both would read the same site.
+const PID_FILE = join(STATE_DIR, "station.pid");
+try {
+  const other = Number(readFileSync(PID_FILE, "utf8"));
+  if (other && other !== process.pid) {
+    process.kill(other, 0);
+    log(`another station (pid ${other}) is already running on ${STATE_DIR} — this one exits`);
+    process.exit(0);
+  }
+} catch {
+  // no pid file, or that process is gone: this station takes over
+}
+writeFileSync(PID_FILE, String(process.pid));
+process.on("exit", () => {
+  try {
+    if (Number(readFileSync(PID_FILE, "utf8")) === process.pid) unlinkSync(PID_FILE);
+  } catch {
+    // already gone
+  }
+});
+
+const STOPPED = { state: "idle", message: "Station stopped — the scan continues at the next check-in", competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 };
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.on(sig, () => {
     markStopped("shutdown");
+    if (loadScanState()) status(STOPPED);
     log(`station stopped (${sig})${loadScanState() ? " — the scan's place is saved" : ""}`);
     process.exit(0);
   });
 }
 process.on("uncaughtException", (e) => {
   markStopped("error", e instanceof Error ? e.message : e);
+  if (loadScanState()) status(STOPPED);
   log(`station error: ${e instanceof Error ? e.stack || e.message : String(e)}`);
   process.exit(1);
 });
@@ -430,14 +455,28 @@ async function runFetch(job, limits, post, saved) {
     pendingLinked = sitemaps.pages.map((u) => pageKey(u, job.siteUrl));
   }
   const t0 = Date.now();
+  // The time limit counts the whole scan, not each continuation.
+  const elapsedBefore = saved?.elapsedMs ?? 0;
   let n = 0;
   let renders = saved?.renders ?? 0;
+  // A page that takes the station down (a crash or an error, twice, on the same page) is handed in as not read and the
+  // scan moves on — otherwise every check-in would start with that page again, for ever, ahead of every other scan.
+  let stuck = saved?.stuck ?? null;
+  if (saved && queue.length && ["crash", "error"].includes(saved.stopped?.reason ?? "crash")) {
+    stuck = stuck?.url === queue[0] ? { url: queue[0], count: stuck.count + 1 } : { url: queue[0], count: 1 };
+    if (stuck.count >= 2) {
+      const bad = queue.shift();
+      stuck = null;
+      log(`  the station stopped twice while reading ${bad} — recorded as not read, moving on`);
+      if ((await post({ url: bad, status: "unreadable", error: "the station stopped twice while reading this page", ms: 0, attempts: 2 })) === null) return { notAttempted: queue.length, ended: true };
+    }
+  }
   /** Pages read but lost on the way in: PM-OS refused the page AND the not-read note for it. Reported with done as not attempted. */
   let lost = saved?.lost ?? 0;
   /** The scan's place, with the page being read still first in the queue — a stop in the middle of a page reads it again. */
-  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0 });
+  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0 });
   while (queue.length) {
-    if (Date.now() - t0 > limits.ms) break;
+    if (elapsedBefore + Date.now() - t0 > limits.ms) break;
     const url = queue.shift();
     saveScanState(place(url));
     if (n > 0 && PAUSE_MS > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
@@ -536,6 +575,14 @@ async function runFetch(job, limits, post, saved) {
       // The scan ended on the server (cancelled, or already processed): nothing more to hand in.
       log(`  scan ended on the server — stopping, ${queue.length} pages left`);
       return { notAttempted: queue.length, ended: true };
+    }
+    if (r && r.refused && /^network/.test(r.refused) && !(await online())) {
+      // The network dropped during the hand-in: the page is not lost — it goes back to the front and the scan is parked.
+      queue.unshift(url);
+      saveScanState(place());
+      markStopped("network");
+      log(`  network lost while handing in ${url} — scan parked, ${queue.length} pages left; it continues from this page at the next check-in`);
+      return { paused: "network", notAttempted: queue.length };
     }
     if (r && r.refused) {
       // PM-OS would not take the page (too large, a bad post, three failed attempts): it is recorded as not read with the

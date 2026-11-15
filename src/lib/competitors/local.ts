@@ -148,7 +148,8 @@ export async function createLocalRequest(scanId: string): Promise<void> {
   ]);
   // The scan is parked whatever happens here: an email that cannot be sent never fails a scan.
   try {
-    await alertStationOff(scanId);
+    // A mail server that hangs must not hold "Scan now" or the tick: 10 seconds, then the scan goes on without the email.
+    await Promise.race([alertStationOff(scanId), new Promise((r) => setTimeout(r, 10_000))]);
   } catch (e) {
     console.error("[competitors] station-off alert failed", scanId, e);
   }
@@ -194,6 +195,8 @@ export async function alertStationOff(scanId: string): Promise<boolean> {
   if (!r) return false;
   const waiting = await db.localScanRequest.count({ where: { state: "waiting" } });
   const org = r.source.competitor.workspace.organization.name;
+  // The marker is written before the email goes out: two scans parked at the same moment send one email, not two.
+  await noteStationOffAlert(t, scanId);
   await sendEmail({
     to: SUPPORT_EMAIL,
     subject: `[PM-OS] Local station is off — scan waiting: ${r.source.competitor.name} (${org})`,
@@ -210,7 +213,6 @@ export async function alertStationOff(scanId: string): Promise<boolean> {
       `Scan log: ${appUrl()}/admin/competitors`,
     ].join("\n"),
   });
-  await noteStationOffAlert(t, scanId);
   return true;
 }
 

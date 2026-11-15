@@ -31,7 +31,7 @@ export function decodeEntities(s: string): string {
  * Scripts go, except the page's hover hints (hintsOf), which are appended after the text.
  */
 const HINT_KEY = "(?:tool-?tip|tooltip_?text|hint|hint_?text|help_?text|helper_?text|info_?text)";
-const HINT_ATTR = /<(?!a\b|img\b|iframe\b|link\b|meta\b|input\b|svg\b|path\b)[a-z0-9]+\b[^>]*?\s(?:data-tooltip|data-tip|data-tippy-content|data-bs-title|data-original-title|aria-description|title)\s*=\s*(?:"([^"]{15,600})"|'([^']{15,600})')/gi;
+const HINT_ATTR = /<(?!a\b|img\b|iframe\b|link\b|meta\b|input\b|svg\b|path\b)[a-z0-9]+\b[^>]{0,2000}?\s(?:data-tooltip|data-tip|data-tippy-content|data-bs-title|data-original-title|aria-description)\s*=\s*(?:"([^"]{15,600})"|'([^']{15,600})')/gi;
 
 /** A JSON string value as written in a script, plain ("…") or escaped inside another string (\"…\"), back to text. */
 function unescapeJson(v: string): string {
@@ -47,7 +47,8 @@ function unescapeJson(v: string): string {
  * each feature row this way (Productboard: 93 hints, none in the visible HTML), so they matter for comparing
  * capabilities. Only hints are read — never scripts or page data in general: a value under a hint-named key
  * ("tooltip", "hint", "helpText"…) in the page's embedded data, with the name of the row it belongs to when the same
- * object carries one, and hint attributes on elements (data-tooltip, title on non-link elements…). One line each.
+ * object carries one, and hint attributes on elements (data-tooltip and the like; not `title`, which sites also use for plain labels). One line
+ * each. Both patterns are bounded (Tomer's review 2026-11-15): a hostile page must not cost seconds of CPU.
  */
 export function hintsOf(html: string): string[] {
   const out: string[] = [];
@@ -64,7 +65,7 @@ export function hintsOf(html: string): string[] {
     const body = script[1];
     if (!/tool-?tip|hint|help_?text|helper_?text|info_?text/i.test(body)) continue;
     // "key":"value" in plain JSON, or \"key\":\"value\" inside a string (Next.js page data).
-    const pair = (key: string) => new RegExp(`(\\\\*)"${key}\\1"\\s*:\\s*\\1"((?:(?!\\1").)*?)\\1"`, "gis");
+    const pair = (key: string) => new RegExp(`(\\\\{0,8})"${key}\\1"\\s*:\\s*\\1"((?:(?!\\1").){0,2000}?)\\1"`, "gis");
     for (const m of body.matchAll(pair(HINT_KEY))) {
       // The row's own name: the nearest name/title/label before the hint, inside the same object.
       const before = body.slice(Math.max(0, (m.index ?? 0) - 1500), m.index ?? 0);

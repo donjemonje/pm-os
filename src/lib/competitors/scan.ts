@@ -178,6 +178,9 @@ export async function createAndRouteScan(
   if (source.competitor.deletedAt) return { error: "removed" };
   const t = await now();
   const active = await db.competitorScan.findFirst({ where: { sourceId: source.id, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true } });
+  // One scan waits behind the running one, never a pile (no daily limit any more: repeated calls must not queue hours of reading).
+  const queued = active ? await db.competitorScan.findFirst({ where: { sourceId: source.id, status: "queued", id: { not: active.id } }, select: { id: true } }) : null;
+  if (queued) return { scanId: queued.id, state: "queued" };
   const scan = await db.competitorScan.create({
     data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", startedAt: t, heartbeatAt: t },
     select: { id: true },
