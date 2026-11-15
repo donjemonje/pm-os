@@ -7,7 +7,7 @@ import { storageFull } from "@/lib/competitors/settings";
 import { extractLinks } from "@/lib/competitors/html";
 import { categoryOf, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
 import { appendHandedInPage } from "@/lib/competitors/scan";
-import { isInsideSite, pageKey } from "@/lib/competitors/url";
+import { isInsideSite, pageKey, sourceSiteHost } from "@/lib/competitors/url";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -61,7 +61,10 @@ export async function POST(req: Request, { params }: Params) {
   } catch {
     return NextResponse.json({ error: "url must be an absolute http(s) URL" }, { status: 400 });
   }
-  if (!isInsideSite(url, scan.source.competitor.host)) return NextResponse.json({ error: `url is outside the competitor's site (${scan.source.competitor.host})` }, { status: 422 });
+  // The site a page must be inside is the source's own: the company's host for its website, the source's address for a
+  // help center, developer docs or release notes on another host (url.ts sourceSiteHost).
+  const site = sourceSiteHost(scan.source, scan.source.competitor.host);
+  if (!isInsideSite(url, site)) return NextResponse.json({ error: `url is outside the competitor's site (${site})` }, { status: 422 });
   const statusIn = typeof body.status === "string" && (STATUSES as string[]).includes(body.status) ? (body.status as PageReadStatus) : null;
   if (!statusIn) return NextResponse.json({ error: `status must be one of ${STATUSES.join(", ")}` }, { status: 400 });
 
@@ -119,14 +122,14 @@ export async function POST(req: Request, { params }: Params) {
   // The links on the page say what still points where (the "unlinked" state) — collected on the scan and applied when it is
   // processed, after every page row exists (the same bookkeeping as the remote lane).
   const linked = new Set<string>();
-  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l, scan.source.url));
+  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, site)) linked.add(pageKey(l, scan.source.url));
   // The station's own discoveries (its sitemap entries) point at pages too — handed in with a page, usually the first one.
   if (Array.isArray(body.linked)) {
     for (const raw of body.linked as unknown[]) {
       if (typeof raw !== "string") continue;
       try {
         const l = new URL(raw);
-        if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l, scan.source.url));
+        if (isInsideSite(l, site)) linked.add(pageKey(l, scan.source.url));
       } catch {
         // not a URL — ignored
       }
