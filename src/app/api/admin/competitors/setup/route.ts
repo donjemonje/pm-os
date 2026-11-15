@@ -34,6 +34,8 @@ export interface AdminSetupCompany {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /** The part of outputTokens that was the models' own thinking (0 where the provider reported none, and for an older run). */
+  thinkingTokens: number;
   budgetReached: boolean;
   calls: number;
   /** The company's tokens per step and model. */
@@ -55,6 +57,8 @@ export interface AdminSetupRun {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /** The part of outputTokens that was the models' own thinking (0 where the provider reported none, and for an older run). */
+  thinkingTokens: number;
   /** The run's tokens per step and model: all companies and the shared calls (unify, domains) together. */
   usage: StepUsage[];
   /** The calls that belong to no company (unify, domains), per step and model. */
@@ -118,10 +122,10 @@ export async function GET(req: Request) {
         id: r.id, status: r.status, step: r.step,
         companies: progress.companies.map((x) => ({
           competitorId: x.competitorId, name: x.name, own: x.own, stage: x.stage, pagesRead: x.counters.pagesRead, pagesUnread: x.counters.pagesUnread,
-          tokensUsed: x.counters.inputTokens + x.counters.outputTokens, inputTokens: x.counters.inputTokens, outputTokens: x.counters.outputTokens, cachedTokens: x.counters.cachedTokens,
+          tokensUsed: x.counters.inputTokens + x.counters.outputTokens, inputTokens: x.counters.inputTokens, outputTokens: x.counters.outputTokens, cachedTokens: x.counters.cachedTokens, thinkingTokens: x.counters.thinkingTokens,
           budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls, usage: sortUsage(x.usage), caps: capLines(capsOf(hit, x.competitorId)),
         })),
-        rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens,
+        rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, thinkingTokens: c.thinkingTokens,
         usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), caps: capLines(hit), pacing: pacingView(r.pacing), model: r.model, budget: c.budget,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };

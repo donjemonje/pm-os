@@ -7,7 +7,7 @@ import {
   getCompetitorsGeminiLocation,
 } from "@/lib/competitors/ai";
 import { ADDRESS_PICK_SYSTEM_PROMPT, ADDRESS_PICK_VERSION, addressPickTool, GUESS_NAMES, MAX_CANDIDATES } from "@/lib/competitors/addresses";
-import { competitorsModels, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, type PromptId } from "@/lib/competitors/models";
+import { competitorsModels, competitorsThinking, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, THINKING_DEFAULTS, THINKING_ENV, THINKING_ENV_ALL, type PromptId } from "@/lib/competitors/models";
 import { DOMAINS_SYSTEM_PROMPT, DOMAINS_VERSION, domainsTool } from "@/lib/competitors/analysis/domains";
 import {
   comparePageLine,
@@ -60,6 +60,7 @@ export default async function AdminCompetitorsPage() {
   ).map((o) => ({ id: o.id, name: o.name, competitors: o.workspace?.competitors ?? [] }));
   const importOrgs: ImportOrg[] = planOrgs.map((o) => ({ ...o, competitors: o.competitors.filter((c) => !c.isOwn) }));
   const models = competitorsModels();
+  const thinking = competitorsThinking();
   /** What each role is used for, next to its model. */
   const ROLE_USE: Record<string, string> = { read: "map, research (the broad read and the go-back), second look, facts", match: "merge, unify batches, match", judge: "unify review, domains" };
   /** The prompt of the list → its id in models.ts PROMPT_ROLES (the role decides the model). */
@@ -158,6 +159,15 @@ export default async function AdminCompetitorsPage() {
                 </div>
               ))}
             </dd>
+            <dt className="text-slate-500">Thinking</dt>
+            <dd className="text-xs">
+              <div className="mb-1 text-slate-400">How much a model thinks before it answers is a setting per role. Thinking is billed as output; each run records it apart from the answer. {THINKING_ENV_ALL} overrides all three roles at once.</div>
+              {MODEL_ROLES.map((role) => (
+                <div key={role} className="font-mono" data-testid="admin-thinking-role">
+                  {role}: {thinking[role]} <span className="font-sans text-slate-400">({THINKING_ENV[role]} → {THINKING_DEFAULTS[role]}{role === "read" ? "; the lowest level the reading model accepts" : ""})</span>
+                </div>
+              ))}
+            </dd>
             <dt className="text-slate-500">Vertex region</dt>
             <dd className="font-mono text-xs">{getCompetitorsGeminiLocation()} <span className="font-sans text-slate-400">for gemini-* models (COMPETITORS_GEMINI_LOCATION → global; the newest Gemini models are served on the global endpoint only)</span> · {getCompetitorsVertexLocation()} <span className="font-sans text-slate-400">for any other model (COMPETITORS_VERTEX_LOCATION → IDEAS_VERTEX_LOCATION → eu)</span></dd>
             <dt className="text-slate-500">Prompt versions</dt>
@@ -177,7 +187,7 @@ export default async function AdminCompetitorsPage() {
               <details key={p.id} className="rounded-lg border border-slate-200">
                 <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium hover:bg-slate-50">{p.title}</summary>
                 <div className="border-t border-slate-200 px-3 py-3">
-                  <p className="mb-2 text-xs text-slate-500" data-testid="admin-prompt-model">Model: <span className="font-mono text-slate-700">{models[PROMPT_ROLES[PROMPT_OF[p.id]]]}</span> (role {PROMPT_ROLES[PROMPT_OF[p.id]]}, {MODEL_ENV[PROMPT_ROLES[PROMPT_OF[p.id]]]})</p>
+                  <p className="mb-2 text-xs text-slate-500" data-testid="admin-prompt-model">Model: <span className="font-mono text-slate-700">{models[PROMPT_ROLES[PROMPT_OF[p.id]]]}</span> (role {PROMPT_ROLES[PROMPT_OF[p.id]]}, {MODEL_ENV[PROMPT_ROLES[PROMPT_OF[p.id]]]}) · thinking: <span className="font-mono text-slate-700">{thinking[PROMPT_ROLES[PROMPT_OF[p.id]]]}</span></p>
                   <p className="mb-2 text-xs text-slate-500">{p.note}</p>
                   <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">System prompt</div>
                   <pre className="mb-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-800">{p.text}</pre>

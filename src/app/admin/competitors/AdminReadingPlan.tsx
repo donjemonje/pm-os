@@ -36,7 +36,7 @@ const COPY = {
   byCode: "code",
   byAi: "PMOS AI",
   budgetReached: "budget reached",
-  tokens: (input: number, output: number, cached: number) => `${input.toLocaleString("en-US")} input + ${output.toLocaleString("en-US")} output${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`,
+  tokens: (input: number, output: number, cached: number, thinking: number) => `${input.toLocaleString("en-US")} input + ${output.toLocaleString("en-US")} output${thinking > 0 ? `, ${thinking.toLocaleString("en-US")} of them thinking` : ""}${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`,
   tokensPerStep: "Tokens per step and model",
   models: "Models",
   noBudget: "–",
@@ -212,7 +212,7 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                       <td className="px-3 pb-2" colSpan={8}>
                         <div className="mb-1.5"><RunCaps caps={r.caps} recorded={r.recorded} active={r.status === "queued" || r.status === "running" || r.status === "waiting"} /></div>
                         <details>
-                          <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}: {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens)}</summary>
+                          <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}: {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens, r.thinkingTokens)}</summary>
                           <div className="mt-1.5">
                             {r.model && <div className="mb-1 text-slate-500">{COPY.models}: <span className="font-mono">{r.model}</span></div>}
                             <RunUsage usage={r.usage} calls={r.calls} />

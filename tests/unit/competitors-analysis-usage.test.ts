@@ -1,8 +1,9 @@
 /** Capability Analysis — a run's tokens by step, model and company (analysis/usage.ts, setup-rules.ts setupTotals). Pure modules. */
 import { describe, expect, it } from "vitest";
-import { emptyCounters } from "@/lib/competitors/analysis/counters";
+import { geminiUsage } from "@/lib/competitors/ai";
+import { emptyCounters, readCounters, sumCounters } from "@/lib/competitors/analysis/counters";
 import { emptySetupProgress, readSetupProgress, setupTotals } from "@/lib/competitors/analysis/setup-rules";
-import { addUsage, readUsage, rollUp, sortUsage, usageByModel, usageByModelText, usageByStep, usageLine, usageSince, usageTotal, type StepUsage } from "@/lib/competitors/analysis/usage";
+import { addUsage, answerTokens, readUsage, rollUp, sortUsage, usageByModel, usageByModelText, usageByStep, usageLine, usageSince, usageTotal, type StepUsage } from "@/lib/competitors/analysis/usage";
 
 const H = "gemini-4-hydrogen";
 const A = "gemini-4-argon";
@@ -24,7 +25,7 @@ function company(): StepUsage[] {
 describe("every call adds to the row of its step and its model", () => {
   const list = company();
   it("one row per step and model: calls counted, input / output / cached added up", () => {
-    expect(list.find((r) => r.step === "research")).toEqual({ step: "research", model: H, calls: 2, input: 22_000, output: 1_500, cached: 2_000 });
+    expect(list.find((r) => r.step === "research")).toEqual({ step: "research", model: H, calls: 2, input: 22_000, output: 1_500, cached: 2_000, thinking: 0 });
     expect(list).toHaveLength(6);
   });
   it("a go-back round reads with one model and merges with another: two rows under go_back", () => {
@@ -38,7 +39,50 @@ describe("every call adds to the row of its step and its model", () => {
   it("an injected answer (test knob) counts the call with no tokens", () => {
     const l: StepUsage[] = [];
     addUsage(l, "match", A, { input: 0, output: 0, cached: 0 });
-    expect(l[0]).toEqual({ step: "match", model: A, calls: 1, input: 0, output: 0, cached: 0 });
+    expect(l[0]).toEqual({ step: "match", model: A, calls: 1, input: 0, output: 0, cached: 0, thinking: 0 });
+  });
+});
+
+describe("thinking tokens are recorded apart from the visible answer, wherever the provider reports them", () => {
+  it("Gemini reports the answer and the thinking apart: both are output, the thinking is kept as its own number", () => {
+    expect(geminiUsage({ promptTokenCount: 2_650, candidatesTokenCount: 1_143, thoughtsTokenCount: 1_536, cachedContentTokenCount: 0 })).toEqual({ input: 2_650, output: 2_679, cached: 0, thinking: 1_536 });
+    expect(geminiUsage({ promptTokenCount: 900, candidatesTokenCount: 100 })).toEqual({ input: 900, output: 100, cached: 0, thinking: 0 });
+    expect(geminiUsage(undefined)).toEqual({ input: 0, output: 0, cached: 0, thinking: 0 });
+  });
+  it("a row adds up the thinking of its calls; the answer is the output without it", () => {
+    const l: StepUsage[] = [];
+    addUsage(l, "research", H, { input: 2_650, output: 2_679, cached: 0, thinking: 1_536 });
+    addUsage(l, "research", H, { input: 3_000, output: 2_000, cached: 0, thinking: 900 });
+    addUsage(l, "merge", A, { input: 3_000, output: 1_182, cached: 0, thinking: 0 });
+    expect(l[0]).toEqual({ step: "research", model: H, calls: 2, input: 5_650, output: 4_679, cached: 0, thinking: 2_436 });
+    expect(answerTokens(l[0])).toBe(2_243);
+    expect(answerTokens(l[1])).toBe(1_182);
+    expect(usageTotal(l)).toEqual({ calls: 3, input: 8_650, output: 5_861, cached: 0, thinking: 2_436 });
+    expect(usageByModel(l).map((m) => [m.model, m.thinking])).toEqual([[A, 0], [H, 2_436]]);
+    expect(usageByStep(l).map((x) => [x.step, x.thinking])).toEqual([["research", 2_436], ["merge", 0]]);
+  });
+  it("a call that reports no thinking, or gives none, adds none", () => {
+    const l: StepUsage[] = [];
+    addUsage(l, "match", A, { input: 10, output: 5, cached: 0 });
+    expect(l[0].thinking).toBe(0);
+  });
+  it("the run log says the thinking part of a step only when there is one", () => {
+    expect(usageLine({ model: H, calls: 12, input: 120_000, output: 8_000, cached: 3_000, thinking: 4_500 })).toBe(`${H}: 12 calls · 120,000 input + 8,000 output tokens, 4,500 of them thinking (3,000 cached)`);
+    expect(usageLine({ model: A, calls: 1, input: 3_000, output: 400, cached: 0, thinking: 0 })).toBe(`${A}: 1 call · 3,000 input + 400 output tokens`);
+  });
+  it("what a step cost carries its thinking; roll-ups add it up; a row stored before thinking was recorded reads as 0", () => {
+    const before: StepUsage[] = [{ step: "research", model: H, calls: 1, input: 100, output: 50, cached: 0, thinking: 20 }];
+    const now: StepUsage[] = [{ step: "research", model: H, calls: 3, input: 400, output: 250, cached: 0, thinking: 120 }];
+    expect(usageSince(now, before)).toEqual([{ step: "research", model: H, calls: 2, input: 300, output: 200, cached: 0, thinking: 100 }]);
+    expect(rollUp([before, now])).toEqual([{ step: "research", model: H, calls: 4, input: 500, output: 300, cached: 0, thinking: 140 }]);
+    expect(readUsage([{ step: "research", model: H, calls: 2, input: 22_000, output: 1_500, cached: 2_000 }])).toEqual([{ step: "research", model: H, calls: 2, input: 22_000, output: 1_500, cached: 2_000, thinking: 0 }]);
+    expect(readUsage([{ step: "research", model: H, calls: 1, input: 1, output: 9, cached: 0, thinking: 4 }])[0].thinking).toBe(4);
+  });
+  it("the run's counters keep the total next to input and output", () => {
+    expect(emptyCounters().thinkingTokens).toBe(0);
+    expect(readCounters({ inputTokens: 5, outputTokens: 9, thinkingTokens: 4 }).thinkingTokens).toBe(4);
+    expect(readCounters({ inputTokens: 5, outputTokens: 9 }).thinkingTokens).toBe(0);
+    expect(sumCounters([{ ...emptyCounters(), thinkingTokens: 4 }, { ...emptyCounters(), thinkingTokens: 6 }]).thinkingTokens).toBe(10);
   });
 });
 
@@ -55,16 +99,16 @@ describe("roll-ups", () => {
   });
   it("per model, whatever the step", () => {
     expect(usageByModel(list)).toEqual([
-      { model: A, calls: 2, input: 4_000, output: 500, cached: 0 },
-      { model: H, calls: 5, input: 47_900, output: 2_050, cached: 2_000 },
+      { model: A, calls: 2, input: 4_000, output: 500, cached: 0, thinking: 0 },
+      { model: H, calls: 5, input: 47_900, output: 2_050, cached: 2_000, thinking: 0 },
     ]);
     expect(usageByModelText(list)).toBe(`${A} 4000/500; ${H} 47900/2050`);
   });
   it("the total is every row", () => {
-    expect(usageTotal(list)).toEqual({ calls: 7, input: 51_900, output: 2_550, cached: 2_000 });
+    expect(usageTotal(list)).toEqual({ calls: 7, input: 51_900, output: 2_550, cached: 2_000, thinking: 0 });
   });
   it("rows are shown by step in run order, then by model; an unknown step comes last", () => {
-    expect(sortUsage([{ step: "zzz", model: H, calls: 1, input: 1, output: 1, cached: 0 }, ...list]).map((r) => `${r.step}/${r.model}`)).toEqual([
+    expect(sortUsage([{ step: "zzz", model: H, calls: 1, input: 1, output: 1, cached: 0, thinking: 0 }, ...list]).map((r) => `${r.step}/${r.model}`)).toEqual([
       `map/${H}`, `research/${H}`, `merge/${A}`, `go_back/${A}`, `go_back/${H}`, `second_look/${H}`, `zzz/${H}`,
     ]);
   });
@@ -73,9 +117,9 @@ describe("roll-ups", () => {
     addUsage(list, "facts", H, { input: 7_000, output: 600, cached: 1_000 });
     addUsage(list, "facts", H, { input: 3_000, output: 400, cached: 0 });
     const step = usageSince(list, before);
-    expect(step).toEqual([{ step: "facts", model: H, calls: 2, input: 10_000, output: 1_000, cached: 1_000 }]);
+    expect(step).toEqual([{ step: "facts", model: H, calls: 2, input: 10_000, output: 1_000, cached: 1_000, thinking: 0 }]);
     expect(usageByModel(step).map(usageLine)).toEqual([`${H}: 2 calls · 10,000 input + 1,000 output tokens (1,000 cached)`]);
-    expect(usageLine({ model: C, calls: 1, input: 30_000, output: 5_000, cached: 0 })).toBe(`${C}: 1 call · 30,000 input + 5,000 output tokens`);
+    expect(usageLine({ model: C, calls: 1, input: 30_000, output: 5_000, cached: 0, thinking: 0 })).toBe(`${C}: 1 call · 30,000 input + 5,000 output tokens`);
     expect(usageSince(list, list.map((r) => ({ ...r })))).toEqual([]);
   });
 });
@@ -93,15 +137,15 @@ describe("a setup run: per company, and the whole run", () => {
     { competitorId: "pb", name: "Productboard", own: false, stage: "done" as const, pagesTotal: 2, pagesDone: 2, appliedAt: null, counters: emptyCounters(), usage: competitor },
   ] };
   it("each company keeps its own rows", () => {
-    expect(usageTotal(progress.companies[0].usage)).toEqual({ calls: 7, input: 51_900, output: 2_550, cached: 2_000 });
-    expect(usageTotal(progress.companies[1].usage)).toEqual({ calls: 8, input: 91_900, output: 11_550, cached: 32_000 });
+    expect(usageTotal(progress.companies[0].usage)).toEqual({ calls: 7, input: 51_900, output: 2_550, cached: 2_000, thinking: 0 });
+    expect(usageTotal(progress.companies[1].usage)).toEqual({ calls: 8, input: 91_900, output: 11_550, cached: 32_000, thinking: 0 });
   });
   it("the run's rows are the roll-up of its companies and of the shared calls: one row per step and model", () => {
     const run = setupTotals(progress).usage;
-    expect(run.find((r) => r.step === "research")).toEqual({ step: "research", model: H, calls: 4, input: 44_000, output: 3_000, cached: 4_000 });
+    expect(run.find((r) => r.step === "research")).toEqual({ step: "research", model: H, calls: 4, input: 44_000, output: 3_000, cached: 4_000, thinking: 0 });
     expect(run.filter((r) => r.step === "unify").map((r) => [r.model, r.calls])).toEqual([[A, 1], [C, 1]]);
     expect(run.find((r) => r.step === "domains")).toMatchObject({ model: C, calls: 1, input: 14_000, output: 4_000 });
-    expect(usageTotal(run)).toEqual({ calls: 18, input: 180_800, output: 21_100, cached: 34_000 });
+    expect(usageTotal(run)).toEqual({ calls: 18, input: 180_800, output: 21_100, cached: 34_000, thinking: 0 });
     expect(usageTotal(run)).toEqual(usageTotal(rollUp([own, competitor, shared])));
     expect(usageByModel(run).map((m) => m.model)).toEqual([A, C, H]);
   });
@@ -120,7 +164,7 @@ describe("a setup run: per company, and the whole run", () => {
 
 describe("the stored list", () => {
   it("is read row by row: anything that is not a row is left out, a bad number is 0", () => {
-    expect(readUsage([{ step: "map", model: H, calls: 1, input: 5, output: "x", cached: -3 }, { step: "", model: H }, null, 7, { model: H }])).toEqual([{ step: "map", model: H, calls: 1, input: 5, output: 0, cached: 0 }]);
+    expect(readUsage([{ step: "map", model: H, calls: 1, input: 5, output: "x", cached: -3 }, { step: "", model: H }, null, 7, { model: H }])).toEqual([{ step: "map", model: H, calls: 1, input: 5, output: 0, cached: 0, thinking: 0 }]);
     expect(readUsage(undefined)).toEqual([]);
     expect(readUsage({})).toEqual([]);
   });

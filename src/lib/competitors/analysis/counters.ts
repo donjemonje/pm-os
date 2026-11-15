@@ -26,8 +26,11 @@ export interface Counters {
   /** Of those, the calls whose answer was unusable (empty, cut off, invalid JSON). */
   unusableAnswers: number;
   inputTokens: number;
+  /** The visible answers and the model's own thinking together (both are billed as output). */
   outputTokens: number;
   cachedTokens: number;
+  /** The part of outputTokens that was thinking, where the provider reports it. */
+  thinkingTokens: number;
   waits: number;
   waitedMs: number;
   findings: number;
@@ -62,7 +65,7 @@ export interface Counters {
 export function emptyCounters(): Counters {
   return {
     mapSections: 0, mapLabeled: 0, mapCalls: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
-    pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, waits: 0, waitedMs: 0,
+    pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, thinkingTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
     newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0, factsNew: 0,

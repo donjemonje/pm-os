@@ -44,6 +44,8 @@ export interface AdminPlanRun {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /** The part of outputTokens that was the models' own thinking (0 where the provider reported none, and for an older run). */
+  thinkingTokens: number;
   calls: number;
   /** The run's tokens per step and model (analysis/usage.ts); [] for a run from before they were split. */
   usage: StepUsage[];
@@ -93,7 +95,7 @@ export async function GET(req: Request) {
       const c = readCounters(r.counters);
       return {
         id: r.id, trigger: r.trigger, status: r.status, step: r.step, pagesRead: c.pagesRead, pagesUnread: c.pagesUnread, tokensUsed: c.inputTokens + c.outputTokens,
-        inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, calls: c.calls, usage: sortUsage(readUsage(r.usage)), caps: capLines(readCaps(r.caps)), pacing: pacingView(r.pacing), recorded: readUsage(r.usage).length > 0 || c.calls === 0, model: r.model,
+        inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, thinkingTokens: c.thinkingTokens, calls: c.calls, usage: sortUsage(readUsage(r.usage)), caps: capLines(readCaps(r.caps)), pacing: pacingView(r.pacing), recorded: readUsage(r.usage).length > 0 || c.calls === 0, model: r.model,
         budget: c.budget, budgetReached: c.budgetReached > 0, goBackRounds: c.goBackRounds, goBackPages: c.goBackPages,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };

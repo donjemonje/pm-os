@@ -3,7 +3,8 @@ import type { StepUsage } from "@/lib/competitors/analysis/usage";
 
 /**
  * Administration → Competitors: the tokens of one run (or of one company of a setup run), per step, with the model
- * that step used — input, output and, when any was served from a cache, cached. Read-only, from the rows the run
+ * that step used — input, output, the part of the output that was the model's own thinking (where the provider
+ * reported any) and, when any was served from a cache, cached. Read-only, from the rows the run
  * recorded (analysis/usage.ts). Shared by the analysis runs and the setup runs sections.
  */
 
@@ -14,17 +15,21 @@ const COPY = {
 };
 
 const n = (v: number) => v.toLocaleString("en-US");
+/** "57%" — the part of the output that was thinking. */
+const share = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : "0%");
 const TH = "px-2 py-1";
 const TD = "px-2 py-1 align-top";
 
 export function RunUsage({ usage, calls }: { usage: StepUsage[]; /** The run's own count of calls: tells "no call" from "not recorded". */ calls: number }) {
   if (usage.length === 0) return <div className="text-xs text-slate-500" data-testid="admin-usage-empty">{calls > 0 ? COPY.none : COPY.noCalls}</div>;
   const cached = usage.some((u) => u.cached > 0);
-  const total = usage.reduce((t, u) => ({ calls: t.calls + u.calls, input: t.input + u.input, output: t.output + u.output, cached: t.cached + u.cached }), { calls: 0, input: 0, output: 0, cached: 0 });
+  // The model's own thinking is part of the output tokens: shown apart wherever the provider reported any.
+  const thinking = usage.some((u) => u.thinking > 0);
+  const total = usage.reduce((t, u) => ({ calls: t.calls + u.calls, input: t.input + u.input, output: t.output + u.output, cached: t.cached + u.cached, thinking: t.thinking + u.thinking }), { calls: 0, input: 0, output: 0, cached: 0, thinking: 0 });
   return (
     <table className="text-xs" data-testid="admin-usage">
       <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-        <tr><th className={TH}>Step</th><th className={TH}>Model</th><th className={`${TH} text-right`}>Calls</th><th className={`${TH} text-right`}>Input tokens</th><th className={`${TH} text-right`}>Output tokens</th>{cached && <th className={`${TH} text-right`}>Cached</th>}</tr>
+        <tr><th className={TH}>Step</th><th className={TH}>Model</th><th className={`${TH} text-right`}>Calls</th><th className={`${TH} text-right`}>Input tokens</th><th className={`${TH} text-right`}>Output tokens</th>{thinking && <th className={`${TH} text-right`} title="The part of the output tokens that was the model's own thinking, not the answer">Of them thinking</th>}{cached && <th className={`${TH} text-right`}>Cached</th>}</tr>
       </thead>
       <tbody>
         {usage.map((u) => (
@@ -34,6 +39,7 @@ export function RunUsage({ usage, calls }: { usage: StepUsage[]; /** The run's o
             <td className={`${TD} text-right tabular-nums`}>{n(u.calls)}</td>
             <td className={`${TD} text-right tabular-nums`}>{n(u.input)}</td>
             <td className={`${TD} text-right tabular-nums`}>{n(u.output)}</td>
+            {thinking && <td className={`${TD} text-right tabular-nums`} data-testid="admin-usage-thinking">{u.thinking > 0 ? `${n(u.thinking)} (${share(u.thinking, u.output)})` : "–"}</td>}
             {cached && <td className={`${TD} text-right tabular-nums`}>{u.cached > 0 ? n(u.cached) : "–"}</td>}
           </tr>
         ))}
@@ -42,6 +48,7 @@ export function RunUsage({ usage, calls }: { usage: StepUsage[]; /** The run's o
           <td className={`${TD} text-right tabular-nums`}>{n(total.calls)}</td>
           <td className={`${TD} text-right tabular-nums`}>{n(total.input)}</td>
           <td className={`${TD} text-right tabular-nums`}>{n(total.output)}</td>
+          {thinking && <td className={`${TD} text-right tabular-nums`}>{n(total.thinking)} ({share(total.thinking, total.output)})</td>}
           {cached && <td className={`${TD} text-right tabular-nums`}>{n(total.cached)}</td>}
         </tr>
       </tbody>

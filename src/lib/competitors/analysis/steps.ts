@@ -152,7 +152,7 @@ export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<
         // A page of a "compare" section: only what it says the competitor itself offers is listed.
         renderResearch({ url: p.url, title: page.title ?? "", text: page.text, kind: page.kind, sourceLabel: C.profile.sourceTypes[p.sourceType] ?? p.sourceType }, { compareCompany: p.read.label === "compare" ? ctx.competitor.name : null }),
         RESEARCH_TOOL,
-        { role: "read", maxTokens: RESEARCH_MAX_TOKENS, thinking: "low", injected: injectedResearch(ctx, p.url) },
+        { role: "read", maxTokens: RESEARCH_MAX_TOKENS, injected: injectedResearch(ctx, p.url) },
       );
       const parsed = parseResearch(r.value, page.text);
       await db.$transaction([
@@ -424,7 +424,7 @@ async function mergeCall(ctx: RunContext, tail: string, entries: MergeEntry[], b
     work: async (t) => {
       // TEST KNOB: the answer of the n-th merge call of the run; none given = nothing to merge.
       const injected = ctx.answers ? ctx.answers.merge?.[ctx.counters.mergeCalls] ?? '{"groups": []}' : undefined;
-      const r = await ctx.call<Record<string, unknown>>(MERGE_SYSTEM_PROMPT, "", t, MERGE_TOOL, { role: "match", maxTokens: MERGE_MAX_TOKENS, thinking: "medium", injected });
+      const r = await ctx.call<Record<string, unknown>>(MERGE_SYSTEM_PROMPT, "", t, MERGE_TOOL, { role: "match", maxTokens: MERGE_MAX_TOKENS, injected });
       ctx.counters.mergeCalls++;
       const plans = planMerges(parseMerge(r.value, entries), byCode);
       const merged = await applyMerges(ctx.competitor.id, plans, sent);
@@ -603,7 +603,7 @@ export async function matchStep(ctx: RunContext): Promise<void> {
           injected = ctx.answers.match?.[ctx.counters.matchCalls];
           if (injected === undefined) throw new AnalysisError("other", `no injected match answer for match call ${ctx.counters.matchCalls + 1} (test knob)`);
         }
-        const r = await ctx.call<Record<string, unknown>>(MATCH_SYSTEM_PROMPT, ours.catalog.shared, t, matchTool(entries.map((e) => e.code), ours.catalog), { role: "match", maxTokens: MATCH_MAX_TOKENS, thinking: "high", injected });
+        const r = await ctx.call<Record<string, unknown>>(MATCH_SYSTEM_PROMPT, ours.catalog.shared, t, matchTool(entries.map((e) => e.code), ours.catalog), { role: "match", maxTokens: MATCH_MAX_TOKENS, injected });
         ctx.counters.matchCalls++;
         const parsed = parseMatch(r.value, entries, ours.catalog);
         if (parsed.unknownOurs.length) ctx.log("warn", `Match: ${parsed.unknownOurs.length} answer${parsed.unknownOurs.length === 1 ? "" : "s"} named a code that is not ours (${parsed.unknownOurs.slice(0, 3).join(", ")}) — counted as none of ours`);
@@ -772,7 +772,7 @@ export async function secondLookStep(ctx: RunContext, opts: { /** Only these cap
         "",
         renderSecondLook({ name: k.name, description: k.description, aliases: t.aliases }, k.domain, ctx.competitor.name, t.pages.map((p) => ({ url: p.url, title: p.title, text: p.text, kind: kindOf.get(p.id), sourceLabel: C.profile.sourceTypes[sourceTypeOf.get(p.id) ?? ""] }))),
         lookTool(t.pages.map((p) => p.url)),
-        { role: "read", maxTokens: LOOK_MAX_TOKENS, thinking: "low", injected },
+        { role: "read", maxTokens: LOOK_MAX_TOKENS, injected },
       );
       const answer = parseSecondLook(r.value, t.pages);
       made.add(k.id);

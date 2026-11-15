@@ -1,7 +1,7 @@
 import { GoogleGenAI, ThinkingLevel, Type, type Schema } from "@google/genai";
 import { getVertexProjectId } from "../vertex-config";
 import { FACT_KINDS, type FactKind } from "./config";
-import { modelFor, providerOf, type ModelProvider } from "./models";
+import { modelFor, providerOf, type ModelProvider, type ThinkingLevelName } from "./models";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 
 /**
@@ -142,13 +142,18 @@ export function packPages(pages: PageText[]): string {
     .join("\n\n");
 }
 
-/** Tokens one call used. `output` includes thinking tokens; `cached` is the part of `input` served from a cache. */
+/**
+ * Tokens one call used. `output` is everything billed as output — the visible answer and the model's own thinking;
+ * `thinking` is the part of it that was thinking, as the provider reports it (0 when it reports none); `cached` is
+ * the part of `input` served from a cache.
+ */
 export interface Usage {
   input: number;
   output: number;
   cached: number;
+  thinking: number;
 }
-export const NO_USAGE: Usage = { input: 0, output: 0, cached: 0 };
+export const NO_USAGE: Usage = { input: 0, output: 0, cached: 0, thinking: 0 };
 
 /** PMOS AI has no capacity right now (HTTP 429, 503, 529 or RESOURCE_EXHAUSTED): the caller waits and continues. */
 export class CapacityError extends Error {
@@ -193,13 +198,13 @@ export class AnswerError extends Error {
   }
 }
 
-export type ThinkingName = "minimal" | "low" | "medium" | "high";
+export type ThinkingName = ThinkingLevelName;
 export interface CallOptions {
   /** The model that makes the call (models.ts modelFor(role)): the caller decides, nothing here reads an environment variable for it. */
   model: string;
   /** Visible output tokens the answer may take (thinking is on top). */
   maxTokens: number;
-  /** The thinking level this prompt asks for; COMPETITORS_THINKING overrides it when set. */
+  /** The thinking level of the call — the level of its role (models.ts thinkingFor(role)): the caller decides, as for the model. Not given = high. */
   thinking?: ThinkingName;
   /** TEST KNOB: the raw JSON text the model would have answered. With it no model is ever called. */
   injected?: string;
@@ -242,6 +247,15 @@ export function asCapacityError(e: unknown): unknown {
 }
 
 /**
+ * What a Gemini answer says it used. Gemini reports the visible answer (candidatesTokenCount) and the model's own
+ * thinking (thoughtsTokenCount) apart; both are billed as output.
+ */
+export function geminiUsage(u: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number } | null | undefined): Usage {
+  const thinking = u?.thoughtsTokenCount ?? 0;
+  return { input: u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + thinking, cached: u?.cachedContentTokenCount ?? 0, thinking };
+}
+
+/**
  * One structured call. `shared` goes first (the part that repeats across calls of a run, "" when there is none),
  * `tail` after it.
  *
@@ -271,8 +285,8 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
         config: {
           systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
           temperature: 0,
-          // Gemini 4 takes a thinking *level*, not a token budget (a budget is rejected). Each prompt asks for its
-          // own level (analysis/prompts.ts); thinking is billed against maxOutputTokens, hence the headroom.
+          // Gemini 4 takes a thinking *level*, not a token budget (a budget is rejected). The level is the call's
+          // role's (models.ts thinkingFor); thinking is billed against maxOutputTokens, hence the headroom.
           thinkingConfig: { thinkingLevel: thinkingLevel(opts.thinking) },
           maxOutputTokens: opts.maxTokens + 16000,
           responseMimeType: "application/json",
@@ -283,7 +297,7 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
       throw asCapacityError(e);
     }
     const u = response.usageMetadata;
-    const usage: Usage = { input: u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0), cached: u?.cachedContentTokenCount ?? 0 };
+    const usage: Usage = geminiUsage(u);
     const text = response.text ?? "";
     const finish = String(response.candidates?.[0]?.finishReason ?? "unknown");
     if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish})`, usage);
@@ -312,6 +326,8 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
     input: (mu?.input_tokens ?? 0) + (mu?.cache_creation_input_tokens ?? 0) + (mu?.cache_read_input_tokens ?? 0),
     output: mu?.output_tokens ?? 0,
     cached: mu?.cache_read_input_tokens ?? 0,
+    // This path asks for no extended thinking, and the provider reports none apart.
+    thinking: 0,
   };
   const toolUse = message.content.find((b) => b.type === "tool_use");
   if (!toolUse || toolUse.type !== "tool_use") throw new AnswerError("PMOS AI returned no structured answer", usage);
@@ -461,15 +477,10 @@ export function dedupeFacts(facts: ExtractedFact[], seen: Set<string>): Extracte
   return out;
 }
 
-/**
- * Gemini thinking level: COMPETITORS_THINKING wins when it is set (dev sets "low"), else the level the prompt
- * asks for, else HIGH.
- */
+/** The level as Gemini takes it. Which level a call gets is decided by its role (models.ts thinkingFor), environment overrides included; not given = HIGH. */
 function thinkingLevel(asked?: ThinkingName): ThinkingLevel {
-  const env = process.env.COMPETITORS_THINKING?.trim().toLowerCase();
-  const v = env === "low" || env === "medium" || env === "minimal" || env === "high" ? env : asked;
-  if (v === "low") return ThinkingLevel.LOW;
-  if (v === "medium") return ThinkingLevel.MEDIUM;
-  if (v === "minimal") return ThinkingLevel.MINIMAL;
+  if (asked === "low") return ThinkingLevel.LOW;
+  if (asked === "medium") return ThinkingLevel.MEDIUM;
+  if (asked === "minimal") return ThinkingLevel.MINIMAL;
   return ThinkingLevel.HIGH;
 }

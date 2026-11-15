@@ -63,7 +63,7 @@ export async function factsStep(ctx: RunContext): Promise<void> {
         const known = await db.profileFact.findMany({ where: { competitorId, dismissedAt: null }, select: { kind: true, value: true }, orderBy: { createdAt: "asc" } });
         // TEST KNOB: every chunk gets this answer; none given = no fact.
         const injected = ctx.answers ? ctx.answers.facts ?? '{"facts": []}' : undefined;
-        const r = await ctx.call<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, FACTS_SHARED, renderFactsTail(ctx.competitor.name, known, texts, part, chunks.length), FACTS_TOOL, { role: "read", maxTokens: FACTS_MAX_TOKENS, thinking: "low", injected });
+        const r = await ctx.call<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, FACTS_SHARED, renderFactsTail(ctx.competitor.name, known, texts, part, chunks.length), FACTS_TOOL, { role: "read", maxTokens: FACTS_MAX_TOKENS, injected });
         tokens = r.tokens;
         const facts = dedupeFacts(parseFacts(r.value), seen);
         found += facts.length;

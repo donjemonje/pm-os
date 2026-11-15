@@ -1,6 +1,52 @@
 /** Capability Analysis — a model per step (lib/competitors/models.ts): role → model with and without overrides, and what a refused model says. Pure module. */
 import { describe, expect, it } from "vitest";
-import { callFailureMessage, competitorsModels, MODEL_DEFAULTS, MODEL_ENV, modelFor, modelOfPrompt, modelRefused, modelsLine, PROMPT_ROLES, providerOf } from "@/lib/competitors/models";
+import {
+  callFailureMessage,
+  competitorsModels,
+  competitorsThinking,
+  MODEL_DEFAULTS,
+  MODEL_ENV,
+  modelFor,
+  modelOfPrompt,
+  modelRefused,
+  modelsLine,
+  PROMPT_ROLES,
+  providerOf,
+  THINKING_DEFAULTS,
+  THINKING_ENV,
+  THINKING_ENV_ALL,
+  THINKING_LEVELS,
+  thinkingFor,
+  thinkingLine,
+} from "@/lib/competitors/models";
+
+describe("role → thinking level", () => {
+  it("a level per role, with the reading role at the lowest level its model accepts", () => {
+    expect(THINKING_DEFAULTS).toEqual({ read: "low", match: "high", judge: "high" });
+    expect(competitorsThinking({})).toEqual({ read: "low", match: "high", judge: "high" });
+    // "minimal" is a level, but the reading model refuses it (measured 2026-11-15): the default is the lowest it takes.
+    expect(THINKING_LEVELS).toEqual(["minimal", "low", "medium", "high"]);
+    expect(THINKING_LEVELS.indexOf(THINKING_DEFAULTS.read)).toBe(1);
+  });
+  it("each role has its own override", () => {
+    expect(THINKING_ENV).toEqual({ read: "COMPETITORS_THINKING_READ", match: "COMPETITORS_THINKING_MATCH", judge: "COMPETITORS_THINKING_JUDGE" });
+    expect(thinkingFor("read", { COMPETITORS_THINKING_READ: "minimal" })).toBe("minimal");
+    expect(competitorsThinking({ COMPETITORS_THINKING_MATCH: " Medium " })).toEqual({ read: "low", match: "medium", judge: "high" });
+    expect(competitorsThinking({ COMPETITORS_THINKING_READ: "high", COMPETITORS_THINKING_MATCH: "low", COMPETITORS_THINKING_JUDGE: "medium" })).toEqual({ read: "high", match: "low", judge: "medium" });
+  });
+  it("COMPETITORS_THINKING keeps working as the override for all roles — over a role's own override too", () => {
+    expect(THINKING_ENV_ALL).toBe("COMPETITORS_THINKING");
+    expect(competitorsThinking({ COMPETITORS_THINKING: "low" })).toEqual({ read: "low", match: "low", judge: "low" });
+    expect(competitorsThinking({ COMPETITORS_THINKING: "medium", COMPETITORS_THINKING_JUDGE: "high" })).toEqual({ read: "medium", match: "medium", judge: "medium" });
+  });
+  it("a value that is not a level is no override", () => {
+    expect(competitorsThinking({ COMPETITORS_THINKING: "off", COMPETITORS_THINKING_READ: "0", COMPETITORS_THINKING_MATCH: "  " })).toEqual({ read: "low", match: "high", judge: "high" });
+    expect(thinkingFor("judge", { COMPETITORS_THINKING: "none", COMPETITORS_THINKING_JUDGE: "medium" })).toBe("medium");
+  });
+  it("one line for the run log", () => {
+    expect(thinkingLine(competitorsThinking({}))).toBe("read low · match high · judge high");
+  });
+});
 
 describe("role → model", () => {
   it("the defaults are the Gemini 4 line-up: read = hydrogen, match = argon, judge = carbon", () => {

@@ -38,7 +38,7 @@ import { recordCompetitorEvent } from "./analytics";
 import { ACTIVE_SCAN_STATUSES, isAddressKind, type AddressKind } from "./config";
 import { fetchPlain, type FetchedPage } from "./fetcher";
 import { contentHash, htmlToText, titleOf } from "./html";
-import { modelFor } from "./models";
+import { modelFor, thinkingFor } from "./models";
 import { isPublicWebsite } from "./netguard";
 import { MAX_PAGE_CHARS } from "./pages";
 import { aiStepEnabled, noteStoredChars, testAiAnswers } from "./settings";
@@ -321,7 +321,7 @@ export async function searchAddresses(
           result = { ...result, status: "undecided", note: "PMOS AI is switched off (test knob): the candidates were not judged" };
         } else {
           const r = await callTool<Record<string, unknown>>(ADDRESS_PICK_SYSTEM_PROMPT, "", renderAddressPick({ name: competitor.name, site: site.url }, entries), addressPickTool(codes), {
-            model: modelFor("read"), maxTokens: ADDRESS_PICK_MAX_TOKENS, thinking: "low", injected: answers ? injectedAddressPick(answers.addresses, entries) : undefined,
+            model: modelFor("read"), maxTokens: ADDRESS_PICK_MAX_TOKENS, thinking: thinkingFor("read"), injected: answers ? injectedAddressPick(answers.addresses, entries) : undefined,
           });
           tokens = r.usage.input + r.usage.output;
           const parsed = parseAddressPick(r.value, codes);

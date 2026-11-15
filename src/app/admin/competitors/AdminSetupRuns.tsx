@@ -40,7 +40,7 @@ const COPY = {
   noRuns: "No setup run yet.",
   made: (r: AdminSetupRun) => `${r.domains} domain${r.domains === 1 ? "" : "s"} · ${r.rows} capabilit${r.rows === 1 ? "y" : "ies"} · ${r.features} feature${r.features === 1 ? "" : "s"}`,
   budgetReached: "budget reached",
-  tokens: (input: number, output: number, cached: number) => `${input.toLocaleString("en-US")} input + ${output.toLocaleString("en-US")} output${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`,
+  tokens: (input: number, output: number, cached: number, thinking: number) => `${input.toLocaleString("en-US")} input + ${output.toLocaleString("en-US")} output${thinking > 0 ? `, ${thinking.toLocaleString("en-US")} of them thinking` : ""}${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`,
   tokensPerStep: "Tokens per step and model — the whole run",
   sharedTokens: "Of those, the calls that belong to no company (unify, domains)",
   companyTokens: "Tokens per step and model",
@@ -175,7 +175,7 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                   <span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span>
                   <span>Step: <b>{r.step.replace("_", " ")}</b></span>
                   <span>{COPY.made(r)}</span>
-                  <span className="tabular-nums">{r.calls.toLocaleString("en-US")} PMOS AI calls · {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens)} tokens</span>
+                  <span className="tabular-nums">{r.calls.toLocaleString("en-US")} PMOS AI calls · {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens, r.thinkingTokens)} tokens</span>
                   <span>Started {when(r.startedAt)}</span>
                   <span>Finished {when(r.finishedAt)}</span>
                   <span className="font-mono text-slate-400">{r.id}</span>
@@ -222,7 +222,7 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                           <td className="px-3 pb-2" colSpan={5}>
                             {c.caps.length > 0 && <div className="mb-1.5"><RunCaps caps={c.caps} recorded /></div>}
                             <details>
-                              <summary className="cursor-pointer text-slate-500">{COPY.companyTokens}: {COPY.tokens(c.inputTokens, c.outputTokens, c.cachedTokens)}</summary>
+                              <summary className="cursor-pointer text-slate-500">{COPY.companyTokens}: {COPY.tokens(c.inputTokens, c.outputTokens, c.cachedTokens, c.thinkingTokens)}</summary>
                               <div className="mt-1.5"><RunUsage usage={c.usage} calls={c.calls} /></div>
                             </details>
                           </td>

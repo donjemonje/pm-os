@@ -102,8 +102,8 @@ describe("cut", () => {
 
 describe("AnswerError — an unusable answer was still a billed call", () => {
   it("carries the tokens the call used, so the run counts them", () => {
-    const e = new AnswerError("PMOS AI did not finish its answer (finish: MAX_TOKENS, 9000 chars)", { input: 4200, output: 17000, cached: 0 });
-    expect(e.usage).toEqual({ input: 4200, output: 17000, cached: 0 });
+    const e = new AnswerError("PMOS AI did not finish its answer (finish: MAX_TOKENS, 9000 chars)", { input: 4200, output: 17000, cached: 0, thinking: 9000 });
+    expect(e.usage).toEqual({ input: 4200, output: 17000, cached: 0, thinking: 9000 });
     expect(e.name).toBe("AnswerError");
   });
   it("without usage (an injected answer, a test) it counts nothing", () => {

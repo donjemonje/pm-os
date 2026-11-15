@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "../../db";
 import { AnswerError, callTool, CapacityError, EndpointError, type CallOptions } from "../ai";
-import { callFailureMessage, competitorsModels, modelsLine, type ModelRole } from "../models";
+import { callFailureMessage, competitorsModels, competitorsThinking, modelsLine, thinkingLine, type ModelRole } from "../models";
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
 import { aiStepEnabled, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
@@ -105,8 +105,8 @@ class RunLost extends Error {}
 
 export { emptyCounters, readCounters, type Counters } from "./counters";
 
-/** What a step passes with a call: everything but the model — the step names the ROLE (models.ts), the engine resolves the model. */
-export type StepCallOptions = Omit<CallOptions, "model"> & { role: ModelRole };
+/** What a step passes with a call: everything but the model and the thinking level — the step names the ROLE (models.ts), the engine resolves both. */
+export type StepCallOptions = Omit<CallOptions, "model" | "thinking"> & { role: ModelRole };
 
 export interface AnalysisLogLine {
   at: string;
@@ -326,6 +326,8 @@ export function echoRunLog(to: ((line: AnalysisLogLine) => void) | null): void {
 export interface SetupEnv {
   run: { id: string; workspaceId: string; ownCompetitorId: string; startedById: string | null; startedAt: Date; injected: boolean; resumed: boolean };
   model: string;
+  /** "read low · match high · judge high": how much each role thinks in this run (models.ts thinkingFor). */
+  thinking: string;
   /** The run's recorded progress (CompetitorAnalysis.setup): written with every heartbeat. */
   progress: SetupProgress;
   log: RunContext["log"];
@@ -348,6 +350,8 @@ export async function runAnalysis(id: string): Promise<void> {
   // A model per role (models.ts), resolved once: every call of the run names its role. The run row carries all three.
   const models = competitorsModels();
   const model = modelsLine(models);
+  // How much each role thinks (models.ts thinkingFor), resolved once like the models.
+  const thinking = competitorsThinking();
   // The claim's owner token: every later write of this worker carries it in its `where`.
   const token = randomUUID();
   // The claim: only the head of the queue can be claimed, and only once — so two runs never execute together.
@@ -524,7 +528,7 @@ export async function runAnalysis(id: string): Promise<void> {
           }
           let r;
           try {
-            r = await callTool<T>(system, shared, tail, tool, { ...rest, model: callModel });
+            r = await callTool<T>(system, shared, tail, tool, { ...rest, model: callModel, thinking: thinking[role] });
           } catch (e) {
             if (e instanceof AnswerError) {
               // The call was made and is billed: its tokens count, whatever the step does with the failure.
@@ -533,6 +537,7 @@ export async function runAnalysis(id: string): Promise<void> {
               c.inputTokens += e.usage.input;
               c.outputTokens += e.usage.output;
               c.cachedTokens += e.usage.cached;
+              c.thinkingTokens += e.usage.thinking;
               addUsage(t.usage, step, callModel, e.usage);
               throw e;
             }
@@ -545,6 +550,8 @@ export async function runAnalysis(id: string): Promise<void> {
           c.inputTokens += r.usage.input;
           c.outputTokens += r.usage.output;
           c.cachedTokens += r.usage.cached;
+          // The model's own thinking is billed as output: counted there, and kept apart (usage.ts).
+          c.thinkingTokens += r.usage.thinking;
           addUsage(t.usage, step, callModel, r.usage);
           return { value: r.value, tokens: r.usage.input + r.usage.output };
         },
@@ -624,6 +631,7 @@ export async function runAnalysis(id: string): Promise<void> {
       await setupWalk({
         run: { id, workspaceId: row.workspaceId, ownCompetitorId: row.competitorId, startedById: row.startedById, startedAt: claimed.startedAt, injected: row.injected, resumed: claimed.resumed },
         model,
+        thinking: thinkingLine(thinking),
         progress: setup,
         log,
         inStep,
@@ -682,7 +690,7 @@ export async function runAnalysis(id: string): Promise<void> {
       });
       const reading = ctx.reading;
       const isOwn = row.competitor.isOwn;
-      log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${isOwn ? " — the organization's own site" : ""}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model}`}`);
+      log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${isOwn ? " — the organization's own site" : ""}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model} — thinking: ${thinkingLine(thinking)}`}`);
       // The map first: what is read follows from the reading plan. No plan, no read — a failed map fails the run.
       await inStep("map", () => mapStep(ctx));
       await setStep("research");
@@ -716,7 +724,7 @@ export async function runAnalysis(id: string): Promise<void> {
     // Limits are safety nets: the run's last lines say whether one was hit, each with what it left undone.
     if (caps.length) log("warn", `${capsHeadline(caps)} in this run — ${capLines(caps).join("; ")}`);
     else log("info", `${capsHeadline(caps)} in this run`);
-    log("info", `${what} done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens`);
+    log("info", `${what} done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens${counters.thinkingTokens ? ` (${counters.inputTokens} input, ${counters.outputTokens} output — ${counters.thinkingTokens} of the output was the models' own thinking)` : ""}`);
   } catch (e) {
     if (lost || e instanceof RunLost) {
       lost = true;
@@ -756,12 +764,12 @@ export async function runAnalysis(id: string): Promise<void> {
     if (outcome !== "done") await moveSetupState(row.workspaceId, "run_stopped").catch((e) => console.error("[competitors] the setup state could not be written", id, e));
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_setup_finished", {
       analysisId: id, outcome, step, companies: setup.companies.length, rows: setup.rows, domains: setup.domains, features: setup.features,
-      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total,
+      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, thinkingTokens: counters.thinkingTokens, thinking: thinkingLine(thinking), tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total,
       durationMs: Date.now() - t0, totalMs: Date.now() - claimed.startedAt.getTime(), resumed: claimed.resumed, errorKind: errorKind ?? "none", error,
     });
   } else {
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total, errorKind: errorKind ?? "none", error,
+      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, thinking: thinkingLine(thinking), ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total, errorKind: errorKind ?? "none", error,
     });
   }
   await alertSupport(id);

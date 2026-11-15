@@ -286,7 +286,7 @@ async function unifyStep(env: SetupEnv, companies: SetupCompany[]): Promise<void
           injected = ctx.answers.unify?.[ctx.counters.unifyCalls];
           if (injected === undefined) throw new AnalysisError("other", `no injected unify answer for unify call ${ctx.counters.unifyCalls + 1} (test knob)`);
         }
-        const r = await ctx.call<Record<string, unknown>>(UNIFY_SYSTEM_PROMPT, "", t, unifyTool(entries.map((e) => e.code), rows.map((x) => x.code)), { role: "match", maxTokens: UNIFY_MAX_TOKENS, thinking: "medium", injected });
+        const r = await ctx.call<Record<string, unknown>>(UNIFY_SYSTEM_PROMPT, "", t, unifyTool(entries.map((e) => e.code), rows.map((x) => x.code)), { role: "match", maxTokens: UNIFY_MAX_TOKENS, injected });
         ctx.counters.unifyCalls++;
         const parsed = parseUnify(r.value, entries, rows);
         // Closed sets: a code outside them makes the answer unusable — nothing of it is saved.
@@ -337,7 +337,7 @@ async function unifyStep(env: SetupEnv, companies: SetupCompany[]): Promise<void
           work: async (t) => {
             // TEST KNOB: every review call gets this answer; none given = nothing to merge, drop or rename.
             const injected = ctx.answers ? ctx.answers.unifyReview ?? '{"merge": [], "drop": [], "rename": []}' : undefined;
-            const r = await ctx.call<Record<string, unknown>>(UNIFY_REVIEW_SYSTEM_PROMPT, "", t, unifyReviewTool(chunk.map((x) => x.code)), { role: "judge", maxTokens: UNIFY_REVIEW_MAX_TOKENS, thinking: "high", injected });
+            const r = await ctx.call<Record<string, unknown>>(UNIFY_REVIEW_SYSTEM_PROMPT, "", t, unifyReviewTool(chunk.map((x) => x.code)), { role: "judge", maxTokens: UNIFY_REVIEW_MAX_TOKENS, injected });
             ctx.counters.unifyCalls++;
             const parsed = parseUnifyReview(r.value, chunk);
             if (parsed.problems.length) throw new AnalysisError("answer", `PMOS AI's unify review is unusable: ${parsed.problems.slice(0, 3).join("; ")}${parsed.problems.length > 3 ? ` (+${parsed.problems.length - 3} more)` : ""}`);
@@ -411,7 +411,7 @@ async function domainsStep(env: SetupEnv, companies: SetupCompany[]): Promise<vo
           injected = ctx.answers.domains?.[ctx.counters.domainsCalls];
           if (injected === undefined) throw new AnalysisError("other", `no injected domains answer for domains call ${ctx.counters.domainsCalls + 1} (test knob)`);
         }
-        const r = await ctx.call<Record<string, unknown>>(DOMAINS_SYSTEM_PROMPT, "", t, domainsTool(batch.map((x) => x.code)), { role: "judge", maxTokens: DOMAINS_MAX_TOKENS, thinking: "high", injected });
+        const r = await ctx.call<Record<string, unknown>>(DOMAINS_SYSTEM_PROMPT, "", t, domainsTool(batch.map((x) => x.code)), { role: "judge", maxTokens: DOMAINS_MAX_TOKENS, injected });
         ctx.counters.domainsCalls++;
         const parsed = parseDomains(r.value, batch, known);
         if (parsed.problems.length) throw new AnalysisError("answer", `PMOS AI's domains answer is unusable: ${parsed.problems.slice(0, 3).join("; ")}${parsed.problems.length > 3 ? ` (+${parsed.problems.length - 3} more)` : ""}`);
@@ -474,7 +474,7 @@ export async function setupWalk(env: SetupEnv): Promise<void> {
   const ctxOf = (c: SetupCompany) => contexts.get(c.id)!;
   for (const c of work) env.setStage(c.id, finished.has(c.id) ? "done" : "waiting");
 
-  env.log("info", `Setup run ${env.run.resumed ? "continued" : "started"} — ${own.name}'s own site (${own.pages} page${own.pages === 1 ? "" : "s"}) and ${competitors.length} competitor${competitors.length === 1 ? "" : "s"}: ${competitors.map((c) => `${c.name} (${c.pages})`).join(", ")}${env.run.injected ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${env.model}`}`);
+  env.log("info", `Setup run ${env.run.resumed ? "continued" : "started"} — ${own.name}'s own site (${own.pages} page${own.pages === 1 ? "" : "s"}) and ${competitors.length} competitor${competitors.length === 1 ? "" : "s"}: ${competitors.map((c) => `${c.name} (${c.pages})`).join(", ")}${env.run.injected ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${env.model} — thinking: ${env.thinking}`}`);
   if (skipped.length) env.log("warn", `Not part of this setup run — no stored page yet: ${skipped.map((c) => c.name).join(", ")}. Their first scan queues an ordinary analysis`);
   await recordCompetitorEvent(workspaceId, env.run.startedById, "cmp_setup_started", { analysisId: runId, companies: work.length, competitors: competitors.length, skipped: skipped.length, pages: work.reduce((n, c) => n + c.pages, 0), resumed: env.run.resumed, model: env.model, injected: env.run.injected });
   await env.flush();

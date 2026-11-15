@@ -72,6 +72,14 @@ env:
   #     - RUNTIME
   # - variable: COMPETITORS_MODEL_MATCH
   # - variable: COMPETITORS_MODEL_JUDGE
+  # How much each role thinks before it answers (thinking is billed as output
+  # and recorded apart on every run), with the defaults in code (models.ts):
+  #   read = low (the lowest level gemini-4-hydrogen accepts), match = high, judge = high
+  # Set COMPETITORS_THINKING_READ / _MATCH / _JUDGE (minimal | low | medium | high)
+  # only to override one role; COMPETITORS_THINKING still overrides all three.
+  # - variable: COMPETITORS_THINKING_READ
+  # - variable: COMPETITORS_THINKING_MATCH
+  # - variable: COMPETITORS_THINKING_JUDGE
   # The speed of an analysis run (src/lib/competitors/analysis/pacing.ts): a run
   # paces itself from the provider's answers — it starts at 8 calls at once,
   # speeds up while calls succeed and halves when the provider pushes back.

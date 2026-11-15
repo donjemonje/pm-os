@@ -9,7 +9,8 @@
  * The old single COMPETITORS_MODEL decides nothing any more: no code reads it.
  *
  * A `gemini-*` id runs on Gemini (Vertex, a response schema); anything else on the Anthropic provider (forced tool
- * use). The model of every call is recorded with its tokens (analysis/usage.ts).
+ * use). The model of every call is recorded with its tokens (analysis/usage.ts). How much a role THINKS is a
+ * setting per role too (THINKING_DEFAULTS below).
  *
  * Pure: no database, no network — the environment is a parameter.
  */
@@ -64,6 +65,58 @@ export function modelOfPrompt(prompt: PromptId, env: Env = process.env): string 
 /** "read gemini-4-hydrogen · match gemini-4-argon · judge gemini-4-carbon" — what a run row and a log line say. */
 export function modelsLine(models: Record<ModelRole, string>): string {
   return MODEL_ROLES.map((r) => `${r} ${models[r]}`).join(" · ");
+}
+
+// ————— How much a role thinks —————
+
+/**
+ * The thinking level of a role (Daniel 2026-11-15): a model's own thinking is billed as output — on the first real
+ * run roughly half of the reading step's output was thinking — so how much a call thinks is a setting per role,
+ * like its model, with the defaults in code:
+ *   read  — low:  the lowest level the reading model accepts. gemini-4-hydrogen refuses "minimal" and thinking off
+ *                 (measured 2026-11-15, one page: at "low" 1,143 answer + 1,536 thinking tokens); gemini-4-argon at
+ *                 "low" thought 0 tokens on the same page. Reading lists what a page says: it needs no deliberation.
+ *   match — high: merge, unify batches, match — deciding that two wordings are one thing, and which row of ours it is.
+ *   judge — high: unify review, domains — the calls that shape the catalog.
+ * Each role has an environment override — COMPETITORS_THINKING_READ, _MATCH, _JUDGE — and COMPETITORS_THINKING
+ * still overrides all three at once (dev sets it). A value that is not a level is ignored.
+ *
+ * What a finding carries does not depend on any of this: quote, reasoning and description stay.
+ */
+export const THINKING_LEVELS = ["minimal", "low", "medium", "high"] as const;
+export type ThinkingLevelName = (typeof THINKING_LEVELS)[number];
+
+export const THINKING_DEFAULTS: Record<ModelRole, ThinkingLevelName> = {
+  read: "low",
+  match: "high",
+  judge: "high",
+};
+
+export const THINKING_ENV: Record<ModelRole, string> = {
+  read: "COMPETITORS_THINKING_READ",
+  match: "COMPETITORS_THINKING_MATCH",
+  judge: "COMPETITORS_THINKING_JUDGE",
+};
+/** The one setting that overrides the level of every role. */
+export const THINKING_ENV_ALL = "COMPETITORS_THINKING";
+
+function levelOf(v: string | undefined): ThinkingLevelName | null {
+  const t = v?.trim().toLowerCase();
+  return t && (THINKING_LEVELS as readonly string[]).includes(t) ? (t as ThinkingLevelName) : null;
+}
+
+/** The thinking level of a role: COMPETITORS_THINKING when it is set, else the role's own override, else the default in code. */
+export function thinkingFor(role: ModelRole, env: Env = process.env): ThinkingLevelName {
+  return levelOf(env[THINKING_ENV_ALL]) ?? levelOf(env[THINKING_ENV[role]]) ?? THINKING_DEFAULTS[role];
+}
+
+export function competitorsThinking(env: Env = process.env): Record<ModelRole, ThinkingLevelName> {
+  return { read: thinkingFor("read", env), match: thinkingFor("match", env), judge: thinkingFor("judge", env) };
+}
+
+/** "read low · match high · judge high" — what a run's log says next to its models. */
+export function thinkingLine(levels: Record<ModelRole, ThinkingLevelName>): string {
+  return MODEL_ROLES.map((r) => `${r} ${levels[r]}`).join(" · ");
 }
 
 export type ModelProvider = "gemini" | "claude";
