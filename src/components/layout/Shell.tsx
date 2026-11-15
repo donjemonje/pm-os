@@ -22,6 +22,7 @@ export function Shell({
   sidebarDefaultCollapsed,
   ideasEnabled,
   ideasPending = 0,
+  competitorsEnabled,
   docsEnabled,
   chatEnabled,
   dashboardEnabled,
@@ -38,6 +39,7 @@ export function Shell({
   ideasEnabled: boolean;
   /** Ideas awaiting review — the badge on the Ideas nav item. */
   ideasPending?: number;
+  competitorsEnabled: boolean;
   docsEnabled: boolean;
   chatEnabled: boolean;
   dashboardEnabled: boolean;
@@ -66,6 +68,7 @@ export function Shell({
           defaultCollapsed={sidebarDefaultCollapsed}
           ideasEnabled={ideasEnabled}
           ideasPending={ideasPending}
+          competitorsEnabled={competitorsEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
           dashboardEnabled={dashboardEnabled}

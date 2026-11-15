@@ -56,6 +56,7 @@ export default async function RootLayout({
   // request-cached, so the per-org ideas flag reuses the same session lookup.
   const user = await getCurrentUser();
   const ideasEnabled = await featureEnabledForCurrentUser("ideas");
+  const competitorsEnabled = await featureEnabledForCurrentUser("competitors");
   const docsEnabled = await featureEnabledForCurrentUser("docs");
   const chatEnabled = await featureEnabledForCurrentUser("chat");
   const dashboardEnabled = await featureEnabledForCurrentUser("dashboard");
@@ -104,6 +105,7 @@ export default async function RootLayout({
           sidebarDefaultCollapsed={sidebarCollapsed}
           ideasEnabled={ideasEnabled}
           ideasPending={ideasPending}
+          competitorsEnabled={competitorsEnabled}
           docsEnabled={docsEnabled}
           chatEnabled={chatEnabled}
           dashboardEnabled={dashboardEnabled}

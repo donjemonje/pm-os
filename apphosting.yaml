@@ -39,6 +39,36 @@ env:
       - BUILD
       - RUNTIME
 
+  - variable: COMPETITORS_ENABLED
+    value: "false"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  # --- Competitors scanner ---
+  # Website scans run in a Cloud Run job (scanner/Dockerfile: Node + Chromium),
+  # triggered by "Scan now" through the Cloud Run API and by Cloud Scheduler
+  # hourly with --due. Local dev leaves COMPETITORS_RUNNER unset (= inline).
+  - variable: COMPETITORS_RUNNER
+    value: "cloudrun"
+    availability:
+      - RUNTIME
+  - variable: COMPETITORS_JOB
+    value: "projects/pm-os-9d992/locations/us-east4/jobs/pmos-competitors-scanner"
+    availability:
+      - RUNTIME
+  # PMOS AI model for competitors (Gemini — covered by the GCP credits). A
+  # gemini-* id runs on Gemini with a response schema; anything else on Claude.
+  - variable: COMPETITORS_MODEL
+    value: "gemini-4-argon"
+    availability:
+      - RUNTIME
+  # Competitor profile media (UI captures, deep-dive images) referenced by path
+  # from CompetitorMedia / CapabilityInsight.media and served by
+  # /api/competitors/media. Unset = every capture shows its labelled placeholder.
+  # - variable: COMPETITORS_MEDIA_DIR
+  #   value: "/mnt/competitors-media"
+
   - variable: NEXT_PUBLIC_APP_URL
     value: "https://app.pm-os.io"
     availability:

@@ -37,7 +37,7 @@ import { TEST_TOTP_SECRET } from "./two-factor-helpers";
  */
 
 const ROOMLENS_SLUG = "roomlens";
-const PROD_PARITY = { ideas: true, dashboard: false, docs: false, chat: false };
+const PROD_PARITY = { ideas: true, dashboard: false, docs: false, chat: false, competitors: false };
 
 const ORG_B = { orgName: "QA-ISO Org B", slug: "qa-iso-org-b" };
 const USER_B = {
@@ -132,7 +132,7 @@ test.describe("Gating and isolation (GATE-02, GATE-06, XC-02)", () => {
 
       // Soft: a sweep should report every off surface in one run, not stop
       // at the first one that still renders (the test still fails).
-      for (const path of ["/chat", "/docs", "/docs/new", "/releases", "/settings/google-drive"]) {
+      for (const path of ["/chat", "/docs", "/docs/new", "/releases", "/settings/google-drive", "/competitors", "/settings/competitors"]) {
         await page.goto(path);
         await expect.soft(page.getByText("This page could not be found"), `${path} is gone`).toBeVisible();
       }
@@ -142,7 +142,7 @@ test.describe("Gating and isolation (GATE-02, GATE-06, XC-02)", () => {
       await page.goto("/dashboard");
       await expect(page).toHaveURL(/\/ideas/);
       await expect(page.getByRole("heading", { name: "Dashboard" })).toHaveCount(0);
-      for (const path of ["/api/chat/sessions", "/api/documents", "/api/releases", "/api/google-drive/status"]) {
+      for (const path of ["/api/chat/sessions", "/api/documents", "/api/releases", "/api/google-drive/status", "/api/competitors"]) {
         const res = await page.request.get(path);
         expect.soft(res.status(), `${path} is gone`).toBe(404);
       }
@@ -152,7 +152,7 @@ test.describe("Gating and isolation (GATE-02, GATE-06, XC-02)", () => {
       await expect(aside).toBeVisible();
       await expect(aside.locator('a[href="/ideas"]')).toHaveCount(1);
       await expect(aside.locator('a[href^="/settings"]')).toHaveCount(1);
-      for (const href of ["/dashboard", "/docs", "/chat", "/settings/google-drive"]) {
+      for (const href of ["/dashboard", "/docs", "/chat", "/settings/google-drive", "/competitors"]) {
         await expect.soft(aside.locator(`a[href="${href}"]`), `no sidebar link to ${href}`).toHaveCount(0);
       }
       // "/" follows the same order: with only Ideas on it lands on /ideas.

@@ -1,0 +1,851 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, ChevronRight, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { UmMarkdown } from "@/components/documents/UmMarkdown";
+import { ColorSwatch } from "@/components/settings/ColorSwatch";
+import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
+import { MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES } from "@/lib/competitors/config";
+import { ownProductLabel } from "@/lib/competitors/ownProduct";
+import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow } from "@/lib/competitors/store";
+import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
+import { mentionsName } from "@/lib/competitors/mentions";
+import { scanSummaryLine } from "@/lib/competitors/summary";
+import { timeAgo, timeUntil } from "@/lib/competitors/time";
+import { track } from "@/lib/analytics/track";
+import { cn } from "@/lib/utils";
+import { ScanLogDrawer } from "./ScanLogDrawer";
+
+const INPUT =
+  "w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:shadow-[0_0_0_1px_rgba(122,167,255,.3)] disabled:opacity-60";
+const SELECT = INPUT + " pr-8";
+const SMALL_BTN =
+  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border bg-white px-3 text-[12px] font-medium hover:border-primary disabled:cursor-not-allowed disabled:opacity-50";
+const ICON_BTN = "rounded-md p-1.5 text-fg-muted hover:bg-background hover:text-foreground disabled:opacity-40";
+
+const STATUS_PILL: Record<string, string> = {
+  full: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
+  incomplete: "bg-[#fff7e0] text-[#8a5a00]",
+  blocked: "bg-[#fff7e0] text-[#8a5a00]",
+  unreachable: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  stale: "bg-[#fff7e0] text-[#8a5a00]",
+  running: "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]",
+  pending: "bg-[#eef1f6] text-[#4a5b74]",
+  pendingLate: "bg-[rgba(239,90,138,.15)] text-[#c23767]",
+  never: "bg-[#eef1f6] text-[#4a5b74]",
+};
+const PENDING_LATE_MS = 24 * 3600_000;
+
+const POLL_MS = 3000;
+
+/**
+ * Settings → Competitors: competitors (with Scan now and the scan log),
+ * suggestions waiting for review, domains (with the definition text PMOS AI
+ * reads), the capability catalog with the org's own status per row, and who
+ * is notified. Every section opens and closes; only Competitors starts open
+ * (Daniel 2026-11-12: the page was crowded). The organization itself is never
+ * scanned. Reads are for everyone; catalog writes need a customer admin (the
+ * API enforces the same). Scan now and the log are for every member.
+ */
+type SectionKey = "competitors" | "suggestions" | "domains" | "capabilities" | "notifications";
+
+/** A section's title row: click to open or close. The count says what is inside while it is closed. */
+function SectionToggle({ section, title, count, open, onToggle, heading = false }: { section: SectionKey; title: string; count?: number; open: boolean; onToggle: () => void; heading?: boolean }) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} data-testid={`cmp-section-${section}`}
+      className={cn("-ml-1 flex min-w-0 items-center gap-1.5 rounded-md px-1 text-left text-foreground hover:text-primary", heading ? "font-title text-[15px] font-semibold" : "font-medium")}>
+      <ChevronRight size={15} className={cn("shrink-0 text-fg-muted transition-transform", open && "rotate-90")} />
+      <span>{title}</span>
+      {count !== undefined && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10.5px] font-normal text-fg-muted">{count}</span>}
+    </button>
+  );
+}
+
+export function CompetitorsSettings({ initialState, canEdit }: { initialState: CompetitorsState; canEdit: boolean }) {
+  const { confirm } = useConfirm();
+  const [state, setState] = useState(initialState);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [logFor, setLogFor] = useState<CompetitorRow | null>(null);
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({ competitors: true, suggestions: false, domains: false, capabilities: false, notifications: false });
+  const [addingCompetitor, setAddingCompetitor] = useState(false);
+  const isOpen = (k: SectionKey) => openSections[k];
+  const toggle = (k: SectionKey) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
+  const openSection = (k: SectionKey) => setOpenSections((o) => ({ ...o, [k]: true }));
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refresh = useCallback(async () => {
+    // One failed refresh (a dev restart, a 502) must not end the polling that tells the user the scan finished.
+    try {
+      const res = await fetch("/api/competitors");
+      const data = await res.json();
+      if (res.ok) setState(data.state);
+    } catch {
+      // try again on the next tick
+    }
+  }, []);
+
+  const [note, setNote] = useState<string | null>(null);
+  const lastResponse = useRef<Record<string, unknown> | null>(null);
+
+  async function call(method: "POST" | "PATCH" | "PUT" | "DELETE", url: string, body?: unknown): Promise<boolean> {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? C.errors.generic);
+      lastResponse.current = data;
+      if (data.state) setState(data.state);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : C.errors.generic);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ——— Scan now + polling until the scan leaves queued/running ———
+  const scanning = state.scanning;
+  useEffect(() => {
+    if (!scanning) return;
+    const tick = async () => {
+      await refresh();
+      pollRef.current = setTimeout(tick, POLL_MS);
+    };
+    pollRef.current = setTimeout(tick, POLL_MS);
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, [scanning, refresh]);
+
+  async function scanNow(c: CompetitorRow) {
+    setError(null);
+    try {
+      const res = await fetch("/api/competitors/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ competitorId: c.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error ?? C.errors.scanFailed);
+        return;
+      }
+    } catch {
+      setError(C.errors.scanFailed);
+      return;
+    }
+    await refresh();
+  }
+
+  // ——— Competitors ———
+  async function removeCompetitor(c: CompetitorRow) {
+    if (!(await confirm({ title: C.settings.removeTitle(c.name), message: C.settings.removeBody, confirmLabel: C.settings.removeConfirm, tone: "danger" }))) return;
+    await call("DELETE", `/api/competitors/${c.id}`);
+  }
+
+  const competitors = state.competitors;
+  const suggested = state.capabilities.filter((k) => k.state === "suggested");
+  const active = state.capabilities.filter((k) => k.state === "active");
+  // Suggested domains are decided in the matrix (dashed group); the catalog panels show accepted ones.
+  const activeDomains = state.domains.filter((d) => d.state === "active");
+  const nextScanAt = (c: CompetitorRow) =>
+    c.source?.lastScanAt ? new Date(new Date(c.source.lastScanAt).getTime() + c.source.scanEveryDays * 86_400_000).toISOString() : null;
+
+  return (
+    <div className="space-y-8">
+      {error && <div className="rounded-inner border border-[#f3c9d5] bg-[#fdeef2] px-4 py-2.5 text-[13px] text-[#c94266]">{error}</div>}
+      {note && <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#0f7a47]"><Check size={12} strokeWidth={2.5} />{note}</div>}
+      {!canEdit && <div className="text-[12.5px] text-fg-muted">{C.settings.viewOnly}</div>}
+
+      {/* Competitors */}
+      <section className="rounded-xl border border-border bg-card" data-testid="cmp-competitors">
+        <div className={cn("px-5 py-4", isOpen("competitors") && "border-b border-border")}>
+          <div className="flex items-start justify-between gap-4">
+            <SectionToggle section="competitors" title={C.settings.competitorsTitle} count={competitors.length} open={isOpen("competitors")} onToggle={() => toggle("competitors")} />
+            {canEdit && !addingCompetitor && (
+              <button type="button" onClick={() => { openSection("competitors"); setAddingCompetitor(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCompetitor}</button>
+            )}
+          </div>
+          {isOpen("competitors") && <p className="mt-1 text-sm text-muted">{C.settings.competitorsBlurb}</p>}
+        </div>
+        {isOpen("competitors") && (
+          <>
+            {canEdit && addingCompetitor && <AddCompetitorForm busy={busy} onAdd={(body) => call("POST", "/api/competitors", body)} onClose={() => setAddingCompetitor(false)} />}
+            {competitors.length === 0 ? (
+              <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCompetitors}</div>
+            ) : (
+              competitors.map((c) => (
+                <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)}
+                  onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
+              ))
+            )}
+          </>
+        )}
+      </section>
+
+      {/* Suggestions / proposed catalog */}
+      {suggested.length > 0 && (
+        <SuggestionsPanel
+          suggested={suggested}
+          domains={state.domains.filter((d) => d.state !== "dismissed")}
+          competitors={state.competitors}
+          canEdit={canEdit}
+          busy={busy}
+          open={isOpen("suggestions")}
+          onToggle={() => toggle("suggestions")}
+          onDecide={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
+        />
+      )}
+
+      {/* Domains */}
+      <DomainsPanel domains={activeDomains} capabilities={active} cells={state.cells} competitors={state.competitors} canEdit={canEdit} busy={busy}
+        open={isOpen("domains")} onToggle={() => toggle("domains")} onOpen={() => openSection("domains")}
+        onAdd={(body) => call("POST", "/api/competitors/domains", body)}
+        onSave={(id, body) => call("PATCH", `/api/competitors/domains/${id}`, body)}
+        onRename={async (d, body) => {
+          // Domain names cross-reference each other in the definition texts: say what the rename touches.
+          const newName = String((body as { name?: string }).name ?? "").trim();
+          const mentions = state.domains.filter((o) => o.id !== d.id && mentionsName(o.description, d.name)).length
+            + state.capabilities.filter((k) => mentionsName(k.description, d.name)).length;
+          if (!(await confirm({ title: C.settings.renameDomainTitle(d.name, newName), message: C.settings.renameDomainBody(mentions), confirmLabel: C.settings.renameDomainConfirm }))) return false;
+          setNote(null);
+          const ok = await call("PATCH", `/api/competitors/domains/${d.id}`, body);
+          if (ok) {
+            const n = Number(lastResponse.current?.renamedReferences ?? 0);
+            setNote(C.settings.renamedDomain(n));
+            setTimeout(() => setNote(null), 4000);
+          }
+          return ok;
+        }}
+        onReorder={(order) => call("PUT", "/api/competitors/domains", { order })}
+        onRemove={async (d) => {
+          const n = active.filter((k) => k.domainId === d.id).length;
+          if (!(await confirm({ title: C.settings.removeDomainTitle(d.name), message: C.settings.removeDomainBody(n), confirmLabel: C.settings.remove, tone: "danger" }))) return;
+          await call("DELETE", `/api/competitors/domains/${d.id}`);
+        }}
+      />
+
+      {/* Capabilities */}
+      <CapabilitiesPanel capabilities={active} domains={activeDomains} productLines={state.productLines} canEdit={canEdit} busy={busy}
+        open={isOpen("capabilities")} onToggle={() => toggle("capabilities")} onOpen={() => openSection("capabilities")}
+        onAdd={(body) => call("POST", "/api/competitors/capabilities", body)}
+        onSave={(id, body) => call("PATCH", `/api/competitors/capabilities/${id}`, body)}
+        onRemove={async (k) => {
+          if (!(await confirm({ title: C.settings.removeCapabilityTitle(k.name), message: C.settings.removeCapabilityBody, confirmLabel: C.settings.remove, tone: "danger" }))) return;
+          await call("DELETE", `/api/competitors/capabilities/${k.id}`);
+        }}
+      />
+
+      {/* Notifications */}
+      <NotificationsPanel members={state.members} selected={state.config.notifyUserIds} canEdit={canEdit} busy={busy} open={isOpen("notifications")} onToggle={() => toggle("notifications")} onSave={(ids) => call("PATCH", "/api/competitors/settings", { notifyUserIds: ids })} />
+
+      {logFor && <ScanLogDrawer competitorId={logFor.id} competitorName={logFor.name} onClose={() => setLogFor(null)} />}
+    </div>
+  );
+}
+
+// ————— Competitor row —————
+
+function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog, onRemove, onSave }: {
+  c: CompetitorRow;
+  busy: boolean;
+  scanning: boolean;
+  canEdit: boolean;
+  nextScanAt: string | null;
+  /** Today's manual scans reached the org's per-site limit (PM-OS admins never are). */
+  onScan: (c: CompetitorRow) => Promise<void>;
+  onLog: (c: CompetitorRow) => void;
+  onRemove: (c: CompetitorRow) => Promise<void>;
+  onSave: (id: string, body: unknown) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(c.name);
+  const [website, setWebsite] = useState(c.websiteUrl);
+  const [starting, setStarting] = useState(false);
+  const [logoBroken, setLogoBroken] = useState(false);
+  // Customers see one thing, a scan: pending, in progress, or the last result. Never how it ran.
+  const pendingLate = c.pending ? Date.now() - new Date(c.pending.since).getTime() > PENDING_LATE_MS : false;
+  const status = c.running ? "running" : c.pending ? (pendingLate ? "pendingLate" : "pending") : c.lastScan?.badge ?? (c.source?.lastScanAt ? "incomplete" : "never");
+  const pillText = c.running
+    ? C.settings.scanInProgress(c.running.pagesSoFar)
+    : c.pending
+      ? C.settings.scanPendingSince(timeAgo(c.pending.since))
+      : status === "never"
+        ? C.settings.neverScanned
+        : C.settings.badges[status] ?? status;
+  const summary = c.running || c.pending ? "" : scanSummaryLine(c, nextScanAt);
+
+  async function save() {
+    if (await onSave(c.id, { name, website })) setEditing(false);
+  }
+
+  return (
+    <div className="flex items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-border bg-white text-fg-muted">
+        {c.logoUrl && !logoBroken ? <img src={c.logoUrl} alt="" onError={() => setLogoBroken(true)} className="h-[70%] w-[70%] object-contain" /> : <Globe size={14} />}
+      </span>
+      {editing ? (
+        <div className="flex min-w-0 flex-1 items-center gap-2"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); void save(); }
+            if (e.key === "Escape") setEditing(false);
+          }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} className={cn(INPUT, "w-48")} disabled={busy} autoFocus />
+          <input value={website} onChange={(e) => setWebsite(e.target.value)} className={INPUT} disabled={busy} aria-label={C.settings.website} />
+          <button onClick={() => setEditing(false)} className={ICON_BTN} aria-label={C.settings.cancel} disabled={busy}><X size={14} /></button>
+          <button onClick={save} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !name.trim()}><Check size={14} /></button>
+        </div>
+      ) : (
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[14px] font-medium">{c.name}</span>
+            <span className={cn("inline-flex shrink-0 rounded-full px-2 py-px text-[11px] font-semibold", STATUS_PILL[status] ?? STATUS_PILL.never)} title={C.settings.badgeHint[status === "pendingLate" ? "pending" : status]} data-testid="cmp-scan-status">
+              {pillText}
+            </span>
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-fg-muted">
+            <a href={c.websiteUrl} target="_blank" rel="noreferrer" className="hover:underline">{c.host}</a>
+            {c.source?.lastScanAt && <span>· {C.settings.lastScan(timeAgo(c.source.lastScanAt))}</span>}
+            {nextScanAt && !c.running && !c.pending && <span>· {C.settings.nextScan(timeUntil(nextScanAt))}</span>}
+          </div>
+          {summary && <div className={cn("mt-1 text-[12px]", status === "unreachable" ? "text-[#c23767]" : "text-fg-3")}>{summary}</div>}
+        </div>
+      )}
+      {!editing && (
+        <>
+          <span title={c.running || c.pending ? C.settings.scanRunning : undefined}>
+            <button
+              onClick={async () => { setStarting(true); await onScan(c); setStarting(false); }}
+              disabled={Boolean(c.running || c.pending) || starting || busy}
+              className={SMALL_BTN}
+            >
+              {c.running || starting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              {c.running ? C.settings.scanning : C.settings.scanNow}
+            </button>
+          </span>
+          <button onClick={() => onLog(c)} className={SMALL_BTN} title={C.settings.viewLog}>
+            <FileText size={12} /> {C.settings.viewLog}
+          </button>
+          {canEdit && (
+            <>
+              <button onClick={() => { setName(c.name); setWebsite(c.websiteUrl); setEditing(true); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
+              <button onClick={() => void onRemove(c)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy || Boolean(c.running)}><Trash2 size={14} /></button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The add form of the Competitors section; its "Add competitor" button sits in the section's title row, like the other sections. */
+function AddCompetitorForm({ busy, onAdd, onClose }: { busy: boolean; onAdd: (body: unknown) => Promise<boolean>; onClose: () => void }) {
+  const [website, setWebsite] = useState("");
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!website.trim()) return;
+    if (await onAdd({ website })) {
+      setWebsite("");
+      onClose();
+      track("cmp_competitor_added_ui", {});
+    }
+  }
+  return (
+    <form onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }} className="flex items-start gap-2 border-b border-border px-5 py-4">
+      <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder={C.settings.websitePlaceholder} className={INPUT} disabled={busy} autoFocus aria-label={C.settings.website} />
+      <Button type="button" onClick={onClose} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+      <Button type="submit" variant="primary" disabled={busy || !website.trim()}>
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
+      </Button>
+    </form>
+  );
+}
+
+// ————— Suggestions —————
+
+function SuggestionsPanel({ suggested, domains, competitors, canEdit, busy, open, onToggle, onDecide }: {
+  open: boolean;
+  onToggle: () => void;
+  suggested: CapabilityRow[];
+  domains: DomainRow[];
+  competitors: CompetitorRow[];
+  canEdit: boolean;
+  busy: boolean;
+  onDecide: (id: string, body: unknown) => Promise<boolean>;
+}) {
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [domainOf, setDomainOf] = useState<Record<string, string>>({});
+  const domainName = (id: string) => domains.find((d) => d.id === id)?.name ?? "";
+  const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
+
+  return (
+    <section className="rounded-xl border border-primary/40 bg-card shadow-[0_0_0_3px_rgba(36,87,245,.06)]">
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
+        <SectionToggle section="suggestions" title={C.settings.suggestionsTitle} count={suggested.length} open={open} onToggle={onToggle} />
+        {open && <p className="mt-1 text-sm text-muted">{C.settings.suggestionsBlurb}</p>}
+      </div>
+      {open && suggested.map((k) => {
+        const quote = k.suggestedQuote?.split(" — https") ?? [];
+        return (
+          <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3 last:border-b-0">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                {canEdit ? (
+                  <input value={names[k.id] ?? k.name} onChange={(e) => setNames((p) => ({ ...p, [k.id]: e.target.value }))} className={cn(INPUT, "w-72")} disabled={busy} aria-label="Capability name" />
+                ) : (
+                  <span className="text-[14px] font-medium">{k.name}</span>
+                )}
+                {canEdit ? (
+                  <select value={domainOf[k.id] ?? k.domainId} onChange={(e) => setDomainOf((p) => ({ ...p, [k.id]: e.target.value }))} className={cn(SELECT, "w-56")} disabled={busy} aria-label="Domain">
+                    {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select>
+                ) : (
+                  <span className="text-[12px] text-fg-muted">{domainName(k.domainId)}</span>
+                )}
+                {k.suggestedById && <span className="text-[12px] text-fg-muted">{C.settings.suggestedBy(competitorName(k.suggestedById))}</span>}
+              </div>
+              {k.description && <div className="mt-1 text-[12.5px] text-fg-3">{k.description}</div>}
+              {quote[0] && (
+                <div className="mt-1 text-[12px] italic text-fg-muted">
+                  “{quote[0]}”{quote[1] && <> — <a href={`https${quote[1]}`} target="_blank" rel="noreferrer" className="not-italic text-primary hover:underline">{C.matrix.learnMore} ↗</a></>}
+                </div>
+              )}
+            </div>
+            {canEdit && (
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button onClick={() => onDecide(k.id, { state: "dismissed" })} className={SMALL_BTN} disabled={busy}>{C.settings.dismiss}</button>
+                <button
+                  onClick={() => onDecide(k.id, { state: "active", ...(names[k.id] && names[k.id] !== k.name ? { name: names[k.id] } : {}), ...(domainOf[k.id] && domainOf[k.id] !== k.domainId ? { domainId: domainOf[k.id] } : {}) })}
+                  className={cn(SMALL_BTN, "border-transparent bg-primary text-white hover:bg-primary-hover")}
+                  disabled={busy}
+                >
+                  <Check size={12} /> {C.settings.accept}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+// ————— Domains (the product-lines pattern: color, name, counts, definition text, drag order) —————
+
+const FIELD_LABEL = "mb-1 block text-[12px] font-medium text-fg-3";
+const EDITOR_BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-[13px] font-medium hover:border-primary";
+const EDITOR_PRIMARY = "inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-white hover:bg-primary-hover disabled:opacity-50";
+
+function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy, open, onToggle, onOpen, onAdd, onSave, onRename, onReorder, onRemove }: {
+  open: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+  domains: DomainRow[];
+  capabilities: CapabilityRow[];
+  cells: CellRow[];
+  competitors: CompetitorRow[];
+  canEdit: boolean;
+  busy: boolean;
+  onAdd: (body: unknown) => Promise<boolean>;
+  onSave: (id: string, body: unknown) => Promise<boolean>;
+  /** A save that changes the name: confirms, then cascades into the descriptions. */
+  onRename: (d: DomainRow, body: unknown) => Promise<boolean>;
+  onReorder: (order: string[]) => Promise<boolean>;
+  onRemove: (d: DomainRow) => Promise<void>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editSummary, setEditSummary] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+
+  /** Competitors that have a capability of this domain in full while the org doesn't. */
+  function competitorsAhead(d: DomainRow): number {
+    const caps = capabilities.filter((k) => k.domainId === d.id && k.ourStatus !== "has");
+    const ahead = new Set<string>();
+    for (const k of caps) for (const c of cells) if (c.capabilityId === k.id && c.value === "has") ahead.add(c.competitorId);
+    return [...ahead].filter((id) => competitors.some((c) => c.id === id)).length;
+  }
+
+  async function add() {
+    if (!name.trim()) return;
+    if (await onAdd({ name, summary, description })) { setName(""); setSummary(""); setDescription(""); setAdding(false); }
+  }
+  async function saveEdit(id: string) {
+    const d = domains.find((x) => x.id === id);
+    const body = { name: editName, summary: editSummary, description: editDescription };
+    const renamed = d && editName.trim() !== d.name;
+    if (await (renamed ? onRename(d, body) : onSave(id, body))) setEditingId(null);
+  }
+  async function dropOn(targetId: string) {
+    const from = domains.findIndex((d) => d.id === dragId);
+    const to = domains.findIndex((d) => d.id === targetId);
+    setDragId(null);
+    setOverId(null);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...domains];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    await onReorder(next.map((d) => d.id));
+  }
+  const editorKeys = (onSubmit: () => void, onCancel: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); }
+    else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+  };
+  const summaryEditor = (value: string, onChange: (v: string) => void) => (
+    <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={3} maxLength={MAX_DOMAIN_SUMMARY}
+      placeholder={C.settings.domainSummaryPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} disabled={busy} />
+  );
+  const descriptionEditor = (value: string, onChange: (v: string) => void) => (
+    <div>
+      <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={10} maxLength={MAX_DOMAIN_DESCRIPTION}
+        placeholder={C.settings.domainDescriptionPlaceholder}
+        className={cn(INPUT, "resize-y font-mono text-[12.5px] leading-relaxed")} disabled={busy} />
+      <div className="mt-1 text-right font-mono text-[10.5px] text-[#9aa8be]">{value.length}/{MAX_DOMAIN_DESCRIPTION}</div>
+    </div>
+  );
+
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-domains">
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
+        <div className="flex items-start justify-between gap-4">
+          <SectionToggle section="domains" title={C.settings.domainsTitle} count={domains.length} open={open} onToggle={onToggle} />
+          {canEdit && !(adding && open) && (
+            <button onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addDomain}</button>
+          )}
+        </div>
+        {open && <p className="mt-1 text-sm text-muted">{C.settings.domainsBlurb} {canEdit && C.settings.domainsDrag}</p>}
+      </div>
+      {open && (
+      <div className="px-5 py-4">
+
+      {canEdit && adding && (
+        <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
+          <label className="block">
+            <span className={FIELD_LABEL}>{C.settings.domainName}</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
+          </label>
+          <label className="block">
+            <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
+            {summaryEditor(summary, setSummary)}
+          </label>
+          <label className="block">
+            <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
+            {descriptionEditor(description, setDescription)}
+          </label>
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={() => setAdding(false)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
+            <button onClick={() => void add()} disabled={busy || !name.trim()} className={EDITOR_PRIMARY}>
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} {C.settings.addDomain}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {domains.length === 0 && !adding && <div className="rounded-xl border border-border bg-white px-5 py-4 text-sm text-muted">{C.settings.emptyDomains}</div>}
+
+      <div className="flex flex-col gap-3">
+        {domains.map((d) => {
+          const n = capabilities.filter((k) => k.domainId === d.id).length;
+          const editing = editingId === d.id;
+          return (
+            <div
+              key={d.id}
+              onDragOver={(e) => { if (!dragId || dragId === d.id) return; e.preventDefault(); if (overId !== d.id) setOverId(d.id); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null) && overId === d.id) setOverId(null); }}
+              onDrop={(e) => { e.preventDefault(); void dropOn(d.id); }}
+              className={cn(
+                "relative rounded-xl border border-border bg-white px-5 py-4 transition-[box-shadow,opacity,border-color]",
+                dragId === d.id && "opacity-40",
+                dragId && overId === d.id && "border-primary shadow-[0_0_0_2px_var(--app-accent-soft)]",
+              )}
+            >
+              {editing ? (
+                <div className="flex flex-col gap-2" onKeyDown={editorKeys(() => void saveEdit(d.id), () => setEditingId(null))}>
+                  <label className="block">
+                    <span className={FIELD_LABEL}>{C.settings.domainName}</span>
+                    <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder={C.settings.domainPlaceholder} className={INPUT} maxLength={80} disabled={busy} autoFocus />
+                  </label>
+                  <label className="block">
+                    <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
+                    {summaryEditor(editSummary, setEditSummary)}
+                  </label>
+                  <label className="block">
+                    <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
+                    {descriptionEditor(editDescription, setEditDescription)}
+                  </label>
+                  <div className="flex items-center justify-end gap-2">
+                    <button onClick={() => setEditingId(null)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
+                    <button onClick={() => void saveEdit(d.id)} disabled={busy || !editName.trim()} className={EDITOR_PRIMARY}>
+                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {busy && editName.trim() !== d.name ? C.settings.renamingDomain : C.settings.save}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <span className="-ml-1.5 flex min-w-0 items-center gap-1.5">
+                      <ColorSwatch color={d.color} fallback={PRODUCT_CHIP_DEFAULT} name={d.name} canEdit={canEdit && !busy} onPick={(color) => onSave(d.id, { color })} />
+                      <span className="font-title text-[14px] font-semibold">{d.name}</span>
+                      <span className="ml-1 font-mono text-[11px] text-fg-muted">{C.settings.domainCounts(n, competitorsAhead(d))}</span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {canEdit && (
+                        <>
+                          <span draggable={!busy} onDragStart={(e) => { setDragId(d.id); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDragId(null); setOverId(null); }}
+                            title="Drag to reorder" className="flex h-7 w-7 cursor-grab items-center justify-center rounded-lg text-[#7a8aa3] hover:bg-background hover:text-foreground active:cursor-grabbing">
+                            <GripVertical size={14} />
+                          </span>
+                          <span className="mx-0.5 h-4 w-px bg-border" />
+                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditSummary(d.summary); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
+                          <button onClick={() => void onRemove(d)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={13} /></button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <p className={cn("m-0 mb-2 text-[13px] leading-snug", d.summary ? "text-foreground" : "italic text-fg-faint")}>{d.summary || C.settings.domainSummaryEmpty}</p>
+                  <div className={FIELD_LABEL}>{C.settings.domainDescription}</div>
+                  {d.description ? (
+                    <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
+                  ) : (
+                    <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      </div>
+      )}
+    </section>
+  );
+}
+
+// ————— Capabilities —————
+
+function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy, open, onToggle, onOpen, onAdd, onSave, onRemove }: {
+  open: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+  capabilities: CapabilityRow[];
+  domains: DomainRow[];
+  productLines: string[];
+  canEdit: boolean;
+  busy: boolean;
+  onAdd: (body: unknown) => Promise<boolean>;
+  onSave: (id: string, body: unknown) => Promise<boolean>;
+  onRemove: (k: CapabilityRow) => Promise<void>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [domainId, setDomainId] = useState(domains[0]?.id ?? "");
+  const [description, setDescription] = useState("");
+  const [ownProduct, setOwnProduct] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editOwnProduct, setEditOwnProduct] = useState("");
+
+  useEffect(() => {
+    if (!domainId && domains[0]) setDomainId(domains[0].id);
+  }, [domains, domainId]);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !domainId) return;
+    if (await onAdd({ name, domainId, description, ownProduct })) { setName(""); setDescription(""); setOwnProduct(""); setAdding(false); }
+  }
+  async function saveEdit(id: string) {
+    if (await onSave(id, { name: editName, description: editDescription, ownProduct: editOwnProduct })) setEditingId(null);
+  }
+  /** Name, domain, own product and description, each under its label; the add form and the row editor share it. */
+  const fields = (v: { name: string; domainId?: string; description: string; ownProduct: string }, set: { name: (s: string) => void; domainId?: (s: string) => void; description: (s: string) => void; ownProduct: (s: string) => void }) => (
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        <label className="block w-64">
+          <span className={FIELD_LABEL}>{C.settings.capabilityName}</span>
+          <input value={v.name} onChange={(e) => set.name(e.target.value)} placeholder={C.settings.capabilityPlaceholder} className={INPUT} disabled={busy} autoFocus />
+        </label>
+        {set.domainId && (
+          <label className="block w-52">
+            <span className={FIELD_LABEL}>{C.settings.capabilityDomain}</span>
+            <select value={v.domainId} onChange={(e) => set.domainId?.(e.target.value)} className={SELECT} disabled={busy}>
+              {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+        )}
+        <label className="block w-64">
+          <span className={FIELD_LABEL}>{C.settings.ownProduct}</span>
+          <input value={v.ownProduct} onChange={(e) => set.ownProduct(e.target.value)} placeholder={C.settings.ownProductPlaceholder} className={INPUT} maxLength={MAX_OWN_PRODUCT} disabled={busy} />
+        </label>
+      </div>
+      <label className="block">
+        <span className={FIELD_LABEL}>{C.settings.capabilityDescription}</span>
+        <textarea value={v.description} onChange={(e) => set.description(e.target.value)} placeholder={C.settings.capabilityDescriptionPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} rows={3} maxLength={MAX_CAPABILITY_DESCRIPTION} disabled={busy} />
+      </label>
+    </div>
+  );
+  function toggleLine(k: CapabilityRow, line: string) {
+    const next = k.productLines.includes(line) ? k.productLines.filter((l) => l !== line) : [...k.productLines, line];
+    void onSave(k.id, { productLines: next });
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-capabilities">
+      <div className={cn("px-5 py-4", open && "border-b border-border")}>
+        <div className="flex items-start justify-between gap-4">
+          <SectionToggle section="capabilities" title={C.settings.capabilitiesTitle} count={capabilities.length} open={open} onToggle={onToggle} />
+          {canEdit && !(adding && open) && domains.length > 0 && <button type="button" onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
+        </div>
+        {open && <p className="mt-1 text-sm text-muted">{C.settings.capabilitiesBlurb}</p>}
+        {open && productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
+      </div>
+      {open && adding && (
+        <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void add(e); } }} className="flex items-end gap-2 border-b border-border px-5 py-4">
+          {fields({ name, domainId, description, ownProduct }, { name: setName, domainId: setDomainId, description: setDescription, ownProduct: setOwnProduct })}
+          <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={busy || !name.trim() || !domainId}><Check size={13} /> {C.settings.save}</Button>
+        </form>
+      )}
+      {open && capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{C.settings.emptyCapabilities}</div>}
+      {open && domains.map((d) => {
+        const rows = capabilities.filter((k) => k.domainId === d.id);
+        if (rows.length === 0) return null;
+        return (
+          <div key={d.id}>
+            <div className="flex items-center gap-2 border-b border-border bg-[rgba(36,87,245,.05)] px-5 py-1.5 font-mono text-[10.5px] font-medium tracking-[0.04em] text-fg-muted">
+              <span className="h-2 w-2 rounded-[2px]" style={{ background: swatchColor(d.color, PRODUCT_CHIP_DEFAULT) }} />
+              {d.name}
+            </div>
+            {rows.map((k) => {
+              const editing = editingId === k.id;
+              return (
+                <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3">
+                  {editing ? (
+                    <div className="flex min-w-0 flex-1 items-end gap-2"
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !(e.target instanceof HTMLTextAreaElement))) { e.preventDefault(); void saveEdit(k.id); } if (e.key === "Escape") setEditingId(null); }}>
+                      {fields({ name: editName, description: editDescription, ownProduct: editOwnProduct }, { name: setEditName, description: setEditDescription, ownProduct: setEditOwnProduct })}
+                      <button onClick={() => setEditingId(null)} className={ICON_BTN} aria-label={C.settings.cancel}><X size={14} /></button>
+                      <button onClick={() => saveEdit(k.id)} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !editName.trim()}><Check size={14} /></button>
+                    </div>
+                  ) : (
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[14px] font-medium">{k.name}</span>
+                        {k.origin === "ai" && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
+                        {k.ownProduct && <span className="max-w-[220px] truncate rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[10px] font-semibold text-[#2a5fd0]" title={`${C.settings.ownProduct}: ${k.ownProduct}`}>{ownProductLabel(k.ownProduct)}</span>}
+                        <span className="ml-1 inline-flex items-center gap-1" title={C.settings.ourStatus}>
+                          {OWN_STATUS_VALUES.map((v) => (
+                            <button key={v} type="button" onClick={() => k.ourStatus !== v && void onSave(k.id, { ourStatus: v })} disabled={busy} aria-pressed={k.ourStatus === v}
+                              className={cn("rounded-full border px-2 py-px font-mono text-[10px] font-semibold", k.ourStatus === v
+                                ? v === "has" ? "border-transparent bg-[rgba(23,178,106,.16)] text-[#0f7a47]" : v === "partial" ? "border-transparent bg-[rgba(59,124,246,.15)] text-[#2a5fd0]" : "border-transparent bg-[#fff7e0] text-[#8a5a00]"
+                                : "border-border bg-white text-fg-faint hover:border-primary/55")}>
+                              {C.values[v]}
+                            </button>
+                          ))}
+                        </span>
+                      </div>
+                      {k.description && <div className="mt-0.5 text-[12.5px] text-fg-3">{k.description}</div>}
+                      {productLines.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {productLines.map((line) => {
+                            const on = k.productLines.includes(line);
+                            return (
+                              <button
+                                key={line}
+                                type="button"
+                                onClick={() => canEdit && toggleLine(k, line)}
+                                disabled={!canEdit || busy}
+                                aria-pressed={on}
+                                className={cn(
+                                  "rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold leading-[15px]",
+                                  on ? "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]" : "bg-[#eef1f6] text-fg-faint",
+                                  canEdit && "hover:ring-1 hover:ring-primary/40",
+                                )}
+                              >
+                                {line}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {canEdit && !editing && (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <select value={k.domainId} onChange={(e) => void onSave(k.id, { domainId: e.target.value })} className="rounded-lg border border-border bg-white px-2 py-1 text-[12px]" disabled={busy} aria-label="Move to domain">
+                        {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
+                      </select>
+                      <button onClick={() => { setEditingId(k.id); setEditName(k.name); setEditDescription(k.description); setEditOwnProduct(k.ownProduct); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
+                      <button onClick={() => void onRemove(k)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+// ————— Notifications —————
+
+/** Who receives the scan notification email: every active user of the organization, ticked or not. */
+function NotificationsPanel({ members, selected, canEdit, busy, open, onToggle, onSave }: {
+  open: boolean;
+  onToggle: () => void;
+  members: CompetitorsState["members"];
+  selected: string[];
+  canEdit: boolean;
+  busy: boolean;
+  onSave: (ids: string[]) => Promise<boolean>;
+}) {
+  const picked = new Set(selected);
+  async function toggle(id: string) {
+    const next = picked.has(id) ? selected.filter((x) => x !== id) : [...selected, id];
+    await onSave(next);
+  }
+  return (
+    <section className="rounded-xl border border-border bg-card" data-testid="cmp-notifications">
+      <div className={cn("flex items-start justify-between gap-4 px-5 py-4", open && "border-b border-border")}>
+        <div>
+          <SectionToggle section="notifications" title={C.notify.title} open={open} onToggle={onToggle} />
+          {open && <p className="mt-1 text-sm text-muted">{C.notify.blurb}</p>}
+        </div>
+        <span className="shrink-0 text-[12px] text-fg-muted">{C.notify.selected(selected.filter((id) => members.some((m) => m.id === id)).length)}</span>
+      </div>
+      {!open ? null : members.length === 0 ? (
+        <div className="px-5 py-4 text-sm text-muted">{C.notify.empty}</div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {members.map((m) => (
+            <li key={m.id}>
+              <label className={cn("flex items-center gap-3 px-5 py-2.5 text-sm", canEdit ? "cursor-pointer hover:bg-background" : "cursor-default")}>
+                <input type="checkbox" checked={picked.has(m.id)} onChange={() => void toggle(m.id)} disabled={!canEdit || busy} className="h-4 w-4 accent-[var(--app-accent)]" />
+                <span className="font-medium text-foreground">{m.name || m.email}</span>
+                {m.name && <span className="text-[12.5px] text-fg-muted">{m.email}</span>}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}

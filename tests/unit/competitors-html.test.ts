@@ -1,0 +1,158 @@
+/**
+ * Story 2 (competitors) — HTML → text, links, change detection and bot-wall
+ * detection of the website scanner (src/lib/competitors/html.ts). Pure module.
+ */
+import { describe, expect, it } from "vitest";
+import { contentHash, extractLinks, htmlToText, looksEmptyWithoutJs, looksLikeBotWall, metaDescription, siteNameOf, titleOf, hintsOf } from "@/lib/competitors/html";
+import { Frontier, isAllowed, orderCandidates } from "@/lib/competitors/crawl";
+
+const PAGE = `<!doctype html><html><head><title>Acme &amp; Co — Platform</title>
+<meta name="description" content="Threat intel for &quot;everyone&quot;">
+<style>.x{color:red}</style><script>var a = 1;</script></head>
+<body><nav><a href="/pricing">Pricing</a></nav>
+<main><h1>Dark web monitoring</h1><p>We watch closed forums&nbsp;24/7.</p>
+<ul><li>Takedown requests</li><li>SIEM integrations</li></ul>
+<a href="/platform/intel">Intel</a> <a href="https://other.com/x">Out</a> <a href="/docs/api#top">Docs</a></main>
+<footer>© 2026 Acme</footer></body></html>`;
+
+describe("htmlToText", () => {
+  it("keeps the content, nav and footer included, drops scripts and styles, and separates blocks by line", () => {
+    const text = htmlToText(PAGE);
+    expect(text).toContain("Dark web monitoring");
+    expect(text).toContain("We watch closed forums 24/7.");
+    expect(text.split("\n")).toContain("Takedown requests");
+    expect(text).not.toContain("var a");
+    expect(text).not.toContain("color:red");
+    expect(text.split("\n")).toContain("Pricing"); // the menu is text a person reads: kept
+    expect(text).toContain("© 2026 Acme");
+  });
+  it("keeps a hero block inside <header> (Bagel AI, 2026-11-12: headline, intro and sample rows sat in a <header> within <main>)", () => {
+    const html = `<body><header><a href="/">Home</a></header><main><header class="hero"><h1>See which features landed</h1>
+<p>After a feature ships, it reads feedback, usage and revenue.</p>
+<div class="row"><span>Renewal note</span><span>Renewed for two years. Audit log export was on their list.</span></div></header>
+<section><p>Body copy.</p></section></main><footer><p>Privacy</p></footer></body>`;
+    const lines = htmlToText(html).split("\n");
+    expect(lines).toContain("See which features landed");
+    expect(lines).toContain("After a feature ships, it reads feedback, usage and revenue.");
+    expect(lines.join(" ")).toContain("Renewed for two years. Audit log export was on their list.");
+    expect(lines).toContain("Home");
+    expect(lines).toContain("Privacy");
+    expect(lines).toContain("Body copy.");
+  });
+  it("keeps the text inside a form (a use-case description in a checkbox label), drops its controls", () => {
+    // ZeroFox's pricing page (round-2 check, 2026-11-10): the copy that matters sits in <label><p>…</p></label> inside a <form>.
+    const html = `<main><form><div>Select all use cases that apply.</div><label><input id="f2" type="checkbox"/><div>Domain Protection</div>
+<p>Lookalike domains and hijacks impersonate us, steal credentials, and harm our brand.</p></label>
+<select><option>Pick one</option></select><textarea>draft</textarea><button type="submit">Send request</button></form></main>`;
+    const text = htmlToText(html);
+    expect(text).toContain("Lookalike domains and hijacks impersonate us, steal credentials, and harm our brand.");
+    expect(text).toContain("Domain Protection");
+    expect(text).not.toContain("Pick one");
+    expect(text).not.toContain("draft");
+    expect(text).not.toContain("Send request");
+  });
+  it("decodes entities in title and description", () => {
+    expect(titleOf(PAGE)).toBe("Acme & Co — Platform");
+    expect(metaDescription(PAGE)).toBe('Threat intel for "everyone"');
+  });
+});
+
+describe("extractLinks + contentHash", () => {
+  it("resolves every href against the page and strips fragments", () => {
+    const links = extractLinks(PAGE, "https://acme.com/home").map((u) => u.href);
+    expect(links).toEqual(["https://acme.com/pricing", "https://acme.com/platform/intel", "https://other.com/x", "https://acme.com/docs/api"]);
+  });
+  it("hashes the text, so markup churn is not a change but a word is", () => {
+    const a = htmlToText(PAGE);
+    const b = htmlToText(PAGE.replace("<p>", '<p class="new">').replace("<style>.x{color:red}</style>", ""));
+    expect(contentHash(a)).toBe(contentHash(b));
+    expect(contentHash(a)).not.toBe(contentHash(a.replace("24/7", "9–5")));
+    expect(contentHash(a)).toHaveLength(32);
+  });
+});
+
+describe("bot wall and JS-only detection", () => {
+  it("recognises Cloudflare's interstitial and a 403 with a challenge, not an ordinary 403", () => {
+    expect(looksLikeBotWall(403, "<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>")).toBe(true);
+    expect(looksLikeBotWall(200, "<title>Attention Required! | Cloudflare</title>")).toBe(true);
+    expect(looksLikeBotWall(403, "<html><body><h1>Forbidden</h1><p>You don't have permission.</p></body></html>")).toBe(false);
+    expect(looksLikeBotWall(200, PAGE)).toBe(false);
+  });
+  it("flags an empty SPA shell as needing a browser, and a normal page as not", () => {
+    expect(looksEmptyWithoutJs("", '<html><body><div id="root"></div><script src="/app.js"></script></body></html>')).toBe(true);
+    expect(looksEmptyWithoutJs(htmlToText(PAGE).padEnd(500, " x"), PAGE)).toBe(false);
+  });
+});
+
+describe("Frontier", () => {
+  const rules = { disallow: ["/wp-admin/", "/thank-you", "/*.pdf$", "https://acme.com/private/"], sitemaps: [], crawlDelaySec: null };
+  it("honours robots.txt rules with wildcards and absolute URLs", () => {
+    expect(isAllowed(new URL("https://acme.com/platform"), rules)).toBe(true);
+    expect(isAllowed(new URL("https://acme.com/wp-admin/x"), rules)).toBe(false);
+    expect(isAllowed(new URL("https://acme.com/thank-you-page"), rules)).toBe(false);
+    expect(isAllowed(new URL("https://acme.com/files/a.pdf"), rules)).toBe(false);
+    expect(isAllowed(new URL("https://acme.com/private/x"), rules)).toBe(false);
+  });
+  it("dedupes by page key, stays inside the site, skips assets and feeds, keeps people pages and locales, and hands out the most useful page first", () => {
+    const f = new Frontier("acme.com", rules);
+    expect(f.add(new URL("https://acme.com/"), "home")).toBe(true);
+    expect(f.add(new URL("https://acme.com/?utm=1"), "link")).toBe(false); // same page
+    expect(f.add(new URL("https://acme.com/blog/post-1"), "link")).toBe(true);
+    expect(f.add(new URL("https://acme.com/pricing/"), "link")).toBe(true);
+    expect(f.add(new URL("https://acme.com/de/pricing"), "link")).toBe(true); // everything a PM would look at — locales included (PRD 2026-11-04)
+    expect(f.add(new URL("https://acme.com/feed"), "link")).toBe(false);
+    expect(f.add(new URL("https://acme.com/logo.png"), "link")).toBe(false);
+    expect(f.add(new URL("https://acme.com/brochure.pdf"), "link")).toBe(false); // this site's robots.txt disallows PDFs
+    expect(f.add(new URL("https://other.com/"), "link")).toBe(false);
+    expect(f.add(new URL("https://acme.com/private/x"), "link")).toBe(false); // robots → recorded
+    expect(f.add(new URL("https://acme.com/team/jane"), "link")).toBe(true); // people pages are pages too
+    expect(f.robotsSkipped).toEqual(["/brochure.pdf", "/private/x"]);
+    expect(f.robotsSkippedCount).toBe(2);
+    expect(f.linked.has("https://acme.com/pricing")).toBe(true);
+    expect(f.next()?.url).toBe("https://acme.com/");
+    expect(f.next()?.url).toBe("https://acme.com/pricing");
+    expect(f.next()?.url).toBe("https://acme.com/de/pricing");
+    expect(f.next()?.url).toBe("https://acme.com/team/jane");
+    expect(f.next()?.url).toBe("https://acme.com/blog/post-1");
+    expect(f.next()).toBeUndefined();
+    expect(f.remainingUrls()).toEqual([]);
+  });
+  it("puts a resumed scan's pending pages ahead of everything", () => {
+    const f = new Frontier("acme.com", rules);
+    f.add(new URL("https://acme.com/"), "home");
+    f.add(new URL("https://acme.com/docs/api"), "known", { first: true });
+    expect(f.next()?.url).toBe("https://acme.com/docs/api");
+    expect(f.next()?.url).toBe("https://acme.com/");
+  });
+  it("orders equal priorities by depth, then name", () => {
+    const sorted = orderCandidates([
+      { key: "c", url: "https://a.com/products/one/two", priority: 2, via: "link" },
+      { key: "b", url: "https://a.com/products/zeta", priority: 2, via: "link" },
+      { key: "a", url: "https://a.com/products/alpha", priority: 2, via: "link" },
+    ]).map((c) => c.url);
+    expect(sorted).toEqual(["https://a.com/products/alpha", "https://a.com/products/zeta", "https://a.com/products/one/two"]);
+  });
+});
+
+describe("siteNameOf", () => {
+  it("prefers og:site_name, then the shortest title segment, then the host", () => {
+
+    expect(siteNameOf('<head><meta property="og:site_name" content="Recorded Future"><title>Advanced Cyber Threat Intelligence | Recorded Future</title></head>', "recordedfuture.com")).toBe("Recorded Future");
+    expect(siteNameOf("<title>Flashpoint | Threat Intelligence With Industry-Best Data</title>", "flashpoint.io")).toBe("Flashpoint");
+    expect(siteNameOf("<title>Check Point Exposure Management | Formerly Cyberint</title>", "cyberint.com")).toBe("Formerly Cyberint");
+    expect(siteNameOf("<html></html>", "intel471.com")).toBe("Intel471");
+  });
+
+  it("keeps hover hints, named by their row, and nothing else of a script (Daniel 2026-11-12)", () => {
+    // Next.js page data: the pricing rows live in an escaped string inside a script.
+    const next = `<p>Email integration</p><script>self.__next_f.push([1,"{\\"features\\":[{\\"name\\":\\"Workplace collaboration (Slack, Microsoft Teams)\\",\\"values\\":[{\\"planId\\":\\"pro\\",\\"type\\":\\"check\\"}],\\"tooltip\\":\\"Push messages containing product feedback into the product.\\"},{\\"name\\":\\"SSO\\",\\"tooltip\\":\\"\\",\\"secret\\":\\"internal page data that is not a hint\\"}]}"])</script>`;
+    const text = htmlToText(next);
+    expect(text).toContain("Hints shown on hover:\nWorkplace collaboration (Slack, Microsoft Teams): Push messages containing product feedback into the product.");
+    expect(text).not.toContain("internal page data");
+    expect(text).not.toContain("planId");
+    // Plain JSON and element attributes; a link's title and a one-word value are not hints.
+    const plain = `<script type="application/json">{"label":"Audit log","helpText":"Every change is recorded for 12 months."}</script><span data-tooltip="Billed once a year, per maker.">i</span><a href="/x" title="Read the full story here">x</a><i title="info">i</i>`;
+    expect(hintsOf(plain)).toEqual(["Audit log: Every change is recorded for 12 months.", "Billed once a year, per maker."]);
+    expect(htmlToText("<p>No hints here</p><script>var a = 1;</script>")).toBe("No hints here");
+  });
+});

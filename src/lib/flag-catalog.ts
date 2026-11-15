@@ -65,6 +65,22 @@ export const FLAG_AREAS: readonly FlagArea[] = [
     ],
   },
   {
+    key: "competitors",
+    label: "Competitors",
+    flags: [
+      {
+        key: "competitors",
+        label: "Competitors",
+        description: "Competitors page: parity matrix, news feed, profiles, battle cards and roadmap.",
+      },
+      {
+        key: "competitorsDemoNews",
+        label: "Scan reads demo news",
+        description: "The Scan button on the Competitors page reads prepared pages from the collector bundle folder instead of crawling the websites. Showcase setting; off = live crawl.",
+      },
+    ],
+  },
+  {
     key: "docs",
     label: "Docs",
     flags: [
@@ -95,7 +111,7 @@ export const FLAG_AREAS: readonly FlagArea[] = [
         key: "dashboard",
         label: "Dashboard",
         description:
-          "Dashboard page. The post-login landing is the first ON surface in menu order (Dashboard, Ideas, Docs, Chat, Settings).",
+          "Dashboard page. The post-login landing is the first ON surface in menu order (Dashboard, Ideas, Competitors, Docs, Chat, Settings).",
       },
     ],
   },

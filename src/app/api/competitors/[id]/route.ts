@@ -1,0 +1,106 @@
+import { NextResponse } from "next/server";
+import { isPublicWebsite } from "@/lib/competitors/netguard";
+import { rewriteSourceOrigin } from "@/lib/competitors/pages";
+import { db } from "@/lib/db";
+import { bad, cleanName, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
+import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
+import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
+import { recordCompetitorEvent } from "@/lib/competitors/analytics";
+import { cancelLocalRequests } from "@/lib/competitors/local";
+import { createAndRouteScan } from "@/lib/competitors/scan";
+
+type Params = { params: Promise<{ id: string }> };
+
+/**
+ * PATCH: rename / new website / logo. DELETE: remove the competitor and everything under it.
+ *
+ * Changing the website removes the old site's pages (text dropped, hash kept) and queues a scan of the
+ * new site at once — the same create-and-route path as adding a competitor (trigger "onboarding"), so the
+ * one-scan-per-site rule holds (queued behind a running scan) and the daily manual-rescan limit does not
+ * apply: a new site is a first add, not a rescan.
+ */
+export async function PATCH(req: Request, { params }: Params) {
+  const ctx = await competitorsGuard({ admin: true });
+  if (ctx instanceof NextResponse) return ctx;
+  const { id } = await params;
+  const body = await readJson(req);
+  if (body instanceof NextResponse) return body;
+  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId, deletedAt: null } });
+  if (!existing) return bad("Not found", 404);
+
+  const data: { name?: string; websiteUrl?: string; host?: string; logoUrl?: string | null } = {};
+  if (body.name !== undefined) {
+    const name = cleanName(body.name);
+    if (!name) return bad(C.settings.nameRequired);
+    const dup = await db.competitor.findFirst({
+      where: { workspaceId: ctx.workspaceId, id: { not: id }, deletedAt: null, name: { equals: name, mode: "insensitive" } },
+      select: { id: true },
+    });
+    if (dup) return bad(C.settings.duplicateName, 409);
+    data.name = name;
+  }
+  if (body.website !== undefined) {
+    try {
+      const site = normalizeWebsite(typeof body.website === "string" ? body.website : "");
+      const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true } });
+      // A removed competitor still holds the host (its history stays); say so rather than fail on the unique index.
+      if (dup) return bad(C.settings.duplicateHost, 409);
+      // Name AND addresses must be public: a public-looking name that resolves into our network is refused (story checklist §12).
+      if (!(await isPublicWebsite(site.url))) return bad(C.settings.privateHost);
+      data.websiteUrl = site.url;
+      data.host = site.host;
+    } catch (e) {
+      return bad(e instanceof InvalidUrlError && e.reason === "private" ? C.settings.privateHost : C.settings.invalidUrl);
+    }
+  }
+  if (body.logoUrl !== undefined) {
+    data.logoUrl = typeof body.logoUrl === "string" && body.logoUrl.trim() ? body.logoUrl.trim().slice(0, 500) : null;
+  }
+  await db.competitor.update({ where: { id }, data });
+  if (data.websiteUrl) {
+    const websiteSources = await db.competitorSource.findMany({ where: { competitorId: id, type: "website" }, select: { id: true, url: true } });
+    await db.competitorSource.updateMany({ where: { competitorId: id, type: "website" }, data: { url: data.websiteUrl } });
+    if (data.host === existing.host) {
+      // Same site, another spelling (www., https): the stored pages move to the new address — no re-add, no duplicates.
+      for (const src of websiteSources) if (src.url !== data.websiteUrl) await rewriteSourceOrigin([src.id], src.url, data.websiteUrl);
+    }
+    if (data.host && data.host !== existing.host) {
+      // A new site: the old site's pages are never read again, so they leave the current picture now (Tomer's review).
+      // Their text goes too (the hash stays, so the page history still says what was there); nothing reads a removed page's text.
+      const t = new Date();
+      await db.sourcePage.updateMany({
+        where: { source: { competitorId: id, type: "website" }, state: { not: "removed" } },
+        data: { state: "removed", removedAt: t, text: null, previousText: null, previousHash: null },
+      });
+      // The source URL above already points at the new site, so this scan reads it. Same path as a first add.
+      await createAndRouteScan(ctx.workspaceId, id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] scan of the new website failed to start", e));
+    }
+  }
+  return stateResponse(ctx);
+}
+
+export async function DELETE(_req: Request, { params }: Params) {
+  const ctx = await competitorsGuard({ admin: true });
+  if (ctx instanceof NextResponse) return ctx;
+  const { id } = await params;
+  const existing = await db.competitor.findFirst({
+    where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+    select: { id: true, sources: { select: { id: true, lastScanAt: true } } },
+  });
+  if (!existing) return bad("Not found", 404);
+  const running = await db.competitorScan.findFirst({
+    where: { workspaceId: ctx.workspaceId, status: "running", source: { competitorId: id } },
+    select: { id: true },
+  });
+  if (running) return bad(C.settings.scanRunning, 409);
+  // Soft delete (PRD): pages, hashes and scan history stay for the retention period; a waiting local-scan request is cancelled.
+  const cancelled = await cancelLocalRequests(existing.sources.map((s) => s.id));
+  await db.competitorScan.updateMany({ where: { source: { competitorId: id }, status: "queued" }, data: { status: "cancelled", finishedAt: new Date(), error: "the competitor was removed" } });
+  await db.competitor.update({ where: { id }, data: { deletedAt: new Date() } });
+  await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_removed", {
+    competitorId: id,
+    hadScans: existing.sources.some((s) => s.lastScanAt != null),
+    cancelledRequests: cancelled,
+  });
+  return stateResponse(ctx);
+}

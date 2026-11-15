@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- PM-OS local scan station: check in with PM-OS every 15 minutes (Website Scanning PRD 2026-11-04).
+       install.sh fills in the label (one per environment: com.pm-os.local-scan.dev / .prod), paths and state dir, and loads it. -->
+  <key>Label</key><string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/scripts/pmos-local-scan/poller.mjs</string>
+    <string>--app-url</string>
+    <string>__APP_URL__</string>
+    <string>--state-dir</string>
+    <string>__STATE_DIR__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>__HOME__</string>
+  </dict>
+  <key>StartInterval</key><integer>900</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>__STATE_DIR__/local-scan.out.log</string>
+  <key>StandardErrorPath</key><string>__STATE_DIR__/local-scan.err.log</string>
+</dict>
+</plist>
