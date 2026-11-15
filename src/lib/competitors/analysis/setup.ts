@@ -425,11 +425,12 @@ export async function setupWalk(env: SetupEnv): Promise<void> {
   if (!own || own.id !== env.run.ownCompetitorId) throw new AnalysisError("other", "the organization's own site is gone — the setup run needs it");
   const competitors = work.filter((c) => !c.isOwn);
   if (!competitors.length) throw new AnalysisError("other", "no competitor of this organization has stored pages — the setup run needs at least one");
-  const contexts = new Map<string, RunContext>();
-  for (const c of work) contexts.set(c.id, await env.company(c));
-  const ctxOf = (c: SetupCompany) => contexts.get(c.id)!;
-  // A company whose part is finished carries a record of this run: it is not worked on again.
+  // A company whose part is finished carries a record of this run: it is not worked on again — and it gets no
+  // context: a context starts a company's walk, which forgets what was true at the end of its last one (its caps).
   const finished = new Set((await db.competitorAnalysis.findMany({ where: { parentId: runId }, select: { competitorId: true } })).map((r) => r.competitorId));
+  const contexts = new Map<string, RunContext>();
+  for (const c of work) if (!finished.has(c.id)) contexts.set(c.id, await env.company(c));
+  const ctxOf = (c: SetupCompany) => contexts.get(c.id)!;
   for (const c of work) env.setStage(c.id, finished.has(c.id) ? "done" : "waiting");
 
   env.log("info", `Setup run ${env.run.resumed ? "continued" : "started"} — ${own.name}'s own site (${own.pages} page${own.pages === 1 ? "" : "s"}) and ${competitors.length} competitor${competitors.length === 1 ? "" : "s"}: ${competitors.map((c) => `${c.name} (${c.pages})`).join(", ")}${env.run.injected ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${env.model}`}`);

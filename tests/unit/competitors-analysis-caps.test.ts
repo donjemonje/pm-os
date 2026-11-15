@@ -231,4 +231,10 @@ describe("one email per run", () => {
     expect(email.text).toContain("continue the same run: --setup ws-1");
     expect(runAlertEmail({ ...base, kind: "setup", company: "Aha" }).subject).toBe("[PM-OS] Setup run hit 3 limits: Aha");
   });
+  it("an analysis of the organization's own site is never called a competitor", () => {
+    const email = runAlertEmail({ ...base, company: "Aha", ownSite: true });
+    expect(email.subject).toBe("[PM-OS] Analysis hit 3 limits: the own site of Aha");
+    expect(email.text).toContain("Own site:     Aha");
+    expect(email.text).not.toContain("Competitor:");
+  });
 });

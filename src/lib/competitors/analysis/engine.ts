@@ -754,7 +754,7 @@ async function alertSupport(id: string): Promise<void> {
       where: { id },
       select: {
         id: true, kind: true, workspaceId: true, status: true, step: true, error: true, errorKind: true, caps: true, counters: true, model: true, startedAt: true, finishedAt: true, startedById: true,
-        competitor: { select: { name: true, workspace: { select: { organization: { select: { name: true } } } } } },
+        competitor: { select: { name: true, isOwn: true, workspace: { select: { organization: { select: { name: true } } } } } },
       },
     });
     if (!run || (run.status !== "done" && run.status !== "failed")) return;
@@ -764,7 +764,7 @@ async function alertSupport(id: string): Promise<void> {
     // Loaded here: local.ts (the scanner's own support alerts) and the mailer are not needed by a run that ends clean.
     const [{ SUPPORT_EMAIL, appUrl }, { sendEmail }] = await Promise.all([import("../local"), import("../../mailer")]);
     const email = runAlertEmail({
-      kind: run.kind, outcome: run.status, organization: run.competitor.workspace.organization.name, company: run.competitor.name, runId: run.id, workspaceId: run.workspaceId,
+      kind: run.kind, outcome: run.status, organization: run.competitor.workspace.organization.name, company: run.competitor.name, ownSite: run.competitor.isOwn, runId: run.id, workspaceId: run.workspaceId,
       step: run.step, error: run.error, errorKind: run.errorKind, caps: hit, models: run.model ?? "", calls: c.calls, inputTokens: c.inputTokens, outputTokens: c.outputTokens,
       startedAt: run.startedAt, finishedAt: run.finishedAt ?? new Date(), appUrl: appUrl(),
     });

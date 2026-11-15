@@ -21,6 +21,8 @@ export interface RunAlertInput {
   organization: string;
   /** The company the run was about; a setup run's is the organization's own site. */
   company: string;
+  /** The run was an analysis of the organization's own site (never a competitor). */
+  ownSite?: boolean;
   runId: string;
   workspaceId: string;
   /** The step it ended in ("done" when it finished). */
@@ -50,7 +52,7 @@ export function runAlertEmail(r: RunAlertInput): { subject: string; text: string
   const failed = r.outcome === "failed";
   const limits = r.caps.length ? `hit ${r.caps.length} limit${r.caps.length === 1 ? "" : "s"}` : "";
   const happened = [failed ? "failed" : "", limits].filter(Boolean).join(" and ");
-  const about = r.kind === "setup" ? r.organization : `${r.company} (${r.organization})`;
+  const about = r.kind === "setup" ? r.organization : r.ownSite ? `the own site of ${r.organization}` : `${r.company} (${r.organization})`;
   const lines = capLines(r.caps);
   const took = r.startedAt ? `${Math.max(1, Math.round((r.finishedAt.getTime() - r.startedAt.getTime()) / 60_000))} min` : "–";
   const text = [
@@ -59,7 +61,7 @@ export function runAlertEmail(r: RunAlertInput): { subject: string; text: string
       : `${r.kind === "setup" ? "A setup run" : "An analysis run"} finished, and hit a limit that should never be hit. Limits are safety nets: what is listed below was left undone.`,
     ``,
     `Organization: ${r.organization}`,
-    r.kind === "setup" ? `Own site:     ${r.company}` : `Competitor:   ${r.company}`,
+    r.kind === "setup" || r.ownSite ? `Own site:     ${r.company}` : `Competitor:   ${r.company}`,
     `Run:          ${r.runId} (${r.kind})`,
     `Ended:        ${failed ? `failed in the ${r.step.replace(/_/g, " ")} step` : "done"} at ${r.finishedAt.toISOString()}, after ${took}`,
     ...(failed ? [`Error:        ${r.error ?? "no reason recorded"}${r.errorKind && r.errorKind !== "none" ? ` [${r.errorKind}]` : ""}`] : []),
