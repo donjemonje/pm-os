@@ -10,6 +10,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { recordCompetitorEvent } from "./analytics";
 import { notifyRun, runEmailDue } from "./notify";
+import { NOT_OWN } from "./own";
 import { failStaleScans } from "./run";
 import { createScan, runScan } from "./scan";
 import { routeScan } from "./tick";
@@ -20,10 +21,14 @@ interface PlanItem {
   host: string;
 }
 
-/** Which competitors a run would scan, in matrix order, and which it leaves out (with the reason). */
+/**
+ * Which competitors a run would scan, in matrix order, and which it leaves out (with the reason). The organization's
+ * own site (own.ts) is never part of a Scan run — not in its count, its progress or its email: it is scanned on its
+ * own schedule, like every website source (tick.ts).
+ */
 async function planRun(workspaceId: string): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
   const competitors = await db.competitor.findMany({
-    where: { workspaceId, deletedAt: null },
+    where: { workspaceId, deletedAt: null, ...NOT_OWN },
     orderBy: [{ position: "asc" }, { name: "asc" }],
     select: { id: true, name: true, host: true, sources: { where: { type: "website" }, select: { id: true } } },
   });
@@ -51,7 +56,8 @@ export async function startRun(
   // A press must never be blocked by a run whose runner died (dev server reload, crash): 10 min without a heartbeat = stale.
   await failStaleScans();
   const [activeScan, activeRun] = await Promise.all([
-    db.competitorScan.findFirst({ where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } }, select: { id: true } }),
+    // A scan of the organization's own site does not block a press: nobody sees it as a scan in progress.
+    db.competitorScan.findFirst({ where: { workspaceId, source: { competitor: NOT_OWN }, status: { in: ["queued", "pending_local", "running"] } }, select: { id: true } }),
     db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, select: { id: true } }),
   ]);
   if (activeScan || activeRun) return { error: "running" };

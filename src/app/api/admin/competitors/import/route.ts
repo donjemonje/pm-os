@@ -82,7 +82,7 @@ export async function POST(req: Request) {
 
   const workspace = await db.workspace.findUnique({ where: { organizationId }, select: { id: true } });
   if (!workspace) return refuse(404, "This organization was not found.");
-  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: workspace.id, deletedAt: null }, select: { id: true, name: true, host: true } });
+  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: workspace.id, deletedAt: null, isOwn: false }, select: { id: true, name: true, host: true } });
   if (!competitor) return refuse(404, "This competitor was not found in the organization.");
 
   let bundle: Bundle;

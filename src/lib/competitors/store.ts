@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
 import { mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
+import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -9,6 +10,9 @@ import { mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsCo
  * is scoped by workspaceId. Everything here comes out of the scan pipeline
  * (sources → scans → pages → statuses, history, facts) or a PM's own edits;
  * there is no other way in.
+ *
+ * The organization's own site (Competitor.isOwn, own.ts) is never in any list served here: not a competitor, not a
+ * scan in progress, not a cell, not a fact. What it found of ours is on the rows (ourStatus, ownEvidence).
  */
 
 export interface SourceRow {
@@ -124,8 +128,12 @@ export interface CapabilityRow {
   /** The org's own product or module that carries it; "" when none. */
   ownProduct: string;
   productLines: string[];
-  /** The org's own cell: found | not_found — set by PMs, no confidence. */
+  /** The org's own cell: found | not_found, no confidence — what the own site's analysis found, or a PM's value (which wins). */
   ourStatus: OwnStatus;
+  /** A PM set the own cell by hand: no run changes it. */
+  ourStatusByPm: boolean;
+  /** The top evidence of ours behind the own cell (from the organization's own site); null = none. */
+  ownEvidence: OwnEvidence | null;
   position: number;
   origin: string;
   state: string;
@@ -169,6 +177,8 @@ export interface FeatureRow {
   description: string;
   /** The org's own mark: found | not_found. */
   ourStatus: OwnStatus;
+  ourStatusByPm: boolean;
+  ownEvidence: OwnEvidence | null;
   position: number;
   origin: string;
 }
@@ -196,6 +206,8 @@ export interface FactRow {
 
 export interface CompetitorsState {
   orgName: string;
+  /** The organization's own website is analysed (lib/competitors/own.ts): its own column is filled from it where no PM set a value. */
+  ownSite: boolean;
   config: CompetitorsConfig;
   productLines: string[];
   competitors: CompetitorRow[];
@@ -231,11 +243,11 @@ function asStringArray(v: unknown): string[] {
 }
 
 export async function getCompetitorsState(workspaceId: string, orgName: string, userId: string | null = null, opts: { /** Settings → Removed is for admins: only they are sent the list. */ withRemoved?: boolean } = {}): Promise<CompetitorsState> {
-  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans, features, featureStatuses, activeAnalyses, finishedAnalyses] = await Promise.all([
+  const [workspace, productLines, competitors, allDomains, allCapabilities, statuses, facts, activeScans, recentScans, features, featureStatuses, activeAnalyses, finishedAnalyses, ownSite] = await Promise.all([
     db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true, organizationId: true } }),
     db.productLine.findMany({ where: { workspaceId }, orderBy: [{ position: "asc" }, { name: "asc" }], select: { name: true } }),
     db.competitor.findMany({
-      where: { workspaceId, deletedAt: null },
+      where: { workspaceId, deletedAt: null, ...NOT_OWN },
       orderBy: [{ position: "asc" }, { name: "asc" }],
       include: {
         sources: { orderBy: { createdAt: "asc" } },
@@ -248,10 +260,11 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       orderBy: [{ position: "asc" }, { name: "asc" }],
       include: { ideas: { orderBy: { createdAt: "asc" }, select: { origin: true, idea: { select: { id: true, title: true, batchStatus: true, sources: { where: { kind: "jira" }, select: { jiraKey: true }, take: 1 } } } } } },
     }),
-    db.capabilityStatus.findMany({ where: { workspaceId, capability: { state: { not: "removed" } } }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
-    db.profileFact.findMany({ where: { workspaceId, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
+    db.capabilityStatus.findMany({ where: { workspaceId, competitor: NOT_OWN, capability: { state: { not: "removed" } } }, include: { history: { orderBy: { at: "desc" }, take: 10 } } }),
+    db.profileFact.findMany({ where: { workspaceId, competitor: NOT_OWN, dismissedAt: null }, orderBy: [{ kind: "asc" }, { value: "asc" }] }),
+    // A scan of the organization's own site is not a competitor scan: it is not "scanning" on the Competitors pages.
     db.competitorScan.findMany({
-      where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } },
+      where: { workspaceId, source: { competitor: NOT_OWN }, status: { in: ["queued", "pending_local", "running"] } },
       select: { id: true, sourceId: true, status: true, startedAt: true, heartbeatAt: true, pagesFetched: true },
       orderBy: { startedAt: "asc" },
     }),
@@ -259,13 +272,14 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     // Never the page log: it is one row per page of every scan ever, and this query runs every 3 s while a scan is active
     // (Tomer's review 2026-11-10). The counts the cards need are in `outcomes`.
     db.competitorScan.findMany({
-      where: { workspaceId, status: { in: ["ok", "partial", "failed", "stale"] } },
+      where: { workspaceId, source: { competitor: NOT_OWN }, status: { in: ["ok", "partial", "failed", "stale"] } },
       orderBy: { startedAt: "desc" },
       select: { id: true, sourceId: true, badge: true, trigger: true, startedAt: true, pagesFetched: true, outcomes: true, robotsDisallowed: true, removedPages: true, error: true },
     }),
     db.feature.findMany({ where: { workspaceId, state: "active", capability: { state: { not: "removed" } } }, orderBy: [{ position: "asc" }, { name: "asc" }] }),
-    db.featureStatus.findMany({ where: { workspaceId, feature: { state: "active", capability: { state: { not: "removed" } } } } }),
-    // Analysis runs — never their log (this query runs every 3 s while one is active).
+    db.featureStatus.findMany({ where: { workspaceId, competitor: NOT_OWN, feature: { state: "active", capability: { state: { not: "removed" } } } } }),
+    // Analysis runs — never their log (this query runs every 3 s while one is active). The own site's runs and the
+    // setup run are in this list on purpose: while one works, the table is still being filled (`analyzing`).
     db.competitorAnalysis.findMany({
       where: { workspaceId, status: { in: ["queued", "running", "waiting"] } },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -277,6 +291,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       distinct: ["competitorId"],
       select: { id: true, competitorId: true, status: true, step: true, pagesDone: true, pagesTotal: true, resumeAt: true, error: true, finishedAt: true },
     }),
+    db.competitor.count({ where: { workspaceId, isOwn: true, deletedAt: null } }),
   ]);
   const analysisRow = (a: (typeof activeAnalyses)[number]): AnalysisRow => ({ id: a.id, status: a.status, step: a.step, pagesDone: a.pagesDone, pagesTotal: a.pagesTotal, resumeAt: a.resumeAt?.toISOString() ?? null, error: a.error, finishedAt: a.finishedAt?.toISOString() ?? null });
   const analysisOf = (competitorId: string): AnalysisRow | null => {
@@ -348,6 +363,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
   );
   return {
     orgName,
+    ownSite: ownSite > 0,
     config,
     productLines: productLines.map((p) => p.name),
     competitors: competitors.map((c) => {
@@ -411,6 +427,8 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       ownProduct: k.ownProduct,
       productLines: asStringArray(k.productLines),
       ourStatus: (k.ourStatus === "not_found" ? "not_found" : "found") as OwnStatus,
+      ourStatusByPm: k.ourStatusSetAt != null,
+      ownEvidence: readOwnEvidence(k.ourEvidence),
       position: k.position,
       origin: k.origin,
       state: k.state,
@@ -443,7 +461,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         history: s.history.map((h) => ({ value: h.value as StatusValue, quote: h.quote, sourceUrl: h.sourceUrl, at: h.at.toISOString() })),
       };
     }),
-    features: features.map((f) => ({ id: f.id, capabilityId: f.capabilityId, name: f.name, description: f.description, ourStatus: (f.ourStatus === "found" ? "found" : "not_found") as OwnStatus, position: f.position, origin: f.origin })),
+    features: features.map((f) => ({ id: f.id, capabilityId: f.capabilityId, name: f.name, description: f.description, ourStatus: (f.ourStatus === "found" ? "found" : "not_found") as OwnStatus, ourStatusByPm: f.ourStatusSetAt != null, ownEvidence: readOwnEvidence(f.ourEvidence), position: f.position, origin: f.origin })),
     featureCells: featureStatuses.map((s) => {
       const scanned = s.value as StatusValue;
       const ov = s.overrideValue as StatusValue | null;
@@ -524,7 +542,7 @@ export async function saveCompetitorsConfig(workspaceId: string, config: Competi
 export async function nextPosition(model: "competitor" | "competitorDomain" | "capability", workspaceId: string): Promise<number> {
   const agg =
     model === "competitor"
-      ? await db.competitor.aggregate({ where: { workspaceId }, _max: { position: true } })
+      ? await db.competitor.aggregate({ where: { workspaceId, ...NOT_OWN }, _max: { position: true } })
       : model === "competitorDomain"
         ? await db.competitorDomain.aggregate({ where: { workspaceId, state: "active" }, _max: { position: true } })
         : await db.capability.aggregate({ where: { workspaceId, state: "active" }, _max: { position: true } });

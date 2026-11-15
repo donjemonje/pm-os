@@ -13,7 +13,7 @@ export async function GET(req: Request) {
   const ctx = await competitorsGuard();
   if (ctx instanceof NextResponse) return ctx;
   const competitorId = new URL(req.url).searchParams.get("competitorId") ?? "";
-  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null }, select: { id: true, name: true } });
+  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false }, select: { id: true, name: true } });
   if (!competitor) return bad("Not found", 404);
   const scans = await db.competitorScan.findMany({
     where: { workspaceId: ctx.workspaceId, source: { competitorId }, status: { not: "cancelled" } },

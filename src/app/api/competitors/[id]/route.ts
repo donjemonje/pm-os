@@ -26,7 +26,8 @@ export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
-  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId, deletedAt: null } });
+  // Never the organization's own site (own.ts): it is not a competitor, and no customer route renames, moves or removes it.
+  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false } });
   if (!existing) return bad("Not found", 404);
 
   const data: { name?: string; websiteUrl?: string; host?: string; logoUrl?: string | null } = {};
@@ -34,7 +35,7 @@ export async function PATCH(req: Request, { params }: Params) {
     const name = cleanName(body.name);
     if (!name) return bad(C.settings.nameRequired);
     const dup = await db.competitor.findFirst({
-      where: { workspaceId: ctx.workspaceId, id: { not: id }, deletedAt: null, name: { equals: name, mode: "insensitive" } },
+      where: { workspaceId: ctx.workspaceId, id: { not: id }, deletedAt: null, isOwn: false, name: { equals: name, mode: "insensitive" } },
       select: { id: true },
     });
     if (dup) return bad(C.settings.duplicateName, 409);
@@ -43,7 +44,8 @@ export async function PATCH(req: Request, { params }: Params) {
   if (body.website !== undefined) {
     try {
       const site = normalizeWebsite(typeof body.website === "string" ? body.website : "");
-      const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true } });
+      const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true, isOwn: true } });
+      if (dup?.isOwn) return bad(C.settings.ownSiteHost, 409);
       // A removed competitor still holds the host (its history stays); say so rather than fail on the unique index.
       if (dup) return bad(C.settings.duplicateHost, 409);
       // Name AND addresses must be public: a public-looking name that resolves into our network is refused (story checklist §12).
@@ -85,7 +87,7 @@ export async function DELETE(_req: Request, { params }: Params) {
   if (ctx instanceof NextResponse) return ctx;
   const { id } = await params;
   const existing = await db.competitor.findFirst({
-    where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+    where: { id, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false },
     select: { id: true, sources: { select: { id: true, lastScanAt: true } } },
   });
   if (!existing) return bad("Not found", 404);

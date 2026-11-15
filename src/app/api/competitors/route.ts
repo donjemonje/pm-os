@@ -35,7 +35,9 @@ export async function POST(req: Request) {
   } catch (e) {
     return bad(e instanceof InvalidUrlError && e.reason === "private" ? C.settings.privateHost : C.settings.invalidUrl);
   }
-  const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true, deletedAt: true } });
+  const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true, deletedAt: true, isOwn: true } });
+  // The organization's own site (own.ts) is stored like a competitor's, and is never one.
+  if (dupHost?.isOwn) return bad(C.settings.ownSiteHost, 409);
   if (dupHost && !dupHost.deletedAt) return bad(C.settings.duplicateHost, 409);
   // Name AND addresses must be public before the app server fetches anything from it (story checklist §12).
   if (!(await isPublicWebsite(site.url))) return bad(C.settings.privateHost);
@@ -61,7 +63,7 @@ export async function POST(req: Request) {
   if (!name) name = siteNameOf(probe.html, site.host).slice(0, 80);
   // Two sites may share a brand word; keep both by suffixing the host.
   const dupName = await db.competitor.findFirst({
-    where: { workspaceId: ctx.workspaceId, name: { equals: name, mode: "insensitive" } },
+    where: { workspaceId: ctx.workspaceId, isOwn: false, name: { equals: name, mode: "insensitive" } },
     select: { id: true },
   });
   if (dupName) {

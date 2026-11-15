@@ -8,6 +8,7 @@
  * scans find from then on is new. Read state is per user (CompetitorFeedRead).
  */
 import { db } from "../db";
+import { NOT_OWN } from "./own";
 import type { OwnStatus, StatusValue } from "./config";
 
 export type FeedKind = "gap" | "raised" | "lowered" | "fact" | "suggestion";
@@ -104,7 +105,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
   const [statuses, facts, suggestions, competitors, reads] = await Promise.all([
     db.capabilityStatus.findMany({
       // News is history (Daniel 2026-11-11): what was reported about a capability stays in the feed after a PM removes it from the table.
-      where: { workspaceId, changedAt: since ? { gt: since } : { not: null } },
+      where: { workspaceId, competitor: NOT_OWN, changedAt: since ? { gt: since } : { not: null } },
       orderBy: { changedAt: "desc" },
       take: FEED_LIMIT,
       include: {
@@ -113,7 +114,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       },
     }),
     db.profileFact.findMany({
-      where: { workspaceId, dismissedAt: null, changedAt: since ? { gt: since } : { not: null } },
+      where: { workspaceId, competitor: NOT_OWN, dismissedAt: null, changedAt: since ? { gt: since } : { not: null } },
       orderBy: { changedAt: "desc" },
       take: FEED_LIMIT,
     }),
@@ -123,7 +124,8 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       take: FEED_LIMIT,
       include: { domain: { select: { name: true, state: true } } },
     }),
-    db.competitor.findMany({ where: { workspaceId }, select: { id: true, name: true, sources: { select: { type: true, url: true } } } }),
+    // Never the organization's own site (own.ts): the feed is news about competitors.
+    db.competitor.findMany({ where: { workspaceId, ...NOT_OWN }, select: { id: true, name: true, sources: { select: { type: true, url: true } } } }),
     userId ? db.competitorFeedRead.findMany({ where: { workspaceId, userId }, select: { key: true } }) : [],
   ]);
   void after;

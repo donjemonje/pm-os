@@ -33,7 +33,7 @@ async function sources(): Promise<AdminSourceRow[]> {
   const rows = await db.competitorSource.findMany({
     where: { type: "website", competitor: { deletedAt: null } },
     include: {
-      competitor: { select: { name: true, workspace: { select: { organization: { select: { name: true } } } } } },
+      competitor: { select: { name: true, isOwn: true, workspace: { select: { organization: { select: { name: true } } } } } },
       localRequests: { where: { state: { in: ["waiting", "running"] } }, select: { createdAt: true }, take: 1 },
     },
     orderBy: [{ competitor: { workspace: { organization: { name: "asc" } } } }, { competitor: { name: "asc" } }],
@@ -41,7 +41,8 @@ async function sources(): Promise<AdminSourceRow[]> {
   return rows.map((s) => ({
     id: s.id,
     orgName: s.competitor.workspace.organization.name,
-    competitorName: s.competitor.name,
+    // The organization's own site is scanned on a schedule like a competitor's (own.ts); the list says which it is.
+    competitorName: s.competitor.isOwn ? `${s.competitor.name} — own site` : s.competitor.name,
     url: s.url,
     scanEveryDays: s.scanEveryDays,
     lastScanAt: s.lastScanAt?.toISOString() ?? null,

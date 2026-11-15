@@ -71,6 +71,11 @@ export const COMPETITORS_COPY = {
     noCatalogBody: "Add your domains and capabilities in Settings → Competitors; competitor scans fill the columns.",
     ownCellTitle: (org: string) => `${org}'s status`,
     ownCellHint: "Set by your team, never scanned.",
+    // An organization whose own website is analysed (lib/competitors/own.ts): where the own cell's value comes from.
+    ownCellFromSite: "From your own website. Set it yourself and your value stays.",
+    ownCellByTeam: "Set by your team. An analysis of your own website does not change it.",
+    ownEvidenceEmpty: "Not found on the pages of your own website PMOS AI read",
+    ownFromProductLines: "From your product lines (Settings → Product Lines)",
     ownProductTip: (org: string, product: string) => `${org}'s product for this capability: ${product}`,
     notScanned: "not scanned yet",
     ofN: (n: number, total: number) => `${n} of ${total}`,
@@ -179,6 +184,8 @@ export const COMPETITORS_COPY = {
       jobs: "Jobs",
       events: "Webinars & events",
       other: "Other",
+      // The organization's own material that is not on its website (own.ts): today the product lines, as one stored page.
+      ownmaterial: "Product lines",
     } as Record<string, string>,
     capabilities: "Capabilities",
     stale: "stale",
@@ -345,6 +352,7 @@ export const COMPETITORS_COPY = {
     emptyCompetitors: "No competitors yet. Add the first one with the button above.",
     invalidUrl: "Enter a full web address, like https://example.com",
     duplicateHost: "This website is already tracked.",
+    ownSiteHost: "This is your organization's own website. It is not a competitor.",
     duplicateName: "A competitor with this name already exists.",
     privateHost: "That address points at a private network and cannot be scanned.",
     unreachable: "That website did not answer. Check the address and try again.",
