@@ -208,7 +208,7 @@ describe("one email per run", () => {
       "  - second looks per run: 30 — 12 capabilities not checked at Productboard",
       "  - capabilities per page: 40 — 7 capabilities left out on 2 pages at Productboard",
       "",
-      "What to do: raise the limit that was hit, then run the analysis again — what was left undone is still due. The token budget is in Administration → Competitors; second looks per run is the organization's setting competitorsConfig.secondLooksPerRun (1–500, no screen yet); the others are constants in src/lib/competitors/analysis.",
+      "What to do: raise the limit that was hit, then run the analysis again — what was left undone is still due. The token budget is in Administration → Competitors; second looks per run is the organization's setting competitorsConfig.secondLooksPerRun (1–500, no screen yet); the two ceilings of a run's speed are environment settings of the job (COMPETITORS_ANALYSIS_MAX_SPEED, COMPETITORS_ANALYSIS_TPM); the others are constants in src/lib/competitors/analysis.",
       "This email is sent once per run, whatever the number of limits.",
       "Run log: https://app.pm-os.io/admin/competitors",
     ].join("\n"));

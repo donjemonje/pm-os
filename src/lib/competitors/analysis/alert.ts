@@ -75,7 +75,7 @@ export function runAlertEmail(r: RunAlertInput): { subject: string; text: string
       ? r.kind === "setup"
         ? `What to do: read the run's log, fix the cause, then continue the same run: --setup ${r.workspaceId}. Nothing it wrote is redone.`
         : `What to do: read the run's log and fix the cause. A failed run is not retried by itself: the competitor's next scan queues a new one, or queue one from Administration → Competitors.`
-      : `What to do: raise the limit that was hit, then run the analysis again — what was left undone is still due. The token budget is in Administration → Competitors; second looks per run is the organization's setting competitorsConfig.secondLooksPerRun (1–500, no screen yet); the others are constants in src/lib/competitors/analysis.`,
+      : `What to do: raise the limit that was hit, then run the analysis again — what was left undone is still due. The token budget is in Administration → Competitors; second looks per run is the organization's setting competitorsConfig.secondLooksPerRun (1–500, no screen yet); the two ceilings of a run's speed are environment settings of the job (COMPETITORS_ANALYSIS_MAX_SPEED, COMPETITORS_ANALYSIS_TPM); the others are constants in src/lib/competitors/analysis.`,
     `This email is sent once per run, whatever the number of limits.`,
     `Run log: ${r.appUrl}/admin/competitors`,
   ].join("\n");

@@ -9,7 +9,7 @@ import { cellFromEvidence, type CellFromEvidence, type Evidence } from "./cells"
 import { AnalysisError, queueCatalogAnalyses, type RunContext } from "./engine";
 import { canonicalName, findItem, itemKey, ownKey, planChildMerges, planMerges, wordingKey, type ItemLite, type MergePlan } from "./items";
 import { batchItems, buildCatalog, type Catalog } from "./match";
-import { analysisConcurrency, estimateTokens, OUTPUT_RESERVE } from "./pacing";
+import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import { loadPages, planOf, type StoredPage } from "./plan";
 import {
   LOOK_MAX_TOKENS,
@@ -139,7 +139,7 @@ export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<
   const result = await ctx.paced({
     items: todo,
     reading: true,
-    concurrency: analysisConcurrency(),
+    concurrency: "self",
     estimate: (p) => estimateTokens(p.chars) + RESEARCH_OVERHEAD_TOKENS + OUTPUT_RESERVE,
     work: async (p) => {
       // The text and its hash in one read: the key written below is the hash of the text that was read, so a page
@@ -762,7 +762,7 @@ export async function secondLookStep(ctx: RunContext, opts: { /** Only these cap
   const looks = await ctx.paced({
     items: todo,
     reading: true,
-    concurrency: analysisConcurrency(),
+    concurrency: "self",
     estimate: (t) => estimateTokens(t.pages.reduce((n, p) => n + p.text.length, 0)) + 500 + OUTPUT_RESERVE,
     work: async (t) => {
       const k = t.capability;

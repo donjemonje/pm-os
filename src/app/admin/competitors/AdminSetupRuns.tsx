@@ -5,7 +5,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminSetupRun, AdminSetupState } from "@/app/api/admin/competitors/setup/route";
 import { ORG_SETUP_STATES, type OrgSetupState } from "@/lib/competitors/analysis/setup-rules";
 import type { ImportOrg } from "./AdminImport";
-import { RunCaps, RunUsage } from "./RunUsage";
+import { RunCaps, RunPacing, RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Setup runs (PM-OS admin only). Pick an organization: its setup state (required →
@@ -189,6 +189,7 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                   <details>
                     <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}</summary>
                     <div className="mt-1.5"><RunUsage usage={r.usage} calls={r.calls} /></div>
+                    <div className="mt-2"><RunPacing pacing={r.pacing} /></div>
                     {r.sharedUsage.length > 0 && (
                       <div className="mt-2">
                         <div className="mb-1 text-slate-500">{COPY.sharedTokens}</div>

@@ -5,7 +5,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminPlanRun, AdminPlanSection } from "@/app/api/admin/competitors/plan/route";
 import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ImportOrg } from "./AdminImport";
-import { RunCaps, RunUsage } from "./RunUsage";
+import { RunCaps, RunPacing, RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Reading plan (PM-OS admin only, read-only). Pick an organization and one of its
@@ -216,6 +216,7 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                           <div className="mt-1.5">
                             {r.model && <div className="mb-1 text-slate-500">{COPY.models}: <span className="font-mono">{r.model}</span></div>}
                             <RunUsage usage={r.usage} calls={r.calls} />
+                            <div className="mt-2"><RunPacing pacing={r.pacing} /></div>
                           </div>
                         </details>
                       </td>

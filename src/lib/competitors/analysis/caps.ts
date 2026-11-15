@@ -29,6 +29,8 @@ export const CAP_IDS = [
   "domains_split",
   "llms_txt_chars",
   "log_lines",
+  "speed_ceiling",
+  "tpm_ceiling",
 ] as const;
 export type CapId = (typeof CAP_IDS)[number];
 
@@ -93,6 +95,9 @@ export const CAPS: Record<CapId, CapDefinition> = {
   domains_split: { label: "rows per domains call", mode: "once", undone: (h) => `the domains were built in ${s(h.undone, "call")}, not in one step over all rows` },
   llms_txt_chars: { label: "characters of llms.txt", mode: "once", undone: (h) => `${s(h.undone, "character")} of the site's llms.txt not shown to the map` },
   log_lines: { label: "log lines kept on the run", mode: "state", undone: (h) => `the ${s(h.undone, "oldest line")} of the run's log ${h.undone === 1 ? "was" : "were"} dropped` },
+  // The two ceilings of the run's speed (pacing.ts): safety nets — a run paces itself from the provider's answers and should never be held back by them.
+  speed_ceiling: { label: "calls at once (speed ceiling, COMPETITORS_ANALYSIS_MAX_SPEED)", mode: "once", undone: () => "the run reached the ceiling while the provider still took every call: it could have gone faster" },
+  tpm_ceiling: { label: "tokens per minute (ceiling, COMPETITORS_ANALYSIS_TPM)", mode: "event", undone: (h) => `${s(h.times, "call")} held back, ${s(h.undone, "second")} in all` },
 };
 
 /** "second looks per run: 30 — 12 capabilities not checked at Productboard" */

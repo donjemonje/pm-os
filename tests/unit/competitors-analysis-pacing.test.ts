@@ -2,7 +2,28 @@
 import { describe, expect, it } from "vitest";
 import { AnswerError, asCapacityError, CapacityError, EndpointError, isNetworkError, TransientError } from "@/lib/competitors/ai";
 import { ReadingBudget } from "@/lib/competitors/analysis/budget";
-import { backoffMs, estimateTokens, runPaced, TokenBudget, type PacedOptions } from "@/lib/competitors/analysis/pacing";
+import {
+  ANALYSIS_TPM,
+  analysisMaxSpeed,
+  analysisTpm,
+  backoffMs,
+  BASE_WAIT_MS,
+  emptyPacing,
+  estimateTokens,
+  PACE_MAX_SPEED,
+  PACE_SPEED_LIMIT,
+  PACE_START_SPEED,
+  Pacer,
+  pacingLine,
+  PUSHBACKS_KEPT,
+  readPacing,
+  recordPushback,
+  runPaced,
+  TokenBudget,
+  TRANSIENT_BASE_WAIT_MS,
+  type PacedOptions,
+  type Pushback,
+} from "@/lib/competitors/analysis/pacing";
 
 function fakeClock() {
   let t = 0;
@@ -51,18 +72,108 @@ describe("TokenBudget", () => {
   it("estimates 4 characters per token", () => {
     expect(estimateTokens(4001)).toBe(1001);
   });
+  it("the ceiling is a safety net: it counts every call it held back and for how long", async () => {
+    const c = fakeClock();
+    const b = new TokenBudget(1000, c.now);
+    await b.reserve(600, c.sleep);
+    expect([b.holds, b.heldMs]).toEqual([0, 0]);
+    await b.reserve(600, c.sleep);
+    expect([b.holds, b.heldMs]).toEqual([1, 60_000]);
+    expect(b.tokensPerMinute).toBe(1000);
+  });
+  it("the default ceilings are generous, and the environment sets them", () => {
+    expect(analysisTpm({})).toBe(ANALYSIS_TPM);
+    expect(ANALYSIS_TPM).toBeGreaterThanOrEqual(4_000_000);
+    expect(analysisTpm({ COMPETITORS_ANALYSIS_TPM: "250000" })).toBe(250_000);
+    expect(analysisMaxSpeed({})).toBe(PACE_MAX_SPEED);
+    expect(analysisMaxSpeed({ COMPETITORS_ANALYSIS_MAX_SPEED: "12" })).toBe(12);
+    expect(analysisMaxSpeed({ COMPETITORS_ANALYSIS_MAX_SPEED: "100000" })).toBe(PACE_SPEED_LIMIT);
+    expect(analysisMaxSpeed({ COMPETITORS_ANALYSIS_MAX_SPEED: "zero" })).toBe(PACE_MAX_SPEED);
+    // The old fixed brake decides nothing any more.
+    expect(analysisMaxSpeed({ COMPETITORS_ANALYSIS_CONCURRENCY: "4" })).toBe(PACE_MAX_SPEED);
+  });
+});
+
+describe("Pacer — the run paces itself from the provider's answers", () => {
+  it("starts fast", () => {
+    const p = new Pacer();
+    expect(p.speed).toBe(PACE_START_SPEED);
+    expect(PACE_START_SPEED).toBeGreaterThan(4);
+    expect([p.start, p.max, p.peak]).toEqual([PACE_START_SPEED, PACE_MAX_SPEED, PACE_START_SPEED]);
+  });
+  it("speeds up while calls succeed: one more call at once after every full round of successes", () => {
+    const p = new Pacer(4, 64);
+    for (let i = 0; i < 3; i++) p.success();
+    expect(p.speed).toBe(4);
+    p.success();
+    expect(p.speed).toBe(5);
+    for (let i = 0; i < 5; i++) p.success();
+    expect(p.speed).toBe(6);
+    expect(p.peak).toBe(6);
+  });
+  it("backs off when the provider pushes back: half the speed, never below 1, and the round starts again", () => {
+    const p = new Pacer(8, 64);
+    for (let i = 0; i < 8 + 9; i++) p.success();
+    expect(p.speed).toBe(10);
+    for (let i = 0; i < 9; i++) p.success();
+    expect(p.pushback()).toEqual({ from: 10, to: 5 });
+    // The 9 successes before the pushback count for nothing: a full round at the new speed is needed.
+    for (let i = 0; i < 4; i++) p.success();
+    expect(p.speed).toBe(5);
+    p.success();
+    expect(p.speed).toBe(6);
+    expect(p.pushback()).toEqual({ from: 6, to: 3 });
+    expect(p.pushback()).toEqual({ from: 3, to: 1 });
+    expect(p.pushback()).toEqual({ from: 1, to: 1 });
+    expect(p.peak).toBe(10);
+  });
+  it("the ceiling is a safety net: the run never goes above it, and says when it wanted to", () => {
+    const p = new Pacer(3, 4);
+    for (let i = 0; i < 3; i++) p.success();
+    expect(p.speed).toBe(4);
+    expect(p.ceilingHit).toBe(false);
+    for (let i = 0; i < 4; i++) p.success();
+    expect(p.speed).toBe(4);
+    expect(p.ceilingHit).toBe(true);
+    expect(new Pacer(100, 16).speed).toBe(16);
+  });
+  it("every pushback is recorded: when, in which step, at what speed, the speed after, how long it waited", () => {
+    const p = new Pacer(8, 64);
+    const record = emptyPacing(p);
+    const pushback = (n: number, over: Partial<Pushback> = {}): Pushback => ({ at: `2026-11-15T10:00:${String(n % 60).padStart(2, "0")}.000Z`, step: "research", company: "Acme", reason: "capacity", speed: 16, next: 8, waitMs: 5000, retryAfterMs: null, ...over });
+    recordPushback(record, pushback(1));
+    recordPushback(record, pushback(2, { reason: "endpoint", speed: 8, next: 4, waitMs: 60_000, company: null, retryAfterMs: 30_000 }));
+    expect(record.total).toBe(2);
+    expect(record.pushbacks[1]).toEqual({ at: "2026-11-15T10:00:02.000Z", step: "research", company: null, reason: "endpoint", speed: 8, next: 4, waitMs: 60_000, retryAfterMs: 30_000 });
+    // The stored record reads back as written; anything else is "not recorded".
+    expect(readPacing(JSON.parse(JSON.stringify({ ...record, peak: 16, speed: 4 })))).toEqual({ ...record, peak: 16, speed: 4 });
+    expect(readPacing(null)).toBeNull();
+    expect(readPacing([])).toBeNull();
+    expect(readPacing({ pushbacks: [] })).toBeNull();
+    expect(pacingLine({ ...record, peak: 16, speed: 4 })).toBe("started at 8 calls at once, fastest 16, ceiling 64 — 2 pushbacks from the provider (waited 65 s in all)");
+    expect(pacingLine(emptyPacing(p))).toBe("started at 8 calls at once, fastest 8, ceiling 64 — no pushback from the provider");
+    // The newest PUSHBACKS_KEPT are kept with their details; all are counted.
+    for (let i = 0; i < PUSHBACKS_KEPT + 5; i++) recordPushback(record, pushback(i));
+    expect(record.pushbacks).toHaveLength(PUSHBACKS_KEPT);
+    expect(record.total).toBe(PUSHBACKS_KEPT + 7);
+  });
 });
 
 describe("backoffMs", () => {
-  it("60 s, 2 min, 4 min, 8 min, then 15 min", () => {
-    expect([1, 2, 3, 4, 5, 6, 20].map((a) => backoffMs(a, null))).toEqual([60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000]);
+  it("after a capacity answer: 5 s, doubled with every pushback in a row, at most 15 min", () => {
+    expect(BASE_WAIT_MS).toBe(5_000);
+    expect([1, 2, 3, 4, 5, 8, 9, 20].map((a) => backoffMs(a, null))).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 640_000, 900_000, 900_000]);
+  });
+  it("after a failing endpoint: 1, 2, 4, 8, then 15 min", () => {
+    expect([1, 2, 3, 4, 5, 6, 20].map((a) => backoffMs(a, null, TRANSIENT_BASE_WAIT_MS))).toEqual([60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000]);
   });
   it("never less than the server's retry-after", () => {
     expect(backoffMs(1, 300_000)).toBe(300_000);
-    expect(backoffMs(3, 1000)).toBe(240_000);
+    expect(backoffMs(3, 1000)).toBe(20_000);
+    expect(backoffMs(1, 3_600_000)).toBe(3_600_000);
   });
-  it("a shorter base (test knob) scales the whole sequence", () => {
-    expect([1, 2, 5].map((a) => backoffMs(a, null, 10))).toEqual([10, 20, 150]);
+  it("a shorter base (test knob) scales the sequence", () => {
+    expect([1, 2, 5].map((a) => backoffMs(a, null, 10))).toEqual([10, 20, 160]);
   });
 });
 
@@ -95,7 +206,7 @@ function harness(items: string[], fail: (item: string, call: number) => Error | 
     },
     budget: new TokenBudget(1_000_000, c.now),
     sleep: c.sleep,
-    onWait: async (ms, attempt, cause) => { events.push(`wait ${ms} #${attempt}${cause.transient ? " endpoint" : ""}`); },
+    onWait: async (ms, attempt, cause) => { events.push(`wait ${ms} #${attempt}${cause.transient ? " endpoint" : ""}${cause.speed ? ` speed ${cause.speed.from}→${cause.speed.to}` : ""}`); },
     onResume: async () => { events.push("resume"); },
     maxWaitMs: 24 * 3600_000,
     ...opts,
@@ -124,11 +235,11 @@ describe("runPaced", () => {
     const h = harness(ITEMS, (item, n) => (item === "c" && n === 1 ? new CapacityError("429") : null));
     const r = await runPaced(h.options);
     expect(h.saved).toEqual(ITEMS);
-    expect(h.events).toEqual(["wait 60000 #1", "resume"]);
+    expect(h.events).toEqual(["wait 5000 #1", "resume"]);
     expect(h.calls.get("a")).toBe(1);
     expect(h.calls.get("b")).toBe(1);
     expect(h.calls.get("c")).toBe(2);
-    expect(r).toMatchObject({ done: 6, waits: 1, waitedMs: 60_000 });
+    expect(r).toMatchObject({ done: 6, waits: 1, waitedMs: 5_000 });
   });
   it("with calls in flight: those that got through are saved, those refused go back to the front in their order", async () => {
     const h = harness(ITEMS, (item, n) => ((item === "b" || item === "c") && n === 1 ? new CapacityError("429") : null), { concurrency: 4 });
@@ -136,7 +247,7 @@ describe("runPaced", () => {
     // b and c were refused while a, d (and e, started when a ended) got through: after the wait b and c go first, in their order.
     expect(h.started).toEqual(["a", "b", "c", "d", "e", "b", "c", "f"]);
     expect(h.saved).toEqual(["a", "d", "e", "b", "c", "f"]);
-    expect(h.events).toEqual(["wait 60000 #1", "resume"]);
+    expect(h.events).toEqual(["wait 5000 #1", "resume"]);
     for (const i of ITEMS) expect(h.calls.get(i), i).toBe(i === "b" || i === "c" ? 2 : 1);
   });
   it("capacity answers in a row grow the wait; a success resets it; retry-after is honoured", async () => {
@@ -146,16 +257,16 @@ describe("runPaced", () => {
       return null;
     });
     const r = await runPaced(h.options);
-    expect(h.events).toEqual(["wait 60000 #1", "resume", "wait 120000 #2", "resume", "wait 240000 #3", "resume", "wait 200000 #1", "resume"]);
+    expect(h.events).toEqual(["wait 5000 #1", "resume", "wait 10000 #2", "resume", "wait 20000 #3", "resume", "wait 200000 #1", "resume"]);
     expect(h.saved).toEqual(ITEMS);
     expect(r.waits).toBe(4);
-    expect(r.waitedMs).toBe(620_000);
+    expect(r.waitedMs).toBe(235_000);
   });
   it("gives up once the waiting in all would pass the limit", async () => {
-    const h = harness(ITEMS, (item) => (item === "b" ? new CapacityError("429") : null), { maxWaitMs: 200_000 });
+    const h = harness(ITEMS, (item) => (item === "b" ? new CapacityError("429") : null), { maxWaitMs: 20_000 });
     await expect(runPaced(h.options)).rejects.toBeInstanceOf(CapacityError);
     expect(h.saved).toEqual(["a"]);
-    expect(h.events).toEqual(["wait 60000 #1", "resume", "wait 120000 #2", "resume"]);
+    expect(h.events).toEqual(["wait 5000 #1", "resume", "wait 10000 #2", "resume"]);
   });
   it("a failing endpoint (500, 504, network) is waited out like a capacity answer and the loop continues from where it stopped", async () => {
     const h = harness(ITEMS, (item, n) => (item === "c" && n <= 2 ? new TransientError("500 Internal error") : null));
@@ -190,6 +301,50 @@ describe("runPaced", () => {
     await runPaced(m.options);
     expect([...m.saved].sort()).toEqual(ITEMS);
     expect(m.events.filter((e) => e.endsWith("endpoint"))).toEqual([]);
+  });
+  it("SELF-PACED: the loop runs at the run's own speed — it grows while calls succeed, within one loop", async () => {
+    const items = Array.from({ length: 40 }, (_, i) => `p${i}`);
+    const pacer = new Pacer(2, 64);
+    const h = harness(items, () => null, { concurrency: "self", pacer });
+    const r = await runPaced(h.options);
+    expect(r.done).toBe(40);
+    expect(h.started).toEqual(items);
+    // 2 successes → 3, 3 more → 4, … 8 more → 9: 35 successes; the 5 left are not a full round. Never more in flight than the speed.
+    expect(pacer.speed).toBe(9);
+    expect(h.maxInflight()).toBeGreaterThan(2);
+    expect(h.maxInflight()).toBeLessThanOrEqual(9);
+  });
+  it("SELF-PACED: a pushback halves the speed before the wait, the wait is recorded with both speeds, and the loop goes on slower", async () => {
+    const items = Array.from({ length: 12 }, (_, i) => `p${i}`);
+    const pacer = new Pacer(8, 64);
+    // The first round of 8: p0 is refused, the 7 others get through — not a full round, so the speed is still 8 when the provider pushes back.
+    const h = harness(items, (item, n) => (item === "p0" && n === 1 ? new CapacityError("RESOURCE_EXHAUSTED", 7_000) : null), { concurrency: "self", pacer });
+    const r = await runPaced(h.options);
+    expect([...h.saved].sort()).toEqual([...items].sort());
+    expect(h.events).toEqual(["wait 7000 #1 speed 8→4", "resume"]);
+    expect(r).toMatchObject({ done: 12, waits: 1, waitedMs: 7_000 });
+    expect(h.calls.get("p0")).toBe(2);
+    expect(pacer.peak).toBe(8);
+    expect(pacer.speed).toBeLessThan(8);
+  });
+  it("SELF-PACED: pushbacks in a row keep halving, down to one call at a time; a failing endpoint slows the run too", async () => {
+    const pacer = new Pacer(8, 64);
+    const h = harness(ITEMS, (item, n) => (item === "a" && n <= 4 ? (n === 4 ? new TransientError("503 upstream") : new CapacityError("429")) : null), { concurrency: "self", pacer });
+    await runPaced(h.options);
+    // The fourth pushback in a row is a failing endpoint: its wait is the endpoint's (1 min, doubled three times).
+    expect(h.events.filter((e) => e.startsWith("wait"))).toEqual(["wait 5000 #1 speed 8→4", "wait 10000 #2 speed 4→2", "wait 20000 #3 speed 2→1", "wait 480000 #4 endpoint speed 1→1"]);
+    expect([...h.saved].sort()).toEqual(ITEMS);
+  });
+  it("a step whose calls go one at a time is not sped up by its successes — but a pushback in it still slows the run", async () => {
+    const pacer = new Pacer(8, 64);
+    const h = harness(ITEMS, (item, n) => (item === "c" && n === 1 ? new CapacityError("429") : null), { concurrency: 1, pacer });
+    await runPaced(h.options);
+    expect(h.maxInflight()).toBe(1);
+    expect(h.events).toEqual(["wait 5000 #1 speed 8→4", "resume"]);
+    expect(pacer.speed).toBe(4);
+    const calm = new Pacer(8, 64);
+    await runPaced(harness(Array.from({ length: 30 }, (_, i) => `q${i}`), () => null, { concurrency: 1, pacer: calm }).options);
+    expect(calm.speed).toBe(8);
   });
   it("an unusable answer with a handler is recorded and the loop goes on", async () => {
     const failedItems: string[] = [];

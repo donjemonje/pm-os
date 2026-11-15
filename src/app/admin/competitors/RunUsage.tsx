@@ -1,3 +1,4 @@
+import type { PacingView } from "@/lib/competitors/analysis/pacing";
 import type { StepUsage } from "@/lib/competitors/analysis/usage";
 
 /**
@@ -72,6 +73,48 @@ export function RunCaps({ caps, recorded, active }: { /** One line per cap (caps
           <li key={line} data-testid="admin-cap-line">{line}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * How a run paced itself (analysis/pacing.ts), next to its tokens: the speed it started with, the fastest it got,
+ * its ceiling, and every time the provider pushed back — when, in which step, at what speed, the speed after, how
+ * long the run waited. A run paces itself from the provider's answers; nothing here is a setting.
+ */
+const PACING_COPY = {
+  title: "Speed",
+  notRecorded: "Speed: not recorded for this run (it ran before a run paced itself).",
+  older: (n: number) => `${n} earlier pushback${n === 1 ? "" : "s"} of this run ${n === 1 ? "is" : "are"} counted above and not listed.`,
+  reason: { capacity: "no capacity / slow down", endpoint: "the endpoint failed" } as Record<string, string>,
+  asked: (ms: number) => ` (the provider asked for ${Math.round(ms / 1000)} s)`,
+};
+
+export function RunPacing({ pacing }: { /** Null for a run from before pacing was recorded. */ pacing: PacingView | null }) {
+  if (!pacing) return <div className="text-xs text-slate-500" data-testid="admin-pacing-unknown">{PACING_COPY.notRecorded}</div>;
+  return (
+    <div className="text-xs" data-testid="admin-pacing">
+      <div className="text-slate-600"><span className="font-semibold">{PACING_COPY.title}:</span> <span data-testid="admin-pacing-line">{pacing.line}</span></div>
+      {pacing.pushbacks.length > 0 && (
+        <table className="mt-1.5">
+          <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
+            <tr><th className={TH}>When</th><th className={TH}>Step</th><th className={TH}>Company</th><th className={TH}>Why</th><th className={`${TH} text-right`}>Calls at once</th><th className={`${TH} text-right`}>Waited</th></tr>
+          </thead>
+          <tbody>
+            {pacing.pushbacks.map((p, i) => (
+              <tr key={`${p.at}|${i}`} className="border-t border-slate-200" data-testid="admin-pushback-row">
+                <td className={`${TD} whitespace-nowrap`}>{new Date(p.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
+                <td className={TD}>{p.step.replace(/_/g, " ")}</td>
+                <td className={TD}>{p.company ?? "–"}</td>
+                <td className={TD}>{PACING_COPY.reason[p.reason] ?? p.reason}</td>
+                <td className={`${TD} text-right tabular-nums`}>{p.speed} → {p.next}</td>
+                <td className={`${TD} text-right tabular-nums`}>{Math.round(p.waitMs / 1000)} s{p.retryAfterMs ? PACING_COPY.asked(p.retryAfterMs) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {pacing.total > pacing.pushbacks.length && <div className="mt-1 text-slate-500">{PACING_COPY.older(pacing.total - pacing.pushbacks.length)}</div>}
     </div>
   );
 }

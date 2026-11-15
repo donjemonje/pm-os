@@ -895,6 +895,11 @@ model CompetitorAnalysis {
   /// The run's tokens split by step and model (analysis/usage.ts): [{ step, model, calls, input, output, cached }].
   /// A setup run's list is the roll-up of its companies' lists (kept in `setup`) and of its shared calls.
   usage        Json       @default("[]")
+  /// How the run paced itself (analysis/pacing.ts): { start, max, peak, speed, pushbacks: [{ at, step, company, reason,
+  /// speed, next, waitMs, retryAfterMs }], total } — the calls at once it started with, its ceiling, the fastest it got,
+  /// and every time the provider pushed back: when, at what speed, how long the run waited. Null = a run from before
+  /// pacing was recorded.
+  pacing       Json?
   /// The caps this run hit (analysis/caps.ts) — limits are safety nets, so a hit is recorded and surfaced:
   /// [{ cap, limit, competitorId, company, undone, also, times }]. [] = no cap was hit.
   caps         Json       @default("[]")

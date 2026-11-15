@@ -72,6 +72,16 @@ env:
   #     - RUNTIME
   # - variable: COMPETITORS_MODEL_MATCH
   # - variable: COMPETITORS_MODEL_JUDGE
+  # The speed of an analysis run (src/lib/competitors/analysis/pacing.ts): a run
+  # paces itself from the provider's answers — it starts at 8 calls at once,
+  # speeds up while calls succeed and halves when the provider pushes back.
+  # Nothing to set. Two ceilings exist as safety nets only, with generous
+  # defaults in code; a run that is ever held back by one records a cap hit:
+  #   COMPETITORS_ANALYSIS_MAX_SPEED = most calls at once (default 64, at most 128)
+  #   COMPETITORS_ANALYSIS_TPM       = most tokens per minute (default 4,000,000)
+  # The old COMPETITORS_ANALYSIS_CONCURRENCY is read by nothing any more.
+  # - variable: COMPETITORS_ANALYSIS_MAX_SPEED
+  # - variable: COMPETITORS_ANALYSIS_TPM
   # Competitor profile media (UI captures, deep-dive images) referenced by path
   # from CompetitorMedia / CapabilityInsight.media and served by
   # /api/competitors/media. Unset = every capture shows its labelled placeholder.

@@ -6,6 +6,7 @@ import { readCounters } from "@/lib/competitors/analysis/counters";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { setSetupState, workspaceSetup } from "@/lib/competitors/analysis/setup";
 import { isOrgSetupState, ORG_SETUP_STATES, readSetupProgress, type OrgSetupState, type SetupStage } from "@/lib/competitors/analysis/setup-rules";
+import { pacingView, type PacingView } from "@/lib/competitors/analysis/pacing";
 import { readUsage, sortUsage, type StepUsage } from "@/lib/competitors/analysis/usage";
 
 /**
@@ -60,6 +61,8 @@ export interface AdminSetupRun {
   sharedUsage: StepUsage[];
   /** Every cap the run hit, one line each — the company named on the line; [] = no cap was hit. */
   caps: string[];
+  /** How the run paced itself and every pushback of the provider (analysis/pacing.ts); null for a run from before it was recorded. */
+  pacing: PacingView | null;
   /** The models of the run ("read … · match … · judge …"). */
   model: string | null;
   /** The token budget per company of the run; 0 before it started. */
@@ -96,7 +99,7 @@ export async function GET(req: Request) {
       where: { workspaceId, kind: "setup" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
-      select: { id: true, status: true, step: true, counters: true, usage: true, caps: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
+      select: { id: true, status: true, step: true, counters: true, usage: true, caps: true, pacing: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
   if (!setup) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -119,7 +122,7 @@ export async function GET(req: Request) {
           budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls, usage: sortUsage(x.usage), caps: capLines(capsOf(hit, x.competitorId)),
         })),
         rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens,
-        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), caps: capLines(hit), model: r.model, budget: c.budget,
+        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), caps: capLines(hit), pacing: pacingView(r.pacing), model: r.model, budget: c.budget,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };
     }),

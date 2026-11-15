@@ -7,7 +7,7 @@ import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
 import { aiStepEnabled, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
 import { getCompetitorsConfig } from "../store";
-import { analysisBaseWaitMs, analysisTpm, MAX_WAIT_MS, runPaced, TokenBudget, type PacedOptions, type PacedResult } from "./pacing";
+import { analysisBaseWaitMs, analysisMaxSpeed, analysisTpm, emptyPacing, MAX_WAIT_MS, PACE_START_SPEED, Pacer, pacingLine, readPacing, recordPushback, runPaced, TokenBudget, type PacedOptions, type PacedResult, type PacingRecord } from "./pacing";
 import { runAlertDue, runAlertEmail } from "./alert";
 import { ReadingBudget } from "./budget";
 import { capLine, capLines, CAPS, capsForEvent, capsHeadline, capsOf, clearStateCaps, readCaps, recordCap, type CapHit, type CapId } from "./caps";
@@ -26,8 +26,10 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  * The analysis run (Capability Analysis, "How the analysis runs").
  *
  * A scan ends when the pages are stored; a finished scan queues an analysis run for the competitor. ONE run
- * executes at a time in the whole installation, oldest first: the token quota is shared, and two runs that add
- * rows to one catalog at once would add the same row twice. A queue of one needs no shared rate limiter, no locks.
+ * executes at a time in the whole installation, oldest first: the provider's capacity is shared, and two runs that
+ * add rows to one catalog at once would add the same row twice. Inside a run the reading calls go many at once, at
+ * the run's own speed (analysis/pacing.ts): it starts fast, speeds up while calls succeed and slows down when the
+ * provider pushes back — every pushback is recorded on the run (CompetitorAnalysis.pacing). A queue of one needs no shared rate limiter, no locks.
  *
  *   queued ──claim (it is the head of the queue)──▶ running
  *   running ──capacity answer, or the endpoint failed (500, 502, 504, network)──▶ waiting (resumeAt; the same
@@ -374,6 +376,12 @@ export async function runAnalysis(id: string): Promise<void> {
   let usage: StepUsage[] = readUsage(row.usage);
   /** The caps this run hit (caps.ts): one entry per cap and company. [] = no cap was hit. */
   const caps: CapHit[] = readCaps(row.caps);
+  // The run's speed (pacing.ts): it starts fast, goes faster while calls succeed and halves when the provider pushes
+  // back. One pacer for the whole run — every step, and in a setup run every company, shares what it learned.
+  const pacer = new Pacer(PACE_START_SPEED, analysisMaxSpeed());
+  /** How the run paced itself. A run that continues starts fast again and keeps the pushbacks of its earlier walks. */
+  const paced: PacingRecord = { ...(readPacing(row.pacing) ?? emptyPacing(pacer)), start: pacer.start, max: pacer.max };
+  const pacing = (): PacingRecord => ({ ...paced, peak: Math.max(paced.peak, pacer.peak), speed: pacer.speed });
   const sync = () => {
     if (!setup) return;
     const t = setupTotals(setup);
@@ -389,6 +397,11 @@ export async function runAnalysis(id: string): Promise<void> {
   };
   let step: AnalysisStepName = "map";
   let lost = false;
+  /** A cap of the run as a whole — the two ceilings of its speed: recorded for no company, said once in the log. */
+  const runCap = (cap: CapId, r: { limit: number; undone: number; times?: number }) => {
+    const recorded = recordCap(caps, { cap, limit: r.limit, competitorId: null, company: null, undone: r.undone, times: r.times });
+    if (recorded.fresh || (recorded.changed && CAPS[cap].mode !== "event")) log("warn", `Cap hit — ${capLine(recorded.hit)}`);
+  };
   /** Every write to the run row goes through here: it names the claim, and zero rows means the run is no longer this worker's. */
   const own = async (data: Prisma.CompetitorAnalysisUpdateManyMutationInput): Promise<boolean> => {
     const r = await db.competitorAnalysis.updateMany({ where: { id, ownerToken: token }, data });
@@ -401,7 +414,8 @@ export async function runAnalysis(id: string): Promise<void> {
     // The log keeps its newest lines only: when older ones were dropped, that is a cap like any other.
     if (lines.length > MAX_LOG_LINES) recordCap(caps, { cap: "log_lines", limit: MAX_LOG_LINES, competitorId: null, company: null, undone: lines.length - MAX_LOG_LINES });
     return {
-      counters: counters as unknown as Prisma.InputJsonValue, usage: usage as unknown as Prisma.InputJsonValue, caps: caps as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
+      counters: counters as unknown as Prisma.InputJsonValue, usage: usage as unknown as Prisma.InputJsonValue, caps: caps as unknown as Prisma.InputJsonValue, pacing: pacing() as unknown as Prisma.InputJsonValue,
+      log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
       ...(setup ? { setup: setup as unknown as Prisma.InputJsonValue } : {}),
     };
   };
@@ -535,29 +549,38 @@ export async function runAnalysis(id: string): Promise<void> {
           return { value: r.value, tokens: r.usage.input + r.usage.output };
         },
         paced: async <T>({ reading: isReading, ...o }: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => {
+          const held = { calls: pace.holds, ms: pace.heldMs };
           const r = await runPaced<T>({
             ...o,
             ...(isReading ? { admit: (item: T) => reading.admit(o.estimate(item)), release: (item: T) => reading.release(o.estimate(item)) } : {}),
             budget: pace,
+            pacer,
             sleep,
             // 24 h of waiting in all, across the steps (and the companies) of the run.
             maxWaitMs: Math.max(0, MAX_WAIT_MS - waitedMs()),
-            baseWaitMs: analysisBaseWaitMs(),
+            baseWaitMs: analysisBaseWaitMs("capacity"),
+            transientBaseWaitMs: analysisBaseWaitMs("endpoint"),
             shouldStop,
             onWait: async (ms, attempt, cause) => {
               const resumeAt = new Date(Date.now() + ms);
               c.waits++;
               c.waitedMs += ms;
-              say("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, 160)})` : "PMOS AI has no capacity"} — waiting ${Math.round(ms / 1000)} s, then continuing from where it stopped (wait ${attempt} in a row)`);
+              // Every pushback is recorded on the run: when, in which step, at what speed, the speed after, how long it waits.
+              const speed = cause.speed ?? { from: pacer.speed, to: pacer.speed };
+              recordPushback(paced, { at: new Date().toISOString(), step, company: t.capsFor.name, reason: cause.transient ? "endpoint" : "capacity", speed: speed.from, next: speed.to, waitMs: ms, retryAfterMs: cause.retryAfterMs });
+              say("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, 160)})` : "PMOS AI has no capacity"} — slowing from ${speed.from} to ${speed.to} call${speed.to === 1 ? "" : "s"} at once, waiting ${Math.round(ms / 1000)} s${cause.retryAfterMs ? " (the provider asked for it)" : ""}, then continuing from where it stopped (pushback ${attempt} in a row)`);
               await own({ status: "waiting", resumeAt });
               await flush();
-              await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: t.competitor.id, kind: row.kind, step, waitMs: ms, attempt, reason: cause.transient ? "endpoint" : "capacity" });
+              await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: t.competitor.id, kind: row.kind, step, waitMs: ms, attempt, reason: cause.transient ? "endpoint" : "capacity", speedFrom: speed.from, speedTo: speed.to });
             },
             onResume: async () => {
               if (!(await own({ status: "running", resumeAt: null, heartbeatAt: new Date() }))) throw new RunLost();
               say("info", "Continuing");
             },
           });
+          // The two ceilings are safety nets: a run that was ever held back by one says so, like any other cap.
+          if (pace.holds > held.calls) runCap("tpm_ceiling", { limit: pace.tokensPerMinute, undone: Math.round((pace.heldMs - held.ms) / 1000), times: pace.holds - held.calls });
+          if (pacer.ceilingHit) runCap("speed_ceiling", { limit: pacer.max, undone: 0 });
           if (lost) throw new RunLost();
           if (r.stopped) throw new RunCancelled();
           if (reading.reached) c.budgetReached = 1;
@@ -689,6 +712,7 @@ export async function runAnalysis(id: string): Promise<void> {
       }
     }
     sync();
+    log("info", `Speed: ${pacingLine(pacing())}`);
     // Limits are safety nets: the run's last lines say whether one was hit, each with what it left undone.
     if (caps.length) log("warn", `${capsHeadline(caps)} in this run — ${capLines(caps).join("; ")}`);
     else log("info", `${capsHeadline(caps)} in this run`);
@@ -732,12 +756,12 @@ export async function runAnalysis(id: string): Promise<void> {
     if (outcome !== "done") await moveSetupState(row.workspaceId, "run_stopped").catch((e) => console.error("[competitors] the setup state could not be written", id, e));
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_setup_finished", {
       analysisId: id, outcome, step, companies: setup.companies.length, rows: setup.rows, domains: setup.domains, features: setup.features,
-      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps),
+      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total,
       durationMs: Date.now() - t0, totalMs: Date.now() - claimed.startedAt.getTime(), resumed: claimed.resumed, errorKind: errorKind ?? "none", error,
     });
   } else {
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, ...capsForEvent(caps), errorKind: errorKind ?? "none", error,
+      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total, errorKind: errorKind ?? "none", error,
     });
   }
   await alertSupport(id);
