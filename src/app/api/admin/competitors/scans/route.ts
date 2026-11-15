@@ -11,6 +11,8 @@ export interface AdminScanRow {
   orgName: string;
   competitorName: string;
   url: string;
+  /** What the scanned source is: website | helpcenter | apidocs | changelog | … (config.ts SOURCE_TYPES). */
+  sourceType: string;
   trigger: string;
   status: string;
   /** remote | local | bundle — admin only. */
@@ -64,6 +66,7 @@ export async function GET(req: Request) {
     orgName: s.source.competitor.workspace.organization.name,
     competitorName: s.source.competitor.isOwn ? `${s.source.competitor.name} — own site` : s.source.competitor.name,
     url: s.source.url,
+    sourceType: s.source.type,
     trigger: s.trigger,
     status: s.status,
     lane: s.lane,

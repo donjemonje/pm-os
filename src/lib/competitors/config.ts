@@ -194,9 +194,10 @@ export function isFactKind(v: unknown): v is FactKind {
 
 /**
  * Where a competitor's pages come from. The website is crawled by the
- * scanner; every other type gets its pages from a collector (an import, an
- * upload, a later connector) and runs the same pipeline. One source row per
- * type per competitor.
+ * scanner, and so are the company's other addresses (ADDRESS_KINDS below: a
+ * help center, developer docs, release notes — several of one type are
+ * possible). Every other type gets its pages from a collector (an import, an
+ * upload, a later connector) and runs the same pipeline.
  */
 export const SOURCE_TYPES = [
   "website",
@@ -219,6 +220,17 @@ export const SOURCE_TYPES = [
 export type SourceType = (typeof SOURCE_TYPES)[number];
 export function isSourceType(v: unknown): v is SourceType {
   return typeof v === "string" && (SOURCE_TYPES as readonly string[]).includes(v);
+}
+
+/**
+ * The kinds of OTHER ADDRESS of a company: the source types that — like the website — are an address the scanner
+ * crawls (lib/competitors/addresses.ts). A company's help center, developer docs and release notes usually sit on
+ * another address than its main site; each such address is a source of one of these types.
+ */
+export const ADDRESS_KINDS = ["helpcenter", "apidocs", "changelog"] as const;
+export type AddressKind = (typeof ADDRESS_KINDS)[number];
+export function isAddressKind(v: unknown): v is AddressKind {
+  return typeof v === "string" && (ADDRESS_KINDS as readonly string[]).includes(v);
 }
 
 /** What a stored page text is. */

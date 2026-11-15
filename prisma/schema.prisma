@@ -630,6 +630,11 @@ model Competitor {
   /// every listing of competitors leaves it out. At most one per workspace (enforced where it is created). What its
   /// pages say is OURS: it fills Capability.ourStatus / Feature.ourStatus, never a CapabilityStatus cell.
   isOwn       Boolean   @default(false)
+  /// The search for the company's other addresses — help center, developer docs, release notes (lib/competitors/discovery.ts).
+  /// Set while a search is working (one at a time per company; a search that stopped reporting is taken over after 10 minutes).
+  addressSearchStartedAt DateTime?
+  /// What the last search that finished says: { status: "done" | "undecided", at, trigger, candidates, added, note }.
+  addressSearch          Json?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -840,6 +845,7 @@ model CompetitorAnalysis {
   /// It makes the company's later runs ordinary ones (not a first picture) — plain id, no relation.
   parentId     String?
   /// "scan" | "catalog" (our catalog got a row this competitor was never checked for) | "manual" (PM-OS admin / CLI)
+  /// | "sources" (one of the company's other addresses was removed: what its pages said leaves the picture)
   /// | "setup" (the record of one company's part of a setup run)
   trigger      String
   /// The scan whose end queued it (the newest one when several were folded into one queued run); null for catalog / manual.
@@ -1141,11 +1147,27 @@ model CompetitorSource {
   /// One of SOURCE_TYPES (lib/competitors/config.ts): website | documents |
   /// helpcenter | video | archive | apidocs | changelog | code | social |
   /// reviews | marketplaces | press | jobs | events | other. The website is
-  /// crawled by the scanner; every other type receives its pages from a
-  /// collector (an upload, an import, a later connector) and runs the same
-  /// pipeline from there.
+  /// crawled by the scanner, and so is every OTHER ADDRESS of the company —
+  /// a helpcenter, apidocs or changelog source whose url is a plain site
+  /// address (lib/competitors/addresses.ts): found by PM-OS or added by a PM,
+  /// scanned whole on the website's schedule. A company may have several of
+  /// one type (docs.acme.com and support.acme.com are both a help center), so
+  /// (competitorId, type) is not unique; two sources of one company never
+  /// share a site (checked where a source is created). Every other type
+  /// receives its pages from a collector (an upload, an import, a later
+  /// connector) and runs the same pipeline from there.
   type         String     @default("website")
   url          String
+  /// An other address only — how it came to be: "link" (a link on the company's own site) | "llms" (its llms.txt) |
+  /// "guess" (a common name in front of its domain, verified) | "manual" (a PM added it). Null for the website, for a
+  /// source fed by a collector and for an address added before this was recorded.
+  foundVia     String?
+  /// The text of the link it was found under, when a link named it.
+  foundText    String?
+  /// A PM removed the address: it is never scanned, never shown, and never added back by a later search. The row
+  /// stays as that memory; its pages are marked removed. Adding the same address by hand brings it back.
+  removedAt    DateTime?
+  removedById  String?
   /// Scan frequency in days, set per source in Administration (PRD: once every 2 days).
   scanEveryDays Int       @default(2)
   lastScanAt   DateTime?
@@ -1160,7 +1182,7 @@ model CompetitorSource {
   localRequests LocalScanRequest[]
   sections      CompetitorSection[]
 
-  @@unique([competitorId, type])
+  @@index([competitorId, type])
   @@index([workspaceId])
 }
 
@@ -1321,7 +1343,7 @@ model SourcePage {
   state       String           @default("present")
   /// Consecutive scans that answered not-found (404/410 or a not-found page in the local lane).
   notFoundStreak Int           @default(0)
-  /// "home" | "sitemap" | "link" | "handin"
+  /// "home" | "sitemap" | "link" | "handin" | "discovery" (the site's /llms.txt, stored by the address search — never crawled)
   discoveredVia String         @default("link")
   firstSeenAt DateTime         @default(now())
   /// Last scan that read the page successfully.

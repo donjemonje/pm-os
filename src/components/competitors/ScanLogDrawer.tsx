@@ -8,6 +8,9 @@ import { cn } from "@/lib/utils";
 
 interface ScanRow {
   id: string;
+  /** Which of the company's addresses the scan read: "website", or the kind of one of its other addresses. */
+  sourceType: string;
+  sourceUrl: string;
   trigger: string;
   status: string;
   startedAt: string;
@@ -121,6 +124,11 @@ export function ScanLogDrawer({ competitorId, competitorName, onClose }: { compe
                   <span className="font-semibold">{shortDate(s.startedAt)}</span>
                   <span className="text-fg-muted" title={new Date(s.startedAt).toLocaleString()}>{timeAgo(s.startedAt)}</span>
                   <span className="text-fg-muted">· {C.log.trigger[s.trigger] ?? s.trigger}</span>
+                  {s.sourceType !== "website" && (
+                    <span className="rounded-full bg-[#eef1f6] px-2 py-px text-[11px] font-semibold text-[#4a5b74]" title={s.sourceUrl} data-testid="cmp-log-address">
+                      {C.settings.addresses.kinds[s.sourceType] ?? C.profile.sourceTypes[s.sourceType] ?? s.sourceType} · {s.sourceUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                    </span>
+                  )}
                   <span className="ml-auto font-mono text-[11px] text-fg-muted">
                     {C.log.summary(s.pagesFetched, s.pagesChanged)}
                   </span>

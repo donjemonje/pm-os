@@ -3,7 +3,8 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { ANALYSIS_TOKEN_BUDGET_DEFAULT, ANALYSIS_TOKEN_BUDGET_MAX, ANALYSIS_TOKEN_BUDGET_MIN, checkAnalysisTokenBudget } from "@/lib/competitors/analysis/budget";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { MAX_SCAN_EVERY_DAYS, MIN_SCAN_EVERY_DAYS } from "@/lib/competitors/config";
+import { isScannedSource } from "@/lib/competitors/addresses";
+import { ADDRESS_KINDS, MAX_SCAN_EVERY_DAYS, MIN_SCAN_EVERY_DAYS } from "@/lib/competitors/config";
 import { listScannerKeys } from "@/lib/competitors/local";
 import { getGlobalScanSettings, setGlobalScanSettings, testKnobsEnabled } from "@/lib/competitors/settings";
 
@@ -22,6 +23,8 @@ export interface AdminSourceRow {
   orgName: string;
   competitorName: string;
   url: string;
+  /** website, or the kind of one of the company's other addresses: helpcenter | apidocs | changelog. */
+  type: string;
   scanEveryDays: number;
   lastScanAt: string | null;
   lastStatus: string;
@@ -30,20 +33,24 @@ export interface AdminSourceRow {
 }
 
 async function sources(): Promise<AdminSourceRow[]> {
-  const rows = await db.competitorSource.findMany({
-    where: { type: "website", competitor: { deletedAt: null } },
-    include: {
-      competitor: { select: { name: true, isOwn: true, workspace: { select: { organization: { select: { name: true } } } } } },
-      localRequests: { where: { state: { in: ["waiting", "running"] } }, select: { createdAt: true }, take: 1 },
-    },
-    orderBy: [{ competitor: { workspace: { organization: { name: "asc" } } } }, { competitor: { name: "asc" } }],
-  });
+  // Every source the scanner crawls: the websites, and each company's other addresses under its website (addresses.ts).
+  const rows = (
+    await db.competitorSource.findMany({
+      where: { type: { in: ["website", ...ADDRESS_KINDS] }, competitor: { deletedAt: null } },
+      include: {
+        competitor: { select: { name: true, host: true, isOwn: true, workspace: { select: { organization: { select: { name: true } } } } } },
+        localRequests: { where: { state: { in: ["waiting", "running"] } }, select: { createdAt: true }, take: 1 },
+      },
+      orderBy: [{ competitor: { workspace: { organization: { name: "asc" } } } }, { competitor: { name: "asc" } }, { createdAt: "asc" }],
+    })
+  ).filter((s) => isScannedSource(s, s.competitor.host));
   return rows.map((s) => ({
     id: s.id,
     orgName: s.competitor.workspace.organization.name,
     // The organization's own site is scanned on a schedule like a competitor's (own.ts); the list says which it is.
     competitorName: s.competitor.isOwn ? `${s.competitor.name} — own site` : s.competitor.name,
     url: s.url,
+    type: s.type,
     scanEveryDays: s.scanEveryDays,
     lastScanAt: s.lastScanAt?.toISOString() ?? null,
     lastStatus: s.lastStatus,
@@ -75,7 +82,7 @@ export async function PATCH(req: Request) {
   if (typeof body.sourceId === "string") {
     const n = typeof body.scanEveryDays === "number" ? Math.round(body.scanEveryDays) : NaN;
     if (!Number.isFinite(n) || n < MIN_SCAN_EVERY_DAYS || n > MAX_SCAN_EVERY_DAYS) return NextResponse.json({ error: `Scan frequency must be between ${MIN_SCAN_EVERY_DAYS} and ${MAX_SCAN_EVERY_DAYS} days.` }, { status: 400 });
-    const r = await db.competitorSource.updateMany({ where: { id: body.sourceId, type: "website" }, data: { scanEveryDays: n } });
+    const r = await db.competitorSource.updateMany({ where: { id: body.sourceId, type: { in: ["website", ...ADDRESS_KINDS] } }, data: { scanEveryDays: n } });
     if (!r.count) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(await payload());
   }

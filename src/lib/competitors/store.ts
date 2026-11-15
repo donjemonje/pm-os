@@ -2,7 +2,9 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
 import { mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
+import { isScannedAddress, readAddressSearch, searchRunning } from "./addresses";
 import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
+import { siteHost } from "./url";
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -27,6 +29,34 @@ export interface SourceRow {
   badge: ScanBadge | null;
 }
 
+/** One of a company's other addresses (addresses.ts): a help center, developer docs or release notes, scanned whole like the website. */
+export interface AddressRow {
+  id: string;
+  /** helpcenter | apidocs | changelog */
+  kind: string;
+  url: string;
+  host: string;
+  /** Pages stored from it that are there now. */
+  pages: number;
+  lastScanAt: string | null;
+  /** A scan of it waits its turn. */
+  pending: { since: string } | null;
+  /** A scan is reading it right now. */
+  running: { pagesSoFar: number; startedAt: string } | null;
+  /** How its last finished scan ended, as users see it. */
+  badge: ScanBadge | null;
+  /** "link" | "llms" | "guess" (found by PM-OS) | "manual" (a PM added it) | null (added before this was recorded). */
+  foundVia: string | null;
+}
+
+/** The search for a company's other addresses, as the pages show it. */
+export interface AddressSearchRow {
+  /** A search is working right now. */
+  running: boolean;
+  /** How the last search that finished ended: "done", "undecided" (PMOS AI could not say what the candidates are; nothing was added), or null — none finished yet. */
+  status: "done" | "undecided" | null;
+}
+
 export interface CompetitorRow {
   id: string;
   name: string;
@@ -47,8 +77,11 @@ export interface CompetitorRow {
   pending: { since: string } | null;
   /** A scan is reading pages right now. */
   running: { pagesSoFar: number; startedAt: string } | null;
-  /** Every source of the competitor, website first. */
+  /** Every source of the competitor, website first — never an address a PM removed. */
   sources: SourceRow[];
+  /** Its other addresses that are scanned (help center, developer docs, release notes), in the order they were added. */
+  addresses: AddressRow[];
+  addressSearch: AddressSearchRow;
   /** The last finished website scan, as users see it. */
   lastScan: {
     id: string;
@@ -228,6 +261,8 @@ export interface CompetitorsState {
   scanning: boolean;
   /** An analysis run of the workspace is queued or in progress: the table is still being filled. */
   analyzing: boolean;
+  /** A search for a company's other addresses is working: Settings keeps refreshing until it has ended. */
+  searching: boolean;
   /** Active users of the organization — the notification recipients list. */
   members: { id: string; name: string; email: string }[];
   /** The Scan run in progress (header progress), if any. */
@@ -337,6 +372,32 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     if (!cur || (s.status === "running" && cur.status !== "running")) activeBySource.set(s.sourceId, s);
   }
   const isStaleRow = (s: (typeof activeScans)[number]) => s.status === "running" && nowMs - s.heartbeatAt.getTime() > STALE_MS;
+  // A company's other addresses: its sources that are scanned besides the website, with the pages stored from each.
+  const addressSources = competitors.flatMap((c) => c.sources.filter((s) => isScannedAddress(s, c.host)));
+  const pagesOfSource = new Map(
+    addressSources.length
+      ? (await db.sourcePage.groupBy({ by: ["sourceId"], where: { sourceId: { in: addressSources.map((s) => s.id) }, state: { not: "removed" } }, _count: { _all: true } })).map((g) => [g.sourceId, g._count._all])
+      : [],
+  );
+  const addressRow = (s: (typeof addressSources)[number]): AddressRow => {
+    const a = activeBySource.get(s.id);
+    return {
+      id: s.id,
+      kind: s.type,
+      url: s.url,
+      host: siteHost(new URL(s.url)),
+      pages: pagesOfSource.get(s.id) ?? 0,
+      lastScanAt: s.lastScanAt?.toISOString() ?? null,
+      pending: a && (a.status === "queued" || a.status === "pending_local" || isStaleRow(a)) ? { since: a.startedAt.toISOString() } : null,
+      running: a && a.status === "running" && !isStaleRow(a) ? { pagesSoFar: a.pagesFetched, startedAt: a.startedAt.toISOString() } : null,
+      badge: (scansBySource.get(s.id)?.[0]?.badge as ScanBadge | null) ?? null,
+      foundVia: s.foundVia ?? null,
+    };
+  };
+  const addressSearchRow = (c: { addressSearchStartedAt?: Date | null; addressSearch?: unknown }): AddressSearchRow => ({
+    running: searchRunning(c.addressSearchStartedAt, nowMs),
+    status: readAddressSearch(c.addressSearch)?.status ?? null,
+  });
   const config = mergeCompetitorsConfig(workspace?.competitorsConfig);
   const [members, activeRun, lastRun, feed] = await Promise.all([
     workspace
@@ -389,7 +450,10 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
           const a = website ? activeBySource.get(website.id) : undefined;
           return a && a.status === "running" && !isStaleRow(a) ? { pagesSoFar: a.pagesFetched, startedAt: a.startedAt.toISOString() } : null;
         })(),
-        sources: [...c.sources]
+        addresses: c.sources.filter((s) => isScannedAddress(s, c.host)).map(addressRow),
+        addressSearch: addressSearchRow(c),
+        sources: c.sources
+          .filter((s) => !s.removedAt)
           .sort((a, b) => (a.type === "website" ? -1 : b.type === "website" ? 1 : 0))
           .map((s) => {
             const sl = scansBySource.get(s.id)?.[0];
@@ -519,6 +583,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     lastScanAt: lastScanAt?.toISOString() ?? null,
     scanning: activeScans.length > 0 || activeRun != null,
     analyzing: activeAnalyses.length > 0,
+    searching: competitors.some((c) => searchRunning(c.addressSearchStartedAt, nowMs)),
     members,
     activeRun,
     feed,

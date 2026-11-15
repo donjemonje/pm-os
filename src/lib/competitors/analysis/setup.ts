@@ -78,7 +78,8 @@ export async function workspaceSetupState(workspaceId: string): Promise<SetupSta
 async function loadCompanies(workspaceId: string): Promise<SetupCompany[]> {
   const rows = await db.competitor.findMany({ where: { workspaceId, deletedAt: null }, select: { id: true, name: true, host: true, websiteUrl: true, isOwn: true, position: true } });
   const out: SetupCompany[] = [];
-  for (const c of rows) out.push({ ...c, pages: await db.sourcePage.count({ where: { source: { competitorId: c.id }, state: { not: "removed" }, text: { not: null } } }) });
+  // Pages a scan stored — never the site's llms.txt, which the address search stores for the map step and nothing reads as a page.
+  for (const c of rows) out.push({ ...c, pages: await db.sourcePage.count({ where: { source: { competitorId: c.id }, state: { not: "removed" }, text: { not: null }, discoveredVia: { not: "discovery" } } }) });
   return out;
 }
 

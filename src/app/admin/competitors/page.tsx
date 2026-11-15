@@ -6,6 +6,7 @@ import {
   FACTS_VERSION,
   getCompetitorsGeminiLocation,
 } from "@/lib/competitors/ai";
+import { ADDRESS_PICK_SYSTEM_PROMPT, ADDRESS_PICK_VERSION, addressPickTool, GUESS_NAMES, MAX_CANDIDATES } from "@/lib/competitors/addresses";
 import { competitorsModels, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, type PromptId } from "@/lib/competitors/models";
 import { DOMAINS_SYSTEM_PROMPT, DOMAINS_VERSION, domainsTool } from "@/lib/competitors/analysis/domains";
 import {
@@ -62,7 +63,7 @@ export default async function AdminCompetitorsPage() {
   /** What each role is used for, next to its model. */
   const ROLE_USE: Record<string, string> = { read: "map, research (the broad read and the go-back), second look, facts", match: "merge, unify batches, match", judge: "unify review, domains" };
   /** The prompt of the list → its id in models.ts PROMPT_ROLES (the role decides the model). */
-  const PROMPT_OF: Record<string, PromptId> = { map: "map", research: "research", merge: "merge", unify: "unify", "unify-review": "unify_review", domains: "domains", match: "match", look: "second_look", facts: "facts" };
+  const PROMPT_OF: Record<string, PromptId> = { map: "map", research: "research", merge: "merge", unify: "unify", "unify-review": "unify_review", domains: "domains", match: "match", look: "second_look", facts: "facts", addresses: "addresses" };
   const prompts: Array<{ id: string; title: string; note: string; text: string; tool: unknown; extra?: { label: string; text: string } }> = [
     {
       id: "map",
@@ -128,6 +129,13 @@ export default async function AdminCompetitorsPage() {
       text: FACTS_SYSTEM_PROMPT,
       tool: FACTS_TOOL,
     },
+    {
+      id: "addresses",
+      title: `Other addresses — not part of a run: one call per search of a company's other addresses (${ADDRESS_PICK_VERSION})`,
+      note: `Made when a competitor or the organization's own site is added, and after every scan of a main website that read a page. Code finds the candidates first: links on the home page that leave the site and look like help, docs, developers or release notes (by text or address); the addresses the site's llms.txt lists; and the names ${GUESS_NAMES.join(", ")} in front of the domain — a guess counts only when a made-up name on the same domain does not give the same answer and the page is not the main site again. Addresses the company already has, and addresses a PM removed, are left out. PMOS AI gets each remaining candidate (at most ${MAX_CANDIDATES}) with its code, address, how it was found, the link text, the page's title and first lines, and says what it is: help center, developer docs, release notes, or not worth scanning. Codes and kinds are closed sets: an answer that names a code that was not asked, or a kind outside the list, is unusable — the search records "could not decide" and adds nothing; it never fails the add of a competitor or a scan. Every address it names becomes a source and its first scan is queued at once.`,
+      text: ADDRESS_PICK_SYSTEM_PROMPT,
+      tool: addressPickTool(["A1", "A2", "…"]),
+    },
   ];
 
   return (
@@ -135,7 +143,7 @@ export default async function AdminCompetitorsPage() {
       user={admin}
       org={org}
       title="Competitors"
-      description="The competitors feature's PMOS AI — a model per role, region and the nine prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, every organization's setup runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
+      description="The competitors feature's PMOS AI — a model per role, region and the ten prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, every organization's setup runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
     >
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5">

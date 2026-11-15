@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { AdminSourceRow } from "@/app/api/admin/competitors/settings/route";
+import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ScannerKeyRow } from "@/lib/competitors/local";
 
 /**
@@ -222,7 +223,7 @@ export function AdminScanning() {
         <div className="mb-3 flex items-start justify-between gap-4">
           <div>
             <h2 className="text-sm font-bold">Scan frequency per source</h2>
-            <p className="mt-0.5 text-xs text-slate-500">Every website source, all organizations. Default every 2 days; the hourly tick starts a scan when the last one is older than this.</p>
+            <p className="mt-0.5 text-xs text-slate-500">Every source the scanner reads, all organizations: each website, and under it the company&apos;s other addresses (help center, developer docs, release notes) that PM-OS found or a PM added. Default every 2 days; the hourly tick starts a scan when the last one is older than this.</p>
           </div>
           <button onClick={() => void load()} disabled={busy} className={BTN}><RefreshCw size={13} /> Refresh</button>
         </div>
@@ -231,13 +232,14 @@ export function AdminScanning() {
         ) : (
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <table className="w-full text-xs">
-              <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Organization</th><th className="px-3 py-2">Competitor</th><th className="px-3 py-2">Site</th><th className="px-3 py-2">Every (days)</th><th className="px-3 py-2">Last scan</th><th className="px-3 py-2">State</th></tr></thead>
+              <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Organization</th><th className="px-3 py-2">Competitor</th><th className="px-3 py-2">Site</th><th className="px-3 py-2">Kind</th><th className="px-3 py-2">Every (days)</th><th className="px-3 py-2">Last scan</th><th className="px-3 py-2">State</th></tr></thead>
               <tbody>
                 {data.sources.map((s) => (
                   <tr key={s.id} className="border-t border-slate-200" data-testid="admin-source-row">
                     <td className="px-3 py-2">{s.orgName}</td>
                     <td className="px-3 py-2 font-medium">{s.competitorName}</td>
                     <td className="px-3 py-2 text-slate-500">{s.url.replace(/^https?:\/\//, "")}</td>
+                    <td className="px-3 py-2 text-slate-500" data-testid="admin-source-kind">{COMPETITORS_COPY.profile.sourceTypes[s.type] ?? s.type}</td>
                     <td className="px-3 py-2">
                       <select value={s.scanEveryDays} disabled={busy} onChange={(e) => void patch({ sourceId: s.id, scanEveryDays: Number(e.target.value) })} className={`${INPUT} w-20`} aria-label={`Scan ${s.competitorName} every N days`}>
                         {[1, 2, 3, 5, 7, 14, 30].map((n) => <option key={n} value={n}>{n}</option>)}

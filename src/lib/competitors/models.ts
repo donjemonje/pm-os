@@ -40,6 +40,8 @@ export const PROMPT_ROLES = {
   match: "match",
   second_look: "read",
   facts: "read",
+  // Not a step of an analysis run: the search for a company's other addresses (addresses.ts) asks what each candidate is.
+  addresses: "read",
 } as const satisfies Record<string, ModelRole>;
 export type PromptId = keyof typeof PROMPT_ROLES;
 

@@ -86,12 +86,12 @@ export async function importPages(opts: {
   }
   if (rows.length === 0) return { error: "no_pages" };
 
-  const source = await db.competitorSource.upsert({
-    where: { competitorId_type: { competitorId: competitor.id, type: opts.sourceType } },
-    create: { workspaceId: opts.workspaceId, competitorId: competitor.id, type: opts.sourceType, url: opts.sourceUrl?.trim() || competitor.websiteUrl, lastStatus: "running" },
-    update: { lastStatus: "running", ...(opts.sourceUrl?.trim() ? { url: opts.sourceUrl.trim() } : {}) },
-    select: { id: true },
-  });
+  // A collector's pages go into the company's source of that type — its oldest one that a PM did not remove (a
+  // company may have several addresses of one type since they are scanned; lib/competitors/addresses.ts).
+  const existing = (await db.competitorSource.findMany({ where: { competitorId: competitor.id, type: opts.sourceType }, orderBy: { createdAt: "asc" } })).find((s) => !s.removedAt);
+  const source = existing
+    ? await db.competitorSource.update({ where: { id: existing.id }, data: { lastStatus: "running", ...(opts.sourceUrl?.trim() ? { url: opts.sourceUrl.trim() } : {}) }, select: { id: true } })
+    : await db.competitorSource.create({ data: { workspaceId: opts.workspaceId, competitorId: competitor.id, type: opts.sourceType, url: opts.sourceUrl?.trim() || competitor.websiteUrl, lastStatus: "running" }, select: { id: true } });
   const scan = await db.competitorScan.create({
     data: { workspaceId: opts.workspaceId, sourceId: source.id, trigger: "import", fetchMode: "bundle", startedById: opts.startedById, status: "queued" },
     select: { id: true },

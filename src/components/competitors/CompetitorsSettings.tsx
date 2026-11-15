@@ -7,9 +7,9 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES } from "@/lib/competitors/config";
+import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
-import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
+import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
 import { scanSummaryLine } from "@/lib/competitors/summary";
@@ -118,8 +118,9 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   // ——— Scan now + polling until the scan leaves queued/running ———
   const scanning = state.scanning;
   const analyzing = state.analyzing;
+  const searching = state.searching;
   useEffect(() => {
-    if (!scanning && !analyzing) return;
+    if (!scanning && !analyzing && !searching) return;
     const tick = async () => {
       await refresh();
       pollRef.current = setTimeout(tick, POLL_MS);
@@ -128,7 +129,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [scanning, analyzing, refresh]);
+  }, [scanning, analyzing, searching, refresh]);
 
   async function scanNow(c: CompetitorRow) {
     setError(null);
@@ -154,6 +155,13 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   async function removeCompetitor(c: CompetitorRow) {
     if (!(await confirm({ title: C.settings.removeTitle(c.name), message: C.settings.removeBody, confirmLabel: C.settings.removeConfirm, tone: "danger" }))) return;
     await call("DELETE", `/api/competitors/${c.id}`);
+  }
+
+  // ——— A company's other addresses (help center, developer docs, release notes) ———
+  const addAddress = (companyId: string, body: { address: string; kind: AddressKind }) => call("POST", `/api/competitors/${companyId}/sources`, body);
+  async function removeAddress(companyId: string, a: AddressRow) {
+    if (!(await confirm({ title: C.settings.addresses.removeTitle(a.host), message: C.settings.addresses.removeBody, confirmLabel: C.settings.addresses.removeConfirm, tone: "danger" }))) return;
+    await call("DELETE", `/api/competitors/${companyId}/sources/${a.id}`);
   }
 
   const competitors = state.competitors;
@@ -188,7 +196,8 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
             ) : (
               competitors.map((c) => (
                 <CompetitorLine key={c.id} c={c} busy={busy} scanning={scanning} canEdit={canEdit} nextScanAt={nextScanAt(c)}
-                  onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)} />
+                  onScan={scanNow} onLog={setLogFor} onRemove={removeCompetitor} onSave={(id, body) => call("PATCH", `/api/competitors/${id}`, body)}
+                  onAddAddress={addAddress} onRemoveAddress={removeAddress} />
               ))
             )}
           </>
@@ -354,7 +363,9 @@ function RemovedCapabilityLine({ k, domains, busy, onRestore }: {
 
 // ————— Competitor row —————
 
-function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog, onRemove, onSave }: {
+function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog, onRemove, onSave, onAddAddress, onRemoveAddress }: {
+  onAddAddress: (companyId: string, body: { address: string; kind: AddressKind }) => Promise<boolean>;
+  onRemoveAddress: (companyId: string, a: AddressRow) => Promise<void>;
   c: CompetitorRow;
   busy: boolean;
   scanning: boolean;
@@ -399,7 +410,8 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
   }
 
   return (
-    <div className="flex items-center gap-3 border-b border-border px-5 py-3 last:border-b-0">
+    <div className="border-b border-border px-5 py-3 last:border-b-0" data-testid="cmp-competitor" data-name={c.name}>
+    <div className="flex items-center gap-3">
       <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-border bg-white text-fg-muted">
         {c.logoUrl && !logoBroken ? <img src={c.logoUrl} alt="" onError={() => setLogoBroken(true)} className="h-[70%] w-[70%] object-contain" /> : <Globe size={14} />}
       </span>
@@ -453,6 +465,89 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
             </>
           )}
         </>
+      )}
+    </div>
+    <AddressList addresses={c.addresses} search={c.addressSearch} canEdit={canEdit} busy={busy} onAdd={(body) => onAddAddress(c.id, body)} onRemove={(a) => onRemoveAddress(c.id, a)} />
+    </div>
+  );
+}
+
+// ————— A company's other addresses —————
+
+/**
+ * Under a company's website line: its other addresses — help center, developer docs, release notes — that PM-OS
+ * found or a PM added (lib/competitors/addresses.ts). Each says what it is, where it is, how many pages are stored
+ * from it and where its scan stands, and can be removed (with a confirm). "Add address" takes an address and what
+ * it is: Enter confirms, Esc cancels. While PM-OS is looking, the list says so; when it found nothing, it says that.
+ */
+function AddressList({ addresses, search, canEdit, busy, onAdd, onRemove }: {
+  addresses: AddressRow[];
+  search: AddressSearchRow;
+  canEdit: boolean;
+  busy: boolean;
+  onAdd: (body: { address: string; kind: AddressKind }) => Promise<boolean>;
+  onRemove: (a: AddressRow) => Promise<void>;
+}) {
+  const A = C.settings.addresses;
+  const [adding, setAdding] = useState(false);
+  const [address, setAddress] = useState("");
+  const [kind, setKind] = useState<AddressKind>("helpcenter");
+  function close() {
+    setAdding(false);
+    setAddress("");
+    setKind("helpcenter");
+  }
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!address.trim()) return;
+    if (await onAdd({ address, kind })) close();
+  }
+  return (
+    <div className="ml-11 mt-2" data-testid="cmp-addresses">
+      {addresses.map((a) => (
+        <div key={a.id} className="flex items-center gap-2 py-1 text-[12.5px]" data-testid="cmp-address" data-kind={a.kind} data-host={a.host}>
+          <span className="shrink-0 rounded-full bg-[#eef1f6] px-2 py-px text-[11px] font-semibold text-[#4a5b74]" title={a.foundVia ? A.foundBy[a.foundVia] : undefined}>{A.kinds[a.kind] ?? a.kind}</span>
+          <a href={a.url} target="_blank" rel="noreferrer" className="min-w-0 truncate text-foreground hover:underline">{a.host}</a>
+          <span className="shrink-0 text-fg-muted">· {A.pages(a.pages)}</span>
+          <span className={cn("shrink-0", a.running ? "text-[#2a5fd0]" : "text-fg-muted")} data-testid="cmp-address-scan">
+            · {a.running ? A.scanInProgress(a.running.pagesSoFar) : a.pending ? A.scanPending : a.lastScanAt ? `${A.lastScan(timeAgo(a.lastScanAt))}${a.badge && a.badge !== "full" ? ` (${(C.settings.badges[a.badge] ?? a.badge).toLowerCase()})` : ""}` : A.neverScanned}
+          </span>
+          {canEdit && (
+            <button type="button" onClick={() => void onRemove(a)} className={cn(ICON_BTN, "ml-auto p-1 hover:text-[#c23767]")} aria-label={A.removeLabel(a.host)} title={a.running ? A.scanRunning : undefined} disabled={busy || Boolean(a.running)} data-testid="cmp-address-remove">
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
+      ))}
+      {search.running ? (
+        <div className="flex items-center gap-1.5 py-1 text-[12px] text-fg-muted" data-testid="cmp-address-search"><Loader2 size={12} className="animate-spin" />{A.searching}</div>
+      ) : search.status === "undecided" ? (
+        <div className="py-1 text-[12px] text-[#8a5a00]" data-testid="cmp-address-search">{A.undecided}</div>
+      ) : search.status === "done" && addresses.length === 0 ? (
+        <div className="py-1 text-[12px] text-fg-muted" data-testid="cmp-address-search">{A.noneFound}</div>
+      ) : null}
+      {canEdit && !adding && (
+        <button type="button" onClick={() => setAdding(true)} className="mt-1 inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline" disabled={busy} data-testid="cmp-address-add">
+          <Plus size={12} /> {A.add}
+        </button>
+      )}
+      {canEdit && adding && (
+        <form onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); close(); } }} className="mt-2 flex flex-wrap items-end gap-2" data-testid="cmp-address-form">
+          <label className="block min-w-[260px] flex-1">
+            <span className={FIELD_LABEL}>{A.address}</span>
+            <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder={A.addressPlaceholder} className={INPUT} disabled={busy} autoFocus />
+          </label>
+          <label className="block w-44">
+            <span className={FIELD_LABEL}>{A.kind}</span>
+            <select value={kind} onChange={(e) => setKind(e.target.value as AddressKind)} className={SELECT} disabled={busy}>
+              {ADDRESS_KINDS.map((k) => <option key={k} value={k}>{A.kinds[k]}</option>)}
+            </select>
+          </label>
+          <Button type="button" onClick={close} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+          <Button type="submit" variant="primary" disabled={busy || !address.trim()}>
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {C.settings.save}
+          </Button>
+        </form>
       )}
     </div>
   );

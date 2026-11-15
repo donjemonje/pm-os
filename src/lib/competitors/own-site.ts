@@ -27,7 +27,11 @@ export async function ownSourceOf(workspaceId: string): Promise<OwnSource | null
 }
 
 export type AddOwnSiteResult =
-  | { competitorId: string; name: string; host: string; websiteUrl: string; scan: CreateScanResult; frozenCapabilities: number; frozenFeatures: number }
+  | {
+      competitorId: string; name: string; host: string; websiteUrl: string; scan: CreateScanResult; frozenCapabilities: number; frozenFeatures: number;
+      /** The home page this add fetched, for the search for the site's other addresses (address-search.ts) the caller starts next; null when it was not a readable page. */
+      home: { html: string; finalUrl: string } | null;
+    }
   | { error: "no_workspace" | "invalid_url" | "private" | "unreachable" | "exists" | "is_competitor"; message: string };
 
 /**
@@ -39,6 +43,10 @@ export type AddOwnSiteResult =
  *
  * The rows the catalog already has keep the own status they carry: it was typed by the team before any own site
  * existed, so it is frozen as a PM's value (ourStatusSetAt) and no run of the own source changes it.
+ *
+ * The site's other addresses — its help center, developer docs, release notes — are looked for next, by the caller
+ * (address-search.ts searchAddresses, with the home page returned here): the CLI waits for the search, a route
+ * runs it after its answer.
  */
 export async function addOwnSite(workspaceId: string, website: string): Promise<AddOwnSiteResult> {
   const workspace = await db.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, organization: { select: { name: true } } } });
@@ -90,7 +98,8 @@ export async function addOwnSite(workspaceId: string, website: string): Promise<
   // Loaded here, not at the top: the analysis engine imports this file (the product-lines page) and scan.ts imports the engine.
   const { createAndRouteScan } = await import("./scan");
   const scan = await createAndRouteScan(workspaceId, created.id, "onboarding", null);
-  return { competitorId: created.id, name, host: site.host, websiteUrl: origin, scan, frozenCapabilities: created.capabilities, frozenFeatures: created.features };
+  const home = probe.html && !probe.error ? { html: probe.html, finalUrl: probe.finalUrl || site.url } : null;
+  return { competitorId: created.id, name, host: site.host, websiteUrl: origin, scan, frozenCapabilities: created.capabilities, frozenFeatures: created.features, home };
 }
 
 export type ProductLinesSync = "written" | "unchanged" | "removed" | "none";

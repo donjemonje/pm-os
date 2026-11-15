@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import type { AdminScanMetrics, AdminScanRow } from "@/app/api/admin/competitors/scans/route";
+import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 
 /**
  * Scanner health across every organization: one row per run, newest first,
@@ -136,6 +137,8 @@ export function AdminScans({ reloadKey = 0 }: { /** Changes when the list must b
                       <td className="px-3 py-2 font-medium">{r.orgName}</td>
                       <td className="px-3 py-2">
                         {r.competitorName}
+                        {/* A scan of one of the company's other addresses says which kind it is; a website scan says nothing. */}
+                        {r.sourceType !== "website" && <span className="ml-1.5 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-px text-[10.5px] text-slate-600" data-testid="admin-scan-kind" title={r.url}>{COMPETITORS_COPY.profile.sourceTypes[r.sourceType] ?? r.sourceType}</span>}
                       </td>
                       <td className="px-3 py-2">
                         <span className={`inline-flex rounded-full border px-2 py-px text-[11px] font-medium ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span>

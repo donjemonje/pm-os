@@ -5,6 +5,8 @@
  * Pure: no database, no network.
  */
 
+import { isLlmsTxt } from "./sections";
+
 /** "<version>:<hash>" — what SourcePage.analyzedKey / factsKey hold: the prompt version and the text that was read. */
 export function readKey(version: string, hash: string): string {
   return `${version}:${hash}`;
@@ -31,7 +33,8 @@ export function tooManyFailed(failed: number, todo: number): boolean {
 
 /** The stored pages the facts step still has to read (every tier), in address order. */
 export function factsTodo<T extends { url: string; hash: string; factsKey: string | null; state: string; hasText: boolean }>(pages: T[], version: string): T[] {
-  return pages.filter((p) => p.state !== "removed" && p.hasText && p.factsKey !== readKey(version, p.hash)).sort(byUrl);
+  // The site's /llms.txt is stored for the map step only (sections.ts isLlmsTxt): it is never read as a page.
+  return pages.filter((p) => p.state !== "removed" && p.hasText && !isLlmsTxt(p.url) && p.factsKey !== readKey(version, p.hash)).sort(byUrl);
 }
 
 /**

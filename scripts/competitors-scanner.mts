@@ -16,6 +16,10 @@
  *                                                      scanned like a competitor's site, never shown as one; its first scan is queued
  *                                                      exactly as adding a competitor does. Refused when the organization has one, or
  *                                                      when the site is one of its competitors.
+ *   npm run competitors:scan -- --addresses <competitorId>   look for the company's other addresses now — help center, developer docs,
+ *                                                      release notes — and queue a scan of each one found (the id of a competitor or
+ *                                                      of an own site). The same search runs by itself when a company is added and
+ *                                                      after every scan of its website; asked by hand it also runs with COMPETITORS_AI=off.
  *   npm run competitors:scan -- --setup <workspaceId>  queue THE SETUP RUN of an organization that has no domain and no capability
  *                                                      and run it here: map, research and merge for the own site and every competitor,
  *                                                      unify into rows, build the domains, fill the table. Refused (nothing written)
@@ -48,6 +52,7 @@ import { importPages } from "../src/lib/competitors/import";
 import { echoRunLog, queueAnalysis, readCounters, runAnalysis } from "../src/lib/competitors/analysis/engine";
 import { queueSetup } from "../src/lib/competitors/analysis/setup";
 import { readSetupProgress } from "../src/lib/competitors/analysis/setup-rules";
+import { searchAddresses, type SearchOutcome } from "../src/lib/competitors/address-search";
 import { addOwnSite } from "../src/lib/competitors/own-site";
 import { recordCompetitorEvent } from "../src/lib/competitors/analytics";
 import { failStaleScans, settleInline, tick } from "../src/lib/competitors/run";
@@ -104,7 +109,28 @@ async function runOwnSite(workspaceId: string, url: string): Promise<void> {
   const where = { started: "started in the remote lane", queued: "queued for the remote lane", pending_local: "waiting for the local station", no_station: "FAILED: no local station key is enrolled (Administration → Competitors → Local stations)" }[r.scan.state];
   console.log(`[scanner] first scan ${r.scan.scanId}: ${where}`);
   if (r.scan.state === "no_station") process.exitCode = 1;
-  else console.log(`[scanner] when the scan has ended, run the setup: --setup ${workspaceId}`);
+  // The site's other addresses are looked for at once, as when a competitor is added.
+  printAddressSearch(await searchAddresses(r.competitorId, { trigger: "added", home: r.home }));
+  if (r.scan.state !== "no_station") console.log(`[scanner] when the scans have ended, run the setup: --setup ${workspaceId}`);
+}
+
+function printAddressSearch(r: SearchOutcome): void {
+  if ("skipped" in r) {
+    console.log(r.skipped === "running" ? "[scanner] other addresses: a search of this company is already working" : "[scanner] other addresses: no such company");
+    return;
+  }
+  const seen = `${r.candidates} new candidate${r.candidates === 1 ? "" : "s"}${r.alreadyThere ? `, ${r.alreadyThere} already there` : ""}${r.removedByPm ? `, ${r.removedByPm} removed by the team (not added back)` : ""}`;
+  if (r.status === "undecided") console.log(`[scanner] other addresses: could not decide — nothing added (${seen})${r.note ? `: ${r.note}` : ""}`);
+  else if (!r.added.length) console.log(`[scanner] other addresses: none added (${seen})${r.note ? ` — ${r.note}` : ""}`);
+  else console.log(`[scanner] other addresses: ${r.added.map((a) => `${a.kind} ${a.url} (found by ${a.via})`).join(", ")} — a scan of each is queued (${seen})${r.note ? ` — ${r.note}` : ""}`);
+}
+
+/** `--addresses <competitorId>`: the search for a company's other addresses, asked by hand (lib/competitors/address-search.ts). */
+async function runAddresses(competitorId: string): Promise<void> {
+  const company = await db.competitor.findUnique({ where: { id: competitorId }, select: { name: true, host: true, deletedAt: true } });
+  if (!company || company.deletedAt) throw new Error(`no competitor or own site with the id ${competitorId}`);
+  console.log(`[scanner] looking for the other addresses of ${company.name} (${company.host})`);
+  printAddressSearch(await searchAddresses(competitorId, { trigger: "manual" }));
 }
 
 /** `--setup <workspaceId>`: queue the setup run (or continue the one that failed) and run it in this process (analysis/setup.ts). */
@@ -152,6 +178,7 @@ async function main() {
   const rematchIdx = args.indexOf("--rematch");
   const ownSiteIdx = args.indexOf("--own-site");
   const setupIdx = args.indexOf("--setup");
+  const addressesIdx = args.indexOf("--addresses");
   // The sweep belongs to the tick and the runs. A job started for one scan does not sweep: were it to start late, it would
   // mark the very scan it came to process as stale and relaunch it (Tomer's review 2026-11-10).
   if (scanIdx < 0 && analysisIdx < 0) {
@@ -186,12 +213,14 @@ async function main() {
     console.log(`[scanner] ${r.count} match${r.count === 1 ? "" : "es"} by PMOS AI forgotten — run --analyze ${args[rematchIdx + 1]} to match them again`);
   } else if (ownSiteIdx >= 0 && args[ownSiteIdx + 1] && args[ownSiteIdx + 2]) {
     await runOwnSite(args[ownSiteIdx + 1], args[ownSiteIdx + 2]);
+  } else if (addressesIdx >= 0 && args[addressesIdx + 1]) {
+    await runAddresses(args[addressesIdx + 1]);
   } else if (setupIdx >= 0 && args[setupIdx + 1]) {
     await runSetup(args[setupIdx + 1]);
   } else if (args.includes("--tick") || args.includes("--due")) {
     await tick((m) => console.log(`[scanner] ${m}`));
   } else {
-    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId> | --rematch <competitorId> | --own-site <workspaceId> <url> | --setup <workspaceId>");
+    console.error("usage: competitors-scanner --scan <id> | --run <runId> | --tick | --import <manifest.json> | --analysis <id> | --analyze <competitorId> | --rematch <competitorId> | --own-site <workspaceId> <url> | --addresses <competitorId> | --setup <workspaceId>");
     process.exitCode = 2;
   }
 }

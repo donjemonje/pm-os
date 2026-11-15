@@ -20,7 +20,7 @@ import { acquireBrowser, browserAvailable, fetchPage, isRetryable, outcomeCatego
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
 import { finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
 import { getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
-import { isPdfUrl, pageKey } from "./url";
+import { isPdfUrl, pageKey, sourceSiteHost } from "./url";
 
 /**
  * One scan of one source, in two halves (Website Scanning PRD 2026-11-04).
@@ -155,6 +155,11 @@ export type CreateScanResult =
  * lane when it is ON (started at once when a slot is free, else queued), the
  * local lane when OFF. A scan of a site that is already scanning is queued
  * behind the running one — never two scans on one site.
+ *
+ * `sourceId` names one source of the company — one of its other addresses
+ * (a company may have several of one type; lib/competitors/addresses.ts).
+ * Without it the scan is of the company's source of `sourceType`, its
+ * oldest one. An address a PM removed is never scanned.
  */
 export async function createAndRouteScan(
   workspaceId: string,
@@ -162,9 +167,14 @@ export async function createAndRouteScan(
   trigger: "manual" | "scheduled" | "onboarding",
   startedById: string | null,
   sourceType: SourceType = "website",
+  sourceId: string | null = null,
 ): Promise<CreateScanResult> {
-  const source = await db.competitorSource.findFirst({ where: { workspaceId, competitorId, type: sourceType }, select: { id: true, competitor: { select: { deletedAt: true } } } });
-  if (!source) return { error: "no_source" };
+  const source = await db.competitorSource.findFirst({
+    where: sourceId ? { id: sourceId, workspaceId, competitorId } : { workspaceId, competitorId, type: sourceType },
+    orderBy: { createdAt: "asc" },
+    include: { competitor: { select: { deletedAt: true } } },
+  });
+  if (!source || source.removedAt) return { error: "no_source" };
   if (source.competitor.deletedAt) return { error: "removed" };
   const t = await now();
   const active = await db.competitorScan.findFirst({ where: { sourceId: source.id, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true } });
@@ -290,7 +300,10 @@ function noteResult(log: ScanLog, out: Collected, r: RecordPageResult, page: Fet
 
 /** The website: the remote lane crawls under the scanner rules. */
 async function collectWebsite(ctx: CollectContext): Promise<Collected> {
-  const { scanId, workspaceId, source, competitor, log, t0 } = ctx;
+  const { scanId, workspaceId, source, log, t0 } = ctx;
+  // The site that bounds the crawl is the source's own: the company's host for its website, the source's address for
+  // a help center, developer docs or release notes on another host (url.ts sourceSiteHost).
+  const competitor = { ...ctx.competitor, host: sourceSiteHost(source, ctx.competitor.host) };
   const out = emptyCollected("plain");
   let mode: FetchMode = "plain";
   const limits = { ms: await scanTimeLimitMs() };
@@ -684,6 +697,18 @@ export async function runScan(scanId: string): Promise<void> {
     await startQueuedScans(launchScan);
   } catch (e) {
     console.error("[competitors] could not start the next queued scan", e);
+  }
+
+  // The company's other addresses — help center, developer docs, release notes — are looked for again after every
+  // scan of its main website that read a page: companies add these later. The scan has ended; whatever the search
+  // does, it changes nothing about it (address-search.ts never throws, and an address it adds gets a scan of its own).
+  if (source.type === "website" && log.read > 0) {
+    try {
+      const { searchAddresses } = await import("./address-search");
+      await searchAddresses(competitor.id, { trigger: "scan", userId: scan.startedById });
+    } catch (e) {
+      console.error("[competitors] the search for other addresses after the scan failed", scanId, e);
+    }
   }
 }
 

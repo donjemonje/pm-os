@@ -223,6 +223,14 @@ export interface TestAiAnswers {
   domains?: string[];
   /** Capacity answers: after `afterCalls` successful calls of the run, the next `times` calls answer "no capacity". */
   rateLimit?: { afterCalls: number; times: number };
+  /**
+   * The search for the company's other addresses (address-search.ts), not an analysis run: what a candidate address
+   * is, by its host ("support.acme.example" → "helpcenter" | "apidocs" | "changelog" | "skip"); "*" = every other
+   * candidate. A candidate no entry names is "skip". Kind words, not JSON: the answer is built from them
+   * (addresses.ts injectedAddressPick) and goes through the same parser — a word outside the closed set is an
+   * unusable answer, as a real one would be.
+   */
+  addresses?: Record<string, string>;
 }
 
 const isJson = (v: unknown): v is string => {
@@ -245,6 +253,11 @@ export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string
     const m = r.map;
     if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every((v) => typeof v === "string")) return { error: "map must be an object of section address → label" };
     out.map = m as Record<string, string>;
+  }
+  if (r.addresses !== undefined) {
+    const m = r.addresses;
+    if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every((v) => typeof v === "string")) return { error: "addresses must be an object of address host → kind" };
+    out.addresses = m as Record<string, string>;
   }
   for (const key of ["research", "secondLook"] as const) {
     if (r[key] === undefined) continue;

@@ -61,7 +61,7 @@ export async function planOf(ctx: RunContext): Promise<ReadingPlan> {
   return ctx.plan;
 }
 
-/** The text of the site's /llms.txt when a stored page of the website has that path (nothing stores it yet; a later scanning change will). */
+/** The text of the site's /llms.txt when a stored page of the website has that path: the search for the company's other addresses stores it and refreshes it (address-search.ts storeLlmsTxt). */
 async function llmsTxt(pages: StoredPage[]): Promise<string | null> {
   const page = pages.find((p) => p.sourceType === "website" && p.state !== "removed" && p.hasText && isLlmsTxt(p.url));
   if (!page) return null;

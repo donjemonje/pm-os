@@ -71,7 +71,8 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  * itself: the competitor's next scan queues a new run, which starts from what is left.
  */
 
-export type AnalysisTrigger = "scan" | "catalog" | "manual";
+/** "sources" = an address of the company was removed (address-search.ts): what its pages said leaves the picture. Automatic, like "scan" and "catalog". */
+export type AnalysisTrigger = "scan" | "catalog" | "manual" | "sources";
 /** "unify" and "domains" are steps of a setup run only. */
 export type AnalysisStepName = "map" | "research" | "merge" | "unify" | "domains" | "match" | "go_back" | "second_look" | "apply" | "facts";
 export const ACTIVE_ANALYSIS_STATUSES = ["queued", "running", "waiting"] as const;
