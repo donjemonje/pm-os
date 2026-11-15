@@ -10,6 +10,11 @@ import { isRetryable, outcomeCategoryOf } from "@/lib/competitors/fetcher";
 import { contentHash, normalizeText } from "@/lib/competitors/html";
 import { mergeCompetitorsConfig, scanPauseMs, CRAWL_DELAY_CAP_MS } from "@/lib/competitors/config";
 
+// These tests check the product defaults: the e2e environment (CI sets it for the whole job) must not leak in.
+delete process.env.COMPETITORS_PAUSE_MS;
+delete process.env.COMPETITORS_CEILING_MS;
+delete process.env.COMPETITORS_CONFIG;
+
 describe("checkPii — nothing about a person is stored", () => {
   it("catches emails, phones, profile links and name + title", () => {
     expect(checkPii("Contact sales at jane.doe@acme.com for a quote").kind).toBe("email");
