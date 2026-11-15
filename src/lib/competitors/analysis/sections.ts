@@ -53,8 +53,16 @@ export const SPLIT_MIN_PAGES = 40;
 export const SPLIT_MIN_SUBFOLDER_PAGES = 5;
 /** A big section is split only when it has at least this many sizable sub-folders. */
 export const SPLIT_MIN_SUBFOLDERS = 2;
-/** Sample titles and sample addresses shown to PMOS AI per section. */
+/** Sample pages shown to PMOS AI per section: each with its address, its title and its first lines (the map skims them). */
 export const SECTION_SAMPLES = 4;
+/** The first lines of a sample page the map sees: about this many characters of the page's own text. */
+export const MAP_OPENING_CHARS = 300;
+/** How much of a sample page's stored text is looked at to find them: a page starts with the site's menu, its own text comes after. */
+export const MAP_SKIM_CHARS = 6000;
+/** A line is the site's frame — menu, banner, footer — when it shows on at least this share of the source's sample pages … */
+export const FRAME_SHARE = 0.5;
+/** … and the source has at least this many sample pages; with fewer there is nothing to compare, and every line is the page's own. */
+export const FRAME_MIN_PAGES = 4;
 /** An index page of a section is at most this many path segments below the section's prefix (0 = its root, 1 = a direct child). */
 export const INDEX_DEPTH = 1;
 /** The site's own description of its content, for the map call. Never a page of the plan. */
@@ -127,10 +135,18 @@ export interface Section {
   depth: number;
   pages: number;
   chars: number;
-  sampleTitles: string[];
-  sampleUrls: string[];
+  /** The sample pages: the shallowest first, then by address — at most SECTION_SAMPLES. */
+  samples: SectionSample[];
   /** The home page of the competitor's website: its own section, always "product", labeled in code. */
   home: boolean;
+}
+
+/** One sample page of a section. */
+export interface SectionSample {
+  id: string;
+  url: string;
+  /** The page's title; "" when it has none. */
+  title: string;
 }
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -170,12 +186,6 @@ export function buildSections<T extends PlanPage>(pages: T[], opts: { homeHost: 
     const prefix = prefixOf(g.host, entries[0].segs, depth);
     // Samples: the shallowest pages first, then by address.
     const sorted = [...entries].sort((a, b) => a.segs.length - b.segs.length || cmp(a.p.url, b.p.url));
-    const titles: string[] = [];
-    for (const e of sorted) {
-      const t = (e.p.title ?? "").replace(/\s+/g, " ").trim();
-      if (t && !titles.includes(t)) titles.push(t);
-      if (titles.length >= SECTION_SAMPLES) break;
-    }
     out.push({
       key: sectionKey(g.sourceId, prefix),
       sourceId: g.sourceId,
@@ -184,8 +194,7 @@ export function buildSections<T extends PlanPage>(pages: T[], opts: { homeHost: 
       depth,
       pages: entries.length,
       chars: entries.reduce((n, e) => n + e.p.chars, 0),
-      sampleTitles: titles,
-      sampleUrls: sorted.slice(0, SECTION_SAMPLES).map((e) => e.p.url),
+      samples: sorted.slice(0, SECTION_SAMPLES).map((e) => ({ id: e.p.id, url: e.p.url, title: (e.p.title ?? "").replace(/\s+/g, " ").trim() })),
       home: depth === 0 && g.sourceType === "website" && g.host === opts.homeHost,
     });
   };
@@ -204,6 +213,55 @@ export function buildSections<T extends PlanPage>(pages: T[], opts: { homeHost: 
     emit(g, 1, g.entries.filter((e) => !(e.segs.length >= 2 && own.has(e.segs[1]))));
   }
   return out.sort((a, b) => cmp(a.prefix, b.prefix) || cmp(a.sourceId, b.sourceId));
+}
+
+// ————— What the map sees of a sample page —————
+
+/** The start of a sample page's stored text (its first MAP_SKIM_CHARS characters). */
+export interface SampleHead {
+  id: string;
+  sourceId: string;
+  head: string;
+  /** The page's title: the stored text of a web page starts with it, and the map already shows it. */
+  title?: string;
+}
+
+/**
+ * The first lines of each sample page that are the page's OWN (Daniel 2026-11-15: a title often does not say what a
+ * page is; the map should skim the page like a person does — not read it, and not judge it by its address alone).
+ *
+ * A stored page starts with what every page of the site starts with: the menu, a banner. So a line that shows on
+ * at least FRAME_SHARE of a source's sample pages is the site's frame and is skipped, and so is a line that only
+ * repeats the page's title; what is left, in the page's order, cut at a word to MAP_OPENING_CHARS, is the opening. A source with fewer than FRAME_MIN_PAGES sample pages
+ * has nothing to compare: every line is the page's own. A page whose whole start is frame has no opening ("").
+ *
+ * The stored text keeps no heading marks (html.ts htmlToText flattens a page to lines), so headings are not shown
+ * apart: a page's first headings are among its first lines.
+ */
+export function sampleOpenings(samples: SampleHead[]): Map<string, string> {
+  const linesOf = (head: string) => head.split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const bySource = new Map<string, SampleHead[]>();
+  for (const sample of samples) bySource.set(sample.sourceId, [...(bySource.get(sample.sourceId) ?? []), sample]);
+  const out = new Map<string, string>();
+  for (const pages of bySource.values()) {
+    const shown = new Map<string, number>();
+    for (const p of pages) for (const line of new Set(linesOf(p.head))) shown.set(line, (shown.get(line) ?? 0) + 1);
+    const frameAt = pages.length >= FRAME_MIN_PAGES ? Math.ceil(pages.length * FRAME_SHARE) : Infinity;
+    for (const p of pages) {
+      const title = (p.title ?? "").replace(/\s+/g, " ").trim();
+      const own = linesOf(p.head).filter((line) => (shown.get(line) ?? 0) < frameAt && line !== title).join(" ");
+      out.set(p.id, cutAtWord(own, MAP_OPENING_CHARS));
+    }
+  }
+  return out;
+}
+
+/** At most `max` characters, ending at a word when the text is longer. */
+function cutAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max);
+  const space = head.lastIndexOf(" ");
+  return (space > max * 0.6 ? head.slice(0, space) : head).trimEnd();
 }
 
 /** An index page of a section: its root or a direct child (INDEX_DEPTH). `pageSegments` and `sectionDepth` count path segments. */

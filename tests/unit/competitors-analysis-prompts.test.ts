@@ -6,6 +6,8 @@ import {
   LLMS_TXT_MAX_CHARS,
   lookTool,
   MAP_MAX_SECTIONS,
+  MAP_SYSTEM_PROMPT,
+  MAP_VERSION,
   mapTool,
   MAX_CAPABILITIES_PER_PAGE,
   MAX_DESCRIPTION_CHARS,
@@ -27,7 +29,7 @@ import {
   type MatchCatalog,
   type MergeEntry,
 } from "@/lib/competitors/analysis/prompts";
-import { SECTION_LABELS } from "@/lib/competitors/analysis/sections";
+import { MAP_OPENING_CHARS, SECTION_LABELS } from "@/lib/competitors/analysis/sections";
 import { FACTS_TOOL } from "@/lib/competitors/ai";
 
 const PAGE = `Acme Core
@@ -253,7 +255,11 @@ describe("parseSecondLook", () => {
 describe("the map — parseMap, renderMap", () => {
   const entry = (code: string, path: string, pages = 3, extra: Partial<MapEntry["section"]> = {}): MapEntry => ({
     code,
-    section: { prefix: `acme.example${path}`, pages, sampleTitles: [`Title of ${path}`], sampleUrls: [`https://www.acme.example${path}`, `https://www.acme.example${path}/a`], ...extra },
+    section: {
+      prefix: `acme.example${path}`, pages,
+      samples: [{ url: `https://www.acme.example${path}`, title: `Title of ${path}`, opening: `What ${path} does, in its own first lines.` }, { url: `https://www.acme.example${path}/a`, title: "", opening: "" }],
+      ...extra,
+    },
   });
   const codes = ["S1", "S2", "S3"];
   const answer = (...rows: Array<[string, string]>) => ({ sections: rows.map(([code, label]) => ({ code, label })) });
@@ -283,12 +289,21 @@ describe("the map — parseMap, renderMap", () => {
     for (const bad of [null, undefined, "text", 5, {}, { sections: "no" }, { sections: [null, 7, "x"] }]) expect(() => parseMap(bad, codes)).not.toThrow();
     expect(parseMap({ sections: [null] }, codes).unknownCodes).toEqual(["(none)"]);
   });
-  it("renders the company, the site and one line per section: code, prefix, pages, sample titles and addresses", () => {
-    const text = renderMap({ name: "Acme", site: "https://www.acme.example" }, [entry("S1", "/prisma", 34), entry("S2", "/hc", 1, { sourceLabel: "Help center", sampleTitles: [] })], null);
+  it("renders the company, the site and every section: code, prefix, pages — then its sample pages, each with its address, title and first lines", () => {
+    const text = renderMap({ name: "Acme", site: "https://www.acme.example" }, [entry("S1", "/prisma", 34), entry("S2", "/hc", 1, { sourceLabel: "Help center", samples: [] })], null);
     expect(text).toContain("COMPANY: Acme\nSITE: https://www.acme.example\n\nSECTIONS:\n");
-    expect(text).toContain('S1 | acme.example/prisma | 34 pages | titles: "Title of /prisma" | addresses: /prisma, /prisma/a');
-    expect(text).toContain("S2 | acme.example/hc | 1 page | source: Help center | titles: none | addresses: /hc, /hc/a");
+    expect(text).toContain('S1 | acme.example/prisma | 34 pages\n  - /prisma | title: "Title of /prisma" | first lines: "What /prisma does, in its own first lines."\n  - /prisma/a | title: none | first lines: none');
+    expect(text).toContain("S2 | acme.example/hc | 1 page | source: Help center");
     expect(text).not.toContain("LLMS.TXT");
+  });
+  it("the map skims: a sample's first lines are shown up to MAP_OPENING_CHARS and no further; the prompt says to decide from them first", () => {
+    const opening = "x".repeat(MAP_OPENING_CHARS + 50);
+    const text = renderMap({ name: "Acme", site: "s" }, [entry("S1", "/prisma", 3, { samples: [{ url: "https://www.acme.example/prisma", title: 'The "Prisma" page', opening }] })], null);
+    expect(text).toContain(`first lines: "${"x".repeat(MAP_OPENING_CHARS)}…"`);
+    expect(text).toContain("title: \"The 'Prisma' page\"");
+    expect(MAP_SYSTEM_PROMPT).toContain("the first lines of its own text");
+    expect(MAP_SYSTEM_PROMPT).toContain("decide from their first lines first");
+    expect(MAP_VERSION).toBe("map-2");
   });
   it("carries the site's llms.txt when there is one, cut to the limit", () => {
     const text = renderMap({ name: "Acme", site: "https://www.acme.example" }, [entry("S1", "/prisma")], `# Acme\n${"x".repeat(LLMS_TXT_MAX_CHARS)}`);

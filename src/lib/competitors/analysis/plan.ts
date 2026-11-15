@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { db } from "../../db";
 import { COMPETITORS_COPY as C } from "../copy";
 import { OWN_MATERIAL_SOURCE_TYPE } from "../own";
@@ -5,14 +6,15 @@ import { syncProductLinesPage } from "../own-site";
 import { AnalysisError, type RunContext } from "./engine";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import { injectedMapAnswer, LLMS_TXT_MAX_CHARS, MAP_MAX_SECTIONS, MAP_MAX_TOKENS, MAP_SYSTEM_PROMPT, MAP_VERSION, mapTool, parseMap, renderMap, type MapEntry } from "./prompts";
-import { buildSections, hostOf, isLlmsTxt, ReadingPlan, SECTION_LABELS, sectionKey, type Section, type SectionLabel } from "./sections";
+import { buildSections, hostOf, isLlmsTxt, MAP_SKIM_CHARS, ReadingPlan, sampleOpenings, SECTION_LABELS, sectionKey, type SampleHead, type Section, type SectionLabel } from "./sections";
 
 /**
  * The database side of the reading plan (Capability Analysis, "Map, read, go back"): the stored pages, the saved
  * sections (CompetitorSection) and the MAP step — the first step of an analysis run.
  *
  * The map step keeps no state of its own: every start builds the sections from the stored pages (sections.ts) and
- * asks PMOS AI only about the sections that have no saved label. A label is saved in the same transaction as the
+ * asks PMOS AI only about the sections that have no saved label. It skims: each section is shown with a few sample
+ * pages — address, title and the first lines of the page's own text — never a whole page. A label is saved in the same transaction as the
  * call's other labels, so a run that stopped asks only what is left. There is no fallback: a map call that fails,
  * or whose answer names a code or a label outside the closed sets, fails the run.
  *
@@ -68,6 +70,18 @@ async function llmsTxt(pages: StoredPage[]): Promise<string | null> {
   return (await db.sourcePage.findUnique({ where: { id: page.id }, select: { text: true } }))?.text ?? null;
 }
 
+/** The first lines of every sample page of the sections (sections.ts sampleOpenings), from the start of each page's stored text — never the whole text. */
+export async function sampleOpeningsOf(sections: Section[]): Promise<Map<string, string>> {
+  const sampleOf = new Map(sections.flatMap((s) => s.samples.map((p) => [p.id, { sourceId: s.sourceId, title: p.title }] as const)));
+  const ids = [...sampleOf.keys()];
+  const heads: SampleHead[] = [];
+  for (let i = 0; i < ids.length; i += 1000) {
+    const rows = await db.$queryRaw<Array<{ id: string; head: string | null }>>`SELECT id, substr(text, 1, ${MAP_SKIM_CHARS}::int) AS head FROM "SourcePage" WHERE id IN (${Prisma.join(ids.slice(i, i + 1000))})`;
+    for (const r of rows) heads.push({ id: r.id, sourceId: sampleOf.get(r.id)?.sourceId ?? "", title: sampleOf.get(r.id)?.title, head: r.head ?? "" });
+  }
+  return sampleOpenings(heads);
+}
+
 const labelCounts = (rows: Array<{ label: string; pages: number }>): string =>
   SECTION_LABELS.map((l) => ({ l, n: rows.filter((r) => r.label === l).length })).filter((x) => x.n > 0).map((x) => `${x.n} ${x.l.replace("_", " ")}`).join(", ");
 
@@ -113,9 +127,19 @@ export async function mapStep(ctx: RunContext): Promise<void> {
     // The map sees the start of a long llms.txt only: a cap, recorded like any other.
     if (llms && llms.trim().length > LLMS_TXT_MAX_CHARS) ctx.cap("llms_txt_chars", { limit: LLMS_TXT_MAX_CHARS, undone: llms.trim().length - LLMS_TXT_MAX_CHARS });
     ctx.log("info", `Map: ${left.length} section${left.length === 1 ? "" : "s"} of the site ${left.length === 1 ? "has" : "have"} no label yet — asking PMOS AI${llms ? " (with the site's llms.txt)" : ""}`);
+    // The map skims: every sample page carries the first lines of its own text. The site's frame (menu, banner) is
+    // told apart by comparing the sample pages of ALL the source's sections, not only of the ones asked now.
+    const openings = await sampleOpeningsOf(sections);
     while (left.length) {
       const batch = left.slice(0, MAP_MAX_SECTIONS);
-      const entries: MapEntry[] = batch.map((s, n) => ({ code: `S${n + 1}`, section: { ...s, sourceLabel: s.sourceType === "website" ? null : C.profile.sourceTypes[s.sourceType] ?? s.sourceType } }));
+      const entries: MapEntry[] = batch.map((s, n) => ({
+        code: `S${n + 1}`,
+        section: {
+          prefix: s.prefix, pages: s.pages,
+          samples: s.samples.map((p) => ({ url: p.url, title: p.title, opening: openings.get(p.id) ?? "" })),
+          sourceLabel: s.sourceType === "website" ? null : C.profile.sourceTypes[s.sourceType] ?? s.sourceType,
+        },
+      }));
       const sectionOf = new Map(entries.map((e, n) => [e.code, batch[n]]));
       const tail = renderMap({ name: ctx.competitor.name, site: ctx.competitor.websiteUrl }, entries, llms);
       const labeled = new Set<string>();

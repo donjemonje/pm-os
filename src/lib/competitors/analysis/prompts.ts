@@ -2,7 +2,7 @@ import { arr, pageMeta, str } from "../ai";
 import { checkPii } from "../pii";
 import { wordingKey } from "./items";
 import { quoteChecker, verifyQuote } from "./quotes";
-import { isSectionLabel, prefixPath, SECTION_LABELS, type Section, type SectionLabel } from "./sections";
+import { isSectionLabel, MAP_OPENING_CHARS, prefixPath, SECTION_LABELS, type Section, type SectionLabel } from "./sections";
 
 /**
  * The prompts of the setup run's two own steps live next to their rules: analysis/unify.ts (unify, unify review)
@@ -14,15 +14,18 @@ import { isSectionLabel, prefixPath, SECTION_LABELS, type Section, type SectionL
  * on a bad field: it drops it and counts it.
  *
  * PMOS AI never decides a cell. The map labels the sections of the site that code built (closed codes, closed
- * labels). Research lists what a page offers, in the page's words, with a quote; the quote is checked in code.
+ * labels), skimming a few sample pages of each: address, title and first lines. Research lists what a page offers, in the page's words, with a quote; the quote is checked in code.
  * Merge groups wordings. Match answers with OUR codes (a closed set), never free names. The second look answers
  * one capability from its most likely pages. The cells are filled by fixed rules (cells.ts).
  *
  * Pure: no database, no network.
  */
 
-/** Bumping MAP_VERSION invalidates nothing: a saved section label is a decision. It is stored with every label it gave. */
-export const MAP_VERSION = "map-1";
+/**
+ * Bumping MAP_VERSION invalidates nothing: a saved section label is a decision. It is stored with every label it gave.
+ * map-2 (2026-11-15): the map skims the sample pages — each carries its first lines, not only its title and address.
+ */
+export const MAP_VERSION = "map-2";
 
 /** Bumping RESEARCH_VERSION makes every page of every competitor due again (it is part of SourcePage.analyzedKey). */
 export const RESEARCH_VERSION = "research-2";
@@ -42,7 +45,7 @@ export const NO_VALUE = "none";
 
 // ————— 0. Map: the sections of the site —————
 
-export const MAP_SYSTEM_PROMPT = `A product team studies one company to learn what its product does. Below are the sections of the company's website: for each section its code, its address prefix, how many pages it holds, and a few sample page titles and addresses. Label every section with exactly one label.
+export const MAP_SYSTEM_PROMPT = `A product team studies one company to learn what its product does. Below are the sections of the company's website: for each section its code, its address prefix and how many pages it holds, then a few sample pages of it — each with its address, its title and the first lines of its own text. Label every section with exactly one label.
 
 Labels:
 - product: pages that describe what the company sells and what it does — products, platform, features, solutions, use cases, integrations, security of the product. Products are often named by brand, not by the word "product": a section named after a product is a product section.
@@ -56,7 +59,7 @@ Labels:
 
 Rules:
 - Answer once for every section code you were given. Use only the codes and the labels given.
-- Decide from the address and the sample titles. When a section mixes kinds, give the label of most of its pages.
+- Skim the sample pages: decide from their first lines first — a title or an address often does not say what a page is — then from the titles and the addresses. When a section mixes kinds, give the label of most of its pages.
 - When you cannot tell whether a section is product or noise, answer product.
 - LLMS.TXT, when given, is the site's own description of its content: use it.`;
 
@@ -91,10 +94,17 @@ export function mapTool(codes: string[]): Record<string, unknown> {
   };
 }
 
+/** A sample page as the map sees it: its address, its title, and the first lines of its own text (sections.ts sampleOpenings). */
+export interface MapSample {
+  url: string;
+  title: string;
+  opening: string;
+}
+
 export interface MapEntry {
   /** "S1" … in the order of the call. */
   code: string;
-  section: Pick<Section, "prefix" | "pages" | "sampleTitles" | "sampleUrls"> & { /** Source type label when the pages are not the website's ("Help center"). */ sourceLabel?: string | null };
+  section: Pick<Section, "prefix" | "pages"> & { samples: MapSample[]; /** Source type label when the pages are not the website's ("Help center"). */ sourceLabel?: string | null };
 }
 
 /** "/products/core" — an address as a sample: the path, without the host the prefix already shows. */
@@ -110,9 +120,8 @@ function samplePath(url: string): string {
 export function renderMap(company: { name: string; site: string }, entries: MapEntry[], llmsTxt: string | null): string {
   const lines = entries.map((e) => {
     const s = e.section;
-    const titles = s.sampleTitles.map((t) => `"${short(t, 80)}"`).join("; ");
-    const urls = s.sampleUrls.map(samplePath).join(", ");
-    return `${e.code} | ${s.prefix} | ${s.pages} page${s.pages === 1 ? "" : "s"}${s.sourceLabel ? ` | source: ${s.sourceLabel}` : ""} | titles: ${titles || "none"} | addresses: ${urls}`;
+    const samples = s.samples.map((p) => `  - ${samplePath(p.url)} | title: ${p.title ? `"${short(p.title, 80)}"` : "none"} | first lines: ${p.opening ? `"${short(p.opening, MAP_OPENING_CHARS)}"` : "none"}`);
+    return [`${e.code} | ${s.prefix} | ${s.pages} page${s.pages === 1 ? "" : "s"}${s.sourceLabel ? ` | source: ${s.sourceLabel}` : ""}`, ...samples].join("\n");
   });
   const llms = llmsTxt?.trim() ? `\n\nLLMS.TXT:\n${llmsTxt.trim().slice(0, LLMS_TXT_MAX_CHARS)}` : "";
   return `COMPANY: ${company.name}\nSITE: ${company.site}${llms}\n\nSECTIONS:\n${lines.join("\n")}`;

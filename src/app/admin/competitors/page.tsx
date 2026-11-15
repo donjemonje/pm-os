@@ -68,7 +68,7 @@ export default async function AdminCompetitorsPage() {
     {
       id: "map",
       title: `1 · Map — the sections of the site, one call per competitor (${MAP_VERSION})`,
-      note: "Code cuts the stored pages into sections (source and first path segment; a big section with several sizable sub-folders is split one level deeper). PMOS AI gets each section's code, address prefix, page count and a few sample titles and addresses — plus the site's llms.txt when one is stored — and labels it: product, pricing, compare, help, release notes, API docs, news or noise. The label decides what is read. A label is saved and kept: later runs ask only about new sections. A code or label outside the closed sets fails the run; there is no fallback.",
+      note: "Code cuts the stored pages into sections (source and first path segment; a big section with several sizable sub-folders is split one level deeper). PMOS AI gets each section's code, address prefix and page count, and skims a few sample pages of it — each with its address, its title and the first lines of its own text (about 300 characters, after the lines every page of the site shares: its menu, its footer) — plus the site's llms.txt when one is stored (the search for the company's other addresses stores it) — and labels it: product, pricing, compare, help, release notes, API docs, news or noise. The label decides what is read. A label is saved and kept: later runs ask only about new sections. A code or label outside the closed sets fails the run; there is no fallback.",
       text: MAP_SYSTEM_PROMPT,
       tool: mapTool(["S1", "S2", "…"]),
     },
@@ -163,7 +163,7 @@ export default async function AdminCompetitorsPage() {
             <dt className="text-slate-500">Prompt versions</dt>
             <dd className="font-mono text-xs">{[MAP_VERSION, RESEARCH_VERSION, MERGE_VERSION, UNIFY_VERSION, DOMAINS_VERSION, MATCH_VERSION, LOOK_VERSION, FACTS_VERSION].join(" · ")}</dd>
             <dt className="text-slate-500">Input</dt>
-            <dd className="text-xs text-slate-600">Page text only (no HTML, no images). The map sees section addresses and sample titles, never page text. Research reads the full text of one page per call. Our capability list is sent only to the match call, as a shared prefix. Unify and Domains (a setup run only) see names, one-sentence descriptions and company names — never page text. PMOS AI never decides a table cell: cells are filled in code, by fixed rules, from quotes that were checked against the stored page.</dd>
+            <dd className="text-xs text-slate-600">Page text only (no HTML, no images). The map skims: section addresses and, for a few sample pages of each section, the title and the first lines (about 300 characters) — never a whole page. Research reads the full text of one page per call. Our capability list is sent only to the match call, as a shared prefix. Unify and Domains (a setup run only) see names, one-sentence descriptions and company names — never page text. PMOS AI never decides a table cell: cells are filled in code, by fixed rules, from quotes that were checked against the stored page.</dd>
           </dl>
         </section>
 

@@ -3,15 +3,20 @@ import { describe, expect, it } from "vitest";
 import { KIND_RANK } from "@/lib/competitors/analysis/kinds";
 import {
   buildSections,
+  FRAME_MIN_PAGES,
+  FRAME_SHARE,
   hostOf,
   INDEX_DEPTH,
   inPlan,
   isIndexPage,
   LABEL_RULES,
+  MAP_OPENING_CHARS,
+  MAP_SKIM_CHARS,
   pickReadable,
   prefixPath,
   ReadingPlan,
   readGroup,
+  sampleOpenings,
   SECTION_LABELS,
   SECTION_SAMPLES,
   sectionKey,
@@ -32,6 +37,59 @@ const build = (pages: PlanPage[], existing: string[] = []) => buildSections(page
 const prefixes = (pages: PlanPage[], existing: string[] = []) => build(pages, existing).map((s) => `${prefixPath(s.prefix)}:${s.pages}`);
 const planOf = (labels: Record<string, SectionLabel>, sourceId = "web") => new ReadingPlan(Object.entries(labels).map(([path, label]) => ({ sourceId, prefix: `${HOST}${path}`, label })));
 const read = (plan: ReadingPlan, path: string, extra: Partial<PlanPage> = {}) => plan.read(page(path, extra));
+
+describe("what the map sees of a sample page — its first lines, without the site's frame", () => {
+  const MENU = "Products\nSolutions\nPricing\nResources\nLog in\nGet a demo";
+  const head = (id: string, own: string, sourceId = "web") => ({ id, sourceId, head: `${MENU}\n${own}\nPrivacy\nTerms` });
+  const SITE = [
+    head("a", "Plan your roadmap\nPrioritize what to build next with a score every team trusts."),
+    head("b", "Pricing plans\nStarter, Team and Enterprise. Billed per maker."),
+    head("c", "Customer stories\nHow teams ship faster."),
+    head("d", "Release notes\nOctober: bulk edit, new filters."),
+  ];
+
+  it("the lines every page of the site starts with — the menu, the footer — are skipped; the page's own first lines are what is shown", () => {
+    const o = sampleOpenings(SITE);
+    expect(o.get("a")).toBe("Plan your roadmap Prioritize what to build next with a score every team trusts.");
+    expect(o.get("d")).toBe("Release notes October: bulk edit, new filters.");
+    for (const text of o.values()) expect(text).not.toMatch(/Products|Get a demo|Privacy/);
+  });
+  it("a line is frame when it shows on at least half of the source's sample pages", () => {
+    const o = sampleOpenings([...SITE.slice(0, 2), { id: "c", sourceId: "web", head: "Welcome\nOnly here" }, { id: "d", sourceId: "web", head: "Welcome\nOnly there" }]);
+    expect(Math.ceil(4 * FRAME_SHARE)).toBe(2);
+    expect(o.get("c")).toBe("Only here");
+    expect(o.get("a")).toContain("Plan your roadmap");
+    expect(o.get("a")).not.toContain("Products");
+  });
+  it("a source with fewer sample pages than FRAME_MIN_PAGES has nothing to compare: every line is the page's own", () => {
+    const o = sampleOpenings(SITE.slice(0, FRAME_MIN_PAGES - 1));
+    expect(o.get("a")).toBe("Products Solutions Pricing Resources Log in Get a demo Plan your roadmap Prioritize what to build next with a score every team trusts. Privacy Terms");
+  });
+  it("the frame is told apart per source: a help center's menu is not the website's", () => {
+    const help = ["h1", "h2", "h3", "h4"].map((id, n) => ({ id, sourceId: "help", head: `Help Center\nSearch\nArticle ${n}: how to do thing ${n}` }));
+    const o = sampleOpenings([...SITE, ...help]);
+    expect(o.get("h2")).toBe("Article 1: how to do thing 1");
+    expect(o.get("b")).toBe("Pricing plans Starter, Team and Enterprise. Billed per maker.");
+  });
+  it("the opening is cut at a word to MAP_OPENING_CHARS — the map skims, it does not read", () => {
+    const long = Array.from({ length: 200 }, (_, i) => `word${i}`).join(" ");
+    const o = sampleOpenings([{ id: "x", sourceId: "s", head: long }]).get("x")!;
+    expect(o.length).toBeLessThanOrEqual(MAP_OPENING_CHARS);
+    expect(o.length).toBeGreaterThan(MAP_OPENING_CHARS * 0.6);
+    expect(long.startsWith(`${o} `)).toBe(true);
+    expect(MAP_OPENING_CHARS).toBe(300);
+    expect(MAP_SKIM_CHARS).toBeGreaterThan(MAP_OPENING_CHARS);
+  });
+  it("a line that only repeats the page's title is skipped: the map already shows the title", () => {
+    const o = sampleOpenings([{ id: "x", sourceId: "s", title: "Pricing | Acme", head: "Pricing | Acme\nStarter, Team and Enterprise.\nPricing | Acme is not repeated twice" }]);
+    expect(o.get("x")).toBe("Starter, Team and Enterprise. Pricing | Acme is not repeated twice");
+  });
+  it("a page whose whole start is the site's frame, or that has no text, has no opening", () => {
+    const o = sampleOpenings([...SITE, { id: "e", sourceId: "web", head: MENU }, { id: "f", sourceId: "web", head: "" }]);
+    expect(o.get("e")).toBe("");
+    expect(o.get("f")).toBe("");
+  });
+});
 
 describe("inPlan — which stored pages take part", () => {
   it("every page that is there and has text", () => {
@@ -72,11 +130,13 @@ describe("buildSections", () => {
     const sections = build([page("/"), page("/guides/a"), page("/", { id: "h1", sourceId: "help", sourceType: "helpcenter", url: "https://help.acme.example/" }), page("/guides/a", { id: "h2", sourceId: "help", sourceType: "helpcenter", url: "https://help.acme.example/guides/a" })]);
     expect(sections.map((s) => `${s.sourceId}|${s.prefix}|${s.home}`)).toEqual([`web|${HOST}/|true`, `web|${HOST}/guides|false`, "help|help.acme.example/|false", "help|help.acme.example/guides|false"]);
   });
-  it("samples: the shallowest pages first, then by address — at most SECTION_SAMPLES titles and addresses", () => {
-    const s = build([page("/docs/z/deep"), page("/docs/b"), page("/docs"), page("/docs/a"), page("/docs/c"), page("/docs/d")])[0];
-    expect(s.sampleUrls).toHaveLength(SECTION_SAMPLES);
-    expect(s.sampleUrls.map((u) => new URL(u).pathname)).toEqual(["/docs", "/docs/a", "/docs/b", "/docs/c"]);
-    expect(s.sampleTitles).toEqual(["Title of /docs", "Title of /docs/a", "Title of /docs/b", "Title of /docs/c"]);
+  it("samples: the shallowest pages first, then by address — at most SECTION_SAMPLES pages, each with its id, address and title", () => {
+    const s = build([page("/docs/z/deep"), page("/docs/b"), page("/docs"), page("/docs/a"), page("/docs/c", { title: "  The   C page " }), page("/docs/d"), page("/docs/0", { title: null })])[0];
+    expect(s.samples).toHaveLength(SECTION_SAMPLES);
+    expect(s.samples.map((p) => new URL(p.url).pathname)).toEqual(["/docs", "/docs/0", "/docs/a", "/docs/b"]);
+    expect(s.samples.map((p) => p.id)).toEqual(["/docs", "/docs/0", "/docs/a", "/docs/b"]);
+    expect(s.samples.map((p) => p.title)).toEqual(["Title of /docs", "", "Title of /docs/a", "Title of /docs/b"]);
+    expect(build([page("/docs/c", { title: "  The   C page " })])[0].samples[0].title).toBe("The C page");
   });
   it("a big section with several sizable sub-folders is split one level deeper; the rest stays in the first-segment section", () => {
     const pages = [page("/resources"), page("/resources/overview"), ...many("/resources/blog", 30), ...many("/resources/datasheets", SPLIT_MIN_SUBFOLDER_PAGES), ...many("/resources/tiny", SPLIT_MIN_SUBFOLDER_PAGES - 1), page("/resources/blog/2026/deep")];
