@@ -170,10 +170,10 @@ export async function findCandidates(site: { url: string; host: string }, home: 
 
   // 3. Common names in front of the domain, verified against a made-up name. A name the company already named is not guessed.
   const namedHosts = new Set([...named.candidates.map((c) => c.host), ...found.map((c) => c.host)]);
-  const guesses = guessCandidates(site.host).filter((g) => !namedHosts.has(g.host));
+  const guesses = guessCandidates(site).filter((g) => !namedHosts.has(g.host));
   let guessed = 0;
   if (guesses.length) {
-    const [control, ...answers] = await inBatches([controlAddress(site.host, token), ...guesses.map((g) => g.url)], ask);
+    const [control, ...answers] = await inBatches([controlAddress(site, token), ...guesses.map((g) => g.url)], ask);
     // The home page as an answer, for "the page that answers is not the main site again".
     if (!homeAnswer && homePage) homeAnswer = { url: site.url, status: 200, error: null, finalUrl: homePage.finalUrl, title: titleOf(homePage.html), text: htmlToText(homePage.html) };
     guesses.forEach((g, i) => {

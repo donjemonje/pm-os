@@ -183,14 +183,19 @@ Source code: https://github.com/acme/sdk and https://acme.readme.io/reference.
 
 describe("3 — guessing common names, and verifying", () => {
   it("the names go in front of the company's own domain, never the main site itself", () => {
-    expect(guessCandidates("acme.com").map((g) => g.host)).toEqual(GUESS_NAMES.map((n) => `${n}.acme.com`));
-    expect(guessCandidates("app.acme.co.uk")[0]).toMatchObject({ url: "https://help.acme.co.uk", host: "help.acme.co.uk", via: "guess", hint: "helpcenter" });
-    expect(guessCandidates("docs.acme.com").map((g) => g.host)).not.toContain("docs.acme.com");
-    expect(guessCandidates("localhost")).toEqual([]);
-    expect(guessCandidates("10.1.2.3")).toEqual([]);
+    expect(guessCandidates({ url: "https://acme.com", host: "acme.com" }).map((g) => g.host)).toEqual(GUESS_NAMES.map((n) => `${n}.acme.com`));
+    expect(guessCandidates({ url: "https://app.acme.co.uk", host: "app.acme.co.uk" })[0]).toMatchObject({ url: "https://help.acme.co.uk", host: "help.acme.co.uk", via: "guess", hint: "helpcenter" });
+    expect(guessCandidates({ url: "https://docs.acme.com", host: "docs.acme.com" }).map((g) => g.host)).not.toContain("docs.acme.com");
+    expect(guessCandidates({ url: "http://localhost:4100", host: "localhost:4100" })).toEqual([]);
+    expect(guessCandidates({ url: "http://10.1.2.3", host: "10.1.2.3" })).toEqual([]);
+  });
+  it("a guess is asked on the main site's own scheme and port (a test site keeps its port; a real site has none)", () => {
+    const g = guessCandidates({ url: "http://shop.acme.test:4100", host: "shop.acme.test:4100" })[0];
+    expect(g).toMatchObject({ url: "http://help.acme.test:4100", host: "help.acme.test:4100" });
+    expect(controlAddress({ url: "http://shop.acme.test:4100", host: "shop.acme.test:4100" }, "ab12")).toBe("http://pmos-check-ab12.acme.test:4100");
   });
   it("the made-up name sits on the same domain", () => {
-    expect(controlAddress("www.acme.com", "3F9A1C2E")).toBe("https://pmos-check-3f9a1c2e.acme.com");
+    expect(controlAddress({ url: "https://www.acme.com", host: "acme.com" }, "3F9A1C2E")).toBe("https://pmos-check-3f9a1c2e.acme.com");
   });
 
   const HOME = answer("https://acme.com", { title: "Acme — the product", text: page("Acme is the product for teams.", "Acme") });

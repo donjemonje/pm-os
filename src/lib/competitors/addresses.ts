@@ -261,23 +261,34 @@ export function guessDomain(mainHost: string): string {
   return registrableHost(mainHost.replace(/:\d+$/, ""));
 }
 
-/** 3a. The guesses for a company: "https://<name>.<domain>" for every name, never the main site itself. */
-export function guessCandidates(mainHost: string): RawCandidate[] {
-  const domain = guessDomain(mainHost);
+/** The scheme and the port a guess is asked on: the main site's own (https and no port for every real site; a test site keeps its port). */
+function guessOrigin(mainUrl: string, host: string): string {
+  try {
+    const u = new URL(mainUrl);
+    return `${u.protocol}//${host}${u.port ? `:${u.port}` : ""}`;
+  } catch {
+    return `https://${host}`;
+  }
+}
+
+/** 3a. The guesses for a company: "<name>.<domain>" for every name, on the main site's scheme — never the main site itself. */
+export function guessCandidates(main: { url: string; host: string }): RawCandidate[] {
+  const domain = guessDomain(main.host);
   // An IP address or a single-label host has no names in front of it.
   if (!domain.includes(".") || /^[\d.]+$/.test(domain)) return [];
   const out: RawCandidate[] = [];
   for (const name of GUESS_NAMES) {
-    const host = `${name}.${domain}`;
-    if (host === mainHost) continue;
-    out.push({ url: `https://${host}`, host, via: "guess", text: "", hint: GUESS_HINT[name] });
+    const url = guessOrigin(main.url, `${name}.${domain}`);
+    const host = siteHost(new URL(url));
+    if (host === main.host) continue;
+    out.push({ url, host, via: "guess", text: "", hint: GUESS_HINT[name] });
   }
   return out;
 }
 
 /** The made-up name asked next to the guesses: a name no site has ("pmos-check-3f9a1c2e.acme.com"). `token` is random per search. */
-export function controlAddress(mainHost: string, token: string): string {
-  return `https://pmos-check-${token.toLowerCase().replace(/[^a-z0-9]/g, "")}.${guessDomain(mainHost)}`;
+export function controlAddress(main: { url: string; host: string }, token: string): string {
+  return guessOrigin(main.url, `pmos-check-${token.toLowerCase().replace(/[^a-z0-9]/g, "")}.${guessDomain(main.host)}`);
 }
 
 /** What one address answered when it was asked. */
