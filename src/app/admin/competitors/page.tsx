@@ -5,9 +5,8 @@ import {
   FACTS_TOOL,
   FACTS_VERSION,
   getCompetitorsGeminiLocation,
-  getCompetitorsModel,
-  getCompetitorsProvider,
 } from "@/lib/competitors/ai";
+import { competitorsModels, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, type PromptId } from "@/lib/competitors/models";
 import { DOMAINS_SYSTEM_PROMPT, DOMAINS_VERSION, domainsTool } from "@/lib/competitors/analysis/domains";
 import {
   comparePageLine,
@@ -59,6 +58,11 @@ export default async function AdminCompetitorsPage() {
     })
   ).map((o) => ({ id: o.id, name: o.name, competitors: o.workspace?.competitors ?? [] }));
   const importOrgs: ImportOrg[] = planOrgs.map((o) => ({ ...o, competitors: o.competitors.filter((c) => !c.isOwn) }));
+  const models = competitorsModels();
+  /** What each role is used for, next to its model. */
+  const ROLE_USE: Record<string, string> = { read: "map, research (the broad read and the go-back), second look, facts", match: "merge, unify batches, match", judge: "unify review, domains" };
+  /** The prompt of the list → its id in models.ts PROMPT_ROLES (the role decides the model). */
+  const PROMPT_OF: Record<string, PromptId> = { map: "map", research: "research", merge: "merge", unify: "unify", "unify-review": "unify_review", domains: "domains", match: "match", look: "second_look", facts: "facts" };
   const prompts: Array<{ id: string; title: string; note: string; text: string; tool: unknown; extra?: { label: string; text: string } }> = [
     {
       id: "map",
@@ -131,18 +135,23 @@ export default async function AdminCompetitorsPage() {
       user={admin}
       org={org}
       title="Competitors"
-      description="The competitors feature's PMOS AI — model, region and the nine prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, every organization's setup runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
+      description="The competitors feature's PMOS AI — a model per role, region and the nine prompts — the scanning switches (remote lane, retention, station keys, per-source frequency) and the analysis token budget, each competitor's reading plan and analysis runs, every organization's setup runs, the import of a collector's pages and every organization's scans. Per-org setup (competitors, catalog, manual-rescan limit) is in each organization's Settings → Competitors."
     >
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5">
           <h2 className="text-sm font-bold">PMOS AI</h2>
           <dl className="mt-3 grid grid-cols-[140px_1fr] gap-y-1.5 text-sm">
-            <dt className="text-slate-500">Model</dt>
-            <dd className="font-mono text-xs">{getCompetitorsModel()} <span className="font-sans text-slate-400">(COMPETITORS_MODEL → GEMINI_MODEL → gemini-4-argon; a gemini-* id runs on Gemini, anything else on the Anthropic provider)</span></dd>
-            <dt className="text-slate-500">Provider</dt>
-            <dd className="font-mono text-xs">{getCompetitorsProvider()} <span className="font-sans text-slate-400">{getCompetitorsProvider() === "gemini" ? "— structured output through a response schema" : "— forced tool use through the Vertex Anthropic provider"}</span></dd>
+            <dt className="text-slate-500">Models</dt>
+            <dd className="text-xs">
+              <div className="mb-1 text-slate-400">A model per role; every prompt below names its model. The old single COMPETITORS_MODEL decides nothing any more.</div>
+              {MODEL_ROLES.map((role) => (
+                <div key={role} className="font-mono" data-testid="admin-model-role">
+                  {role}: {models[role]} <span className="font-sans text-slate-400">({MODEL_ENV[role]} → {MODEL_DEFAULTS[role]}; {providerOf(models[role]) === "gemini" ? "Gemini, structured output through a response schema" : "the Anthropic provider, forced tool use"}) — {ROLE_USE[role]}</span>
+                </div>
+              ))}
+            </dd>
             <dt className="text-slate-500">Vertex region</dt>
-            <dd className="font-mono text-xs">{getCompetitorsProvider() === "gemini" ? getCompetitorsGeminiLocation() : getCompetitorsVertexLocation()} <span className="font-sans text-slate-400">{getCompetitorsProvider() === "gemini" ? "(COMPETITORS_GEMINI_LOCATION → global; the newest Gemini models are served on the global endpoint only)" : "(COMPETITORS_VERTEX_LOCATION → IDEAS_VERTEX_LOCATION → eu)"}</span></dd>
+            <dd className="font-mono text-xs">{getCompetitorsGeminiLocation()} <span className="font-sans text-slate-400">for gemini-* models (COMPETITORS_GEMINI_LOCATION → global; the newest Gemini models are served on the global endpoint only)</span> · {getCompetitorsVertexLocation()} <span className="font-sans text-slate-400">for any other model (COMPETITORS_VERTEX_LOCATION → IDEAS_VERTEX_LOCATION → eu)</span></dd>
             <dt className="text-slate-500">Prompt versions</dt>
             <dd className="font-mono text-xs">{[MAP_VERSION, RESEARCH_VERSION, MERGE_VERSION, UNIFY_VERSION, DOMAINS_VERSION, MATCH_VERSION, LOOK_VERSION, FACTS_VERSION].join(" · ")}</dd>
             <dt className="text-slate-500">Input</dt>
@@ -160,6 +169,7 @@ export default async function AdminCompetitorsPage() {
               <details key={p.id} className="rounded-lg border border-slate-200">
                 <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium hover:bg-slate-50">{p.title}</summary>
                 <div className="border-t border-slate-200 px-3 py-3">
+                  <p className="mb-2 text-xs text-slate-500" data-testid="admin-prompt-model">Model: <span className="font-mono text-slate-700">{models[PROMPT_ROLES[PROMPT_OF[p.id]]]}</span> (role {PROMPT_ROLES[PROMPT_OF[p.id]]}, {MODEL_ENV[PROMPT_ROLES[PROMPT_OF[p.id]]]})</p>
                   <p className="mb-2 text-xs text-slate-500">{p.note}</p>
                   <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">System prompt</div>
                   <pre className="mb-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-50 p-3 font-mono text-xs leading-relaxed text-slate-800">{p.text}</pre>

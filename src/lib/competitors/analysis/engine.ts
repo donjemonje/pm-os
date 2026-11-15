@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "../../db";
-import { AnswerError, callTool, CapacityError, EndpointError, getCompetitorsModel, type CallOptions } from "../ai";
+import { AnswerError, callTool, CapacityError, EndpointError, type CallOptions } from "../ai";
+import { callFailureMessage, competitorsModels, modelsLine, type ModelRole } from "../models";
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
 import { aiStepEnabled, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
@@ -94,6 +95,9 @@ class RunLost extends Error {}
 
 export { emptyCounters, readCounters, type Counters } from "./counters";
 
+/** What a step passes with a call: everything but the model — the step names the ROLE (models.ts), the engine resolves the model. */
+export type StepCallOptions = Omit<CallOptions, "model"> & { role: ModelRole };
+
 export interface AnalysisLogLine {
   at: string;
   level: "info" | "warn" | "error";
@@ -115,7 +119,10 @@ export interface RunContext {
   minPagesForNewRow: number;
   /** The most second looks this run makes in all (CompetitorsConfig.secondLooksPerRun). */
   maxSecondLooks: number;
+  /** The model of the "read" role: the one that makes the second look, so the one a look's key carries (secondlook.ts lookKey). */
   model: string;
+  /** The model of each role in this run (models.ts), resolved once at the claim. */
+  models: Record<ModelRole, string>;
   /** TEST KNOB: the injected answers of the run, read once at the claim; null = a real run. */
   answers: TestAiAnswers | null;
   counters: Counters;
@@ -123,7 +130,7 @@ export interface RunContext {
   /** Research progress for the UI. */
   progress: { pagesTotal: number; pagesDone: number };
   /** One model call through the run's accounting. Returns the value and the tokens it used (input + output). */
-  call: <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => Promise<{ value: T; tokens: number }>;
+  call: <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => Promise<{ value: T; tokens: number }>;
   /** The run's token budget: the gate of every reading call (budget.ts). */
   reading: ReadingBudget;
   /**
@@ -319,7 +326,9 @@ export interface SetupEnv {
 }
 
 export async function runAnalysis(id: string): Promise<void> {
-  const model = getCompetitorsModel();
+  // A model per role (models.ts), resolved once: every call of the run names its role. The run row carries all three.
+  const models = competitorsModels();
+  const model = modelsLine(models);
   // The claim's owner token: every later write of this worker carries it in its `where`.
   const token = randomUUID();
   // The claim: only the head of the queue can be claimed, and only once — so two runs never execute together.
@@ -395,6 +404,8 @@ export async function runAnalysis(id: string): Promise<void> {
     if (row.injected && !answers) throw new AnalysisError("other", "test answers were cleared before the run started (test knob) — no model is called");
     const config = await getCompetitorsConfig(row.workspaceId);
     const pace = new TokenBudget(analysisTpm());
+    /** The models that made a call in the step that is running: its cost line names them. */
+    const stepModels = new Set<string>();
     let okCalls = 0;
     let refused = 0;
     let stopCheckedAt = 0;
@@ -447,13 +458,17 @@ export async function runAnalysis(id: string): Promise<void> {
         readWeak: config.readWeakPages,
         minPagesForNewRow: config.minPagesForNewRow,
         maxSecondLooks: config.secondLooksPerRun,
-        model,
+        model: models.read,
+        models,
         answers: t.answers,
         counters: c,
         log: say,
         progress: t.progress,
         reading,
-        call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions) => {
+        call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => {
+          const { role, ...rest } = opts;
+          const callModel = models[role];
+          stepModels.add(callModel);
           // A worker that lost the run spends nothing more.
           if (lost) throw new RunLost();
           if (t.answers && opts.injected === undefined) throw new AnalysisError("other", "this run takes injected answers (test knob) and a step asked for a model call");
@@ -463,7 +478,7 @@ export async function runAnalysis(id: string): Promise<void> {
           }
           let r;
           try {
-            r = await callTool<T>(system, shared, tail, tool, opts);
+            r = await callTool<T>(system, shared, tail, tool, { ...rest, model: callModel });
           } catch (e) {
             if (e instanceof AnswerError) {
               // The call was made and is billed: its tokens count, whatever the step does with the failure.
@@ -475,7 +490,8 @@ export async function runAnalysis(id: string): Promise<void> {
               throw e;
             }
             if (e instanceof CapacityError) throw e;
-            throw new AnalysisError("ai", e instanceof Error ? e.message.slice(0, 300) : String(e));
+            // Anything the run cannot wait out — a refused model id above all — fails it with the step and the model named.
+            throw new AnalysisError("ai", callFailureMessage({ status: (e as { status?: unknown } | null)?.status, message: e instanceof Error ? e.message : String(e) }, { step, role, model: callModel }));
           }
           okCalls++;
           c.calls++;
@@ -529,6 +545,7 @@ export async function runAnalysis(id: string): Promise<void> {
       sync();
       const before = { ...counters };
       const started = Date.now();
+      stepModels.clear();
       try {
         return await work();
       } finally {
@@ -536,7 +553,7 @@ export async function runAnalysis(id: string): Promise<void> {
         const calls = counters.calls - before.calls;
         if (calls > 0) {
           const unusable = counters.unusableAnswers - before.unusableAnswers;
-          log("info", `Step ${name.replace("_", " ")}: ${calls} PMOS AI call${calls === 1 ? "" : "s"} · ${counters.inputTokens - before.inputTokens} input + ${counters.outputTokens - before.outputTokens} output tokens${unusable ? ` · ${unusable} unusable answer${unusable === 1 ? "" : "s"}` : ""} · ${Math.round((Date.now() - started) / 1000)} s`);
+          log("info", `Step ${name.replace("_", " ")}: ${calls} PMOS AI call${calls === 1 ? "" : "s"} · ${[...stepModels].join(" + ") || "no model"} · ${counters.inputTokens - before.inputTokens} input + ${counters.outputTokens - before.outputTokens} output tokens${unusable ? ` · ${unusable} unusable answer${unusable === 1 ? "" : "s"}` : ""} · ${Math.round((Date.now() - started) / 1000)} s`);
         }
       }
     };

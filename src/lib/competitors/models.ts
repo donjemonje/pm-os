@@ -1,0 +1,97 @@
+/**
+ * Which model makes which call of the capability analysis (Daniel 2026-11-15: a model per step, the Gemini 4 line-up).
+ *
+ * Three roles, with their defaults in code:
+ *   read  — gemini-4-hydrogen: map, research (the broad read and the go-back), second look, facts.
+ *   match — gemini-4-argon:    merge, unify batches, match.
+ *   judge — gemini-4-carbon:   unify review, domains.
+ * Each role has an environment override: COMPETITORS_MODEL_READ, COMPETITORS_MODEL_MATCH, COMPETITORS_MODEL_JUDGE.
+ * The old single COMPETITORS_MODEL decides nothing any more: no code reads it.
+ *
+ * A `gemini-*` id runs on Gemini (Vertex, a response schema); anything else on the Anthropic provider (forced tool
+ * use). The model of every call is recorded with its tokens (analysis/usage.ts).
+ *
+ * Pure: no database, no network — the environment is a parameter.
+ */
+
+export const MODEL_ROLES = ["read", "match", "judge"] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
+
+export const MODEL_DEFAULTS: Record<ModelRole, string> = {
+  read: "gemini-4-hydrogen",
+  match: "gemini-4-argon",
+  judge: "gemini-4-carbon",
+};
+
+export const MODEL_ENV: Record<ModelRole, string> = {
+  read: "COMPETITORS_MODEL_READ",
+  match: "COMPETITORS_MODEL_MATCH",
+  judge: "COMPETITORS_MODEL_JUDGE",
+};
+
+/** The prompts of the feature, in run order, and the role that makes each. Data: moving a prompt to another role is an edit of this table. */
+export const PROMPT_ROLES = {
+  map: "read",
+  research: "read",
+  merge: "match",
+  unify: "match",
+  unify_review: "judge",
+  domains: "judge",
+  match: "match",
+  second_look: "read",
+  facts: "read",
+} as const satisfies Record<string, ModelRole>;
+export type PromptId = keyof typeof PROMPT_ROLES;
+
+type Env = Record<string, string | undefined>;
+
+/** The model of a role: its environment override when one is set (not blank), else the default in code. */
+export function modelFor(role: ModelRole, env: Env = process.env): string {
+  return env[MODEL_ENV[role]]?.trim() || MODEL_DEFAULTS[role];
+}
+
+export function competitorsModels(env: Env = process.env): Record<ModelRole, string> {
+  return { read: modelFor("read", env), match: modelFor("match", env), judge: modelFor("judge", env) };
+}
+
+/** The model that makes a prompt. */
+export function modelOfPrompt(prompt: PromptId, env: Env = process.env): string {
+  return modelFor(PROMPT_ROLES[prompt], env);
+}
+
+/** "read gemini-4-hydrogen · match gemini-4-argon · judge gemini-4-carbon" — what a run row and a log line say. */
+export function modelsLine(models: Record<ModelRole, string>): string {
+  return MODEL_ROLES.map((r) => `${r} ${models[r]}`).join(" · ");
+}
+
+export type ModelProvider = "gemini" | "claude";
+export function providerOf(model: string): ModelProvider {
+  return /^gemini/i.test(model) ? "gemini" : "claude";
+}
+
+/**
+ * Did the provider refuse the model id itself — an id Vertex does not know, does not serve in this region, or this
+ * project may not use? HTTP 404; or 400 / 403 with a message about the model; or a message that says so.
+ */
+export function modelRefused(e: { status?: unknown; message?: unknown }): boolean {
+  const status = typeof e.status === "number" ? e.status : null;
+  const message = typeof e.message === "string" ? e.message : "";
+  if (status === 404) return true;
+  const aboutModel = /\bmodels?\b|publisher/i.test(message);
+  if ((status === 400 || status === 403) && aboutModel) return true;
+  return aboutModel && /NOT_FOUND|not found|does not exist|is not supported|not available|unknown model|invalid model|no access|permission denied/i.test(message);
+}
+
+/**
+ * What a run says when a model call failed for a reason it cannot wait out. Always names the step and the model;
+ * when the model id itself was refused it says so first, with the setting that chooses it. The provider's own words
+ * follow, cut — the run stores 300 characters, and the step and the model must be among them.
+ */
+export function callFailureMessage(e: { status?: unknown; message?: unknown }, at: { step: string; role: ModelRole; model: string }): string {
+  const said = (typeof e.message === "string" ? e.message : String(e.message ?? "")).replace(/\s+/g, " ").trim();
+  const step = at.step.replace(/_/g, " ");
+  const head = modelRefused(e)
+    ? `The model "${at.model}" was refused by Vertex in the ${step} step (role ${at.role}: set ${MODEL_ENV[at.role]} to a model this project can use)`
+    : `PMOS AI call failed in the ${step} step (model ${at.model}, role ${at.role})`;
+  return `${head}${said ? ` — ${said}` : ""}`.slice(0, 300);
+}

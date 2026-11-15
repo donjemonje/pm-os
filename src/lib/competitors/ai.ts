@@ -1,11 +1,13 @@
 import { GoogleGenAI, ThinkingLevel, Type, type Schema } from "@google/genai";
 import { getVertexProjectId } from "../vertex-config";
 import { FACT_KINDS, type FactKind } from "./config";
+import { modelFor, providerOf, type ModelProvider } from "./models";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 
 /**
  * PMOS AI for competitors: structured calls, never free text. The model is
- * COMPETITORS_MODEL: a `gemini-*` id runs on Gemini (Vertex, structured
+ * chosen per call by its role (models.ts: read / match / judge — the old single
+ * COMPETITORS_MODEL decides nothing any more): a `gemini-*` id runs on Gemini (Vertex, structured
  * output through a response schema — Daniel 2026-10-26: Gemini is covered by
  * the GCP credits, so competitors is where it is tried first); anything else
  * runs on Claude through the Vertex Anthropic client (forced tool use). Both
@@ -23,13 +25,10 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 /** Bumping it makes every stored page due for the facts step again (it is part of SourcePage.factsKey). */
 export const FACTS_VERSION = "facts-1";
 
-export function getCompetitorsModel(): string {
-  return process.env.COMPETITORS_MODEL?.trim() || "gemini-4-argon";
-}
-
-export type CompetitorsProvider = "gemini" | "claude";
-export function getCompetitorsProvider(model = getCompetitorsModel()): CompetitorsProvider {
-  return /^gemini/i.test(model) ? "gemini" : "claude";
+export type CompetitorsProvider = ModelProvider;
+/** The provider of a model; with no model given, of the "read" model (the facts step sizes its chunks by it). */
+export function getCompetitorsProvider(model = modelFor("read")): CompetitorsProvider {
+  return providerOf(model);
 }
 
 /**
@@ -196,6 +195,8 @@ export class AnswerError extends Error {
 
 export type ThinkingName = "minimal" | "low" | "medium" | "high";
 export interface CallOptions {
+  /** The model that makes the call (models.ts modelFor(role)): the caller decides, nothing here reads an environment variable for it. */
+  model: string;
   /** Visible output tokens the answer may take (thinking is on top). */
   maxTokens: number;
   /** The thinking level this prompt asks for; COMPETITORS_THINKING overrides it when set. */
@@ -259,7 +260,7 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
       throw new Error(`PMOS AI test answer is not valid JSON (${opts.injected.length} chars)`);
     }
   }
-  const model = getCompetitorsModel();
+  const model = opts.model;
   const contents = shared ? `${shared}\n\n${tail}` : tail;
   if (getCompetitorsProvider(model) === "gemini") {
     let response;

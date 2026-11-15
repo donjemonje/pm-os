@@ -58,12 +58,20 @@ env:
     value: "projects/pm-os-9d992/locations/us-east4/jobs/pmos-competitors-scanner"
     availability:
       - RUNTIME
-  # PMOS AI model for competitors (Gemini — covered by the GCP credits). A
-  # gemini-* id runs on Gemini with a response schema; anything else on Claude.
-  - variable: COMPETITORS_MODEL
-    value: "gemini-4-argon"
-    availability:
-      - RUNTIME
+  # PMOS AI models for competitors (Gemini — covered by the GCP credits): a model
+  # per role, with the defaults in code (src/lib/competitors/models.ts):
+  #   read  = gemini-4-hydrogen (map, research, second look, facts)
+  #   match = gemini-4-argon    (merge, unify batches, match)
+  #   judge = gemini-4-carbon   (unify review, domains)
+  # Set one of these only to override a default. A gemini-* id runs on Gemini
+  # with a response schema; anything else on Claude. The old single
+  # COMPETITORS_MODEL is read by nothing any more.
+  # - variable: COMPETITORS_MODEL_READ
+  #   value: "gemini-4-hydrogen"
+  #   availability:
+  #     - RUNTIME
+  # - variable: COMPETITORS_MODEL_MATCH
+  # - variable: COMPETITORS_MODEL_JUDGE
   # Competitor profile media (UI captures, deep-dive images) referenced by path
   # from CompetitorMedia / CapabilityInsight.media and served by
   # /api/competitors/media. Unset = every capture shows its labelled placeholder.

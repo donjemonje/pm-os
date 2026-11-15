@@ -124,7 +124,7 @@ export async function mapStep(ctx: RunContext): Promise<void> {
         work: async (t) => {
           // TEST KNOB: the labels a test gave by section address; a section it does not name is "product".
           const injected = ctx.answers ? injectedMapAnswer(ctx.answers.map, entries) : undefined;
-          const r = await ctx.call<Record<string, unknown>>(MAP_SYSTEM_PROMPT, "", t, mapTool(entries.map((e) => e.code)), { maxTokens: MAP_MAX_TOKENS, thinking: "low", injected });
+          const r = await ctx.call<Record<string, unknown>>(MAP_SYSTEM_PROMPT, "", t, mapTool(entries.map((e) => e.code)), { role: "read", maxTokens: MAP_MAX_TOKENS, thinking: "low", injected });
           ctx.counters.mapCalls++;
           const parsed = parseMap(r.value, entries.map((e) => e.code));
           // Closed sets: a code that was not asked or a label that does not exist is an unusable answer — nothing of it is saved.

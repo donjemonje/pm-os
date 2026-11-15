@@ -245,7 +245,7 @@ async function unifyStep(env: SetupEnv, companies: SetupCompany[]): Promise<void
           injected = ctx.answers.unify?.[ctx.counters.unifyCalls];
           if (injected === undefined) throw new AnalysisError("other", `no injected unify answer for unify call ${ctx.counters.unifyCalls + 1} (test knob)`);
         }
-        const r = await ctx.call<Record<string, unknown>>(UNIFY_SYSTEM_PROMPT, "", t, unifyTool(entries.map((e) => e.code), rows.map((x) => x.code)), { maxTokens: UNIFY_MAX_TOKENS, thinking: "medium", injected });
+        const r = await ctx.call<Record<string, unknown>>(UNIFY_SYSTEM_PROMPT, "", t, unifyTool(entries.map((e) => e.code), rows.map((x) => x.code)), { role: "match", maxTokens: UNIFY_MAX_TOKENS, thinking: "medium", injected });
         ctx.counters.unifyCalls++;
         const parsed = parseUnify(r.value, entries, rows);
         // Closed sets: a code outside them makes the answer unusable — nothing of it is saved.
@@ -293,7 +293,7 @@ async function unifyStep(env: SetupEnv, companies: SetupCompany[]): Promise<void
           work: async (t) => {
             // TEST KNOB: every review call gets this answer; none given = nothing to merge, drop or rename.
             const injected = ctx.answers ? ctx.answers.unifyReview ?? '{"merge": [], "drop": [], "rename": []}' : undefined;
-            const r = await ctx.call<Record<string, unknown>>(UNIFY_REVIEW_SYSTEM_PROMPT, "", t, unifyReviewTool(chunk.map((x) => x.code)), { maxTokens: UNIFY_REVIEW_MAX_TOKENS, thinking: "high", injected });
+            const r = await ctx.call<Record<string, unknown>>(UNIFY_REVIEW_SYSTEM_PROMPT, "", t, unifyReviewTool(chunk.map((x) => x.code)), { role: "judge", maxTokens: UNIFY_REVIEW_MAX_TOKENS, thinking: "high", injected });
             ctx.counters.unifyCalls++;
             const parsed = parseUnifyReview(r.value, chunk);
             if (parsed.problems.length) throw new AnalysisError("answer", `PMOS AI's unify review is unusable: ${parsed.problems.slice(0, 3).join("; ")}${parsed.problems.length > 3 ? ` (+${parsed.problems.length - 3} more)` : ""}`);
@@ -365,7 +365,7 @@ async function domainsStep(env: SetupEnv, companies: SetupCompany[]): Promise<vo
           injected = ctx.answers.domains?.[ctx.counters.domainsCalls];
           if (injected === undefined) throw new AnalysisError("other", `no injected domains answer for domains call ${ctx.counters.domainsCalls + 1} (test knob)`);
         }
-        const r = await ctx.call<Record<string, unknown>>(DOMAINS_SYSTEM_PROMPT, "", t, domainsTool(batch.map((x) => x.code)), { maxTokens: DOMAINS_MAX_TOKENS, thinking: "high", injected });
+        const r = await ctx.call<Record<string, unknown>>(DOMAINS_SYSTEM_PROMPT, "", t, domainsTool(batch.map((x) => x.code)), { role: "judge", maxTokens: DOMAINS_MAX_TOKENS, thinking: "high", injected });
         ctx.counters.domainsCalls++;
         const parsed = parseDomains(r.value, batch, known);
         if (parsed.problems.length) throw new AnalysisError("answer", `PMOS AI's domains answer is unusable: ${parsed.problems.slice(0, 3).join("; ")}${parsed.problems.length > 3 ? ` (+${parsed.problems.length - 3} more)` : ""}`);
