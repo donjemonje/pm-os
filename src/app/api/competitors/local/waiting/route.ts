@@ -13,6 +13,12 @@ import { now, scanTimeLimitMs } from "@/lib/competitors/settings";
  * saved place of a scan it did not finish: the scan goes back to waiting before the list is built, so the same
  * answer hands it back and the station continues from the page it stopped on.
  */
+/** A page count from the station: a whole number, 0 to 10 million. */
+function count(v: string | null): number {
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) ? Math.min(Math.max(n, 0), 10_000_000) : 0;
+}
+
 export async function GET(req: Request) {
   const key = await verifyScannerKey(req.headers.get("authorization"));
   if (!key) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -22,8 +28,8 @@ export async function GET(req: Request) {
     await resumeLocalScan(resume, key.id, {
       reason: q.get("reason") ?? "crash",
       stoppedAt: q.get("stoppedAt"),
-      pagesRead: Math.max(0, Number(q.get("pages")) || 0),
-      pagesLeft: Math.max(0, Number(q.get("left")) || 0),
+      pagesRead: count(q.get("pages")),
+      pagesLeft: count(q.get("left")),
     });
   }
   const waiting = await listWaiting({ ms: await scanTimeLimitMs() });
