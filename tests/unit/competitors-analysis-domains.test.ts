@@ -81,7 +81,9 @@ describe("the answer of a domains call", () => {
     expect(twice.assigned.size).toBe(1);
   });
   it("a new domain needs a code that is not in use and a name", () => {
-    expect(parseDomains({ domains: [{ code: "X1", name: "A", definition: "" }], rows: [] }, rows, []).problems[0]).toContain("X1");
+    expect(parseDomains({ domains: [{ code: "", name: "A", definition: "" }], rows: [] }, rows, []).problems[0]).toContain("no code");
+    // Any code the answer declares that is not in use is its own.
+    expect(parseDomains({ domains: [{ code: "X1", name: "A", definition: "" }], rows: [{ row: "R1", domain: "X1" }] }, rows, []).problems).toEqual([]);
     expect(parseDomains({ domains: [{ code: "D1", name: " ", definition: "d" }], rows: [] }, rows, []).problems[0]).toContain("no name");
     expect(parseDomains({ domains: [{ code: "D1", name: "A", definition: "" }, { code: "D1", name: "B", definition: "" }], rows: [] }, rows, []).problems[0]).toContain("already in use");
     const known = knownDomains([{ key: domainKey("Customer Feedback"), name: "Customer Feedback", definition: "x" }]);

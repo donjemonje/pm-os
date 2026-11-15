@@ -46,7 +46,7 @@ export async function importPages(opts: {
   pages: CollectedPage[];
   startedById: string | null;
 }): Promise<ImportResult> {
-  const competitor = await db.competitor.findFirst({ where: { id: opts.competitorId, workspaceId: opts.workspaceId }, select: { id: true, websiteUrl: true } });
+  const competitor = await db.competitor.findFirst({ where: { id: opts.competitorId, workspaceId: opts.workspaceId, isOwn: false }, select: { id: true, websiteUrl: true } });
   if (!competitor) return { error: "no_competitor" };
   const active = await db.competitorScan.findFirst({ where: { workspaceId: opts.workspaceId, status: { in: ["queued", "running"] } }, select: { id: true } });
   if (active) return { error: "running" };

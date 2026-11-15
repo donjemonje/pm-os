@@ -222,8 +222,9 @@ export interface UnifyParsed {
  * The answer of one unify call.
  *   - An entry code that was not asked → a problem. An entry answered twice keeps its first answer. An entry the
  *     answer leaves out is simply not in the result (the step asks it again in the next call).
- *   - A row code must be an R-code that was given or an N-code declared under "rows" in this answer → else a problem.
- *   - A new row needs a name (after cleaning, at most 80 characters) → else a problem. A new row whose normalized
+ *   - A row code must be a code that was given or one declared under "rows" in this answer → else a problem.
+ *   - A new row needs a code of its own (not empty, not a code in use, not used twice) and a name (after cleaning,
+ *     at most 80 characters) → else a problem. A new row whose normalized
  *     name is that of a row that exists (or of an earlier new row of this answer) IS that row: decided in code.
  *   - "none" (or an empty row) = not a capability.
  */
@@ -238,8 +239,13 @@ export function parseUnify(value: unknown, entries: UnifyEntry[], rows: UnifyRow
   for (const r of arr(o.rows)) {
     const ro = (r ?? {}) as Record<string, unknown>;
     const code = typeof ro.code === "string" ? ro.code.trim() : "";
-    if (!/^N\d+$/.test(code)) {
-      problems.push(`a new row has the code "${code || "(none)"}" — new rows are N1, N2 …`);
+    // The prompt asks for N1, N2 …; what the answer must hold is weaker and checkable: a code of its own, not one in use.
+    if (!code || code.toLowerCase() === NO_VALUE) {
+      problems.push("a new row has no code");
+      continue;
+    }
+    if (given.has(code)) {
+      problems.push(`the new row code ${code} is the code of a row that exists`);
       continue;
     }
     if (created.has(code)) {

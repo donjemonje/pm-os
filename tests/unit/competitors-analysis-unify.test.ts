@@ -147,8 +147,14 @@ describe("the answer of a unify call", () => {
     expect(parse({ rows: [], entries: [{ entry: "I1", row: "N1" }] }).problems[0]).toContain("N1");
     expect(parse({ rows: [], entries: [{ entry: "I1", row: "Feedback Collection" }] }).problems).toHaveLength(1);
   });
-  it("a new row needs a code of its own kind and a name", () => {
-    expect(parse({ rows: [{ code: "R9", name: "X", description: "" }], entries: [] }).problems[0]).toContain("R9");
+  it("a new row needs a code of its own — not empty, not a code in use — and a name", () => {
+    expect(parse({ rows: [{ code: "R1", name: "X", description: "" }], entries: [] }).problems[0]).toContain("R1");
+    expect(parse({ rows: [{ code: "", name: "X", description: "" }], entries: [] }).problems[0]).toContain("no code");
+    expect(parse({ rows: [{ code: "none", name: "X", description: "" }], entries: [] }).problems[0]).toContain("no code");
+    // Any other code the answer declares is its own: the reference is still checked against what was declared.
+    const own = parse({ rows: [{ code: "R9", name: "Theme Detection", description: "Finds themes." }], entries: [{ entry: "I4", row: "R9" }] });
+    expect(own.problems).toEqual([]);
+    expect(own.assignments).toEqual([{ itemId: "13", row: { name: "Theme Detection", description: "Finds themes." } }]);
     expect(parse({ rows: [{ code: "N1", name: "  ", description: "d" }], entries: [] }).problems[0]).toContain("no name");
     expect(parse({ rows: [{ code: "N1", name: "A", description: "" }, { code: "N1", name: "B", description: "" }], entries: [] }).problems[0]).toContain("twice");
   });

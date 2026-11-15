@@ -177,8 +177,9 @@ export function parseDomains(value: unknown, rows: UnifyRow[], known: KnownDomai
   for (const d of arr(o.domains)) {
     const dobj = (d ?? {}) as Record<string, unknown>;
     const code = typeof dobj.code === "string" ? dobj.code.trim() : "";
-    if (!/^D\d+$/.test(code)) {
-      problems.push(`a new domain has the code "${code || "(none)"}" — domains are D1, D2 …`);
+    // The prompt asks for D1, D2 …; what the answer must hold is weaker and checkable: a code of its own, not one in use.
+    if (!code) {
+      problems.push("a new domain has no code");
       continue;
     }
     if (byCode.has(code)) {
