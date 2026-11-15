@@ -602,8 +602,11 @@ model PasswordResetToken {
 // ————— Competitors (story 2: website data → parity matrix + profile) —————
 //
 // Every row belongs to a workspace. The org's own column of the matrix is
-// Capability.ourStatus — the organization is never scanned (Daniel,
-// 2026-10-26): its catalog and statuses are entered by its PMs. Design of
+// Capability.ourStatus. Until 2026-11-15 the organization was never scanned
+// (Daniel, 2026-10-26: its catalog and statuses are entered by its PMs); since
+// then an organization may have its OWN website stored as a Competitor row
+// flagged isOwn ("the own source"): what it says fills ourStatus where no PM
+// set it by hand. Organizations without one are unchanged. Design of
 // record: the C2 "full-screen matrix" board; spec: "PM-OS Competitor
 // Analysis — Spec", tab "Story 2 — Website data".
 
@@ -622,6 +625,11 @@ model Competitor {
   position    Int       @default(0)
   /// Soft delete (Website Scanning PRD 2026-11-04): pages, hashes and scan history stay for the retention period; re-adding the same host restores the row.
   deletedAt   DateTime?
+  /// The organization's OWN website — "the own source" (Capability Analysis, the setup run; lib/competitors/own.ts).
+  /// Stored, scanned, mapped and read exactly like a competitor's site, but NEVER shown or counted as a competitor:
+  /// every listing of competitors leaves it out. At most one per workspace (enforced where it is created). What its
+  /// pages say is OURS: it fills Capability.ourStatus / Feature.ourStatus, never a CapabilityStatus cell.
+  isOwn       Boolean   @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -697,6 +705,14 @@ model Capability {
   productLines   Json             @default("[]")
   /// "found" | "not_found"
   ourStatus      String           @default("found")
+  /// Set when a PM set ourStatus by hand (and for every row that existed when the organization's own site was added):
+  /// the PM's value is the truth — no run changes ourStatus again. Null = a run may set it from the own source.
+  ourStatusSetAt   DateTime?
+  /// The PM who set it (plain id, no relation); null when it was frozen by adding the own site.
+  ourStatusSetById String?
+  /// The top-ranked evidence from the organization's own source behind the own cell, written by the own source's
+  /// analysis: { quote, sourceUrl, reasoning, wording, description, count }. Null = no evidence of ours.
+  ourEvidence    Json?
   position       Int              @default(0)
   /// "manual" | "ai"
   origin         String           @default("manual")
@@ -812,18 +828,32 @@ model CompetitorAnalysis {
   workspaceId  String
   competitorId String
   competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// "analysis" = one competitor's stored pages (the default). "setup" = THE SETUP RUN of a workspace (analysis/setup.ts):
+  /// the first run of an organization, attached to its own source (competitorId), working on the own source and every
+  /// competitor. It lives in this table so it takes its turn in the same queue: one run at a time in the installation.
+  kind         String     @default("analysis")
+  /// kind "setup" only — per-company progress and totals, written with every heartbeat:
+  /// { companies: [{ competitorId, name, own, stage, pagesTotal, pagesDone, appliedAt, counters }], shared: counters,
+  ///   rows, domains, features }.
+  setup        Json?
+  /// The record a setup run leaves on each company it filled (trigger "setup", status "done"): the setup run's id.
+  /// It makes the company's later runs ordinary ones (not a first picture) — plain id, no relation.
+  parentId     String?
   /// "scan" | "catalog" (our catalog got a row this competitor was never checked for) | "manual" (PM-OS admin / CLI)
+  /// | "setup" (the record of one company's part of a setup run)
   trigger      String
   /// The scan whose end queued it (the newest one when several were folded into one queued run); null for catalog / manual.
   scanId       String?
   startedById  String?
   /// "queued" | "running" | "waiting" (PMOS AI has no capacity; sleeping until resumeAt) | "done" | "failed" | "cancelled"
   status       String     @default("queued")
-  /// Display only — where the run is: "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts" | "done".
+  /// Display only — where the run is: "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts" | "done"
+  /// (a setup run also: "unify" | "domains").
   /// A resumed run never trusts it: every step recomputes its own to-do from the tables.
   step         String     @default("research")
   /// What cannot be derived: { factsBaselineSources: string[], goBack: { rounds: string[][] } } — the sources whose
   /// first facts read this is, and the pages each go-back round chose (page ids), so a run that stopped reads the same pages.
+  /// A setup run keeps one such object per company under { companies: { <competitorId>: {…} } }, and { unify: { reviewed } }.
   cursor       Json       @default("{}")
   /// Set while status = "waiting".
   resumeAt     DateTime?
@@ -859,6 +889,7 @@ model CompetitorAnalysis {
   @@index([status, createdAt])
   @@index([competitorId, createdAt])
   @@index([workspaceId, createdAt])
+  @@index([parentId])
 }
 
 /// One section of a competitor's READING PLAN (analysis/sections.ts): the stored pages under one address prefix of
@@ -958,13 +989,17 @@ model CompetitorItem {
   capability      Capability?      @relation(fields: [capabilityId], references: [id], onDelete: SetNull)
   featureId       String?
   feature         Feature?         @relation(fields: [featureId], references: [id], onDelete: SetNull)
-  /// "name" | "alias" (resolved in code through decisions.ts) | "ai" (the match call) | "created" (the apply step made the row
-  /// from this item) | "silent" (it is a row a PM removed or declined: remembered, never shown)
+  /// "name" | "alias" (resolved in code through decisions.ts) | "ai" (the match call, or the setup run's unify step)
+  /// | "created" (the apply step made the row from this item) | "silent" (it is a row a PM removed or declined:
+  /// remembered, never shown) | "excluded" (the setup run's unify step judged it no capability — a commercial term or
+  /// a marketing headline: it gets no row, and is never asked again)
   matchedBy       String?
   matchedAt       DateTime?
   matchAnalysisId String?
   /// The match call's answer for an item that is none of ours, kept until the apply step turns it into a row:
-  /// { domainId, newDomainName, newDomainDefinition, closestDomainId, marketName, description }
+  /// { domainId, newDomainName, newDomainDefinition, closestDomainId, marketName, description }.
+  /// During a setup run, a capability item's row as the unify step decided it, kept until the domains step creates
+  /// the catalog: { setupRow: true, marketName, description } — the row is identified by its name.
   placement       Json?
   /// When a run last went back for this item's gaps to the end (analysis/gaps.ts). The item is gone back for again
   /// only when it got a finding after this moment — so a run with nothing new to read reads nothing for it.
@@ -990,6 +1025,11 @@ model Feature {
   description  String     @default("")
   /// The org's own mark: "found" | "not_found". A feature found only at competitors starts as not_found.
   ourStatus    String     @default("not_found")
+  /// Same rule as Capability: set = a PM's value, never changed by a run.
+  ourStatusSetAt   DateTime?
+  ourStatusSetById String?
+  /// Same shape as Capability.ourEvidence.
+  ourEvidence  Json?
   position     Int        @default(0)
   /// "manual" | "ai"
   origin       String     @default("manual")
