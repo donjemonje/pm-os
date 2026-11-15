@@ -10,8 +10,8 @@ import {
 } from "@/lib/competitors/analysis/budget";
 
 describe("the setting", () => {
-  it("defaults to 1,000,000 tokens per competitor, per run", () => {
-    expect(ANALYSIS_TOKEN_BUDGET_DEFAULT).toBe(1_000_000);
+  it("defaults to 10,000,000 tokens per competitor, per run — a safety net, not a ration", () => {
+    expect(ANALYSIS_TOKEN_BUDGET_DEFAULT).toBe(10_000_000);
     expect(ANALYSIS_TOKEN_BUDGET_MIN).toBeLessThan(ANALYSIS_TOKEN_BUDGET_DEFAULT);
     expect(ANALYSIS_TOKEN_BUDGET_MAX).toBeGreaterThan(ANALYSIS_TOKEN_BUDGET_DEFAULT);
   });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { capLines, readCaps } from "@/lib/competitors/analysis/caps";
 import { readCounters } from "@/lib/competitors/analysis/engine";
 import { estimateTokens } from "@/lib/competitors/analysis/pacing";
 import { readUsage, sortUsage, type StepUsage } from "@/lib/competitors/analysis/usage";
@@ -46,6 +47,10 @@ export interface AdminPlanRun {
   calls: number;
   /** The run's tokens per step and model (analysis/usage.ts); [] for a run from before they were split. */
   usage: StepUsage[];
+  /** The caps the run hit, one line each (analysis/caps.ts capLine); [] = no cap was hit. */
+  caps: string[];
+  /** False for a run from before caps and tokens per step were recorded: "no cap" is then not known. */
+  recorded: boolean;
   /** The models of the run, as it recorded them ("read … · match … · judge …", or one model for an older run). */
   model: string | null;
   /** 0 = a run from before the budget existed. */
@@ -72,7 +77,7 @@ export async function GET(req: Request) {
       where: { competitorId, kind: "analysis" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
-      select: { id: true, trigger: true, status: true, step: true, counters: true, usage: true, model: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
+      select: { id: true, trigger: true, status: true, step: true, counters: true, usage: true, caps: true, model: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
   // Sections that hold pages first, by address; a section whose folder is gone (0 pages, the label is kept) last.
@@ -86,7 +91,7 @@ export async function GET(req: Request) {
       const c = readCounters(r.counters);
       return {
         id: r.id, trigger: r.trigger, status: r.status, step: r.step, pagesRead: c.pagesRead, pagesUnread: c.pagesUnread, tokensUsed: c.inputTokens + c.outputTokens,
-        inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, calls: c.calls, usage: sortUsage(readUsage(r.usage)), model: r.model,
+        inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, calls: c.calls, usage: sortUsage(readUsage(r.usage)), caps: capLines(readCaps(r.caps)), recorded: readUsage(r.usage).length > 0 || c.calls === 0, model: r.model,
         budget: c.budget, budgetReached: c.budgetReached > 0, goBackRounds: c.goBackRounds, goBackPages: c.goBackPages,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };

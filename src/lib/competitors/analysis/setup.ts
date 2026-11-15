@@ -277,7 +277,10 @@ async function unifyStep(env: SetupEnv, companies: SetupCompany[]): Promise<void
     const rows = rowsOf(await loadUnifyItems(companies));
     if (rows.length >= 2) {
       const parts = Math.ceil(rows.length / UNIFY_REVIEW_MAX_ROWS);
-      if (parts > 1) env.log("warn", `Unify review split in ${parts} calls (${rows.length} rows): the same capability in two calls can stay two rows`);
+      if (parts > 1) {
+        env.log("warn", `Unify review split in ${parts} calls (${rows.length} rows): the same capability in two calls can stay two rows`);
+        ctx.cap("unify_review_split", { limit: UNIFY_REVIEW_MAX_ROWS, undone: parts });
+      }
       let merged = 0;
       let dropped = 0;
       let renamed = 0;
@@ -350,6 +353,8 @@ async function domainsStep(env: SetupEnv, companies: SetupCompany[]): Promise<vo
   const assigned = new Map<string, string>();
   let left: UnifyRow[] = rows;
   env.log("info", `Domains: ${rows.length} row${rows.length === 1 ? "" : "s"}, ${productLines.length} product line${productLines.length === 1 ? "" : "s"} of the organization`);
+  // More rows than one call takes: the step is no longer ONE step over all rows — a cap, recorded like any other.
+  if (rows.length > DOMAINS_MAX_ROWS) ctx.cap("domains_split", { limit: DOMAINS_MAX_ROWS, undone: Math.ceil(rows.length / DOMAINS_MAX_ROWS) });
   while (left.length) {
     const batch = left.slice(0, DOMAINS_MAX_ROWS);
     const known = knownDomains(drafts);
@@ -525,7 +530,7 @@ async function recordCompany(env: SetupEnv, c: SetupCompany, ctx: RunContext): P
       data: {
         workspaceId: env.run.workspaceId, competitorId: c.id, kind: "analysis", trigger: "setup", parentId: env.run.id, startedById: env.run.startedById,
         status: "done", step: "done", model: env.model, startedAt: env.run.startedAt, appliedAt: entry?.appliedAt ? new Date(entry.appliedAt) : at, finishedAt: at, heartbeatAt: at,
-        pagesTotal: entry?.pagesTotal ?? 0, pagesDone: entry?.pagesDone ?? 0, counters: ctx.counters as unknown as Prisma.InputJsonValue, usage: (entry?.usage ?? []) as unknown as Prisma.InputJsonValue, errorKind: "none",
+        pagesTotal: entry?.pagesTotal ?? 0, pagesDone: entry?.pagesDone ?? 0, counters: ctx.counters as unknown as Prisma.InputJsonValue, usage: (entry?.usage ?? []) as unknown as Prisma.InputJsonValue, caps: env.capsOf(c.id) as unknown as Prisma.InputJsonValue, errorKind: "none",
         log: [{ at: at.toISOString(), level: "info", msg: `Filled by the setup run ${env.run.id} — its log holds this company's lines` }] as unknown as Prisma.InputJsonValue,
       },
     });

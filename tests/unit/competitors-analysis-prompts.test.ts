@@ -47,7 +47,7 @@ describe("parseResearch", () => {
       { kind: "capability", wording: "Access management", parentWording: null, quote: "Single sign-on (SSO) is included in every plan", reasoning: "The page says so.", description: null },
       { kind: "feature", wording: "RBAC", parentWording: "Access management", quote: "Role-based access control lets admins scope every role", reasoning: "The page says so.", description: null },
     ]);
-    expect(r.dropped).toEqual({ noQuote: 0, pii: 0, over: 0 });
+    expect(r.dropped).toEqual({ noQuote: 0, pii: 0, over: 0, overCapabilities: 0, overFeatures: 0 });
   });
   it("a capability whose quote is not on the page is dropped, and its features with it", () => {
     const r = parseResearch({ capabilities: [cap("Threat hunting", "Hunt threats with our autonomous agents", [feat("RBAC", "Role-based access control lets admins scope every role")]), cap("Threat detection", "Detect threats across your whole stack in real time")] }, PAGE);

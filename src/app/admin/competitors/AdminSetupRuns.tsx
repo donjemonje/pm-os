@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminSetupRun, AdminSetupState } from "@/app/api/admin/competitors/setup/route";
 import type { ImportOrg } from "./AdminImport";
-import { RunUsage } from "./RunUsage";
+import { RunCaps, RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Setup runs (PM-OS admin only, read-only). Pick an organization: whether it is set
@@ -149,6 +149,9 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                   <span className="font-mono text-slate-400">{r.id}</span>
                 </div>
                 {r.error && <div className="border-b border-slate-200 px-3 py-2 text-xs text-red-700" data-testid="admin-setup-run-error">{r.error}</div>}
+                <div className="border-b border-slate-200 px-3 py-2" data-testid="admin-setup-run-caps">
+                  <RunCaps caps={r.caps} recorded active={r.status === "queued" || r.status === "running" || r.status === "waiting"} />
+                </div>
                 <div className="border-b border-slate-200 px-3 py-2 text-xs" data-testid="admin-setup-run-tokens">
                   {r.model && <div className="mb-1 text-slate-500">{COPY.models}: <span className="font-mono">{r.model}</span></div>}
                   <details>
@@ -184,6 +187,7 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                         </tr>
                         <tr data-testid="admin-setup-company-tokens">
                           <td className="px-3 pb-2" colSpan={5}>
+                            {c.caps.length > 0 && <div className="mb-1.5"><RunCaps caps={c.caps} recorded /></div>}
                             <details>
                               <summary className="cursor-pointer text-slate-500">{COPY.companyTokens}: {COPY.tokens(c.inputTokens, c.outputTokens, c.cachedTokens)}</summary>
                               <div className="mt-1.5"><RunUsage usage={c.usage} calls={c.calls} /></div>

@@ -94,6 +94,11 @@ const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * best first (ties by address), at most `perItem`, never a page in `taken`. The pages it picks are added to `taken`.
  */
 export function pickForItem(item: GoBackItem, pages: IndexedPage[], taken: Set<string>, perItem: number = GO_BACK_PAGES_PER_ITEM): string[] {
+  return pickForItemCounted(item, pages, taken, perItem).picked;
+}
+
+/** pickForItem, with how many pages scored for the item: more than it may pick = the per-item limit left likely pages unread (caps.ts). */
+export function pickForItemCounted(item: GoBackItem, pages: IndexedPage[], taken: Set<string>, perItem: number = GO_BACK_PAGES_PER_ITEM): { picked: string[]; candidates: number } {
   const scored: Array<{ id: string; url: string; score: number }> = [];
   for (const p of pages) {
     if (taken.has(p.id)) continue;
@@ -103,7 +108,7 @@ export function pickForItem(item: GoBackItem, pages: IndexedPage[], taken: Set<s
   scored.sort((a, b) => b.score - a.score || cmp(a.url, b.url));
   const picked = scored.slice(0, Math.max(0, perItem)).map((s) => s.id);
   for (const id of picked) taken.add(id);
-  return picked;
+  return { picked, candidates: scored.length };
 }
 
 /**

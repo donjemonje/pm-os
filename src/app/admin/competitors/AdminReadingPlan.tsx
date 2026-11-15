@@ -5,7 +5,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminPlanRun, AdminPlanSection } from "@/app/api/admin/competitors/plan/route";
 import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ImportOrg } from "./AdminImport";
-import { RunUsage } from "./RunUsage";
+import { RunCaps, RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Reading plan (PM-OS admin only, read-only). Pick an organization and one of its
@@ -210,6 +210,7 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                     </tr>
                     <tr data-testid="admin-plan-run-tokens">
                       <td className="px-3 pb-2" colSpan={8}>
+                        <div className="mb-1.5"><RunCaps caps={r.caps} recorded={r.recorded} active={r.status === "queued" || r.status === "running" || r.status === "waiting"} /></div>
                         <details>
                           <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}: {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens)}</summary>
                           <div className="mt-1.5">

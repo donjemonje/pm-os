@@ -32,6 +32,8 @@ export interface CompetitorsConfig {
   /**
    * Analysis: the most second looks one run makes (one PMOS AI call per capability of ours with no evidence, 1–500).
    * The capabilities beyond it keep waiting — no cell is written for them — and the competitor's next run goes on.
+   * A safety net (Daniel 2026-11-15): the default is the maximum, so a first table has no blank cell because of it;
+   * a run that reaches it records a cap hit (analysis/caps.ts). A value an organization saved stays as saved.
    */
   secondLooksPerRun: number;
 }
@@ -41,7 +43,7 @@ export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
   baselineUntil: null,
   readWeakPages: false,
   minPagesForNewRow: 1,
-  secondLooksPerRun: 30,
+  secondLooksPerRun: 500,
 };
 
 // ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————

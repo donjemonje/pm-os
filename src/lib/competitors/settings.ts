@@ -14,7 +14,7 @@ import { STORAGE_LIMIT_CHARS, ceilingMsFromEnv } from "./config";
  *                                    pages are saved: page states and the badge
  *                                    are set, PMOS AI is not called.
  *   competitors.analysisTokenBudget — "Analysis token budget per competitor,
- *                                    per run", default 1,000,000 (Daniel
+ *                                    per run", default 10,000,000 (Daniel
  *                                    2026-11-12; analysis/budget.ts). One
  *                                    number for the installation.
  *   competitors.clockOffsetMs      — TEST KNOB. Honoured only when
@@ -30,7 +30,7 @@ export interface GlobalScanSettings {
   remoteScanEnabled: boolean;
   /** "Disable analysis": a scan ends after saving its pages, PMOS AI is not called. Default false. */
   analysisDisabled: boolean;
-  /** The most tokens one analysis run of one competitor may use (analysis/budget.ts). Default 1,000,000. */
+  /** The most tokens one analysis run of one competitor may use (analysis/budget.ts). Default 10,000,000. */
   analysisTokenBudget: number;
 }
 

@@ -15,6 +15,8 @@ import {
   LOOK_MAX_TOKENS,
   LOOK_SYSTEM_PROMPT,
   lookTool,
+  MAX_CAPABILITIES_PER_PAGE,
+  MAX_FEATURES_PER_CAPABILITY,
   MATCH_MAX_TOKENS,
   MATCH_SYSTEM_PROMPT,
   matchTool,
@@ -40,7 +42,7 @@ import {
   type MergeEntry,
   type Placement,
 } from "./prompts";
-import { capLooks, indexPages, lookKey, pagesFor, type LookPage } from "./secondlook";
+import { capLooks, indexPages, LOOK_MAX_CHARS, LOOK_MAX_PAGES, lookKey, selectLookPages, type LookPage } from "./secondlook";
 import { pickReadable, sortForReading, type PageRead, type ReadingPlan } from "./sections";
 import { readKey, researchTodo, rowsSince, tooManyFailed } from "./todo";
 
@@ -61,6 +63,14 @@ export type ReadablePage = StoredPage & { read: PageRead };
 /** The pages the analysis may read (sections.ts): broad and deep pages, plus weak ones when the workspace reads them. */
 export async function readablePages(ctx: RunContext): Promise<ReadablePage[]> {
   return pickReadable(await loadPages(ctx.competitor.id), await planOf(ctx), { readWeak: ctx.readWeak });
+}
+
+/**
+ * The run's token budget stopped the reading (caps.ts "token_budget"): recorded with what it left undone so far —
+ * the pages left unread and, once the second looks were reached, the looks that were not made.
+ */
+export function budgetCap(ctx: RunContext, looksNotMade = 0): void {
+  ctx.cap("token_budget", { limit: ctx.reading.limit, undone: ctx.counters.pagesUnread, also: looksNotMade });
 }
 
 // ————— 1. Research: one call per page —————
@@ -161,6 +171,9 @@ export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<
       ctx.counters.quotesDropped += parsed.dropped.noQuote;
       ctx.counters.piiHits += parsed.dropped.pii;
       if (parsed.dropped.over) ctx.log("warn", `${parsed.dropped.over} item${parsed.dropped.over === 1 ? "" : "s"} beyond the per-page limit were left out`, p.url);
+      // The answer listed more than a page may hold: a cap was hit, and what was left out is counted.
+      if (parsed.dropped.overCapabilities) ctx.cap("capabilities_per_page", { limit: MAX_CAPABILITIES_PER_PAGE, undone: parsed.dropped.overCapabilities });
+      if (parsed.dropped.overFeatures) ctx.cap("features_per_capability", { limit: MAX_FEATURES_PER_CAPABILITY, undone: parsed.dropped.overFeatures });
       return r.tokens;
     },
     // A page whose answer is unusable is recorded and skipped: it is asked again only when its text or the prompt changes.
@@ -173,6 +186,8 @@ export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<
       ctx.progress.pagesDone++;
       ctx.counters.pagesFailed++;
       ctx.log("warn", `Page skipped — PMOS AI's answer was unusable: ${e.message.slice(0, 200)}`, p.url);
+      // A page whose answer did not fit (or came back empty or invalid) was not read: nothing of it is in the table.
+      ctx.cap("research_answer_unusable", { limit: RESEARCH_MAX_TOKENS, undone: 1 });
       // Many unusable answers are the model's or the prompt's problem, not a page's.
       if (tooManyFailed(failed, todo.length)) throw new AnalysisError("answer", `${failed} of ${todo.length} pages got an unusable answer from PMOS AI — stopping`);
     },
@@ -180,6 +195,7 @@ export async function readPages(ctx: RunContext, todo: ReadablePage[]): Promise<
   if (result.left) {
     ctx.counters.pagesUnread += result.left;
     ctx.progress.pagesTotal = Math.max(ctx.progress.pagesDone, ctx.progress.pagesTotal - result.left);
+    budgetCap(ctx);
   }
   return { read: todo.length - failed - result.left, failed, left: result.left };
 }
@@ -434,6 +450,7 @@ export async function mergeStep(ctx: RunContext): Promise<void> {
     if (calls === 0 && todo.length > chunk.length) {
       const n = Math.ceil(todo.length / MERGE_MAX_CAPABILITY_LINES);
       ctx.counters.mergeSplits += n - 1;
+      ctx.cap("merge_split", { limit: MERGE_MAX_CAPABILITY_LINES, undone: n });
       ctx.log("warn", `merge list split in ${n} calls (${todo.length} new capability names): merges across the calls can be missed`);
     }
     const { entries, byCode } = mergeEntries([...chunk, ...capabilities.filter((i) => i.mergeChecked)], stats);
@@ -717,10 +734,10 @@ export async function secondLookStep(ctx: RunContext, opts: { /** Only these cap
       update: { lookKey: key },
     });
 
-  const due: Array<{ capability: (typeof candidates)[number]; aliases: string[]; pages: LookPage[]; key: string }> = [];
+  const due: Array<{ capability: (typeof candidates)[number]; aliases: string[]; pages: LookPage[]; key: string; leftByPages: number; leftByChars: number }> = [];
   for (const k of candidates) {
     const aliases = aliasList(k.aliases);
-    const pages = pagesFor({ name: k.name, aliases }, indexed);
+    const { pages, leftByPages, leftByChars } = selectLookPages({ name: k.name, aliases }, indexed);
     const key = lookKey({ name: k.name, description: k.description, aliases }, k.domain, pages, ctx.model);
     if (asked.get(k.id) === key) continue;
     if (!pages.length) {
@@ -728,13 +745,15 @@ export async function secondLookStep(ctx: RunContext, opts: { /** Only these cap
       await saveKey(k.id, key);
       continue;
     }
-    due.push({ capability: k, aliases, pages, key });
+    due.push({ capability: k, aliases, pages, key, leftByPages, leftByChars });
   }
   if (!due.length) return waiting;
   // The limit per run, in table order. What is over it waits for the competitor's next run.
   const { now: todo, later } = capLooks(due, ctx.counters.secondLooks, ctx.maxSecondLooks);
   for (const t of later) waiting.add(t.capability.id);
   ctx.counters.secondLooksWaiting = later.length;
+  // The limit per run left capabilities unchecked: a cap was hit.
+  if (later.length) ctx.cap("second_looks_per_run", { limit: ctx.maxSecondLooks, undone: later.length });
   ctx.log("info", `Second look: ${due.length} of your capabilities have no evidence at ${ctx.competitor.name} yet — asking once each, on their most likely pages${later.length ? `; ${todo.length} now (the limit is ${ctx.maxSecondLooks} per run), ${later.length} wait for the next run` : ""}`);
   if (!todo.length) return waiting;
   let found = 0;
@@ -757,6 +776,9 @@ export async function secondLookStep(ctx: RunContext, opts: { /** Only these cap
       );
       const answer = parseSecondLook(r.value, t.pages);
       made.add(k.id);
+      // The look could not show every candidate page: its page limit or its character limit left some out.
+      if (t.leftByPages) ctx.cap("second_look_pages", { limit: LOOK_MAX_PAGES, undone: t.leftByPages });
+      if (t.leftByChars) ctx.cap("second_look_chars", { limit: LOOK_MAX_CHARS, undone: t.leftByChars });
       ctx.counters.secondLooks++;
       if (answer.found) {
         const page = t.pages.find((p) => p.id === answer.pageId)!;
@@ -777,6 +799,7 @@ export async function secondLookStep(ctx: RunContext, opts: { /** Only these cap
   if (looks.left) {
     for (const t of todo) if (!made.has(t.capability.id)) waiting.add(t.capability.id);
     ctx.counters.secondLooksWaiting = waiting.size;
+    budgetCap(ctx, todo.filter((t) => !made.has(t.capability.id)).length);
   }
   ctx.log(looks.left ? "warn" : "info", `Second look: ${found} found, ${made.size - found} not found${waiting.size ? `, ${waiting.size} not asked yet` : ""}${looks.left ? ` — the run's token budget (${ctx.reading.limit.toLocaleString("en-US")}) was reached` : ""}`);
   await ctx.flush();

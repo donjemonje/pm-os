@@ -13,7 +13,11 @@
  * Pure: no database, no network.
  */
 
-export const ANALYSIS_TOKEN_BUDGET_DEFAULT = 1_000_000;
+/**
+ * A safety net, not a ration (Daniel 2026-11-15): a run is not expected to reach it. When one does, it is recorded
+ * as a cap hit and support is emailed (analysis/caps.ts). Was 1,000,000 until then.
+ */
+export const ANALYSIS_TOKEN_BUDGET_DEFAULT = 10_000_000;
 /** Below this a run cannot do its map, merge and match and still read a page. */
 export const ANALYSIS_TOKEN_BUDGET_MIN = 100_000;
 /** A ceiling against a slip of the hand (an extra zero), not a recommendation. */

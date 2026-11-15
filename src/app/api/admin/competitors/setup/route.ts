@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
+import { capLines, capsOf, readCaps } from "@/lib/competitors/analysis/caps";
 import { readCounters } from "@/lib/competitors/analysis/counters";
 import { readSetupProgress, setupStateOf, type SetupStage, type SetupState } from "@/lib/competitors/analysis/setup-rules";
 import { readUsage, sortUsage, type StepUsage } from "@/lib/competitors/analysis/usage";
@@ -32,6 +33,8 @@ export interface AdminSetupCompany {
   calls: number;
   /** The company's tokens per step and model. */
   usage: StepUsage[];
+  /** The caps hit for this company, one line each. */
+  caps: string[];
 }
 
 export interface AdminSetupRun {
@@ -51,6 +54,8 @@ export interface AdminSetupRun {
   usage: StepUsage[];
   /** The calls that belong to no company (unify, domains), per step and model. */
   sharedUsage: StepUsage[];
+  /** Every cap the run hit, one line each — the company named on the line; [] = no cap was hit. */
+  caps: string[];
   /** The models of the run ("read … · match … · judge …"). */
   model: string | null;
   /** The token budget per company of the run; 0 before it started. */
@@ -85,7 +90,7 @@ export async function GET(req: Request) {
       where: { workspaceId, kind: "setup" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
-      select: { id: true, status: true, step: true, counters: true, usage: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
+      select: { id: true, status: true, step: true, counters: true, usage: true, caps: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
   const body: AdminSetupState = {
@@ -97,15 +102,16 @@ export async function GET(req: Request) {
     runs: runs.map((r): AdminSetupRun => {
       const c = readCounters(r.counters);
       const progress = readSetupProgress(r.setup);
+      const hit = readCaps(r.caps);
       return {
         id: r.id, status: r.status, step: r.step,
         companies: progress.companies.map((x) => ({
           competitorId: x.competitorId, name: x.name, own: x.own, stage: x.stage, pagesRead: x.counters.pagesRead, pagesUnread: x.counters.pagesUnread,
           tokensUsed: x.counters.inputTokens + x.counters.outputTokens, inputTokens: x.counters.inputTokens, outputTokens: x.counters.outputTokens, cachedTokens: x.counters.cachedTokens,
-          budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls, usage: sortUsage(x.usage),
+          budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls, usage: sortUsage(x.usage), caps: capLines(capsOf(hit, x.competitorId)),
         })),
         rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens,
-        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), model: r.model, budget: c.budget,
+        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), caps: capLines(hit), model: r.model, budget: c.budget,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };
     }),

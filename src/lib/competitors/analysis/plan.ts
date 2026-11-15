@@ -4,7 +4,7 @@ import { OWN_MATERIAL_SOURCE_TYPE } from "../own";
 import { syncProductLinesPage } from "../own-site";
 import { AnalysisError, type RunContext } from "./engine";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
-import { injectedMapAnswer, MAP_MAX_SECTIONS, MAP_MAX_TOKENS, MAP_SYSTEM_PROMPT, MAP_VERSION, mapTool, parseMap, renderMap, type MapEntry } from "./prompts";
+import { injectedMapAnswer, LLMS_TXT_MAX_CHARS, MAP_MAX_SECTIONS, MAP_MAX_TOKENS, MAP_SYSTEM_PROMPT, MAP_VERSION, mapTool, parseMap, renderMap, type MapEntry } from "./prompts";
 import { buildSections, hostOf, isLlmsTxt, ReadingPlan, SECTION_LABELS, sectionKey, type Section, type SectionLabel } from "./sections";
 
 /**
@@ -110,6 +110,8 @@ export async function mapStep(ctx: RunContext): Promise<void> {
   const asked = left.length;
   if (left.length) {
     const llms = await llmsTxt(pages);
+    // The map sees the start of a long llms.txt only: a cap, recorded like any other.
+    if (llms && llms.trim().length > LLMS_TXT_MAX_CHARS) ctx.cap("llms_txt_chars", { limit: LLMS_TXT_MAX_CHARS, undone: llms.trim().length - LLMS_TXT_MAX_CHARS });
     ctx.log("info", `Map: ${left.length} section${left.length === 1 ? "" : "s"} of the site ${left.length === 1 ? "has" : "have"} no label yet — asking PMOS AI${llms ? " (with the site's llms.txt)" : ""}`);
     while (left.length) {
       const batch = left.slice(0, MAP_MAX_SECTIONS);

@@ -1,10 +1,10 @@
 import { db } from "../../db";
 import type { RunContext } from "./engine";
-import { dueForGoBack, GO_BACK_MAX_ROUNDS, GO_BACK_PAGES_PER_ITEM, hasGap, pickForItem, savedGoBackRounds, sortGoBackItems, type GapFinding, type GoBackItem } from "./gaps";
+import { dueForGoBack, GO_BACK_MAX_ROUNDS, GO_BACK_PAGES_PER_ITEM, hasGap, pickForItemCounted, savedGoBackRounds, sortGoBackItems, type GapFinding, type GoBackItem } from "./gaps";
 import { planOf } from "./plan";
 import { RESEARCH_VERSION } from "./prompts";
 import { indexPages, type LookPage } from "./secondlook";
-import { matchStep, mergeStep, readablePages, readPages, tableRows } from "./steps";
+import { budgetCap, matchStep, mergeStep, readablePages, readPages, tableRows } from "./steps";
 import { readKey, researchTodo } from "./todo";
 
 /**
@@ -63,17 +63,22 @@ async function openItems(ctx: RunContext): Promise<GoBackItem[]> {
   return sortGoBackItems(out);
 }
 
-/** The pages one round reads: for each open item its most likely unread deep pages. `taken` = the pages earlier rounds chose. */
-async function pickRound(ctx: RunContext, round: number, taken: Set<string>): Promise<string[]> {
+/**
+ * The pages one round reads: for each open item its most likely unread deep pages. `taken` = the pages earlier rounds chose.
+ * `probe` = only asked what a round beyond the last allowed one WOULD read (the rounds cap, caps.ts): nothing is
+ * logged and nothing is recorded; `served` = the items that would get a page.
+ */
+async function pickRound(ctx: RunContext, round: number, taken: Set<string>, probe = false): Promise<{ pageIds: string[]; served: number }> {
+  const none = { pageIds: [], served: 0 };
   const open = await openItems(ctx);
   if (!open.length) {
-    if (round === 1) ctx.log("info", "Go back: no capability of theirs has a new gap — nothing to read");
-    return [];
+    if (round === 1 && !probe) ctx.log("info", "Go back: no capability of theirs has a new gap — nothing to read");
+    return none;
   }
   const unread = (await readablePages(ctx)).filter((p) => p.read.role === "deep" && p.analyzedKey !== readKey(RESEARCH_VERSION, p.hash) && !taken.has(p.id));
   if (!unread.length) {
-    ctx.log("info", `Go back, round ${round}: ${open.length} capabilit${open.length === 1 ? "y of theirs has" : "ies of theirs have"} a gap, and there is no unread deep page to go back to`);
-    return [];
+    if (!probe) ctx.log("info", `Go back, round ${round}: ${open.length} capabilit${open.length === 1 ? "y of theirs has" : "ies of theirs have"} a gap, and there is no unread deep page to go back to`);
+    return none;
   }
   const pool: LookPage[] = [];
   for (let i = 0; i < unread.length; i += CHUNK) {
@@ -84,30 +89,46 @@ async function pickRound(ctx: RunContext, round: number, taken: Set<string>): Pr
   const picked = new Set<string>();
   const pageIds: string[] = [];
   let served = 0;
+  /** Items that had more likely pages than an item may go back to, and the pages that left unread. */
+  let cutItems = 0;
+  let cutPages = 0;
   for (const item of open) {
-    const ids = pickForItem(item, indexed, picked, GO_BACK_PAGES_PER_ITEM);
+    const { picked: ids, candidates } = pickForItemCounted(item, indexed, picked, GO_BACK_PAGES_PER_ITEM);
     if (ids.length) served++;
+    if (candidates > ids.length) {
+      cutItems++;
+      cutPages += candidates - ids.length;
+    }
     pageIds.push(...ids);
     await breathe();
   }
+  if (probe) return { pageIds, served };
+  if (cutItems) ctx.cap("go_back_pages_per_item", { limit: GO_BACK_PAGES_PER_ITEM, undone: cutPages, times: cutItems });
   ctx.log("info", `Go back, round ${round}: ${open.length} capabilit${open.length === 1 ? "y of theirs has" : "ies of theirs have"} a gap (no description beyond marketing pages, no feature, or a feature with no description) — ${pageIds.length} of ${unread.length} unread deep page${unread.length === 1 ? "" : "s"} picked for ${served} of them`);
-  return pageIds;
+  return { pageIds, served };
 }
 
 export async function goBackStep(ctx: RunContext): Promise<void> {
   const rounds = savedGoBackRounds(ctx.run.cursor);
   // False once the run's token budget stopped the reading: the items were not gone back for to the end, so they stay due.
   let complete = true;
+  /** Every allowed round was made and each read pages: more may have been due than the rounds allow. */
+  let exhausted = true;
   for (let round = 1; round <= GO_BACK_MAX_ROUNDS; round++) {
     let pageIds = rounds[round - 1];
     if (!pageIds) {
       if (ctx.reading.reached) {
         ctx.log("warn", `Go back: not started${round > 1 ? ` (round ${round})` : ""} — the run's token budget (${ctx.reading.limit.toLocaleString("en-US")}) was reached. The gaps stay open for the next run`);
+        budgetCap(ctx);
         complete = false;
+        exhausted = false;
         break;
       }
-      pageIds = await pickRound(ctx, round, new Set(rounds.flat()));
-      if (!pageIds.length) break;
+      pageIds = (await pickRound(ctx, round, new Set(rounds.flat()))).pageIds;
+      if (!pageIds.length) {
+        exhausted = false;
+        break;
+      }
       // Saved before a page is read: a run that stops here reads the same pages when it continues.
       rounds.push(pageIds);
       await ctx.saveCursor({ goBack: { rounds } });
@@ -124,8 +145,15 @@ export async function goBackStep(ctx: RunContext): Promise<void> {
     await matchStep(ctx);
     if (r.left) {
       complete = false;
+      exhausted = false;
       break;
     }
+  }
+  // The rounds cap: after the last allowed round, would one more round still read pages? Then more was due than
+  // allowed — asked with the same picking a round uses, before the items are marked as checked.
+  if (exhausted) {
+    const more = await pickRound(ctx, GO_BACK_MAX_ROUNDS + 1, new Set(rounds.flat()), true);
+    if (more.pageIds.length) ctx.cap("go_back_rounds", { limit: GO_BACK_MAX_ROUNDS, undone: more.served, also: more.pageIds.length });
   }
   // The rounds are over: every capability item was checked for gaps as of now. A later run goes back for an item
   // only when it got a finding after this moment (gaps.ts dueForGoBack). Not when the budget cut the reading short.

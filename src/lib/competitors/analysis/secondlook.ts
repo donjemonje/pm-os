@@ -75,6 +75,22 @@ export function scorePage(terms: string[], page: IndexedPage): number {
  * larger. No page scores → no page (and no call).
  */
 export function pagesFor(capability: { name: string; aliases: string[] }, pages: IndexedPage[], opts: { maxPages?: number; maxChars?: number } = {}): LookPage[] {
+  return selectLookPages(capability, pages, opts).pages;
+}
+
+export interface LookSelection {
+  /** The pages shown. */
+  pages: LookPage[];
+  /** Pages that scored above zero: the candidates. */
+  candidates: number;
+  /** Candidates not shown because the look already had its most pages (LOOK_MAX_PAGES). */
+  leftByPages: number;
+  /** Candidates not shown because their text did not fit (LOOK_MAX_CHARS) — and the first page, when it alone was larger and was cut. */
+  leftByChars: number;
+}
+
+/** pagesFor, with what its two limits left out — a look that could not show every candidate page hit a cap (caps.ts). */
+export function selectLookPages(capability: { name: string; aliases: string[] }, pages: IndexedPage[], opts: { maxPages?: number; maxChars?: number } = {}): LookSelection {
   const maxPages = opts.maxPages ?? LOOK_MAX_PAGES;
   const maxChars = opts.maxChars ?? LOOK_MAX_CHARS;
   const terms = [capability.name, ...capability.aliases];
@@ -84,18 +100,28 @@ export function pagesFor(capability: { name: string; aliases: string[] }, pages:
     .sort((a, b) => b.score - a.score || (a.p.url < b.p.url ? -1 : a.p.url > b.p.url ? 1 : 0));
   const out: LookPage[] = [];
   let chars = 0;
-  for (const { p } of scored) {
-    if (out.length >= maxPages) break;
+  let leftByPages = 0;
+  let leftByChars = 0;
+  for (let i = 0; i < scored.length; i++) {
+    const { p } = scored[i];
+    if (out.length >= maxPages) {
+      leftByPages = scored.length - i;
+      break;
+    }
     if (out.length === 0) {
       out.push({ id: p.id, url: p.url, title: p.title, hash: p.hash, text: p.text.length > maxChars ? p.text.slice(0, maxChars) : p.text });
+      if (p.text.length > maxChars) leftByChars++;
       chars = Math.min(p.text.length, maxChars);
       continue;
     }
-    if (chars + p.text.length > maxChars) break;
+    if (chars + p.text.length > maxChars) {
+      leftByChars += scored.length - i;
+      break;
+    }
     out.push({ id: p.id, url: p.url, title: p.title, hash: p.hash, text: p.text });
     chars += p.text.length;
   }
-  return out;
+  return { pages: out, candidates: scored.length, leftByPages, leftByChars };
 }
 
 /**

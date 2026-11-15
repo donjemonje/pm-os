@@ -47,3 +47,31 @@ export function RunUsage({ usage, calls }: { usage: StepUsage[]; /** The run's o
     </table>
   );
 }
+
+/**
+ * The caps a run hit (analysis/caps.ts): a clearly visible warning with every cap on its own line — which limit, its
+ * value, what was left undone, at which company — or the clean state. Limits are safety nets: a hit is never silent.
+ */
+const CAPS_COPY = {
+  none: "No cap was hit",
+  hit: (count: number) => `${count} cap${count === 1 ? " was" : "s were"} hit — limits are safety nets: what is listed here was left undone`,
+  notRecorded: "Caps: not recorded for this run (it ran before caps were recorded).",
+  noneYet: "No cap was hit so far",
+};
+
+export function RunCaps({ caps, recorded, active }: { /** One line per cap (caps.ts capLine). */ caps: string[]; /** False for a run from before caps were recorded. */ recorded: boolean; /** The run is still queued or working. */ active?: boolean }) {
+  if (caps.length === 0) {
+    if (!recorded) return <div className="text-xs text-slate-500" data-testid="admin-caps-unknown">{CAPS_COPY.notRecorded}</div>;
+    return <span className="inline-block rounded-full border border-emerald-200 bg-emerald-50 px-2 py-px text-[11px] font-semibold text-emerald-700" data-testid="admin-caps-none">{active ? CAPS_COPY.noneYet : CAPS_COPY.none}</span>;
+  }
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="alert" data-testid="admin-caps-hit">
+      <div className="font-semibold">{CAPS_COPY.hit(caps.length)}</div>
+      <ul className="mt-1 list-disc pl-4">
+        {caps.map((line) => (
+          <li key={line} data-testid="admin-cap-line">{line}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}

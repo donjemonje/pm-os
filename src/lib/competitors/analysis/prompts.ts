@@ -250,8 +250,12 @@ export interface ResearchDropped {
   noQuote: number;
   /** The finding named a person. */
   pii: number;
-  /** Beyond 40 capabilities per page or 30 features per capability. */
+  /** Beyond 40 capabilities per page or 30 features per capability: the sum of the two below. */
   over: number;
+  /** Capabilities beyond MAX_CAPABILITIES_PER_PAGE that the answer listed and were left out. */
+  overCapabilities: number;
+  /** Features beyond MAX_FEATURES_PER_CAPABILITY, under the capabilities that were kept. */
+  overFeatures: number;
 }
 
 const piiIn = (...texts: string[]) => texts.some((t) => checkPii(t).hit);
@@ -260,7 +264,7 @@ const clean = (text: string): string => (checkPii(text).hit ? "" : text);
 
 export function parseResearch(value: unknown, pageText: string): { findings: ResearchFinding[]; dropped: ResearchDropped } {
   const findings: ResearchFinding[] = [];
-  const dropped: ResearchDropped = { noQuote: 0, pii: 0, over: 0 };
+  const dropped: ResearchDropped = { noQuote: 0, pii: 0, over: 0, overCapabilities: 0, overFeatures: 0 };
   const check = quoteChecker(pageText);
   /** capability wording key → the wording that won; its features hang under that wording. */
   const capabilityByKey = new Map<string, string>();
@@ -282,7 +286,8 @@ export function parseResearch(value: unknown, pageText: string): { findings: Res
     return { name, quote, reasoning, description: clean(str(o.description, MAX_DESCRIPTION_CHARS)) || null };
   };
   const capabilities = arr((value as Record<string, unknown> | null)?.capabilities);
-  dropped.over += Math.max(0, capabilities.length - MAX_CAPABILITIES_PER_PAGE);
+  dropped.overCapabilities = Math.max(0, capabilities.length - MAX_CAPABILITIES_PER_PAGE);
+  dropped.over += dropped.overCapabilities;
   for (const c of capabilities.slice(0, MAX_CAPABILITIES_PER_PAGE)) {
     const o = (c ?? {}) as Record<string, unknown>;
     const name = str(o.name, 80);
@@ -297,6 +302,7 @@ export function parseResearch(value: unknown, pageText: string): { findings: Res
       parentWording = cap.name;
     }
     const features = arr(o.features);
+    dropped.overFeatures += Math.max(0, features.length - MAX_FEATURES_PER_CAPABILITY);
     dropped.over += Math.max(0, features.length - MAX_FEATURES_PER_CAPABILITY);
     for (const f of features.slice(0, MAX_FEATURES_PER_CAPABILITY)) {
       const fo = (f ?? {}) as Record<string, unknown>;
