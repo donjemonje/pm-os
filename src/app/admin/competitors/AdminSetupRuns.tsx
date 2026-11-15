@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminSetupRun, AdminSetupState } from "@/app/api/admin/competitors/setup/route";
 import type { ImportOrg } from "./AdminImport";
+import { RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Setup runs (PM-OS admin only, read-only). Pick an organization: whether it is set
@@ -34,6 +35,11 @@ const COPY = {
   noRuns: "No setup run yet.",
   made: (r: AdminSetupRun) => `${r.domains} domain${r.domains === 1 ? "" : "s"} · ${r.rows} capabilit${r.rows === 1 ? "y" : "ies"} · ${r.features} feature${r.features === 1 ? "" : "s"}`,
   budgetReached: "budget reached",
+  tokens: (input: number, output: number, cached: number) => `${input.toLocaleString("en-US")} input + ${output.toLocaleString("en-US")} output${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`,
+  tokensPerStep: "Tokens per step and model — the whole run",
+  sharedTokens: "Of those, the calls that belong to no company (unify, domains)",
+  companyTokens: "Tokens per step and model",
+  models: "Models",
   own: "own site",
   stages: { waiting: "waiting", map: "map", research: "research", merge: "merge", unify: "unify", match: "match", second_look: "second look", apply: "apply", facts: "facts", done: "done" } as Record<string, string>,
 };
@@ -137,12 +143,25 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                   <span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span>
                   <span>Step: <b>{r.step.replace("_", " ")}</b></span>
                   <span>{COPY.made(r)}</span>
-                  <span className="tabular-nums">{r.calls.toLocaleString("en-US")} PMOS AI calls · {r.tokensUsed.toLocaleString("en-US")} tokens</span>
+                  <span className="tabular-nums">{r.calls.toLocaleString("en-US")} PMOS AI calls · {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens)} tokens</span>
                   <span>Started {when(r.startedAt)}</span>
                   <span>Finished {when(r.finishedAt)}</span>
                   <span className="font-mono text-slate-400">{r.id}</span>
                 </div>
                 {r.error && <div className="border-b border-slate-200 px-3 py-2 text-xs text-red-700" data-testid="admin-setup-run-error">{r.error}</div>}
+                <div className="border-b border-slate-200 px-3 py-2 text-xs" data-testid="admin-setup-run-tokens">
+                  {r.model && <div className="mb-1 text-slate-500">{COPY.models}: <span className="font-mono">{r.model}</span></div>}
+                  <details>
+                    <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}</summary>
+                    <div className="mt-1.5"><RunUsage usage={r.usage} calls={r.calls} /></div>
+                    {r.sharedUsage.length > 0 && (
+                      <div className="mt-2">
+                        <div className="mb-1 text-slate-500">{COPY.sharedTokens}</div>
+                        <RunUsage usage={r.sharedUsage} calls={r.calls} />
+                      </div>
+                    )}
+                  </details>
+                </div>
                 {r.companies.length === 0 ? (
                   <div className="px-3 py-2 text-xs text-slate-500">The run has not started on a company yet.</div>
                 ) : (
@@ -152,7 +171,8 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                     </thead>
                     <tbody>
                       {r.companies.map((c) => (
-                        <tr key={c.competitorId} className="border-t border-slate-200" data-testid="admin-setup-company">
+                        <Fragment key={c.competitorId}>
+                        <tr className="border-t border-slate-200" data-testid="admin-setup-company">
                           <td className={TD}>{c.name}{c.own && <span className="ml-2 rounded-full border border-slate-200 bg-slate-50 px-2 py-px text-[11px] font-semibold text-slate-600">{COPY.own}</span>}</td>
                           <td className={TD}>{COPY.stages[c.stage] ?? c.stage}</td>
                           <td className={`${TD} text-right tabular-nums`}>{c.pagesRead.toLocaleString("en-US")} / {c.pagesUnread.toLocaleString("en-US")}</td>
@@ -162,6 +182,15 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                             {c.budgetReached && <span className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800">{COPY.budgetReached}</span>}
                           </td>
                         </tr>
+                        <tr data-testid="admin-setup-company-tokens">
+                          <td className="px-3 pb-2" colSpan={5}>
+                            <details>
+                              <summary className="cursor-pointer text-slate-500">{COPY.companyTokens}: {COPY.tokens(c.inputTokens, c.outputTokens, c.cachedTokens)}</summary>
+                              <div className="mt-1.5"><RunUsage usage={c.usage} calls={c.calls} /></div>
+                            </details>
+                          </td>
+                        </tr>
+                        </Fragment>
                       ))}
                     </tbody>
                   </table>

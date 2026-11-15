@@ -833,8 +833,8 @@ model CompetitorAnalysis {
   /// competitor. It lives in this table so it takes its turn in the same queue: one run at a time in the installation.
   kind         String     @default("analysis")
   /// kind "setup" only — per-company progress and totals, written with every heartbeat:
-  /// { companies: [{ competitorId, name, own, stage, pagesTotal, pagesDone, appliedAt, counters }], shared: counters,
-  ///   rows, domains, features }.
+  /// { companies: [{ competitorId, name, own, stage, pagesTotal, pagesDone, appliedAt, counters, usage }], shared: counters,
+  ///   sharedUsage, rows, domains, features }.
   setup        Json?
   /// The record a setup run leaves on each company it filled (trigger "setup", status "done"): the setup run's id.
   /// It makes the company's later runs ordinary ones (not a first picture) — plain id, no relation.
@@ -880,6 +880,12 @@ model CompetitorAnalysis {
   pagesDone    Int        @default(0)
   /// Everything else that is counted (analysis/engine.ts Counters).
   counters     Json       @default("{}")
+  /// The run's tokens split by step and model (analysis/usage.ts): [{ step, model, calls, input, output, cached }].
+  /// A setup run's list is the roll-up of its companies' lists (kept in `setup`) and of its shared calls.
+  usage        Json       @default("[]")
+  /// The caps this run hit (analysis/caps.ts) — limits are safety nets, so a hit is recorded and surfaced:
+  /// [{ cap, limit, competitorId, company, undone, also, times }]. [] = no cap was hit.
+  caps         Json       @default("[]")
   /// "none" | "capacity" | "answer" | "ai" | "stale" | "other"
   errorKind    String?
   error        String?

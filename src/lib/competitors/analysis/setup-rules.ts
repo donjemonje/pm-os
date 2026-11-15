@@ -1,4 +1,5 @@
 import { emptyCounters, readCounters, sumCounters, type Counters } from "./counters";
+import { readUsage, rollUp, type StepUsage } from "./usage";
 
 /**
  * The rules of THE SETUP RUN — the first run of an organization (Capability Analysis, "The setup run").
@@ -134,12 +135,15 @@ export interface SetupCompanyProgress {
   /** When its cells were filled (ISO); null before. */
   appliedAt: string | null;
   counters: Counters;
+  /** Its tokens by step and model (usage.ts). */
+  usage: StepUsage[];
 }
 
 export interface SetupProgress {
   companies: SetupCompanyProgress[];
   /** The calls that belong to no company: unify, domains. */
   shared: Counters;
+  sharedUsage: StepUsage[];
   /** What the run made: capability rows, domains, feature rows. */
   rows: number;
   domains: number;
@@ -147,7 +151,7 @@ export interface SetupProgress {
 }
 
 export function emptySetupProgress(): SetupProgress {
-  return { companies: [], shared: emptyCounters(), rows: 0, domains: 0, features: 0 };
+  return { companies: [], shared: emptyCounters(), sharedUsage: [], rows: 0, domains: 0, features: 0 };
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -159,6 +163,7 @@ export function readSetupProgress(raw: unknown): SetupProgress {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
   out.shared = readCounters(r.shared);
+  out.sharedUsage = readUsage(r.sharedUsage);
   out.rows = num(r.rows);
   out.domains = num(r.domains);
   out.features = num(r.features);
@@ -175,15 +180,17 @@ export function readSetupProgress(raw: unknown): SetupProgress {
       pagesDone: num(o.pagesDone),
       appliedAt: typeof o.appliedAt === "string" ? o.appliedAt : null,
       counters: readCounters(o.counters),
+      usage: readUsage(o.usage),
     });
   }
   return out;
 }
 
 /** The run's own counters and page progress: the sum of its companies and of the shared calls. */
-export function setupTotals(p: SetupProgress): { counters: Counters; pagesTotal: number; pagesDone: number } {
+export function setupTotals(p: SetupProgress): { counters: Counters; usage: StepUsage[]; pagesTotal: number; pagesDone: number } {
   return {
     counters: sumCounters([...p.companies.map((c) => c.counters), p.shared]),
+    usage: rollUp([...p.companies.map((c) => c.usage), p.sharedUsage]),
     pagesTotal: p.companies.reduce((n, c) => n + c.pagesTotal, 0),
     pagesDone: p.companies.reduce((n, c) => n + c.pagesDone, 0),
   };

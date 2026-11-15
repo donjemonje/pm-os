@@ -124,8 +124,8 @@ describe("the recorded progress", () => {
     const total = sumCounters([a, b, shared]);
     expect(total).toMatchObject({ calls: 16, inputTokens: 1800, outputTokens: 350, pagesRead: 11, pagesUnread: 40, unifyCalls: 1, domainsCalls: 1, budget: 1_000_000, budgetReached: 1 });
     const progress = { ...emptySetupProgress(), shared, companies: [
-      { competitorId: "a", name: "A", own: true, stage: "done" as const, pagesTotal: 10, pagesDone: 8, appliedAt: null, counters: a },
-      { competitorId: "b", name: "B", own: false, stage: "apply" as const, pagesTotal: 3, pagesDone: 3, appliedAt: null, counters: b },
+      { competitorId: "a", name: "A", own: true, stage: "done" as const, pagesTotal: 10, pagesDone: 8, appliedAt: null, counters: a, usage: [] },
+      { competitorId: "b", name: "B", own: false, stage: "apply" as const, pagesTotal: 3, pagesDone: 3, appliedAt: null, counters: b, usage: [] },
     ] };
     expect(setupTotals(progress)).toMatchObject({ pagesTotal: 13, pagesDone: 11 });
     expect(setupTotals(progress).counters.calls).toBe(16);

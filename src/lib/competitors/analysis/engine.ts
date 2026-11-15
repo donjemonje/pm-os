@@ -17,6 +17,7 @@ import { mapStep } from "./plan";
 import type { ReadingPlan } from "./sections";
 import { setupWalk, workspaceSetupState } from "./setup";
 import { analysisFillsTable, readSetupProgress, setupTotals, type SetupCompany, type SetupProgress, type SetupStage } from "./setup-rules";
+import { addUsage, readUsage, usageByModel, usageByModelText, usageLine, usageSince, type StepUsage } from "./usage";
 import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
 
 /**
@@ -353,10 +354,13 @@ export async function runAnalysis(id: string): Promise<void> {
   const progress = { pagesTotal: row.pagesTotal, pagesDone: row.pagesDone };
   /** A setup run: its per-company progress. The run's own counters and page progress are their sum (sync). */
   const setup: SetupProgress | null = isSetup ? readSetupProgress(row.setup) : null;
+  /** The run's tokens by step and model (usage.ts). A setup run's are the roll-up of its companies' lists and its shared calls. */
+  let usage: StepUsage[] = readUsage(row.usage);
   const sync = () => {
     if (!setup) return;
     const t = setupTotals(setup);
     Object.assign(counters, t.counters);
+    usage = t.usage;
     progress.pagesTotal = t.pagesTotal;
     progress.pagesDone = t.pagesDone;
   };
@@ -377,7 +381,7 @@ export async function runAnalysis(id: string): Promise<void> {
   const state = (): Prisma.CompetitorAnalysisUpdateManyMutationInput => {
     sync();
     return {
-      counters: counters as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
+      counters: counters as unknown as Prisma.InputJsonValue, usage: usage as unknown as Prisma.InputJsonValue, log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
       ...(setup ? { setup: setup as unknown as Prisma.InputJsonValue } : {}),
     };
   };
@@ -404,8 +408,6 @@ export async function runAnalysis(id: string): Promise<void> {
     if (row.injected && !answers) throw new AnalysisError("other", "test answers were cleared before the run started (test knob) — no model is called");
     const config = await getCompetitorsConfig(row.workspaceId);
     const pace = new TokenBudget(analysisTpm());
-    /** The models that made a call in the step that is running: its cost line names them. */
-    const stepModels = new Set<string>();
     let okCalls = 0;
     let refused = 0;
     let stopCheckedAt = 0;
@@ -436,6 +438,8 @@ export async function runAnalysis(id: string): Promise<void> {
     interface Target {
       competitor: RunContext["competitor"];
       counters: Counters;
+      /** Its tokens by step and model: every call adds to the row of the running step and the call's model. */
+      usage: StepUsage[];
       progress: { pagesTotal: number; pagesDone: number };
       answers: TestAiAnswers | null;
       cursor: Record<string, unknown>;
@@ -468,7 +472,6 @@ export async function runAnalysis(id: string): Promise<void> {
         call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => {
           const { role, ...rest } = opts;
           const callModel = models[role];
-          stepModels.add(callModel);
           // A worker that lost the run spends nothing more.
           if (lost) throw new RunLost();
           if (t.answers && opts.injected === undefined) throw new AnalysisError("other", "this run takes injected answers (test knob) and a step asked for a model call");
@@ -487,6 +490,7 @@ export async function runAnalysis(id: string): Promise<void> {
               c.inputTokens += e.usage.input;
               c.outputTokens += e.usage.output;
               c.cachedTokens += e.usage.cached;
+              addUsage(t.usage, step, callModel, e.usage);
               throw e;
             }
             if (e instanceof CapacityError) throw e;
@@ -498,6 +502,7 @@ export async function runAnalysis(id: string): Promise<void> {
           c.inputTokens += r.usage.input;
           c.outputTokens += r.usage.output;
           c.cachedTokens += r.usage.cached;
+          addUsage(t.usage, step, callModel, r.usage);
           return { value: r.value, tokens: r.usage.input + r.usage.output };
         },
         paced: async <T>({ reading: isReading, ...o }: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => {
@@ -544,8 +549,8 @@ export async function runAnalysis(id: string): Promise<void> {
       await setStep(name);
       sync();
       const before = { ...counters };
+      const usedBefore = usage.map((u) => ({ ...u }));
       const started = Date.now();
-      stepModels.clear();
       try {
         return await work();
       } finally {
@@ -553,7 +558,8 @@ export async function runAnalysis(id: string): Promise<void> {
         const calls = counters.calls - before.calls;
         if (calls > 0) {
           const unusable = counters.unusableAnswers - before.unusableAnswers;
-          log("info", `Step ${name.replace("_", " ")}: ${calls} PMOS AI call${calls === 1 ? "" : "s"} · ${[...stepModels].join(" + ") || "no model"} · ${counters.inputTokens - before.inputTokens} input + ${counters.outputTokens - before.outputTokens} output tokens${unusable ? ` · ${unusable} unusable answer${unusable === 1 ? "" : "s"}` : ""} · ${Math.round((Date.now() - started) / 1000)} s`);
+          // The step's cost, model by model (a go-back round reads with one model and merges and matches with another).
+          log("info", `Step ${name.replace("_", " ")}: ${usageByModel(usageSince(usage, usedBefore)).map(usageLine).join("; ") || `${calls} PMOS AI call${calls === 1 ? "" : "s"}`}${unusable ? ` · ${unusable} unusable answer${unusable === 1 ? "" : "s"}` : ""} · ${Math.round((Date.now() - started) / 1000)} s`);
         }
       }
     };
@@ -574,7 +580,7 @@ export async function runAnalysis(id: string): Promise<void> {
           if (known) return known;
           let entry = setup.companies.find((x) => x.competitorId === c.id);
           if (!entry) {
-            entry = { competitorId: c.id, name: c.name, own: c.isOwn, stage: "waiting", pagesTotal: 0, pagesDone: 0, appliedAt: null, counters: emptyCounters() };
+            entry = { competitorId: c.id, name: c.name, own: c.isOwn, stage: "waiting", pagesTotal: 0, pagesDone: 0, appliedAt: null, counters: emptyCounters(), usage: [] };
             setup.companies.push(entry);
           }
           entry.name = c.name;
@@ -585,6 +591,7 @@ export async function runAnalysis(id: string): Promise<void> {
           const ctx = contextFor({
             competitor: company(c),
             counters: mine.counters,
+            usage: mine.usage,
             progress: mine,
             answers: theirs,
             cursor: (companyCursors[c.id] ??= {}),
@@ -597,7 +604,7 @@ export async function runAnalysis(id: string): Promise<void> {
           made.set(c.id, ctx);
           return ctx;
         },
-        shared: contextFor({ competitor: company(row.competitor), counters: setup.shared, progress: { pagesTotal: 0, pagesDone: 0 }, answers: row.injected ? answers : null, cursor, markApplied: async () => undefined, prefix: "" }),
+        shared: contextFor({ competitor: company(row.competitor), counters: setup.shared, usage: setup.sharedUsage, progress: { pagesTotal: 0, pagesDone: 0 }, answers: row.injected ? answers : null, cursor, markApplied: async () => undefined, prefix: "" }),
         setStage: (competitorId, stage) => {
           const entry = setup.companies.find((x) => x.competitorId === competitorId);
           if (entry) entry.stage = stage;
@@ -609,6 +616,7 @@ export async function runAnalysis(id: string): Promise<void> {
       const ctx = contextFor({
         competitor: company(row.competitor),
         counters,
+        usage,
         progress,
         answers,
         cursor,
@@ -687,12 +695,12 @@ export async function runAnalysis(id: string): Promise<void> {
   if (setup) {
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_setup_finished", {
       analysisId: id, outcome, step, companies: setup.companies.length, rows: setup.rows, domains: setup.domains, features: setup.features,
-      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, pagesRead: counters.pagesRead,
+      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead,
       durationMs: Date.now() - t0, totalMs: Date.now() - claimed.startedAt.getTime(), resumed: claimed.resumed, errorKind: errorKind ?? "none", error,
     });
   } else {
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, errorKind: errorKind ?? "none", error,
+      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, errorKind: errorKind ?? "none", error,
     });
   }
   await notifyScanRun(row.scanId);

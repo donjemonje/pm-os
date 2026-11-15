@@ -3,6 +3,7 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { readCounters } from "@/lib/competitors/analysis/counters";
 import { readSetupProgress, setupStateOf, type SetupStage, type SetupState } from "@/lib/competitors/analysis/setup-rules";
+import { readUsage, sortUsage, type StepUsage } from "@/lib/competitors/analysis/usage";
 
 /**
  * Administration → Competitors → Setup runs (PM-OS admin only, read-only): an organization's setup state, its own
@@ -24,8 +25,13 @@ export interface AdminSetupCompany {
   pagesRead: number;
   pagesUnread: number;
   tokensUsed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
   budgetReached: boolean;
   calls: number;
+  /** The company's tokens per step and model. */
+  usage: StepUsage[];
 }
 
 export interface AdminSetupRun {
@@ -38,6 +44,15 @@ export interface AdminSetupRun {
   features: number;
   calls: number;
   tokensUsed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  /** The run's tokens per step and model: all companies and the shared calls (unify, domains) together. */
+  usage: StepUsage[];
+  /** The calls that belong to no company (unify, domains), per step and model. */
+  sharedUsage: StepUsage[];
+  /** The models of the run ("read … · match … · judge …"). */
+  model: string | null;
   /** The token budget per company of the run; 0 before it started. */
   budget: number;
   queuedAt: string;
@@ -70,7 +85,7 @@ export async function GET(req: Request) {
       where: { workspaceId, kind: "setup" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
-      select: { id: true, status: true, step: true, counters: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
+      select: { id: true, status: true, step: true, counters: true, usage: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
   const body: AdminSetupState = {
@@ -86,9 +101,11 @@ export async function GET(req: Request) {
         id: r.id, status: r.status, step: r.step,
         companies: progress.companies.map((x) => ({
           competitorId: x.competitorId, name: x.name, own: x.own, stage: x.stage, pagesRead: x.counters.pagesRead, pagesUnread: x.counters.pagesUnread,
-          tokensUsed: x.counters.inputTokens + x.counters.outputTokens, budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls,
+          tokensUsed: x.counters.inputTokens + x.counters.outputTokens, inputTokens: x.counters.inputTokens, outputTokens: x.counters.outputTokens, cachedTokens: x.counters.cachedTokens,
+          budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls, usage: sortUsage(x.usage),
         })),
-        rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, budget: c.budget,
+        rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens,
+        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), model: r.model, budget: c.budget,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };
     }),

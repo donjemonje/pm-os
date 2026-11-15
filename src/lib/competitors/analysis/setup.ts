@@ -525,7 +525,7 @@ async function recordCompany(env: SetupEnv, c: SetupCompany, ctx: RunContext): P
       data: {
         workspaceId: env.run.workspaceId, competitorId: c.id, kind: "analysis", trigger: "setup", parentId: env.run.id, startedById: env.run.startedById,
         status: "done", step: "done", model: env.model, startedAt: env.run.startedAt, appliedAt: entry?.appliedAt ? new Date(entry.appliedAt) : at, finishedAt: at, heartbeatAt: at,
-        pagesTotal: entry?.pagesTotal ?? 0, pagesDone: entry?.pagesDone ?? 0, counters: ctx.counters as unknown as Prisma.InputJsonValue, errorKind: "none",
+        pagesTotal: entry?.pagesTotal ?? 0, pagesDone: entry?.pagesDone ?? 0, counters: ctx.counters as unknown as Prisma.InputJsonValue, usage: (entry?.usage ?? []) as unknown as Prisma.InputJsonValue, errorKind: "none",
         log: [{ at: at.toISOString(), level: "info", msg: `Filled by the setup run ${env.run.id} — its log holds this company's lines` }] as unknown as Prisma.InputJsonValue,
       },
     });

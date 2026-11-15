@@ -3,6 +3,7 @@ import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { readCounters } from "@/lib/competitors/analysis/engine";
 import { estimateTokens } from "@/lib/competitors/analysis/pacing";
+import { readUsage, sortUsage, type StepUsage } from "@/lib/competitors/analysis/usage";
 
 /**
  * Administration → Competitors → Reading plan (PM-OS admin only, read-only): one competitor's reading plan — the
@@ -39,6 +40,14 @@ export interface AdminPlanRun {
   pagesRead: number;
   pagesUnread: number;
   tokensUsed: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+  calls: number;
+  /** The run's tokens per step and model (analysis/usage.ts); [] for a run from before they were split. */
+  usage: StepUsage[];
+  /** The models of the run, as it recorded them ("read … · match … · judge …", or one model for an older run). */
+  model: string | null;
   /** 0 = a run from before the budget existed. */
   budget: number;
   budgetReached: boolean;
@@ -63,7 +72,7 @@ export async function GET(req: Request) {
       where: { competitorId, kind: "analysis" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
-      select: { id: true, trigger: true, status: true, step: true, counters: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
+      select: { id: true, trigger: true, status: true, step: true, counters: true, usage: true, model: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
   // Sections that hold pages first, by address; a section whose folder is gone (0 pages, the label is kept) last.
@@ -77,6 +86,7 @@ export async function GET(req: Request) {
       const c = readCounters(r.counters);
       return {
         id: r.id, trigger: r.trigger, status: r.status, step: r.step, pagesRead: c.pagesRead, pagesUnread: c.pagesUnread, tokensUsed: c.inputTokens + c.outputTokens,
+        inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, calls: c.calls, usage: sortUsage(readUsage(r.usage)), model: r.model,
         budget: c.budget, budgetReached: c.budgetReached > 0, goBackRounds: c.goBackRounds, goBackPages: c.goBackPages,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminPlanRun, AdminPlanSection } from "@/app/api/admin/competitors/plan/route";
 import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ImportOrg } from "./AdminImport";
+import { RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Reading plan (PM-OS admin only, read-only). Pick an organization and one of its
@@ -35,6 +36,9 @@ const COPY = {
   byCode: "code",
   byAi: "PMOS AI",
   budgetReached: "budget reached",
+  tokens: (input: number, output: number, cached: number) => `${input.toLocaleString("en-US")} input + ${output.toLocaleString("en-US")} output${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`,
+  tokensPerStep: "Tokens per step and model",
+  models: "Models",
   noBudget: "–",
   labels: { product: "product", pricing: "pricing", compare: "compare", help: "help", release_notes: "release notes", api_docs: "API docs", news: "news", noise: "noise" } as Record<string, string>,
   read: { product: "read whole", pricing: "read whole", compare: "read whole, own claims only", help: "index pages; deeper pages on a gap", release_notes: "index pages; deeper pages on a gap", api_docs: "index pages; deeper pages on a gap", news: "only with weak pages on", noise: "never read" } as Record<string, string>,
@@ -190,7 +194,8 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                 </thead>
                 <tbody>
                   {state.runs.map((r) => (
-                    <tr key={r.id} className="border-t border-slate-200" data-testid="admin-plan-run">
+                    <Fragment key={r.id}>
+                    <tr className="border-t border-slate-200" data-testid="admin-plan-run">
                       <td className={TD}><span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${STATUS_CHIP[r.status] ?? STATUS_CHIP.queued}`}>{r.status}</span> <span className="text-slate-400">{r.trigger}</span></td>
                       <td className={TD}>{r.step.replace("_", " ")}</td>
                       <td className={`${TD} text-right tabular-nums`}>{r.pagesRead.toLocaleString("en-US")} / {r.pagesUnread.toLocaleString("en-US")}</td>
@@ -203,6 +208,18 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                       <td className={TD}>{when(r.finishedAt)}</td>
                       <td className={`${TD} max-w-[280px] text-red-700`}>{r.error ?? ""}</td>
                     </tr>
+                    <tr data-testid="admin-plan-run-tokens">
+                      <td className="px-3 pb-2" colSpan={8}>
+                        <details>
+                          <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}: {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens)}</summary>
+                          <div className="mt-1.5">
+                            {r.model && <div className="mb-1 text-slate-500">{COPY.models}: <span className="font-mono">{r.model}</span></div>}
+                            <RunUsage usage={r.usage} calls={r.calls} />
+                          </div>
+                        </details>
+                      </td>
+                    </tr>
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
