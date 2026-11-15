@@ -1,6 +1,7 @@
 /** Capability Analysis — the parsers of the five prompts (analysis/prompts.ts): bad fields are dropped and counted, never thrown. Pure module. */
 import { describe, expect, it } from "vitest";
 import {
+  comparePageLine,
   injectedMapAnswer,
   LLMS_TXT_MAX_CHARS,
   lookTool,
@@ -114,6 +115,9 @@ describe("parseResearch", () => {
     expect(renderResearch(page)).not.toContain("COMPARISON PAGE");
     expect(renderResearch(page, { compareCompany: null })).not.toContain("COMPARISON PAGE");
     expect(renderResearch(page, { compareCompany: "  " })).not.toContain("COMPARISON PAGE");
+    // The same line, on its own: what Administration → Competitors shows next to the research prompt.
+    expect(out).toContain(comparePageLine("Acme"));
+    expect(comparePageLine("<the company>")).toBe("COMPARISON PAGE: this page compares <the company> with another company. List only what it says <the company> itself offers; ignore every statement about the other company.");
     expect(RESEARCH_SYSTEM_PROMPT).toContain("COMPARISON PAGE");
     expect(RESEARCH_SYSTEM_PROMPT).toContain("Ignore every statement about the other company");
   });

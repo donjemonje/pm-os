@@ -23,9 +23,9 @@ describe("queueFilter", () => {
   it("with the AI step on, the queue is every queued, running or waiting run", () => {
     expect(queueFilter({ aiOff: false })).toEqual({ status: { in: ["queued", "running", "waiting"] } });
   });
-  it("with the AI step off, a queued run counts only when it is manual or injected; running and waiting runs always count", () => {
+  it("with the AI step off, a queued run counts only when it was started by hand (manual, the setup run) or injected; running and waiting runs always count", () => {
     expect(queueFilter({ aiOff: true })).toEqual({
-      OR: [{ status: { in: ["running", "waiting"] } }, { status: "queued", OR: [{ trigger: "manual" }, { injected: true }] }],
+      OR: [{ status: { in: ["running", "waiting"] } }, { status: "queued", OR: [{ trigger: { in: ["manual", "setup"] } }, { injected: true }] }],
     });
   });
 });

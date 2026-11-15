@@ -286,7 +286,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     return m;
   }, [state.featureCells]);
   const featureCellOf = (competitorId: string, featureId: string) => featureCellMap.get(`${competitorId}|${featureId}`);
-  /** The org's own cell is the capability's ourStatus — set by PMs, never scanned. */
+  /** The org's own cell is the capability's ourStatus — from its own website where that is analysed, else set by PMs; a PM's value always wins. */
   const ownOf = (k: CapabilityRow): OwnStatus => k.ourStatus;
   /** Gap = not found at the org while found at a competitor (a low-confidence find opens no gap); only-us = found at the org and at no competitor, not even with low confidence. */
   const rowKind = (k: CapabilityRow): "gap" | "only" | "level" | "none" => {
