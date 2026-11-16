@@ -562,7 +562,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                             {c.analysis && isAnalysisActive(c.analysis.status) && (
                               <span
                                 className="inline-flex items-center gap-1 rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#2a5fd0]"
-                                title={c.analysis.status === "waiting" ? C.matrix.analysisWaiting : c.analysis.status === "queued" ? C.settings.analysisQueued : c.analysis.step === "research" && c.analysis.pagesTotal > 0 ? C.settings.analyzingPages(c.analysis.pagesDone, c.analysis.pagesTotal) : C.settings.analysisStep[c.analysis.step] ?? C.matrix.analyzing}
+                                title={c.analysis.status === "waiting" ? C.matrix.analysisWaiting : c.analysis.status === "queued" ? C.settings.analysisQueued : c.analysis.step === "reading" && c.analysis.pagesTotal > 0 ? C.settings.analyzingPages(c.analysis.pagesDone, c.analysis.pagesTotal) : C.settings.analysisStep[c.analysis.step] ?? C.matrix.analyzing}
                                 data-testid="cmp-analyzing-chip"
                               >
                                 <Loader2 size={9} className="animate-spin" />
@@ -629,6 +629,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                       {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
                                     </span>
+                                    {/* What the capability is, in one sentence, right under its name — not only behind the (i). */}
+                                    {k.description && <RowDescription text={k.description} testId="cmp-capability-description" />}
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
@@ -925,7 +927,9 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
                 <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
               )}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
-              <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
+              {/* What the domain covers, in one sentence, next to its name: the short text for people when the team wrote one, else its definition. */}
+              {(domain.summary || domain.description) && <span className="min-w-0 flex-1 truncate text-[12px] font-normal text-fg-3" title={domain.summary || domain.description} data-testid="cmp-domain-definition">{firstSentences(domain.summary || domain.description)}</span>}
+              <span className="ml-auto flex shrink-0 items-center gap-[18px] text-[12px] text-fg-3">
                 {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -956,7 +960,10 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
   const haveN = competitors.filter((c) => cellOf(c.id)?.value === "found").length;
   return (
     <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
-      <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]" title={feature.description || undefined}>{feature.name}</td>
+      <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
+        {feature.name}
+        {feature.description && <RowDescription text={feature.description} testId="cmp-feature-description" />}
+      </td>
       <td className="bg-[rgba(36,87,245,.06)] text-center">
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
           <OwnCell row={feature} kind="feature" org={org} ownSite={ownSite} open={open} setOpen={setOpen} onPatch={onPatch} />
@@ -1092,6 +1099,16 @@ function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: s
       <button type="button" onClick={() => onDecide("dismissed")} title={declineHint} aria-label={decline} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
     </span>
   );
+}
+
+/** The start of a text for one line: its first line, whole (the line is cut by its width, and the hover shows all of it). */
+function firstSentences(text: string): string {
+  return text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+}
+
+/** One sentence of what a row is, under its name: one line, cut by the column's width; the hover shows all of it. */
+function RowDescription({ text, testId }: { text: string; testId: string }) {
+  return <div className="max-w-[560px] truncate pb-1 text-[11.5px] font-normal leading-snug text-fg-muted" title={text} data-testid={testId}>{firstSentences(text)}</div>;
 }
 
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
