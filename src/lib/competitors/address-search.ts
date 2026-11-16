@@ -144,11 +144,15 @@ async function scanAddress(competitor: { id: string; workspaceId: string }, sour
 /**
  * Take a company's search: one at a time per company. Returns the moment of the claim, or null when a search of
  * the company is working (one that stopped reporting SEARCH_STALE_MS ago is taken over).
+ *
+ * `takeOver`: the claim is taken whatever is working — for the scan station's report, which is the newest thing
+ * known about the company's site and comes once per scan. A search that was working finds its claim gone when it
+ * ends and stores no result (the sources it added stay: one address per site per company, under a lock).
  */
-export async function claimAddressSearch(competitorId: string): Promise<Date | null> {
+export async function claimAddressSearch(competitorId: string, takeOver = false): Promise<Date | null> {
   const at = new Date();
   const claim = await db.competitor.updateMany({
-    where: { id: competitorId, OR: [{ addressSearchStartedAt: null }, { addressSearchStartedAt: { lt: new Date(at.getTime() - SEARCH_STALE_MS) } }] },
+    where: { id: competitorId, ...(takeOver ? {} : { OR: [{ addressSearchStartedAt: null }, { addressSearchStartedAt: { lt: new Date(at.getTime() - SEARCH_STALE_MS) } }] }) },
     data: { addressSearchStartedAt: at },
   });
   return claim.count ? at : null;

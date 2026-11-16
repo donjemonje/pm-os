@@ -84,22 +84,15 @@ export async function POST(req: Request, { params }: Params) {
   const log = [...(Array.isArray(scan.log) ? (scan.log as unknown as LogLine[]) : []), line];
   await db.competitorScan.update({ where: { id }, data: { heartbeatAt: new Date(), log: log as unknown as Prisma.InputJsonValue } });
 
-  // Taken before the answer: a scan that ends in the next second finds the search working and does not start its own.
-  const claimedAt = await claimAddressSearch(competitorId).catch(() => null);
+  // The search is taken before the answer — a scan that ends in the next second finds it working and does not start
+  // its own — and taken over from any search that is working: the station's report is the newest material there is.
+  const claimedAt = await claimAddressSearch(competitorId, true);
   const trigger = scan.trigger === "onboarding" ? "added" : "scan";
   const userId = scan.startedById;
-  after(async () => {
-    let claim = claimedAt;
-    // Another search of this company is working (the one that started when it was added): wait for it, ten seconds at most.
-    for (let i = 0; !claim && i < 5; i++) {
-      await new Promise((r) => setTimeout(r, 2_000));
-      claim = await claimAddressSearch(competitorId).catch(() => null);
-    }
-    if (!claim) {
-      console.warn(`[competitors] scan ${id}: the station's report on other addresses was not used — another search of the company is working; the next scan of the website looks again`);
-      return;
-    }
-    await searchAddresses(competitorId, { trigger, userId, station: { finding, scanId: id, note }, claimedAt: claim });
-  });
+  if (claimedAt) {
+    after(async () => {
+      await searchAddresses(competitorId, { trigger, userId, station: { finding, scanId: id, note }, claimedAt });
+    });
+  }
   return NextResponse.json({ ok: true, candidates: finding.candidates.length });
 }
