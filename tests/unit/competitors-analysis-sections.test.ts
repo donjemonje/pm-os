@@ -1,26 +1,26 @@
-/** Capability Analysis — the reading plan (analysis/sections.ts): sections, label → what is read, index vs deep pages, reading order. Pure module. */
+/** Capability Analysis — the reading plan (analysis/sections.ts): sections, label → what is read, and the "where a PM looks" reading order. Pure module. */
 import { describe, expect, it } from "vitest";
 import { KIND_RANK } from "@/lib/competitors/analysis/kinds";
 import {
   buildSections,
   FRAME_MIN_PAGES,
   FRAME_SHARE,
+  compareAddress,
   hostOf,
-  INDEX_DEPTH,
   inPlan,
-  isIndexPage,
   LABEL_RULES,
   MAP_OPENING_CHARS,
   MAP_SKIM_CHARS,
   pickReadable,
   prefixPath,
+  READ_ORDER,
   ReadingPlan,
-  readGroup,
+  readRank,
   sampleOpenings,
   SECTION_LABELS,
   SECTION_SAMPLES,
   sectionKey,
-  sortForReading,
+  sortByWhereAPmLooks,
   SPLIT_MIN_PAGES,
   SPLIT_MIN_SUBFOLDER_PAGES,
   SPLIT_MIN_SUBFOLDERS,
@@ -169,28 +169,16 @@ describe("LABEL_RULES — label → what is read and how its evidence ranks", ()
     expect([...SECTION_LABELS]).toEqual(["product", "pricing", "compare", "help", "release_notes", "api_docs", "news", "noise"]);
     expect(Object.keys(LABEL_RULES).sort()).toEqual([...SECTION_LABELS].sort());
   });
-  it("product, pricing and compare are read whole; help, release notes and API docs by their index; news is weak; noise never", () => {
+  it("help, release notes and API docs are read in full, like product, pricing and compare; news is weak; noise never", () => {
     expect(LABEL_RULES.product).toEqual({ kind: "product", tier: "strong", read: "all" });
     expect(LABEL_RULES.pricing).toEqual({ kind: "pricing", tier: "strong", read: "all" });
     expect(LABEL_RULES.compare).toEqual({ kind: "content", tier: "strong", read: "all" });
-    for (const l of ["help", "release_notes", "api_docs"] as const) expect(LABEL_RULES[l], l).toEqual({ kind: "docs", tier: "strong", read: "index" });
+    for (const l of ["help", "release_notes", "api_docs"] as const) expect(LABEL_RULES[l], l).toEqual({ kind: "docs", tier: "strong", read: "all" });
     expect(LABEL_RULES.news).toEqual({ kind: "news", tier: "weak", read: "weak" });
     expect(LABEL_RULES.noise.read).toBe("never");
   });
   it("every label that is read maps to a kind the evidence ranking knows", () => {
     for (const l of SECTION_LABELS) if (LABEL_RULES[l].read !== "never") expect(KIND_RANK, l).toContain(LABEL_RULES[l].kind);
-  });
-});
-
-describe("isIndexPage — the section root and its direct children", () => {
-  it("counts path segments below the section's prefix", () => {
-    expect(INDEX_DEPTH).toBe(1);
-    expect(isIndexPage(1, 1)).toBe(true); // /docs in /docs
-    expect(isIndexPage(2, 1)).toBe(true); // /docs/start
-    expect(isIndexPage(3, 1)).toBe(false); // /docs/start/install
-    expect(isIndexPage(2, 2)).toBe(true); // /docs/api in /docs/api
-    expect(isIndexPage(3, 2)).toBe(true);
-    expect(isIndexPage(4, 2)).toBe(false);
   });
 });
 
@@ -202,19 +190,16 @@ describe("ReadingPlan.read", () => {
     expect(read(plan, "/pricing")).toEqual({ label: "pricing", kind: "pricing", tier: "strong", role: "broad" });
     expect(read(plan, "/compare/acme-vs-other")).toEqual({ label: "compare", kind: "content", tier: "strong", role: "broad" });
   });
-  it("help, release notes and API docs: index pages in the broad read, every deeper page is deep", () => {
+  it("help, release notes and API docs are read at any depth: the old rule (index pages first, the articles only when going back) is gone", () => {
     expect(read(plan, "/help").role).toBe("broad");
-    expect(read(plan, "/help/getting-started").role).toBe("broad");
-    expect(read(plan, "/help/getting-started/install")).toEqual({ label: "help", kind: "docs", tier: "strong", role: "deep" });
-    expect(read(plan, "/changelog/2026").role).toBe("broad");
-    expect(read(plan, "/changelog/2026/11").role).toBe("deep");
-    expect(read(plan, "/developers/reference/v2/users")).toMatchObject({ label: "api_docs", role: "deep" });
+    expect(read(plan, "/help/getting-started/install")).toEqual({ label: "help", kind: "docs", tier: "strong", role: "broad" });
+    expect(read(plan, "/changelog/2026/11")).toEqual({ label: "release_notes", kind: "docs", tier: "strong", role: "broad" });
+    expect(read(plan, "/developers/reference/v2/users")).toEqual({ label: "api_docs", kind: "docs", tier: "strong", role: "broad" });
   });
   it("a page belongs to the deepest saved section that holds it", () => {
     expect(read(plan, "/docs/start")).toMatchObject({ label: "help", role: "broad" });
     expect(read(plan, "/docs/api")).toMatchObject({ label: "api_docs", role: "broad" });
-    expect(read(plan, "/docs/api/users")).toMatchObject({ label: "api_docs", role: "broad" });
-    expect(read(plan, "/docs/api/users/create")).toMatchObject({ label: "api_docs", role: "deep" });
+    expect(read(plan, "/docs/api/users/create")).toMatchObject({ label: "api_docs", role: "broad" });
     expect(plan.sectionOf(page("/docs/api/users"))).toEqual({ prefix: `${HOST}/docs/api`, depth: 2, label: "api_docs" });
   });
   it("news is weak; noise is never read", () => {
@@ -253,29 +238,42 @@ describe("ReadingPlan.read", () => {
 describe("pickReadable", () => {
   const plan = planOf({ "/": "product", "/pricing": "pricing", "/blog": "news", "/about": "noise", "/features": "product", "/docs": "help" });
   const pages = [page("/pricing"), page("/blog/a"), page("/about"), page("/features/x"), page("/docs/old", { state: "removed" }), page("/docs/empty", { hasText: false }), page("/"), page("/docs/b", { state: "unlinked" }), page("/docs/b/deep"), page("/unlabeled")];
-  it("broad and deep pages, sorted by address; removed, text-less, noise and unlabeled pages never; news only when the workspace reads weak pages", () => {
+  it("every page of a section that is read, sorted by address; removed, text-less, noise and unlabeled pages never; news only when the workspace reads weak pages", () => {
     const picked = pickReadable(pages, plan, { readWeak: false });
-    expect(picked.map((p) => `${p.id}:${p.read.role}`)).toEqual(["/:broad", "/docs/b:broad", "/docs/b/deep:deep", "/features/x:broad", "/pricing:broad"]);
+    expect(picked.map((p) => `${p.id}:${p.read.role}`)).toEqual(["/:broad", "/docs/b:broad", "/docs/b/deep:broad", "/features/x:broad", "/pricing:broad"]);
     const withWeak = pickReadable(pages, plan, { readWeak: true });
     expect(withWeak.map((p) => p.id)).toEqual(["/", "/blog/a", "/docs/b", "/docs/b/deep", "/features/x", "/pricing"]);
     expect(withWeak.find((p) => p.id === "/blog/a")?.read.tier).toBe("weak");
   });
 });
 
-describe("the reading order under a budget", () => {
-  const plan = planOf({ "/": "product", "/pricing": "pricing", "/compare": "compare", "/help": "help", "/blog": "news", "/prisma": "product", "/api": "api_docs" });
-  it("pricing, product, compare, the help / release-notes / API-docs index pages (and documents), news, then deep pages", () => {
-    expect(readGroup(read(plan, "/pricing"))).toBe(0);
-    expect(readGroup(read(plan, "/prisma/x"))).toBe(1);
-    expect(readGroup(read(plan, "/compare/a"))).toBe(2);
-    expect(readGroup(read(plan, "/help/a"))).toBe(3);
-    expect(readGroup(read(plan, "/uploads/sheet.pdf", { kind: "document" }))).toBe(3);
-    expect(readGroup(read(plan, "/blog/a"))).toBe(4);
-    expect(readGroup(read(plan, "/help/a/b"))).toBe(5);
+describe("where a PM looks — the order pages are read in", () => {
+  const plan = planOf({ "/": "product", "/pricing": "pricing", "/compare": "compare", "/help": "help", "/blog": "news", "/prisma": "product", "/api": "api_docs", "/changelog": "release_notes" });
+  it("the strongest sources first: help center, release notes, API docs, the pricing page, product pages, comparison pages, news", () => {
+    expect([...READ_ORDER]).toEqual(["help", "release_notes", "api_docs", "pricing", "product", "compare", "news"]);
+    expect(["/help/a/b", "/changelog/2026", "/api/users", "/pricing", "/prisma/x", "/compare/a", "/blog/a"].map((p) => readRank(read(plan, p)))).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
-  it("inside a group: by address", () => {
-    const paths = ["/help/a/b", "/blog/a", "/prisma/b", "/", "/api", "/compare/z", "/pricing", "/help", "/prisma/a", "/compare/a"];
-    const sorted = sortForReading(pickReadable(paths.map((p) => page(p)), plan, { readWeak: true }));
-    expect(sorted.map((p) => p.id)).toEqual(["/pricing", "/", "/prisma/a", "/prisma/b", "/compare/a", "/compare/z", "/api", "/help", "/blog/a", "/help/a/b"]);
+  it("a document outside every section reads with the product pages", () => {
+    expect(readRank(read(plan, "/uploads/sheet.pdf", { kind: "document" }))).toBe(READ_ORDER.indexOf("product"));
+  });
+  it("related pages stay together: a page is followed by its inner pages, not by a page whose name merely starts the same", () => {
+    const urls = ["/roadmaps-and-more", "/roadmaps/gantt/zoom", "/roadmaps", "/roadmaps/gantt", "/ideas"].map((p) => `https://www.${HOST}${p}`);
+    expect([...urls].sort(compareAddress).map((u) => u.replace(`https://www.${HOST}`, ""))).toEqual(["/ideas", "/roadmaps", "/roadmaps/gantt", "/roadmaps/gantt/zoom", "/roadmaps-and-more"]);
+    // A plain text comparison would put "/roadmaps-and-more" between a page and its inner pages.
+    expect([...urls].sort()[2]).toContain("/roadmaps-and-more");
+  });
+  it("one site after the other: another host never interleaves", () => {
+    expect(["https://support.acme.example/b", "https://acme.example/z", "https://support.acme.example/a", "https://www.acme.example/a"].sort(compareAddress)).toEqual(["https://www.acme.example/a", "https://acme.example/z", "https://support.acme.example/a", "https://support.acme.example/b"]);
+  });
+  it("the whole order: by kind of source, inside a kind by address", () => {
+    const paths = ["/help/a/b", "/blog/a", "/prisma/b", "/", "/api", "/compare/z", "/pricing", "/help", "/prisma/a", "/compare/a", "/changelog/2026"];
+    const sorted = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan, { readWeak: true }));
+    expect(sorted.map((p) => p.id)).toEqual(["/help", "/help/a/b", "/changelog/2026", "/api", "/pricing", "/", "/prisma/a", "/prisma/b", "/compare/a", "/compare/z", "/blog/a"]);
+  });
+  it("deterministic: the same pages in any order give the same order", () => {
+    const paths = ["/help/a/b", "/prisma/b", "/", "/api", "/pricing", "/help"];
+    const a = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan, { readWeak: false })).map((p) => p.id);
+    const b = sortByWhereAPmLooks(pickReadable([...paths].reverse().map((p) => page(p)), plan, { readWeak: false })).map((p) => p.id);
+    expect(a).toEqual(b);
   });
 });

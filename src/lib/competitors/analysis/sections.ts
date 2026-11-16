@@ -1,22 +1,26 @@
 import { folderSkip, segmentsOf, sourceSkip, type PageTier } from "./kinds";
 
 /**
- * The READING PLAN of a competitor (Capability Analysis, "Map, read, go back").
+ * The READING PLAN of a competitor (Capability Analysis, "How the analysis runs").
  *
  * A page used to be read only when its address had a known word (product, platform, pricing, docs …), which missed
  * products named by brand (/prisma, /cortex, /quantum, /product-brain). Now the site is cut into SECTIONS in code —
  * the stored pages under one address prefix — and PMOS AI labels each section once (the map step). What is read
  * follows from the label, by the rules in this file:
  *
- *   product, pricing, compare          → every page, in the broad read
- *   help, release_notes, api_docs      → the section's index pages in the broad read (the section root and its direct
- *                                        children); every deeper page is a DEEP page, read only when the run goes
- *                                        back for a gap (analysis/gaps.ts) and shown to the second look
+ *   help, release_notes, api_docs      → every page: what the product really does is written there (Daniel
+ *                                        2026-11-16: release notes are "very very good content for capabilities",
+ *                                        developer docs "must be prioritized high"). The old rule — index pages
+ *                                        first, the articles only when a run went back for a gap — is gone: the
+ *                                        reading is by chunks under one token budget (analysis/chunks.ts).
+ *   pricing, product, compare          → every page
  *   news                               → weak: read only when the workspace setting readWeakPages is on
  *   noise                              → never read
  *   a document (a PDF)                 → never skipped for its folder (datasheets live under /wp-content/uploads/):
- *                                        read in the broad read, weak only in a news section
+ *                                        read, weak only in a news section
  *   a section with no label yet        → not read (the next run's map step labels it)
+ *
+ * The ORDER pages are read in is the "where a PM looks" order (READ_ORDER): the strongest sources first.
  *
  * Pure: no database, no network.
  */
@@ -31,8 +35,8 @@ export interface LabelRule {
   /** The page kind its evidence ranks as (kinds.ts KIND_RANK); "other" for a label that is never read. */
   kind: string;
   tier: PageTier;
-  /** all = every page in the broad read; index = index pages in the broad read, the rest deep; weak = with readWeakPages only; never = not read. */
-  read: "all" | "index" | "weak" | "never";
+  /** all = every page; weak = with readWeakPages only; never = not read. */
+  read: "all" | "weak" | "never";
 }
 
 /** Label → what is read and how its evidence ranks. Data: moving a label between rules is an edit of this table. */
@@ -40,9 +44,9 @@ export const LABEL_RULES: Record<SectionLabel, LabelRule> = {
   product: { kind: "product", tier: "strong", read: "all" },
   pricing: { kind: "pricing", tier: "strong", read: "all" },
   compare: { kind: "content", tier: "strong", read: "all" },
-  help: { kind: "docs", tier: "strong", read: "index" },
-  release_notes: { kind: "docs", tier: "strong", read: "index" },
-  api_docs: { kind: "docs", tier: "strong", read: "index" },
+  help: { kind: "docs", tier: "strong", read: "all" },
+  release_notes: { kind: "docs", tier: "strong", read: "all" },
+  api_docs: { kind: "docs", tier: "strong", read: "all" },
   news: { kind: "news", tier: "weak", read: "weak" },
   noise: { kind: "other", tier: "skip", read: "never" },
 };
@@ -328,8 +332,7 @@ export class ReadingPlan {
     if (rule.read === "weak") return { label: section.label, kind: rule.kind, tier: "weak", role: "weak" };
     if (rule.read === "all") return { label: section.label, kind: rule.kind, tier: "strong", role: "broad" };
     if (document) return asDocument(section.label);
-    if (rule.read === "never") return SKIP(rule.kind, section.label);
-    return { label: section.label, kind: rule.kind, tier: "strong", role: isIndexPage(segmentsOf(page.url).length, section.depth) ? "broad" : "deep" };
+    return SKIP(rule.kind, section.label);
   }
 }
 
@@ -365,4 +368,42 @@ export function readGroup(read: PageRead): number {
 /** Pages in reading order: by group (readGroup), inside a group by address. */
 export function sortForReading<T extends { url: string; read: PageRead }>(pages: T[]): T[] {
   return [...pages].sort((a, b) => readGroup(a.read) - readGroup(b.read) || cmp(a.url, b.url));
+}
+
+// ————— Where a PM looks: the order pages are read in —————
+
+/**
+ * "Where a PM looks" (Daniel 2026-11-16), as labels, strongest first: marketing pages are how a company wants to
+ * look; what its product really does is in the help center, the release notes and the developer docs, then in the
+ * pricing page's plan table, then on product pages, then on comparison pages; news comes last. The chunks of a
+ * company are read in this order (analysis/chunks.ts), so its list is built from the strongest sources and the
+ * weaker ones only add. The same order is spelled out for PMOS AI in the reading prompt (analysis/reading.ts
+ * WHERE_A_PM_LOOKS). Data: moving a label is an edit of this list.
+ */
+export const READ_ORDER: readonly SectionLabel[] = ["help", "release_notes", "api_docs", "pricing", "product", "compare", "news"];
+
+/** A page's place in the order: the index of its section's label; a page with no label (a document outside every section) reads with the product pages. */
+export function readRank(read: Pick<PageRead, "label">): number {
+  const i = read.label ? READ_ORDER.indexOf(read.label) : -1;
+  return i < 0 ? READ_ORDER.indexOf("product") : i;
+}
+
+/**
+ * Two addresses in the order that keeps related pages together: by host, then segment by segment — so a page is
+ * followed by its inner pages ("/roadmaps", "/roadmaps/gantt", then "/roadmaps-and-more"), which a plain text
+ * comparison does not give ("-" sorts before "/").
+ */
+export function compareAddress(a: string, b: string): number {
+  const ha = hostOf(a);
+  const hb = hostOf(b);
+  if (ha !== hb) return cmp(ha, hb);
+  const sa = segmentsOf(a);
+  const sb = segmentsOf(b);
+  for (let i = 0; i < Math.min(sa.length, sb.length); i++) if (sa[i] !== sb[i]) return cmp(sa[i], sb[i]);
+  return sa.length - sb.length || cmp(a, b);
+}
+
+/** Pages in the order they are read: the strongest kind of source first (readRank), inside a kind one site after the other and a page before its inner pages (compareAddress). */
+export function sortByWhereAPmLooks<T extends { url: string; sourceId: string; read: Pick<PageRead, "label"> }>(pages: T[]): T[] {
+  return [...pages].sort((a, b) => readRank(a.read) - readRank(b.read) || compareAddress(a.url, b.url) || cmp(a.sourceId, b.sourceId));
 }
