@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { analysisTokenBudgetOf } from "./analysis/budget";
+import { readSettingOf, storedReadSetting, type ReadSetting } from "./analysis/reads";
 import { STORAGE_LIMIT_CHARS, ceilingMsFromEnv } from "./config";
 
 /**
@@ -44,6 +45,8 @@ const KEYS = {
   /** TEST KNOBS: a shorter time limit / a smaller storage limit for one test. Honoured only with COMPETITORS_TEST_KNOBS=on. */
   ceilingMs: "competitors.test.ceilingMs",
   storageLimit: "competitors.test.storageLimitChars",
+  /** "What the analysis reads": one switch per kind of content, for the installation (analysis/reads.ts) — { kinds: { help: false, … } }. */
+  analysisReads: "competitors.analysisReads",
   /** TEST KNOB: the model's raw answers for one competitor's analysis runs, { competitorId: TestAiAnswers }. */
   aiAnswers: "competitors.test.aiAnswers",
 } as const;
@@ -60,6 +63,19 @@ async function writeSetting(key: string, value: Prisma.InputJsonValue): Promise<
 export async function getGlobalScanSettings(): Promise<GlobalScanSettings> {
   const [remote, analysisOff, budget] = await Promise.all([readSetting(KEYS.remote), readSetting(KEYS.analysisOff), readSetting(KEYS.analysisBudget)]);
   return { remoteScanEnabled: remote === true, analysisDisabled: analysisOff === true, analysisTokenBudget: analysisTokenBudgetOf(budget) };
+}
+
+/** "What the analysis reads" (analysis/reads.ts), read by a run once, at its claim: a kind never stored has its default. */
+export async function analysisReads(): Promise<ReadSetting> {
+  return readSettingOf(await readSetting(KEYS.analysisReads));
+}
+
+/** Turn kinds on or off; the kinds not named keep what they have. Returns the setting before and after. */
+export async function setAnalysisReads(patch: Partial<ReadSetting>): Promise<{ before: ReadSetting; after: ReadSetting }> {
+  const before = await analysisReads();
+  const after = { ...before, ...patch };
+  await writeSetting(KEYS.analysisReads, storedReadSetting(after));
+  return { before, after };
 }
 
 /** The token budget of one analysis run, read by the run once, at its claim. */
@@ -201,25 +217,37 @@ export interface TestAiAnswers {
    * parser — a word outside the closed set of labels fails the run, as a real answer would.
    */
   map?: Record<string, string>;
-  /** Research: the answer for a page, by its address; "*" = every page not listed. A page with no answer gets {"capabilities": []}. */
-  research?: Record<string, string>;
-  /** Merge: the answer of the n-th merge call of a run. Missing → {"groups": []}. */
-  merge?: string[];
+  /**
+   * Map, page by page: the pages of help-center and blog sections that are release notes — full addresses or paths
+   * ("/blog/changelog-may"). A page no entry names is not one. Addresses, not JSON: the answer is built from them per
+   * call (analysis/prompts.ts injectedMapPagesAnswer) and goes through the same parser.
+   */
+  releaseNotes?: string[];
+  /**
+   * The reading: the answer of the n-th reading request of this company in a run (one request per chunk of pages).
+   * The first request of a company answers with its list ({"capabilities": […], "unexplained": […]}), a later one with
+   * what its pages change ({"new_capabilities", "new_features", "corrections", "removed", "unexplained"}). Missing →
+   * an answer that lists or changes nothing. Quotes name pages by their code in the request (P1 … in reading order).
+   */
+  reading?: string[];
   /** Match: the answer of the n-th match call of a run. Missing while items still need a match → the run FAILS: a test states what it expects. */
   match?: string[];
-  /** Second look: by our capability's name; "*" = every other one. Missing → {"found": false, …}. */
-  secondLook?: Record<string, string>;
+  /** Second look: the answer of the n-th second-look request of this company in a run (one per chunk). Missing → {"found": []}. */
+  secondLook?: string[];
   /** Facts: every chunk gets this answer. Missing → {"facts": []}. */
   facts?: string;
   /**
    * A setup run only, read from the answers of the organization's OWN source (analysis/setup.ts) — every company of
-   * an injected setup run must have answers of its own for its map, research, merge, match, second looks and facts:
-   *   unify       — the answer of the n-th unify call. Missing while items still need a row → the run FAILS.
-   *   unifyReview — the answer of every review call. Missing → {"merge": [], "drop": [], "rename": []}.
-   *   domains     — the answer of the n-th domains call. Missing while rows still need a domain → the run FAILS.
+   * an injected setup run must have answers of its own for its map, reading, second looks and facts:
+   *   unify         — the answer of the n-th unify call about capabilities. Missing while one still needs a row → the run FAILS.
+   *   unifyReview   — the answer of the review call (made only when the capabilities took more than one call). Missing → {"merge": []}.
+   *   unifyFeatures — the answer of the n-th unify call about features (an injected run makes them one at a time, in
+   *                   table order). Missing while a feature still needs a row → the run FAILS.
+   *   domains       — the answer of the n-th domains call. Missing while rows still need a domain → the run FAILS.
    */
   unify?: string[];
   unifyReview?: string;
+  unifyFeatures?: string[];
   domains?: string[];
   /** Capacity answers: after `afterCalls` successful calls of the run, the next `times` calls answer "no capacity". */
   rateLimit?: { afterCalls: number; times: number };
@@ -247,7 +275,8 @@ const isJson = (v: unknown): v is string => {
 export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "answers must be an object" };
   const r = raw as Record<string, unknown>;
-  if ("classify" in r) return { error: "the classify / facts shape is gone: use map, research, merge, match, secondLook, facts, rateLimit" };
+  if ("classify" in r) return { error: "the classify / facts shape is gone: use map, reading, match, secondLook, facts, rateLimit" };
+  if ("research" in r || "merge" in r) return { error: "the per-page research and the merge are gone: use reading (the answer of each reading request, in order)" };
   const out: TestAiAnswers = {};
   if (r.map !== undefined) {
     const m = r.map;
@@ -259,13 +288,11 @@ export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string
     if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every((v) => typeof v === "string")) return { error: "addresses must be an object of address host → kind" };
     out.addresses = m as Record<string, string>;
   }
-  for (const key of ["research", "secondLook"] as const) {
-    if (r[key] === undefined) continue;
-    const m = r[key];
-    if (!m || typeof m !== "object" || Array.isArray(m) || !Object.values(m).every(isJson)) return { error: `${key} must be an object of JSON texts` };
-    out[key] = m as Record<string, string>;
+  if (r.releaseNotes !== undefined) {
+    if (!Array.isArray(r.releaseNotes) || !r.releaseNotes.every((v) => typeof v === "string")) return { error: "releaseNotes must be a list of page addresses" };
+    out.releaseNotes = r.releaseNotes as string[];
   }
-  for (const key of ["merge", "match", "unify", "domains"] as const) {
+  for (const key of ["reading", "match", "secondLook", "unify", "unifyFeatures", "domains"] as const) {
     if (r[key] === undefined) continue;
     if (!Array.isArray(r[key]) || !(r[key] as unknown[]).every(isJson)) return { error: `${key} must be a list of JSON texts` };
     out[key] = r[key] as string[];

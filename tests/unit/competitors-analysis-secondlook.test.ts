@@ -1,109 +1,50 @@
-/** Capability Analysis — the second look (analysis/secondlook.ts): which pages are shown, and when it is asked again. Pure module. */
+/** Capability Analysis — the second look, in bulk (analysis/secondlook.ts): what decides that a row is asked again, and how a look that stopped continues. Pure module. The prompt and its parser are tested in competitors-analysis-prompts.test.ts. */
 import { describe, expect, it } from "vitest";
-import { capLooks, indexPages, lookKey, pagesFor, scorePage, type LookPage } from "@/lib/competitors/analysis/secondlook";
+import { LOOK_VERSION } from "@/lib/competitors/analysis/prompts";
+import { chunksLeft, lookFingerprint, lookKey, readLookProgress } from "@/lib/competitors/analysis/secondlook";
 
-const page = (path: string, title: string, text: string): LookPage => ({ id: path, url: `https://acme.example${path}`, title, text, hash: `h${path}` });
+const capability = { name: "Single Sign-On", description: "Signs users in through the company's identity provider.", aliases: ["SSO", "SAML login"] };
+const domain = { name: "Security", description: "Protects accounts and data." };
 
-describe("scorePage", () => {
-  const score = (terms: string[], p: LookPage) => scorePage(terms, indexPages([p])[0]);
-  it("the whole name in the title beats the address, which beats the text", () => {
-    const inTitle = score(["Single sign-on"], page("/x", "Single Sign-On for teams", "nothing here"));
-    const inPath = score(["Single sign-on"], page("/single-sign-on", "Docs", "nothing here"));
-    const inText = score(["Single sign-on"], page("/x", "Docs", "We offer single sign-on."));
-    expect(inTitle).toBeGreaterThan(inPath);
-    expect(inPath).toBeGreaterThan(inText);
-    expect(inText).toBeGreaterThan(0);
+describe("lookKey — the same question is not asked twice", () => {
+  const key = lookKey(capability, domain, "gemini-4-argon");
+  it("the same row, domain and model give the same key — whatever the order of its other names", () => {
+    expect(lookKey({ ...capability, aliases: ["SAML login", "SSO"] }, domain, "gemini-4-argon")).toBe(key);
+    expect(key).toMatch(/^[0-9a-f]{32}$/);
   });
-  it("counts each word in the text up to 5 times", () => {
-    const few = score(["Takedown"], page("/x", "Docs", "takedown takedown"));
-    const many = score(["Takedown"], page("/x", "Docs", Array(30).fill("takedown").join(" ")));
-    // whole term 10 + word occurrences (2, then capped at 5)
-    expect(few).toBe(12);
-    expect(many).toBe(15);
+  it("it changes with the row's name, description or other names, its domain's name or definition, and the model", () => {
+    expect(lookKey({ ...capability, name: "SSO" }, domain, "gemini-4-argon")).not.toBe(key);
+    expect(lookKey({ ...capability, description: "Other." }, domain, "gemini-4-argon")).not.toBe(key);
+    expect(lookKey({ ...capability, aliases: ["SSO"] }, domain, "gemini-4-argon")).not.toBe(key);
+    expect(lookKey(capability, { ...domain, name: "Trust" }, "gemini-4-argon")).not.toBe(key);
+    expect(lookKey(capability, { ...domain, description: "Other." }, "gemini-4-argon")).not.toBe(key);
+    expect(lookKey(capability, domain, "gemini-4-carbon")).not.toBe(key);
   });
-  it("words that say nothing (management, platform, the …) and words under 3 letters do not score", () => {
-    expect(score(["Management Platform of AI"], page("/x", "Docs", "our management platform for the win"))).toBe(0);
-    expect(score(["Exposure Management"], page("/x", "Docs", "exposure of assets"))).toBe(1);
-  });
-  it("an alias scores like the name", () => {
-    expect(score(["Single sign-on", "SSO"], page("/sso", "SSO", "SSO for all"))).toBeGreaterThan(score(["Single sign-on"], page("/sso", "SSO", "SSO for all")));
+  it("it does not carry the company's pages: a page that is new or changed is read by the reading step, not by asking every row again", () => {
+    expect(lookKey.length).toBe(3);
+    expect(LOOK_VERSION).toBe("look-3");
   });
 });
 
-describe("pagesFor", () => {
-  const cap = { name: "Brand protection", aliases: [] as string[] };
-  it("best first; ties by address; pages that do not score are out", () => {
-    const pages = indexPages([
-      page("/b", "Other", "brand protection is here"),
-      page("/a", "Other", "brand protection is here"),
-      page("/brand-protection", "Brand Protection", "Protect your brand."),
-      page("/pricing", "Pricing", "Plans and prices."),
-    ]);
-    expect(pagesFor(cap, pages).map((p) => p.id)).toEqual(["/brand-protection", "/a", "/b"]);
+describe("a look that stopped half-way continues after the chunks it asked — when it is the same look", () => {
+  const fingerprint = lookFingerprint(["gemini-4-argon"], ["chunk-a", "chunk-b", "chunk-c"]);
+  it("the fingerprint is the chunks in their order (their pages and texts): a changed or reordered chunk is another look", () => {
+    expect(lookFingerprint(["gemini-4-argon"], ["chunk-a", "chunk-b", "chunk-c"])).toBe(fingerprint);
+    expect(lookFingerprint(["gemini-4-argon"], ["chunk-a", "chunk-b", "chunk-x"])).not.toBe(fingerprint);
+    expect(lookFingerprint(["gemini-4-argon"], ["chunk-b", "chunk-a", "chunk-c"])).not.toBe(fingerprint);
+    expect(lookFingerprint(["gemini-4-carbon"], ["chunk-a", "chunk-b", "chunk-c"])).not.toBe(fingerprint);
   });
-  it("at most 4 pages", () => {
-    const pages = indexPages(Array.from({ length: 9 }, (_, i) => page(`/p${i}`, "Brand protection", "brand")));
-    expect(pagesFor(cap, pages).map((p) => p.id)).toEqual(["/p0", "/p1", "/p2", "/p3"]);
+  it("the same look goes on after the chunks it asked", () => {
+    expect(chunksLeft(3, { fingerprint, done: 2 }, fingerprint)).toEqual({ from: 2, left: 1 });
+    expect(chunksLeft(3, { fingerprint, done: 3 }, fingerprint)).toEqual({ from: 3, left: 0 });
+    expect(chunksLeft(3, { fingerprint, done: 9 }, fingerprint)).toEqual({ from: 3, left: 0 });
   });
-  it("stops when the texts would pass 80,000 characters in all", () => {
-    const pages = indexPages([page("/a", "Brand protection", "x".repeat(50_000)), page("/b", "Brand protection", "y".repeat(40_000)), page("/c", "Brand protection", "z".repeat(10))]);
-    expect(pagesFor(cap, pages).map((p) => p.id)).toEqual(["/a"]);
-    expect(pagesFor(cap, pages, { maxChars: 100_000 }).map((p) => p.id)).toEqual(["/a", "/b", "/c"]);
+  it("another look — other chunks, or no saved progress — starts from the first chunk", () => {
+    expect(chunksLeft(3, { fingerprint: "other", done: 2 }, fingerprint)).toEqual({ from: 0, left: 3 });
+    expect(chunksLeft(3, null, fingerprint)).toEqual({ from: 0, left: 3 });
   });
-  it("the first page is always in, cut when it alone is larger than the limit", () => {
-    const picked = pagesFor(cap, indexPages([page("/a", "Brand protection", "x".repeat(200_000))]));
-    expect(picked).toHaveLength(1);
-    expect(picked[0].text.length).toBe(80_000);
-  });
-  it("no page scores → no page, so no call is made", () => {
-    expect(pagesFor(cap, indexPages([page("/pricing", "Pricing", "Plans and prices.")]))).toEqual([]);
-    expect(pagesFor(cap, [])).toEqual([]);
-  });
-});
-
-describe("lookKey", () => {
-  const capability = { name: "SSO", description: "One login.", aliases: ["Single sign-on"] };
-  const domain = { name: "Identity", description: "Who gets in." };
-  const pages = [{ id: "p1", hash: "h1" }, { id: "p2", hash: "h2" }];
-  const base = lookKey(capability, domain, pages, "model-a");
-  it("is 32 hex characters and does not depend on the order of the pages", () => {
-    expect(base).toMatch(/^[0-9a-f]{32}$/);
-    expect(lookKey(capability, domain, [...pages].reverse(), "model-a")).toBe(base);
-  });
-  it("does not change when a page's text changes: the research step reads the changed page, the look is not asked again", () => {
-    const edited = [{ id: "p1", hash: "h1-changed" }, { id: "p2", hash: "h2-changed" }];
-    expect(lookKey(capability, domain, edited, "model-a")).toBe(base);
-    expect(lookKey(capability, domain, [{ id: "p1" }, { id: "p2" }], "model-a")).toBe(base);
-  });
-  it("changes with the description, an alias, the page set and the model", () => {
-    expect(lookKey({ ...capability, description: "One login for all apps." }, domain, pages, "model-a")).not.toBe(base);
-    expect(lookKey({ ...capability, aliases: [] }, domain, pages, "model-a")).not.toBe(base);
-    expect(lookKey(capability, domain, [{ id: "p3" }, pages[1]], "model-a")).not.toBe(base);
-    expect(lookKey(capability, domain, [pages[0]], "model-a")).not.toBe(base);
-    expect(lookKey(capability, domain, pages, "model-b")).not.toBe(base);
-    expect(lookKey(capability, { ...domain, description: "Who may enter." }, pages, "model-a")).not.toBe(base);
-    expect(lookKey(capability, domain, [], "model-a")).not.toBe(base);
-  });
-});
-
-describe("capLooks — the limit on second looks per run", () => {
-  const todo = Array.from({ length: 50 }, (_, i) => `k${i + 1}`);
-  it("under the limit everything is asked now", () => {
-    expect(capLooks(todo.slice(0, 12), 0, 30)).toEqual({ now: todo.slice(0, 12), later: [] });
-    expect(capLooks([], 0, 30)).toEqual({ now: [], later: [] });
-  });
-  it("over the limit: the first 30 in the to-do's order now, the rest stay due for the next run", () => {
-    const r = capLooks(todo, 0, 30);
-    expect(r.now).toEqual(todo.slice(0, 30));
-    expect(r.later).toEqual(todo.slice(30));
-  });
-  it("a run that continues counts the looks it made before it stopped", () => {
-    // 12 were asked before the stop, so they are no longer on the to-do; 18 more fit.
-    const left = todo.slice(12);
-    const r = capLooks(left, 12, 30);
-    expect(r.now).toEqual(left.slice(0, 18));
-    expect(r.later).toHaveLength(20);
-    expect(capLooks(left, 30, 30).now).toEqual([]);
-    expect(capLooks(left, 45, 30)).toEqual({ now: [], later: left });
+  it("the cursor's record is read field by field; anything that is not one is no progress", () => {
+    expect(readLookProgress({ fingerprint, done: 2, rows: ["k1"] })).toEqual({ fingerprint, done: 2 });
+    for (const bad of [null, undefined, "x", [], { fingerprint: "", done: 1 }, { fingerprint, done: -1 }, { fingerprint, done: 1.5 }, { done: 2 }]) expect(readLookProgress(bad)).toBeNull();
   });
 });

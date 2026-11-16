@@ -653,6 +653,7 @@ model Competitor {
   findings        PageFinding[]
   featureStatuses FeatureStatus[]
   sections        CompetitorSection[]
+  chunks          CompetitorChunk[]
 
   @@unique([workspaceId, host])
   @@index([workspaceId])
@@ -793,7 +794,7 @@ model CapabilityStatus {
   evidenceCount Int       @default(0)
   /// The analysis run that last wrote the cell.
   analysisId   String?
-  /// What the last second look that found nothing was asked with (analysis/secondlook.ts lookKey); same key = not asked again.
+  /// What the row was last looked for with, when every chunk of the company found nothing (analysis/secondlook.ts lookKey); same key = not asked again.
   lookKey      String?
   scanId       String?
   /// When `value` last changed (drives "New changes" and "Changed <date>").
@@ -859,12 +860,12 @@ model CompetitorAnalysis {
   startedById  String?
   /// "queued" | "running" | "waiting" (PMOS AI has no capacity; sleeping until resumeAt) | "done" | "failed" | "cancelled"
   status       String     @default("queued")
-  /// Display only — where the run is: "map" | "research" | "merge" | "match" | "go_back" | "second_look" | "apply" | "facts" | "done"
-  /// (a setup run also: "unify" | "domains").
+  /// Display only — where the run is: "map" | "reading" | "match" | "second_look" | "apply" | "facts" | "done"
+  /// (a setup run also: "unify" | "domains"; a run from before 2026-11-16 also "research" | "merge" | "go_back").
   /// A resumed run never trusts it: every step recomputes its own to-do from the tables.
   step         String     @default("research")
-  /// What cannot be derived: { factsBaselineSources: string[], goBack: { rounds: string[][] } } — the sources whose
-  /// first facts read this is, and the pages each go-back round chose (page ids), so a run that stopped reads the same pages.
+  /// What cannot be derived: { factsBaselineSources: string[], look: { fingerprint, rows, done } } — the sources whose
+  /// first facts read this is, and how far a second look got (the chunks it asked), so a run that stopped goes on after them.
   /// A setup run keeps one such object per company under { companies: { <competitorId>: {…} } }, and { unify: { reviewed } }.
   cursor       Json       @default("{}")
   /// Set while status = "waiting".
@@ -892,7 +893,7 @@ model CompetitorAnalysis {
   pagesDone    Int        @default(0)
   /// Everything else that is counted (analysis/engine.ts Counters).
   counters     Json       @default("{}")
-  /// The run's tokens split by step and model (analysis/usage.ts): [{ step, model, calls, input, output, cached }].
+  /// The run's tokens and time split by step and model (analysis/usage.ts): [{ step, model, calls, input, output, cached, thinking, ms }].
   /// A setup run's list is the roll-up of its companies' lists (kept in `setup`) and of its shared calls.
   usage        Json       @default("[]")
   /// How the run paced itself (analysis/pacing.ts): { start, max, peak, speed, pushbacks: [{ at, step, company, reason,
@@ -903,6 +904,16 @@ model CompetitorAnalysis {
   /// The caps this run hit (analysis/caps.ts) — limits are safety nets, so a hit is recorded and surfaced:
   /// [{ cap, limit, competitorId, company, undone, also, times }]. [] = no cap was hit.
   caps         Json       @default("[]")
+  /// "What the analysis reads" when the run ran (analysis/reads.ts): { kinds: { product, pricing, compare, release_notes,
+  /// api_docs, help, news → true | false }, notRead: { <kind>: { pages, tokens } } } — the kinds that were on, and for
+  /// a run of one company how many pages of each kind that was off it left out (a setup run keeps that per company in
+  /// `setup`). A configuration, not a cap. Null = a run from before the setting existed.
+  reads        Json?
+  /// Answers of PMOS AI that should never happen (analysis/incidents.ts): a finding whose quote is not on the page it
+  /// names, a page or an item outside the closed set an answer was given. The finding does not reach the table; the
+  /// case is kept here: { list: [{ kind, at, step, competitorId, company, request, itemKind, item, parent, quote,
+  /// pageCode, pageUrl, pageId, pageHash, foundOn }], total }. Null = none (or a run from before they were kept).
+  incidents    Json?
   /// "none" | "capacity" | "answer" | "ai" | "stale" | "other"
   errorKind    String?
   error        String?
@@ -913,6 +924,52 @@ model CompetitorAnalysis {
   @@index([competitorId, createdAt])
   @@index([workspaceId, createdAt])
   @@index([parentId])
+}
+
+/// One request of a company's READING (analysis/read-step.ts): a chunk of related pages sent to PMOS AI in one call
+/// (analysis/chunks.ts). The first request of a company returns its list; a later one, what its pages change in the
+/// list so far. A record only — the reading never reads it back: what is due is decided from the pages
+/// (SourcePage.analyzedKey). It is what Administration → Competitors shows per company: the chunks, their pages and
+/// tokens, what each answer did, and the labels that were seen but not explained.
+model CompetitorChunk {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// The run that made the request (plain id, no relation).
+  analysisId   String
+  /// READ_VERSION of the prompt that read it.
+  version      String
+  /// 1 … — its place among the requests of that run for this company.
+  position     Int
+  /// "list" (the company's whole list) | "changes" (what these pages change in the list so far)
+  kind         String
+  /// What identifies its content: the pages and the text each had (analysis/chunks.ts chunkKey).
+  key          String
+  pages        Int
+  /// Tokens of its text as estimated before the call (characters / 4).
+  tokens       Int
+  /// Pages per kind: { release_notes: 40, help: 210, … }.
+  kinds        Json       @default("{}")
+  firstUrl     String     @default("")
+  lastUrl      String     @default("")
+  model        String     @default("")
+  /// What the provider billed: input, output (thinking included) and the thinking part of the output.
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  thinkingTokens Int      @default(0)
+  /// How long the call took.
+  ms           Int        @default(0)
+  /// What the answer did: { capabilities, features (the list after it), newCapabilities, newFeatures, corrections,
+  /// removed, incidents, pii, repeated, unnamed, renameRefused }.
+  result       Json       @default("{}")
+  /// "Seen but not explained": bare labels no page explains — [{ label, url }].
+  unexplained  Json       @default("[]")
+  createdAt    DateTime   @default(now())
+
+  @@index([competitorId, createdAt])
+  @@index([workspaceId])
+  @@index([analysisId])
 }
 
 /// One section of a competitor's READING PLAN (analysis/sections.ts): the stored pages under one address prefix of
@@ -946,9 +1003,10 @@ model CompetitorSection {
   @@index([workspaceId])
 }
 
-/// One thing a page says the competitor offers, with the quote that proves it. Written by the research step (one call per
-/// page) and by the second look. A finding exists only while its page text is the text it was read from: when the page
-/// changes or is removed, its findings are deleted and the page is read again.
+/// The proof of one thing a company offers: the quote and the page it is on. Written by the reading (one per item of
+/// the company's list — origin "reading") and by the second look. A finding exists only while its quote is on its
+/// page: when the page changes, the quote is checked again in code; when it is gone (or the page is), the finding is
+/// deleted. Origin "research" = a finding of the old per-page reading: kept until its company is first read by chunks.
 model PageFinding {
   id            String          @id @default(uuid())
   workspaceId   String
@@ -960,7 +1018,7 @@ model PageFinding {
   pageHash      String
   /// The run that wrote it (plain id, no relation).
   analysisId    String?
-  /// "research" | "second_look"
+  /// "reading" | "second_look" | "research" (the old per-page reading)
   origin        String          @default("research")
   /// "capability" | "feature"
   kind          String
@@ -970,11 +1028,11 @@ model PageFinding {
   parentWording String?
   /// Verbatim from the page (verified in code), at most 400 characters.
   quote         String
-  /// One sentence: why this quote means the capability exists.
-  reasoning     String
+  /// No longer written (Daniel 2026-11-16: the description covers it) — "" for every finding of the chunked reading.
+  reasoning     String          @default("")
   /// One plain sentence of what it does, taken only from this page; null when the page does not say.
   description   String?
-  /// The competitor's merged item this finding belongs to (set by the merge step; null for second-look findings).
+  /// The company's item this finding proves (null for second-look findings).
   itemId        String?
   item          CompetitorItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
   /// Second look only: the capability of ours it answers.
@@ -987,7 +1045,7 @@ model PageFinding {
   @@index([competitorId, capabilityId])
 }
 
-/// One capability or feature of a competitor, in their words, after the same thing on several pages was merged.
+/// One capability or feature of a company, in its own words — an entry of the list the reading makes (each once).
 /// Carries the saved match to our catalog: decided once, reused on every later run.
 model CompetitorItem {
   id              String           @id @default(uuid())
@@ -996,16 +1054,20 @@ model CompetitorItem {
   competitor      Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
   /// "capability" | "feature"
   kind            String
-  /// Stable key: "c:<wordingKey>" or "f:<parent item key>><wordingKey>" (analysis/items.ts itemKey).
+  /// Stable key: "c:<wordingKey>" for a capability, "f:<capability item id>><wordingKey>" for a feature (analysis/items.ts itemKey).
   key             String
-  /// Their most common wording for it — "the competitor's own name", shown behind the evidence.
+  /// The company's own name for it, shown behind the evidence.
   name            String
-  /// wordingKeys merged into this item (code merge and saved AI merges): a later finding with one of them joins it without a call.
+  /// One plain sentence of what it does, from the company's pages (the reading). Null for an item of the old per-page reading.
+  description     String?
+  /// Its place in the company's list: capabilities in the order the reading listed them, features in their order under their capability.
+  position        Int              @default(0)
+  /// No longer written or read (it held the wordings the merge step joined); left in place for a later cleanup push.
   wordings        Json             @default("[]")
   parentItemId    String?
   parent          CompetitorItem?  @relation("ItemParent", fields: [parentItemId], references: [id], onDelete: Cascade)
   children        CompetitorItem[] @relation("ItemParent")
-  /// False until the item went through one AI merge call.
+  /// No longer written or read (the merge step is gone: the reading lists each thing once); left in place for a later cleanup push.
   mergeChecked    Boolean          @default(false)
   /// The saved match: exactly one of the two is set once the item is settled.
   capabilityId    String?
@@ -1014,18 +1076,18 @@ model CompetitorItem {
   feature         Feature?         @relation(fields: [featureId], references: [id], onDelete: SetNull)
   /// "name" | "alias" (resolved in code through decisions.ts) | "ai" (the match call, or the setup run's unify step)
   /// | "created" (the apply step made the row from this item) | "silent" (it is a row a PM removed or declined:
-  /// remembered, never shown) | "excluded" (the setup run's unify step judged it no capability — a commercial term or
-  /// a marketing headline: it gets no row, and is never asked again)
+  /// remembered, never shown)
   matchedBy       String?
   matchedAt       DateTime?
   matchAnalysisId String?
   /// The match call's answer for an item that is none of ours, kept until the apply step turns it into a row:
-  /// { domainId, newDomainName, newDomainDefinition, closestDomainId, marketName, description }.
-  /// During a setup run, a capability item's row as the unify step decided it, kept until the domains step creates
-  /// the catalog: { setupRow: true, marketName, description } — the row is identified by its name.
+  /// { domainId, marketName, description }.
+  /// During a setup run, an item's place as the unify step decided it, kept until the domains step creates the
+  /// catalog — a capability's row { setupRow: true, marketName, description }, a feature's feature row
+  /// { setupFeature: true, row, marketName, description }, or the row a feature was moved to { setupMove: true, row }
+  /// (rows are identified by their names).
   placement       Json?
-  /// When a run last went back for this item's gaps to the end (analysis/gaps.ts). The item is gone back for again
-  /// only when it got a finding after this moment — so a run with nothing new to read reads nothing for it.
+  /// No longer written or read (the go-back rounds are gone); left in place for a later cleanup push.
   gapCheckedAt    DateTime?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -1371,7 +1433,11 @@ model SourcePage {
   /// then dropped. Set on the first change since the last successful analysis, kept across further changes until then.
   previousText String?
   previousHash String?
-  /// "<RESEARCH_VERSION>:<hash>" of the text the analysis's research step last read; a different value = the page is due.
+  /// The map's word on a page that sits in a help-center or a blog section (analysis/plan.ts): "release_notes" = it is
+  /// a release-notes page and is read as one, whatever the section's own kind says; "none" = the map looked at it and
+  /// it is not one; null = not looked at yet (or it sits in a section the map does not look into page by page).
+  readAs      String?
+  /// "<READ_VERSION>:<hash>" of the text the reading last read (analysis/reading.ts); a different value = the page is due.
   analyzedKey String?
   analyzedAt  DateTime?
   /// Set when the page's research answer was unusable; cleared when the page is read again.

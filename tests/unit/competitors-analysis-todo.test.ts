@@ -1,30 +1,12 @@
 /** Capability Analysis — what is due (analysis/todo.ts): a run keeps no cursor, the to-do is computed from state. Pure module. */
 import { describe, expect, it } from "vitest";
-import { carriedFactsBaseline, factsBaseline, factsBaselineSources, factsTodo, readKey, researchTodo, rowsSince, tooManyFailed } from "@/lib/competitors/analysis/todo";
+import { carriedFactsBaseline, factsBaseline, factsBaselineSources, factsTodo, readKey, rowsSince } from "@/lib/competitors/analysis/todo";
 
-describe("researchTodo", () => {
-  const V = "research-1";
-  const p = (url: string, hash: string, analyzedKey: string | null) => ({ url, hash, analyzedKey });
-  it("a page read under the current version and hash is not due", () => {
-    expect(researchTodo([p("/a", "h1", readKey(V, "h1"))], V)).toEqual([]);
-  });
-  it("a page never read, a page whose text moved and a page read under another prompt version are due — in address order", () => {
-    const todo = researchTodo([p("/c", "h3", "research-0:h3"), p("/a", "h1", null), p("/d", "h4", readKey(V, "h4")), p("/b", "h2new", readKey(V, "h2old"))], V);
-    expect(todo.map((x) => x.url)).toEqual(["/a", "/b", "/c"]);
-  });
-  it("a page whose answer was unusable carries the current key: it is not asked again until it changes", () => {
-    const failed = { ...p("/a", "h1", readKey(V, "h1")), analysisError: "invalid JSON" };
-    expect(researchTodo([failed], V)).toEqual([]);
-    expect(researchTodo([{ ...failed, hash: "h2" }], V)).toHaveLength(1);
-  });
-});
-
-describe("tooManyFailed", () => {
-  it("more than max(5, 5% of the to-do) unusable answers fails the run", () => {
-    expect(tooManyFailed(5, 40)).toBe(false);
-    expect(tooManyFailed(6, 40)).toBe(true);
-    expect(tooManyFailed(30, 600)).toBe(false);
-    expect(tooManyFailed(31, 600)).toBe(true);
+describe("readKey", () => {
+  it("is the prompt version and the hash of the text that was read: a page whose text or whose prompt version moved has another key, so it is due", () => {
+    expect(readKey("read-1", "h1")).toBe("read-1:h1");
+    expect(readKey("read-1", "h2")).not.toBe(readKey("read-1", "h1"));
+    expect(readKey("read-2", "h1")).not.toBe(readKey("read-1", "h1"));
   });
 });
 

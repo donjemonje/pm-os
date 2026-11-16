@@ -1,289 +1,221 @@
-/** Capability Analysis — the setup run's unify step (analysis/unify.ts): the fixed order, batches, rows, the answer's closed sets, the review. Pure module. */
+/** Capability Analysis — the setup run's unify step (analysis/unify.ts): capabilities → rows, the review, features → feature rows; batches that never move; every code used exactly once. Pure module. */
 import { describe, expect, it } from "vitest";
-import { EXCLUDED, isSettled, matchTodo, needsRepair, type MatchItem } from "@/lib/competitors/analysis/match";
 import {
-  nextUnifyBatch,
-  orderUnifyItems,
-  parseUnify,
+  capabilityBatches,
+  capabilityCode,
+  checkUnified,
+  companyLetter,
+  featureBatches,
+  featureCode,
+  featureRowsOf,
+  parseUnifyCapabilities,
+  parseUnifyFeatures,
   parseUnifyReview,
   planUnifyReview,
-  renderUnify,
+  renderUnifyCapabilities,
+  renderUnifyFeatures,
   renderUnifyReview,
-  rowKey,
   rowsOf,
-  UNIFY_BATCH,
-  UNIFY_REVIEW_SYSTEM_PROMPT,
-  UNIFY_SYSTEM_PROMPT,
-  unifyCalls,
-  unifyEntries,
-  unifyReviewTool,
-  unifyTool,
-  type UnifyItem,
+  UNIFY_CAPABILITIES_PROMPT,
+  UNIFY_CAPABILITY_BATCH,
+  UNIFY_FEATURE_BATCH,
+  UNIFY_FEATURES_PROMPT,
+  UNIFY_MOVED_FEATURES_PROMPT,
+  UNIFY_REVIEW_PROMPT,
+  unifyCapabilitiesTool,
+  unifyFeaturesTool,
+  type UnifyCapability,
+  type UnifyFeature,
+  type UnifyFeatureGroup,
 } from "@/lib/competitors/analysis/unify";
 
-const ORDER = ["us", "en", "bg"];
-const NAMES: Record<string, string> = { us: "Aha", en: "Enterpret", bg: "Bagel AI" };
-const I = (id: string, competitorId: string, name: string, row: { name: string; description: string } | null = null, description: string | null = null): UnifyItem => ({
-  id, competitorId, company: NAMES[competitorId], isOwn: competitorId === "us", name, description, row,
+const COMPANIES = ["Aha", "Bagel AI", "Productboard"];
+const cap = (company: number, n: number, name: string, row: { name: string; description: string } | null = null, features: string[] = []): UnifyCapability => ({
+  id: `${companyLetter(company).toLowerCase()}${n}`, competitorId: `c${company}`, company: COMPANIES[company], isOwn: company === 0, code: capabilityCode(company, n - 1), name, description: `${name} does its thing.`, features, row,
 });
-const ROW = (name: string, description = `${name} description.`) => ({ name, description });
+const feat = (c: UnifyCapability, n: number, name: string, extra: Partial<UnifyFeature> = {}): UnifyFeature => ({
+  id: `${c.id}.${n}`, competitorId: c.competitorId, company: c.company, isOwn: c.isOwn, code: featureCode(c.code, n - 1), name, description: `${name} in detail.`, capabilityItemId: c.id, placed: null, movedTo: null, ...extra,
+});
+const R = (name: string) => ({ name, description: `${name}.` });
 
-describe("the fixed order of the items", () => {
-  const items = [I("5", "bg", "Zapier integration"), I("2", "us", "Roadmaps"), I("4", "en", "Feedback inbox"), I("1", "us", "Idea portal"), I("3", "en", "AI summaries"), I("6", "bg", "analytics")];
-  it("the own source first, then the competitors in their order; inside a company by name", () => {
-    expect(orderUnifyItems(items, ORDER).map((i) => i.id)).toEqual(["1", "2", "3", "4", "6", "5"]);
-  });
-  it("does not depend on the order the items are loaded in", () => {
-    const shuffled = [items[3], items[0], items[5], items[2], items[4], items[1]];
-    expect(orderUnifyItems(shuffled, ORDER).map((i) => i.id)).toEqual(orderUnifyItems(items, ORDER).map((i) => i.id));
-  });
-  it("two items of one company with the same name are ordered by id", () => {
-    expect(orderUnifyItems([I("b", "us", "SSO"), I("a", "us", "SSO")], ORDER).map((i) => i.id)).toEqual(["a", "b"]);
-  });
-  it("an item of a company that is not in the order comes last", () => {
-    expect(orderUnifyItems([{ ...I("x", "zz", "Alpha"), company: "Other" }, I("1", "us", "Zeta")], ORDER).map((i) => i.id)).toEqual(["1", "x"]);
+describe("codes: short, closed, the same for the same lists", () => {
+  it("a company's letter, a capability's place in its list, a feature's place under it", () => {
+    expect([0, 1, 25, 26, 27].map(companyLetter)).toEqual(["A", "B", "Z", "AA", "AB"]);
+    expect(capabilityCode(0, 0)).toBe("A1");
+    expect(capabilityCode(2, 11)).toBe("C12");
+    expect(featureCode("C12", 0)).toBe("C12.1");
   });
 });
 
-describe("batches", () => {
-  const todo = Array.from({ length: 1500 }, (_, n) => `i${n}`);
-  it("a batch is the first items that are not placed, in order", () => {
-    expect(nextUnifyBatch(todo)).toEqual(todo.slice(0, UNIFY_BATCH));
-    expect(nextUnifyBatch(todo.slice(0, 7))).toEqual(todo.slice(0, 7));
-    expect(nextUnifyBatch(todo, 3)).toEqual(["i0", "i1", "i2"]);
+describe("A. capabilities → rows", () => {
+  const caps = [cap(0, 1, "Idea portal"), cap(0, 2, "Roadmaps"), cap(1, 1, "Feedback hub"), cap(2, 1, "Insights"), cap(2, 2, "Timeline roadmap")];
+  it("the batches are slices of ALL capabilities in the fixed order — placed or not — so a run that continues makes the same calls", () => {
+    expect(UNIFY_CAPABILITY_BATCH).toBe(80);
+    expect(capabilityBatches(caps, 2).map((b) => b.map((c) => c.code))).toEqual([["A1", "A2"], ["B1", "C1"], ["C2"]]);
+    const placed = caps.map((c, i) => (i < 3 ? { ...c, row: R("Feedback Collection") } : c));
+    expect(capabilityBatches(placed, 2).map((b) => b.map((c) => c.code))).toEqual([["A1", "A2"], ["B1", "C1"], ["C2"]]);
+    // Companies whose capabilities fit one call are unified in ONE call.
+    expect(capabilityBatches(caps)).toHaveLength(1);
   });
-  it("1,500 items of six companies are 25 calls of 60", () => {
-    expect(UNIFY_BATCH).toBe(60);
-    expect(unifyCalls(1500)).toBe(25);
-    expect(unifyCalls(61)).toBe(2);
-    expect(unifyCalls(0)).toBe(0);
+  it("the same capability under different names is ONE row; a capability only one company has is a row of its own", () => {
+    const parsed = parseUnifyCapabilities({ rows: [
+      { row: "new", name: "Customer Feedback Collection", description: "Collects feedback in one place.", capabilities: ["A1", "B1", "C1"] },
+      { row: "new", name: "Product Roadmaps", description: "Shows what is built next.", capabilities: ["A2", "C2"] },
+    ] }, caps, []);
+    expect(parsed).toMatchObject({ problems: [], twice: [], missing: [] });
+    const rows = rowsOf(caps.map((c) => ({ ...c, row: parsed.assignments.find((a) => a.itemId === c.id)!.row })));
+    expect(rows.map((r) => [r.code, r.name, r.members.map((m) => m.code)])).toEqual([["R1", "Customer Feedback Collection", ["A1", "B1", "C1"]], ["R2", "Product Roadmaps", ["A2", "C2"]]]);
   });
-  it("entries are coded I1 … in the order of the batch", () => {
-    expect(unifyEntries([I("a", "us", "A"), I("b", "en", "B")]).map((e) => [e.code, e.item.id])).toEqual([["I1", "a"], ["I2", "b"]]);
-  });
-});
-
-describe("rows made so far", () => {
-  const items = orderUnifyItems([
-    I("1", "us", "Idea portal", ROW("Feedback Collection")),
-    I("2", "us", "Roadmaps", ROW("Product Roadmaps")),
-    I("3", "en", "Feedback inbox", ROW("feedback collection", "Another description.")),
-    I("4", "en", "Unlimited seats"),
-    I("5", "bg", "Roadmap views", ROW("Product Roadmaps")),
-  ], ORDER);
-  const rows = rowsOf(items);
-  it("a row is identified by its normalized name; its code and its text follow from its first item in the fixed order", () => {
-    expect(rows.map((r) => [r.code, r.name, r.description])).toEqual([
-      ["R1", "Feedback Collection", "Feedback Collection description."],
-      ["R2", "Product Roadmaps", "Product Roadmaps description."],
-    ]);
-    expect(rowKey("Feedback  Collection™")).toBe(rowKey("feedback collection"));
-  });
-  it("every company's own wording stays behind the row", () => {
-    expect(rows[0].members.map((m) => [m.company, m.name, m.isOwn])).toEqual([["Aha", "Idea portal", true], ["Enterpret", "Feedback inbox", false]]);
-    expect(rows[1].members.map((m) => m.id)).toEqual(["2", "5"]);
-  });
-  it("an item with no row is on no row", () => {
-    expect(rows.flatMap((r) => r.members.map((m) => m.id))).not.toContain("4");
-  });
-});
-
-describe("the row naming input", () => {
-  const placed = orderUnifyItems([I("1", "us", "Idea portal", ROW("Feedback Collection", "Collects customer feedback in one place.")), I("2", "en", "Feedback inbox", ROW("Feedback Collection"))], ORDER);
-  const rows = rowsOf(placed);
-  const entries = unifyEntries([I("3", "bg", "Idea | intake", null, "Captures requests from Slack and email."), I("4", "us", "Roadmaps")]);
-  const text = renderUnify("Aha", rows, entries);
-  it("shows every row with its code, name, description and how many companies are on it", () => {
-    expect(text).toContain("R1 | Feedback Collection | Collects customer feedback in one place. | 2 companies");
-  });
-  it("shows every entry with its code, the company, the company's own name and what it does — the organization's own entries marked", () => {
-    expect(text).toContain("I1 | Bagel AI | Idea / intake | Captures requests from Slack and email.");
-    expect(text).toContain("I2 | Aha (the organization itself) | Roadmaps | (the page does not say what it does)");
-    expect(text).toContain("THE ORGANIZATION: Aha");
-  });
-  it("with no row yet it says so", () => {
-    expect(renderUnify("Aha", [], entries)).toContain("ROWS SO FAR:\nnone yet");
-  });
-  it("the prompt asks for the market's most common term, never a brand, and names what is not a capability", () => {
-    expect(UNIFY_SYSTEM_PROMPT).toContain("market's most common term");
-    expect(UNIFY_SYSTEM_PROMPT).toContain("never a product, brand or marketing name");
-    expect(UNIFY_SYSTEM_PROMPT).toContain("not necessarily the wording of any one company");
-    expect(UNIFY_SYSTEM_PROMPT).toContain("unlimited seats");
-    expect(UNIFY_SYSTEM_PROMPT).toContain("End-to-End AI Product Management Assistant");
-    expect(UNIFY_SYSTEM_PROMPT).toContain("GDPR compliance");
-    expect(UNIFY_REVIEW_SYSTEM_PROMPT).toContain("a buyer would list as a requirement");
-  });
-  it("the entry codes ride in the schema as a closed set", () => {
-    const tool = unifyTool(["I1", "I2"], ["R1"]) as { input_schema: { properties: { entries: { items: { properties: { entry: { enum?: string[] } } } } } } };
-    expect(tool.input_schema.properties.entries.items.properties.entry.enum).toEqual(["I1", "I2"]);
-  });
-});
-
-describe("the answer of a unify call", () => {
-  const rows = rowsOf(orderUnifyItems([I("1", "us", "Idea portal", ROW("Feedback Collection")), I("2", "us", "Roadmaps", ROW("Product Roadmaps"))], ORDER));
-  const entries = unifyEntries([I("10", "en", "Feedback inbox"), I("11", "en", "AI summaries"), I("12", "en", "Unlimited seats"), I("13", "en", "Theme detection")]);
-  const parse = (v: unknown) => parseUnify(v, entries, rows);
-
-  it("an entry goes on a row that was given, on a row the answer creates, or on none", () => {
-    const r = parse({
-      rows: [{ code: "N1", name: "AI Feedback Summaries", description: "Summarizes feedback with AI." }],
-      entries: [{ entry: "I1", row: "R1" }, { entry: "I2", row: "N1" }, { entry: "I3", row: "none" }, { entry: "I4", row: "N1" }],
-    });
-    expect(r.problems).toEqual([]);
-    expect(r.assignments).toEqual([
-      { itemId: "10", row: { name: "Feedback Collection", description: "Feedback Collection description." } },
-      { itemId: "11", row: { name: "AI Feedback Summaries", description: "Summarizes feedback with AI." } },
-      { itemId: "12", row: null },
-      { itemId: "13", row: { name: "AI Feedback Summaries", description: "Summarizes feedback with AI." } },
-    ]);
-  });
-  it("an entry code that was not asked makes the answer unusable", () => {
-    const r = parse({ rows: [], entries: [{ entry: "I1", row: "R1" }, { entry: "I9", row: "R1" }] });
-    expect(r.problems).toHaveLength(1);
-    expect(r.problems[0]).toContain("I9");
-  });
-  it("a row code that was neither given nor created in the answer makes the answer unusable", () => {
-    expect(parse({ rows: [], entries: [{ entry: "I1", row: "R7" }] }).problems[0]).toContain("R7");
-    expect(parse({ rows: [], entries: [{ entry: "I1", row: "N1" }] }).problems[0]).toContain("N1");
-    expect(parse({ rows: [], entries: [{ entry: "I1", row: "Feedback Collection" }] }).problems).toHaveLength(1);
-  });
-  it("a new row needs a code of its own — not empty, not a code in use — and a name", () => {
-    expect(parse({ rows: [{ code: "R1", name: "X", description: "" }], entries: [] }).problems[0]).toContain("R1");
-    expect(parse({ rows: [{ code: "", name: "X", description: "" }], entries: [] }).problems[0]).toContain("no code");
-    expect(parse({ rows: [{ code: "none", name: "X", description: "" }], entries: [] }).problems[0]).toContain("no code");
-    // Any other code the answer declares is its own: the reference is still checked against what was declared.
-    const own = parse({ rows: [{ code: "R9", name: "Theme Detection", description: "Finds themes." }], entries: [{ entry: "I4", row: "R9" }] });
-    expect(own.problems).toEqual([]);
-    expect(own.assignments).toEqual([{ itemId: "13", row: { name: "Theme Detection", description: "Finds themes." } }]);
-    expect(parse({ rows: [{ code: "N1", name: "  ", description: "d" }], entries: [] }).problems[0]).toContain("no name");
-    expect(parse({ rows: [{ code: "N1", name: "A", description: "" }, { code: "N1", name: "B", description: "" }], entries: [] }).problems[0]).toContain("twice");
-  });
-  it("a new row with the normalized name of a row that exists IS that row", () => {
-    const r = parse({ rows: [{ code: "N1", name: "feedback   collection", description: "Other words." }], entries: [{ entry: "I1", row: "N1" }] });
-    expect(r.problems).toEqual([]);
-    expect(r.assignments[0].row).toEqual({ name: "Feedback Collection", description: "Feedback Collection description." });
-  });
-  it("two new rows with the same normalized name are one row: the first", () => {
-    const r = parse({
-      rows: [{ code: "N1", name: "Theme Detection", description: "First." }, { code: "N2", name: "theme detection", description: "Second." }],
-      entries: [{ entry: "I2", row: "N1" }, { entry: "I4", row: "N2" }],
-    });
-    expect(r.assignments.map((a) => a.row)).toEqual([{ name: "Theme Detection", description: "First." }, { name: "Theme Detection", description: "First." }]);
-  });
-  it("an entry answered twice keeps its first answer; an entry left out is not in the result", () => {
-    const r = parse({ rows: [], entries: [{ entry: "I1", row: "R1" }, { entry: "I1", row: "R2" }] });
-    expect(r.problems).toEqual([]);
-    expect(r.assignments).toEqual([{ itemId: "10", row: { name: "Feedback Collection", description: "Feedback Collection description." } }]);
-  });
-  it("a new row no entry was put on is dropped and counted", () => {
-    const r = parse({ rows: [{ code: "N1", name: "Orphan", description: "" }], entries: [{ entry: "I1", row: "R1" }] });
-    expect(r.unusedRows).toBe(1);
-    expect(r.assignments).toHaveLength(1);
-  });
-  it("an empty row is none; an empty answer places nothing", () => {
-    expect(parse({ rows: [], entries: [{ entry: "I3", row: "" }] }).assignments).toEqual([{ itemId: "12", row: null }]);
-    expect(parse({}).assignments).toEqual([]);
-    expect(parse(null).problems).toEqual([]);
-  });
-});
-
-describe("an item that is no capability", () => {
-  const item = (over: Partial<MatchItem>): MatchItem => ({ id: "i", kind: "capability", key: "c:x", parentItemId: null, capabilityId: null, featureId: null, placement: null, matchedBy: null, matchedAt: null, ...over });
-  it("is a saved decision: settled, never repaired, never asked again", () => {
-    const excluded = item({ matchedBy: EXCLUDED, matchedAt: new Date() });
-    expect(isSettled(excluded)).toBe(true);
-    expect(needsRepair(excluded)).toBe(false);
-    expect(matchTodo([excluded])).toEqual([]);
-  });
-  it("an item whose row was erased is still repaired", () => {
-    expect(needsRepair(item({ matchedBy: "ai", matchedAt: new Date() }))).toBe(true);
-  });
-});
-
-describe("the review of all rows", () => {
-  const rows = rowsOf(orderUnifyItems([
-    I("1", "us", "Enterprise security", ROW("Enterprise Security and Compliance", "Keeps data safe.")),
-    I("2", "us", "GDPR", ROW("GDPR Compliance", "Meets GDPR.")),
-    I("3", "en", "Security controls", ROW("Operational Security and Compliance Controls", "Controls.")),
-    I("4", "en", "CCPA", ROW("CCPA Compliance", "Meets CCPA.")),
-    I("5", "en", "The AI assistant", ROW("End-to-End AI Product Management Assistant", "Everything.")),
-    I("6", "bg", "Idea Box", ROW("Idea Box", "Collects ideas.")),
-    I("7", "bg", "GDPR + CCPA", ROW("GDPR and CCPA Compliance", "Both.")),
-  ], ORDER));
-  // In the fixed order (the own source first; inside a company by name):
-  // R1 Enterprise…, R2 GDPR, R3 CCPA, R4 Operational…, R5 End-to-End…, R6 GDPR and CCPA, R7 Idea Box
-  const key = (code: string) => rows.find((r) => r.code === code)!.key;
-
-  it("the rows are coded in the fixed order of their first item", () => {
-    expect(rows.map((r) => `${r.code} ${r.name}`)).toEqual([
-      "R1 Enterprise Security and Compliance", "R2 GDPR Compliance", "R3 CCPA Compliance", "R4 Operational Security and Compliance Controls",
-      "R5 End-to-End AI Product Management Assistant", "R6 GDPR and CCPA Compliance", "R7 Idea Box",
-    ]);
-  });
-  it("renders every row with what each company calls it", () => {
-    const text = renderUnifyReview("Aha", rows);
-    expect(text).toContain('R1 | Enterprise Security and Compliance | Keeps data safe. | Aha (the organization itself): "Enterprise security"');
-    expect(text).toContain('R4 | Operational Security and Compliance Controls | Controls. | Enterpret: "Security controls"');
-    const tool = unifyReviewTool(rows.map((r) => r.code)) as { input_schema: { properties: { drop: { items: { enum?: string[] } } } } };
-    expect(tool.input_schema.properties.drop.items.enum).toEqual(["R1", "R2", "R3", "R4", "R5", "R6", "R7"]);
-  });
-  it("near-duplicate rows are merged into the first of them, an umbrella row is dropped, a brand name is renamed", () => {
-    const parsed = parseUnifyReview({
-      merge: [{ rows: ["R4", "R1"], name: "Security and Compliance" }, { rows: ["R2", "R3", "R6"], name: "Privacy Regulation Compliance" }],
-      drop: ["R5"],
-      rename: [{ row: "R7", name: "Idea Management" }],
-    }, rows);
+  it("a later call puts a capability on a row that exists (its code) or makes a new one", () => {
+    const soFar = rowsOf([{ ...caps[0], row: R("Feedback Collection") }, { ...caps[1], row: R("Product Roadmaps") }]);
+    const parsed = parseUnifyCapabilities({ rows: [{ row: "R1", name: "", description: "", capabilities: ["B1", "C1"] }, { row: "R2", name: "", description: "", capabilities: ["C2"] }] }, caps.slice(2), soFar);
     expect(parsed.problems).toEqual([]);
-    expect(parsed.merges).toEqual([
-      { keys: [key("R1"), key("R4")], name: "Security and Compliance" },
-      { keys: [key("R2"), key("R3"), key("R6")], name: "Privacy Regulation Compliance" },
-    ]);
-    const plan = planUnifyReview(parsed, rows);
-    expect(plan.get(key("R1"))).toEqual({ name: "Security and Compliance", description: "Keeps data safe." });
-    expect(plan.get(key("R4"))).toEqual({ name: "Security and Compliance", description: "Keeps data safe." });
-    expect(plan.get(key("R2"))).toEqual({ name: "Privacy Regulation Compliance", description: "Meets GDPR." });
-    expect(plan.get(key("R3"))).toEqual({ name: "Privacy Regulation Compliance", description: "Meets GDPR." });
-    expect(plan.get(key("R6"))).toEqual({ name: "Privacy Regulation Compliance", description: "Meets GDPR." });
-    expect(plan.get(key("R5"))).toBeNull();
-    expect(plan.get(key("R7"))).toEqual({ name: "Idea Management", description: "Collects ideas." });
+    expect(parsed.assignments.map((a) => [a.itemId, a.row.name])).toEqual([["b1", "Feedback Collection"], ["c1", "Feedback Collection"], ["c2", "Product Roadmaps"]]);
   });
-  it("a row code that was not given makes the answer unusable", () => {
-    expect(parseUnifyReview({ merge: [{ rows: ["R1", "R99"], name: "" }], drop: [], rename: [] }, rows).problems[0]).toContain("R99");
-    expect(parseUnifyReview({ merge: [], drop: ["X"], rename: [] }, rows).problems).toHaveLength(1);
-    expect(parseUnifyReview({ merge: [], drop: [], rename: [{ row: "R0", name: "A" }] }, rows).problems).toHaveLength(1);
+  it("a new row with the normalized name of a row that exists — or of an earlier new row of the answer — IS that row", () => {
+    const soFar = rowsOf([{ ...caps[0], row: R("Feedback Collection") }]);
+    const parsed = parseUnifyCapabilities({ rows: [{ row: "new", name: "feedback  COLLECTION", description: "again", capabilities: ["B1"] }, { row: "new", name: "Roadmaps", description: "one", capabilities: ["A2"] }, { row: "", name: "ROADMAPS", description: "two", capabilities: ["C2"] }] }, caps.slice(1), soFar);
+    expect(parsed.assignments.map((a) => [a.itemId, a.row.name, a.row.description])).toEqual([["b1", "Feedback Collection", "Feedback Collection."], ["a2", "Roadmaps", "one"], ["c2", "Roadmaps", "one"]]);
   });
-  it("rows the review does not name stay as they are; an empty answer changes nothing", () => {
-    expect(planUnifyReview(parseUnifyReview({ merge: [], drop: [], rename: [] }, rows), rows).size).toBe(0);
-    expect(planUnifyReview(parseUnifyReview({ merge: [{ rows: ["R1", "R4"], name: "" }], drop: [], rename: [] }, rows), rows).has(key("R7"))).toBe(false);
+  it("EXACTLY ONCE — a code that was not given makes the answer unusable; a code used twice keeps its first row; a code left out is asked again", () => {
+    const unknown = parseUnifyCapabilities({ rows: [{ row: "new", name: "X", description: "", capabilities: ["A1", "Z9"] }, { row: "R7", name: "", description: "", capabilities: ["A2"] }, { row: "new", name: "", description: "", capabilities: ["B1"] }] }, caps, []);
+    expect(unknown.problems).toEqual(['the capability code "Z9" was not given', 'the row "R7" is neither a row that was given nor "new"', "a new row has no name"]);
+    const twice = parseUnifyCapabilities({ rows: [{ row: "new", name: "X", description: "", capabilities: ["A1", "A2"] }, { row: "new", name: "Y", description: "", capabilities: ["A1", "B1"] }] }, caps, []);
+    expect(twice.problems).toEqual([]);
+    expect(twice.twice).toEqual(["A1"]);
+    expect(twice.assignments.map((a) => [a.itemId, a.row.name])).toEqual([["a1", "X"], ["a2", "X"], ["b1", "Y"]]);
+    expect(twice.missing).toEqual(["C1", "C2"]);
   });
-  it("a merge with no name keeps the first row's name", () => {
-    const plan = planUnifyReview(parseUnifyReview({ merge: [{ rows: ["R4", "R1"], name: "" }], drop: [], rename: [] }, rows), rows);
-    expect(plan.has(key("R1"))).toBe(false);
-    expect(plan.get(key("R4"))).toEqual({ name: "Enterprise Security and Compliance", description: "Keeps data safe." });
+  it("never throws on a malformed answer: everything is left out and asked again", () => {
+    for (const bad of [null, "x", {}, { rows: "no" }, { rows: [null, 7, { capabilities: "A1" }] }]) expect(parseUnifyCapabilities(bad, caps, []).assignments).toEqual([]);
   });
-  it("a dropped row leaves every other list; a row stays in its first merge group; a group of one is no merge", () => {
-    const parsed = parseUnifyReview({ merge: [{ rows: ["R1", "R5"], name: "A" }, { rows: ["R2", "R3"], name: "B" }, { rows: ["R3", "R6"], name: "C" }], drop: ["R5"], rename: [{ row: "R5", name: "Z" }, { row: "R2", name: "Y" }] }, rows);
-    expect(parsed.merges).toEqual([{ keys: [key("R2"), key("R3")], name: "B" }]);
-    expect(parsed.drops).toEqual([key("R5")]);
-    expect(parsed.renames).toEqual([]);
+  it("the call shows the rows so far, then the capabilities company by company — the organization marked — each with what it does and some of its features", () => {
+    const text = renderUnifyCapabilities("Aha", rowsOf([{ ...caps[0], row: R("Feedback Collection") }]), [cap(1, 1, "Feedback hub", null, ["Slack intake", "Email intake"]), caps[3]]);
+    expect(text).toBe([
+      "THE ORGANIZATION: Aha", "",
+      "ROWS SO FAR:", "R1 | Feedback Collection — Feedback Collection. | on it: Aha", "",
+      "CAPABILITIES TO PLACE:",
+      "COMPANY Bagel AI", "B1 | Feedback hub — Feedback hub does its thing. | features: Slack intake · Email intake", "",
+      "COMPANY Productboard", "C1 | Insights — Insights does its thing.",
+    ].join("\n"));
+    expect(renderUnifyCapabilities("Aha", [], [caps[0]])).toContain("COMPANY Aha (the organization itself)");
+    expect(renderUnifyCapabilities("Aha", [], [caps[0]])).not.toContain("ROWS SO FAR");
   });
-  it("a new name that is another row's name joins the two rows: the earlier row stays", () => {
-    // The later row takes the earlier row's name: it joins it, and the earlier row is unchanged.
-    const plan = planUnifyReview(parseUnifyReview({ merge: [], drop: [], rename: [{ row: "R6", name: "gdpr compliance" }] }, rows), rows);
-    expect(plan.get(key("R6"))).toEqual({ name: "GDPR Compliance", description: "Meets GDPR." });
-    expect(plan.has(key("R2"))).toBe(false);
-    // The earlier row takes the later row's name: the later row joins it under that name.
-    const up = planUnifyReview(parseUnifyReview({ merge: [], drop: [], rename: [{ row: "R2", name: "CCPA Compliance" }] }, rows), rows);
-    expect(up.get(key("R2"))).toEqual({ name: "CCPA Compliance", description: "Meets GDPR." });
-    expect(up.get(key("R3"))).toEqual({ name: "CCPA Compliance", description: "Meets GDPR." });
+  it("the prompt: one row per capability of the market, the market's term, every code exactly once — and the size of a row", () => {
+    for (const line of ["it is ONE row", "the term the market uses for it", "Use every capability code exactly once", '"Bluetooth connection" is a capability (a row)', "Never build a wide row to hold capabilities that are different things"]) expect(UNIFY_CAPABILITIES_PROMPT).toContain(line);
+    expect(JSON.stringify(unifyCapabilitiesTool(["A1", "B1"], ["R1"]))).toContain('"enum":["A1","B1"]');
   });
-  it("the result never holds two rows with one name", () => {
-    const parsed = parseUnifyReview({ merge: [{ rows: ["R1", "R4"], name: "Compliance" }, { rows: ["R2", "R3"], name: "compliance" }], drop: [], rename: [{ row: "R6", name: "COMPLIANCE" }] }, rows);
-    const plan = planUnifyReview(parsed, rows);
-    const after = rows.map((r) => (plan.has(r.key) ? plan.get(r.key) : { name: r.name, description: r.description })).filter((r): r is { name: string; description: string } => r != null);
-    const names = new Map<string, Set<string>>();
-    for (const r of after) names.set(rowKey(r.name), (names.get(rowKey(r.name)) ?? new Set()).add(r.name));
-    for (const spellings of names.values()) expect(spellings.size).toBe(1);
-    expect(plan.get(key("R6"))).toEqual({ name: "Compliance", description: "Keeps data safe." });
+});
+
+describe("B. the review — only when the rows were made in more than one call", () => {
+  const rows = rowsOf([cap(0, 1, "Idea portal", R("Feedback Collection")), cap(1, 1, "Feedback hub", R("Feedback Intake")), cap(2, 1, "Roadmap", R("Product Roadmaps")), cap(2, 2, "Timeline", R("Roadmap Planning"))]);
+  it("rows that are the same capability are merged into the first of them, under the name the group keeps", () => {
+    const parsed = parseUnifyReview({ merge: [{ rows: ["R2", "R1"], name: "Customer Feedback Collection" }] }, rows);
+    expect(parsed).toEqual({ merges: [{ keys: ["feedback collection", "feedback intake"], name: "Customer Feedback Collection" }], problems: [] });
+    expect([...planUnifyReview(parsed.merges, rows)]).toEqual([["feedback collection", { name: "Customer Feedback Collection", description: "Feedback Collection." }], ["feedback intake", { name: "Customer Feedback Collection", description: "Feedback Collection." }]]);
+  });
+  it("a code that was not given makes the answer unusable; a row in two groups stays in the first; a group of one is no merge", () => {
+    expect(parseUnifyReview({ merge: [{ rows: ["R1", "R9"], name: "X" }] }, rows).problems).toEqual(['the row code "R9" was not given']);
+    expect(parseUnifyReview({ merge: [{ rows: ["R1", "R2"], name: "A" }, { rows: ["R2", "R3"], name: "B" }, { rows: ["R4"], name: "C" }] }, rows).merges).toEqual([{ keys: ["feedback collection", "feedback intake"], name: "A" }]);
+  });
+  it("a group that takes the name of another row joins that row too: never two rows with one name", () => {
+    const plan = planUnifyReview([{ keys: ["product roadmaps", "roadmap planning"], name: "Feedback Collection" }], rows);
+    expect(plan.get("product roadmaps")).toEqual({ name: "Feedback Collection", description: "Feedback Collection." });
+    expect(plan.get("roadmap planning")).toEqual({ name: "Feedback Collection", description: "Feedback Collection." });
+    expect(plan.has("feedback collection")).toBe(false);
+  });
+  it("an empty answer changes nothing", () => {
+    expect(planUnifyReview(parseUnifyReview({ merge: [] }, rows).merges, rows).size).toBe(0);
+    expect(UNIFY_REVIEW_PROMPT).toContain("an empty list is a correct answer");
+    expect(renderUnifyReview("Aha", rows).split("\n")[3]).toBe('R1 | Feedback Collection — Feedback Collection. | Aha (the organization itself): "Idea portal"');
+  });
+});
+
+describe("C. features → feature rows", () => {
+  const a1 = cap(0, 1, "Integrations", R("Integrations"));
+  const a2 = cap(0, 2, "AI assistant", R("AI Assistant"));
+  const b1 = cap(1, 1, "Connectors", R("Integrations"));
+  const b2 = cap(1, 2, "Bagel MCP", R("MCP Server"));
+  const caps = [a1, a2, b1, b2];
+  const rows = rowsOf(caps);
+  const [integrations, assistant, mcp] = rows;
+  const jira = feat(a1, 1, "Jira sync");
+  const mcpServer = feat(a1, 2, "MCP server");
+  const jiraB = feat(b1, 1, "Jira two-way sync");
+  const chat = feat(a2, 1, "Chat with your data");
+  const groups: UnifyFeatureGroup[] = [{ row: integrations, featureRows: [], entries: [jira, mcpServer, jiraB] }, { row: assistant, featureRows: [], entries: [chat] }];
+
+  it("the batches are whole rows in table order, cut over ALL features — a run that continues makes the same calls; a row with none is in no call", () => {
+    expect(UNIFY_FEATURE_BATCH).toBe(120);
+    const sizes = [{ key: "r1", features: 50 }, { key: "r2", features: 60 }, { key: "r3", features: 0 }, { key: "r4", features: 30 }, { key: "r5", features: 200 }, { key: "r6", features: 5 }];
+    expect(featureBatches(sizes, 120)).toEqual([["r1", "r2"], ["r4"], ["r5"], ["r6"]]);
+    expect(featureBatches(sizes, 120)).toEqual(featureBatches([...sizes], 120));
+    expect(featureBatches([], 120)).toEqual([]);
+  });
+  it("the same feature at two companies is ONE feature row with both codes", () => {
+    const parsed = parseUnifyFeatures({ feature_rows: [
+      { row: "R1", feature_row: "new", name: "Jira Issue Sync", description: "Keeps Jira issues and ideas in step.", features: ["A1.1", "B1.1"] },
+      { row: "R2", feature_row: "new", name: "Conversational Q&A", description: "Answers questions in a chat.", features: ["A2.1"] },
+    ], moved: [{ feature: "A1.2", row: "R3" }] }, groups, rows, true);
+    expect(parsed).toMatchObject({ problems: [], twice: [], missing: [] });
+    expect(parsed.placements.map((p) => [p.itemId, p.rowKey, p.feature.name])).toEqual([["a1.1", "integrations", "Jira Issue Sync"], ["b1.1", "integrations", "Jira Issue Sync"], ["a2.1", "ai assistant", "Conversational Q&A"]]);
+  });
+  it("a feature that clearly belongs to another row is handed to it — the MCP server listed under Integrations goes to the MCP row", () => {
+    const parsed = parseUnifyFeatures({ feature_rows: [{ row: "R1", feature_row: "new", name: "Jira Issue Sync", description: "", features: ["A1.1", "B1.1"] }, { row: "R2", feature_row: "new", name: "Chat", description: "", features: ["A2.1"] }], moved: [{ feature: "A1.2", row: "R3" }] }, groups, rows, true);
+    expect(parsed.moves).toEqual([{ itemId: "a1.2", row: { name: "MCP Server", description: "MCP Server." } }]);
+    expect(mcp.code).toBe("R3");
+  });
+  it("inside one call a feature may be put straight under another row of the call", () => {
+    const parsed = parseUnifyFeatures({ feature_rows: [{ row: "R2", feature_row: "new", name: "Assistant For Jira", description: "", features: ["A1.1"] }, { row: "R1", feature_row: "new", name: "Other", description: "", features: ["A1.2", "B1.1", "A2.1"] }], moved: [] }, groups, rows, true);
+    expect(parsed.placements.find((p) => p.itemId === "a1.1")?.rowKey).toBe("ai assistant");
+    expect(parsed.missing).toEqual([]);
+  });
+  it("a feature joins a feature row the row already has (its code), or a new one; a new one with an existing name IS that one", () => {
+    const placedJira = { ...jira, placed: { row: "Integrations", name: "Jira Issue Sync", description: "Keeps Jira in step." } };
+    const has = featureRowsOf(integrations, [placedJira]);
+    expect(has).toEqual([{ code: "R1.F1", key: "jira issue sync", name: "Jira Issue Sync", description: "Keeps Jira in step." }]);
+    const group: UnifyFeatureGroup[] = [{ row: integrations, featureRows: has, entries: [jiraB, mcpServer] }];
+    const byCode = parseUnifyFeatures({ feature_rows: [{ row: "R1", feature_row: "R1.F1", name: "", description: "", features: ["B1.1"] }, { row: "R1", feature_row: "new", name: "JIRA issue  sync", description: "dup", features: ["A1.2"] }] }, group, rows, false);
+    expect(byCode.problems).toEqual([]);
+    expect(byCode.placements.map((p) => [p.itemId, p.feature.name, p.feature.description])).toEqual([["b1.1", "Jira Issue Sync", "Keeps Jira in step."], ["a1.2", "Jira Issue Sync", "Keeps Jira in step."]]);
+  });
+  it("EXACTLY ONCE — unknown codes make the answer unusable; a code used twice keeps its first place; a code left out is asked again", () => {
+    const bad = parseUnifyFeatures({ feature_rows: [{ row: "R9", feature_row: "new", name: "X", description: "", features: ["A1.1"] }, { row: "R1", feature_row: "R2.F1", name: "", description: "", features: ["A1.1"] }, { row: "R1", feature_row: "new", name: "", description: "", features: ["A1.1"] }, { row: "R1", feature_row: "new", name: "Y", description: "", features: ["Q7"] }], moved: [{ feature: "A1.2", row: "R77" }] }, groups, rows, true);
+    expect(bad.problems).toEqual(['the row "R9" is not one of the rows to fill', 'the feature row "R2.F1" is neither a feature row of R1 nor "new"', "a new feature row under R1 has no name", 'the feature code "Q7" was not given', 'feature A1.2 was moved to "R77", which is no row of the table']);
+    const twice = parseUnifyFeatures({ feature_rows: [{ row: "R1", feature_row: "new", name: "X", description: "", features: ["A1.1", "A1.1"] }], moved: [{ feature: "A1.1", row: "R3" }] }, groups, rows, true);
+    expect(twice.twice).toEqual(["A1.1"]);
+    expect(twice.placements).toHaveLength(1);
+    expect(twice.moves).toEqual([]);
+    expect(twice.missing).toEqual(["A1.2", "B1.1", "A2.1"]);
+  });
+  it("the second round: a moved feature stays — an answer that moves it again places nothing, and it is asked again", () => {
+    const moved = { ...mcpServer, movedTo: "MCP Server" };
+    const group: UnifyFeatureGroup[] = [{ row: mcp, featureRows: [], entries: [moved] }];
+    const again = parseUnifyFeatures({ feature_rows: [], moved: [{ feature: "A1.2", row: "R1" }] }, group, rows, false);
+    expect(again).toMatchObject({ placements: [], moves: [], problems: [], missing: ["A1.2"] });
+    expect(parseUnifyFeatures({ feature_rows: [{ row: "R3", feature_row: "new", name: "MCP Server Access", description: "", features: ["A1.2"] }] }, group, rows, false).placements).toHaveLength(1);
+    // A move to a row of the very call places nothing either: it should have been put there.
+    expect(parseUnifyFeatures({ feature_rows: [], moved: [{ feature: "A1.1", row: "R2" }] }, groups, rows, true)).toMatchObject({ moves: [], problems: [], missing: ["A1.1", "A1.2", "B1.1", "A2.1"] });
+    expect(JSON.stringify(unifyFeaturesTool(["A1.2"], ["R3"], [], false))).not.toContain('"moved"');
+    expect(JSON.stringify(unifyFeaturesTool(["A1.2"], ["R1"], ["R2", "R3"], true))).toContain('"moved"');
+    expect(UNIFY_MOVED_FEATURES_PROMPT).toContain("Every feature stays under the row it is shown with");
+  });
+  it("the call shows all rows, then per row to fill the feature rows it has and the features to place", () => {
+    const text = renderUnifyFeatures("Aha", rows, [{ row: integrations, featureRows: [{ code: "R1.F1", key: "k", name: "Jira Issue Sync", description: "Keeps Jira in step." }], entries: [jiraB] }], { allRowsShown: true });
+    expect(text).toBe([
+      "THE ORGANIZATION: Aha", "",
+      "ALL ROWS:", "R1 | Integrations — Integrations.", "R2 | AI Assistant — AI Assistant.", "R3 | MCP Server — MCP Server.", "",
+      "ROWS TO FILL:", "",
+      "ROW R1 | Integrations — Integrations.", " FEATURE ROWS IT HAS:", "  R1.F1 | Jira Issue Sync — Keeps Jira in step.", " FEATURES TO PLACE:", "  B1.1 | Bagel AI | Jira two-way sync — Jira two-way sync in detail.",
+    ].join("\n"));
+    expect(renderUnifyFeatures("Aha", rows, [{ row: mcp, featureRows: [], entries: [mcpServer] }], { allRowsShown: false })).not.toContain("ALL ROWS");
+  });
+  it("the prompt: one feature row per feature, every code exactly once, and a feature may sit under another row than its own capability", () => {
+    for (const line of ["is ONE feature row, with both codes", "unless it clearly belongs to another row", 'list the feature under "moved" with that row\'s code', "Use every feature code exactly once"]) expect(UNIFY_FEATURES_PROMPT).toContain(line);
+  });
+  it("the check before the table is built: every capability on one row, every feature on one feature row of a row that exists", () => {
+    const placed = [{ ...jira, placed: { row: "Integrations", name: "Jira Issue Sync", description: "" } }, { ...mcpServer, placed: { row: "MCP Server", name: "MCP Server Access", description: "" } }];
+    expect(checkUnified(caps, placed)).toEqual({ capabilitiesUnplaced: [], featuresUnplaced: [], featuresOnNoRow: [] });
+    expect(checkUnified([...caps, cap(2, 1, "Loose")], [...placed, chat, { ...jiraB, placed: { row: "A Row That Is Gone", name: "X", description: "" } }])).toEqual({ capabilitiesUnplaced: ["C1"], featuresUnplaced: ["A2.1"], featuresOnNoRow: ["B1.1"] });
   });
 });

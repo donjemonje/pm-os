@@ -11,6 +11,7 @@ import {
   LABEL_RULES,
   MAP_OPENING_CHARS,
   MAP_SKIM_CHARS,
+  PAGE_PICK_LABELS,
   pickReadable,
   prefixPath,
   READ_ORDER,
@@ -169,16 +170,17 @@ describe("LABEL_RULES — label → what is read and how its evidence ranks", ()
     expect([...SECTION_LABELS]).toEqual(["product", "pricing", "compare", "help", "release_notes", "api_docs", "news", "noise"]);
     expect(Object.keys(LABEL_RULES).sort()).toEqual([...SECTION_LABELS].sort());
   });
-  it("help, release notes and API docs are read in full, like product, pricing and compare; news is weak; noise never", () => {
-    expect(LABEL_RULES.product).toEqual({ kind: "product", tier: "strong", read: "all" });
-    expect(LABEL_RULES.pricing).toEqual({ kind: "pricing", tier: "strong", read: "all" });
-    expect(LABEL_RULES.compare).toEqual({ kind: "content", tier: "strong", read: "all" });
-    for (const l of ["help", "release_notes", "api_docs"] as const) expect(LABEL_RULES[l], l).toEqual({ kind: "docs", tier: "strong", read: "all" });
-    expect(LABEL_RULES.news).toEqual({ kind: "news", tier: "weak", read: "weak" });
-    expect(LABEL_RULES.noise.read).toBe("never");
+  it("a label is a kind of content and how strong its evidence is — whether it is READ is not in this table: it is the setting \"What the analysis reads\"", () => {
+    expect(LABEL_RULES.product).toEqual({ kind: "product", tier: "strong" });
+    expect(LABEL_RULES.pricing).toEqual({ kind: "pricing", tier: "strong" });
+    expect(LABEL_RULES.compare).toEqual({ kind: "content", tier: "strong" });
+    for (const l of ["help", "release_notes", "api_docs"] as const) expect(LABEL_RULES[l], l).toEqual({ kind: "docs", tier: "strong" });
+    expect(LABEL_RULES.news).toEqual({ kind: "news", tier: "weak" });
+    expect(LABEL_RULES.noise).toEqual({ kind: "other", tier: "skip" });
+    for (const l of SECTION_LABELS) expect(Object.keys(LABEL_RULES[l]).sort(), l).toEqual(["kind", "tier"]);
   });
-  it("every label that is read maps to a kind the evidence ranking knows", () => {
-    for (const l of SECTION_LABELS) if (LABEL_RULES[l].read !== "never") expect(KIND_RANK, l).toContain(LABEL_RULES[l].kind);
+  it("every label that has a kind maps to a kind the evidence ranking knows", () => {
+    for (const l of SECTION_LABELS) if (LABEL_RULES[l].tier !== "skip") expect(KIND_RANK, l).toContain(LABEL_RULES[l].kind);
   });
 });
 
@@ -230,6 +232,18 @@ describe("ReadingPlan.read", () => {
     expect(read(plan, "/blog/report.pdf", doc)).toEqual({ label: "news", kind: "news", tier: "weak", role: "weak" });
     expect(read(plan, "/x.pdf", { ...doc, sourceType: "events" }).role).toBe("skip");
   });
+  it("release notes win over where they sit: a page of a help-center or blog section that the map named a release-notes page IS one", () => {
+    expect(read(plan, "/help/product-updates", { readAs: "release_notes" })).toEqual({ label: "release_notes", kind: "docs", tier: "strong", role: "broad" });
+    // A changelog published as a blog post is strong evidence, like any release note — not a weak news page.
+    expect(read(plan, "/blog/changelog-may", { readAs: "release_notes" })).toEqual({ label: "release_notes", kind: "docs", tier: "strong", role: "broad" });
+    // The map looked at it and it is not one, or it was never looked at: it is what its section is.
+    expect(read(plan, "/help/how-to", { readAs: "none" }).label).toBe("help");
+    expect(read(plan, "/blog/opinion").label).toBe("news");
+    // Only inside help-center and blog sections: the mark means nothing elsewhere.
+    expect(read(plan, "/prisma/x", { readAs: "release_notes" }).label).toBe("product");
+    expect(read(plan, "/customers/x", { readAs: "release_notes" }).role).toBe("skip");
+    expect([...PAGE_PICK_LABELS]).toEqual(["help", "news"]);
+  });
   it("a saved label outside the closed set is no label", () => {
     expect(new ReadingPlan([{ sourceId: "web", prefix: `${HOST}/prisma`, label: "products" }]).size).toBe(0);
   });
@@ -238,12 +252,10 @@ describe("ReadingPlan.read", () => {
 describe("pickReadable", () => {
   const plan = planOf({ "/": "product", "/pricing": "pricing", "/blog": "news", "/about": "noise", "/features": "product", "/docs": "help" });
   const pages = [page("/pricing"), page("/blog/a"), page("/about"), page("/features/x"), page("/docs/old", { state: "removed" }), page("/docs/empty", { hasText: false }), page("/"), page("/docs/b", { state: "unlinked" }), page("/docs/b/deep"), page("/unlabeled")];
-  it("every page of a section that is read, sorted by address; removed, text-less, noise and unlabeled pages never; news only when the workspace reads weak pages", () => {
-    const picked = pickReadable(pages, plan, { readWeak: false });
-    expect(picked.map((p) => `${p.id}:${p.read.role}`)).toEqual(["/:broad", "/docs/b:broad", "/docs/b/deep:broad", "/features/x:broad", "/pricing:broad"]);
-    const withWeak = pickReadable(pages, plan, { readWeak: true });
-    expect(withWeak.map((p) => p.id)).toEqual(["/", "/blog/a", "/docs/b", "/docs/b/deep", "/features/x", "/pricing"]);
-    expect(withWeak.find((p) => p.id === "/blog/a")?.read.tier).toBe("weak");
+  it("every page that has a kind, sorted by address — news included: whether a kind is read is the setting's; removed, text-less, noise and unlabeled pages never", () => {
+    const picked = pickReadable(pages, plan);
+    expect(picked.map((p) => `${p.id}:${p.read.role}`)).toEqual(["/:broad", "/blog/a:weak", "/docs/b:broad", "/docs/b/deep:broad", "/features/x:broad", "/pricing:broad"]);
+    expect(picked.find((p) => p.id === "/blog/a")?.read.tier).toBe("weak");
   });
 });
 
@@ -267,13 +279,13 @@ describe("where a PM looks — the order pages are read in", () => {
   });
   it("the whole order: by kind of source, inside a kind by address", () => {
     const paths = ["/help/a/b", "/blog/a", "/prisma/b", "/", "/api", "/compare/z", "/pricing", "/help", "/prisma/a", "/compare/a", "/changelog/2026"];
-    const sorted = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan, { readWeak: true }));
+    const sorted = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan));
     expect(sorted.map((p) => p.id)).toEqual(["/changelog/2026", "/help", "/help/a/b", "/api", "/pricing", "/", "/prisma/a", "/prisma/b", "/compare/a", "/compare/z", "/blog/a"]);
   });
   it("deterministic: the same pages in any order give the same order", () => {
     const paths = ["/help/a/b", "/prisma/b", "/", "/api", "/pricing", "/help"];
-    const a = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan, { readWeak: false })).map((p) => p.id);
-    const b = sortByWhereAPmLooks(pickReadable([...paths].reverse().map((p) => page(p)), plan, { readWeak: false })).map((p) => p.id);
+    const a = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan)).map((p) => p.id);
+    const b = sortByWhereAPmLooks(pickReadable([...paths].reverse().map((p) => page(p)), plan)).map((p) => p.id);
     expect(a).toEqual(b);
   });
 });

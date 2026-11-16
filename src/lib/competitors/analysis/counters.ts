@@ -12,7 +12,15 @@ export interface Counters {
   mapSections: number;
   mapLabeled: number;
   mapCalls: number;
-  /** Going back for the gaps: the rounds this run made (set by the step) and the deep pages they chose. */
+  /** The map, page by page: pages of help-center and blog sections it looked at in this run, and the ones it named release notes. */
+  mapPagesAsked: number;
+  mapReleaseNotes: number;
+  /** The reading: the requests made (one per chunk of pages), and the second look's requests (one per chunk too). */
+  readRequests: number;
+  lookRequests: number;
+  /** Incidents (incidents.ts): answers that should never happen — each is kept on the run as a case. */
+  incidents: number;
+  /** RETIRED with the per-page reading (kept so an old run's stored counters still read): go-back rounds and pages. */
   goBackRounds: number;
   goBackPages: number;
   /** The run's token budget (set at the claim), whether it was reached (1 / 0), and the pages left unread because of it (set by the steps of each walk, not added up). */
@@ -33,11 +41,13 @@ export interface Counters {
   thinkingTokens: number;
   waits: number;
   waitedMs: number;
+  /** Proofs stored (one per item of a company's list), proofs lost (their page changed or is gone), and quotes that were not on their page (each an incident). */
   findings: number;
   findingsRemoved: number;
   quotesDropped: number;
   piiHits: number;
   itemsNew: number;
+  /** RETIRED with the per-page reading: the merge step's calls and splits. */
   mergeCalls: number;
   mergeSplits: number;
   matchCalls: number;
@@ -56,20 +66,22 @@ export interface Counters {
   cellsNotFound: number;
   cellsChanged: number;
   factsNew: number;
-  /** A setup run only (analysis/setup.ts): unify calls (the review included), domains calls, capability items that got no row (not a capability). */
+  /** A setup run only (analysis/setup.ts): unify calls about capabilities, unify calls about features, domains calls. */
   unifyCalls: number;
+  unifyFeatureCalls: number;
   domainsCalls: number;
+  /** RETIRED (the unify step no longer leaves a capability without a row); kept so an old run's stored counters still read. */
   itemsExcluded: number;
 }
 
 export function emptyCounters(): Counters {
   return {
-    mapSections: 0, mapLabeled: 0, mapCalls: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
+    mapSections: 0, mapLabeled: 0, mapCalls: 0, mapPagesAsked: 0, mapReleaseNotes: 0, readRequests: 0, lookRequests: 0, incidents: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
     pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, thinkingTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
     newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0, factsNew: 0,
-    unifyCalls: 0, domainsCalls: 0, itemsExcluded: 0,
+    unifyCalls: 0, unifyFeatureCalls: 0, domainsCalls: 0, itemsExcluded: 0,
   };
 }
 

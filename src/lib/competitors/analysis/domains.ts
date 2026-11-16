@@ -1,16 +1,17 @@
 import { arr, str } from "../ai";
 import { checkPii } from "../pii";
 import { wordingKey } from "./items";
-import { MAX_ENUM } from "./prompts";
-import type { UnifyRow } from "./unify";
+
+/** Closed sets up to this size ride in the response schema as an enum; larger ones are enforced by the parser only. */
+const MAX_ENUM = 120;
 
 /**
- * BUILD THE DOMAINS — step 5 of the setup run (Capability Analysis, "The setup run"; the database side is
+ * BUILD THE DOMAINS — step 4 of the setup run (Capability Analysis, "The setup run"; the database side is
  * analysis/setup.ts).
  *
  * Domains used to be typed in before anything was known. Now they are built from the rows: ONE step over all rows
- * (name, description, which companies have it) plus the client's own language — its product lines and the wording
- * of its own items. The client's language weighs heavily but is not the truth. The output is the domains (a name
+ * (name, description, which companies have it, some of its features) plus the client's own language — its product
+ * lines and the wording of its own items. The client's language weighs heavily but is not the truth. The output is the domains (a name
  * in market terms, a one-sentence definition) and the domain of every row: every row gets exactly one domain.
  * There is no limit on the number of domains and no target. There is no "No Domain" bucket: a row that fits no
  * domain gets a domain of its own.
@@ -26,7 +27,7 @@ import type { UnifyRow } from "./unify";
  */
 
 /** Bumping it invalidates nothing: the catalog a setup run made is the PM's to edit. */
-export const DOMAINS_VERSION = "domains-1";
+export const DOMAINS_VERSION = "domains-2";
 /**
  * Rows per domains call. Up to this many rows the step is ONE call over all rows; a longer list goes in
  * consecutive calls, each given the domains made so far. An answer line is two codes: 800 rows are about 10,000
@@ -36,6 +37,8 @@ export const DOMAINS_MAX_ROWS = 800;
 export const DOMAINS_MAX_TOKENS = 24_000;
 /** Own wordings shown behind a row. */
 export const DOMAINS_OWN_WORDINGS = 3;
+/** Feature rows named behind a row, as a hint of what it covers. */
+export const DOMAINS_ROW_FEATURES = 12;
 
 export const DOMAINS_SYSTEM_PROMPT = `You organize the rows of a comparison table of one market into domains. Each row is one capability; the table compares an organization with its competitors, like an analyst's report on the market.
 
@@ -45,7 +48,7 @@ What domains are for:
 3. They speak the market's language: the names a buyer or an analyst uses for the areas of this market.
 A domain organizes and summarizes. It is not evidence, and it is not a product.
 
-You get the organization's own language — its product lines (how it divides what it sells), and what it calls the capabilities it has — and every row with its code, its name, its description and the companies that offer it. The organization's language weighs heavily: when the organization and the market divide the field the same way, use that division. It is not the truth: when the market names or divides an area differently, follow the market.
+You get the organization's own language — its product lines (how it divides what it sells), and what it calls the capabilities it has — and every row with its code, its name, its description, the companies that offer it and some of its features. The organization's language weighs heavily: when the organization and the market divide the field the same way, use that division. It is not the truth: when the market names or divides an area differently, follow the market.
 
 Answer with:
 - domains: every domain you create — a code (D1, D2 …), its name and a one-sentence definition saying what belongs in it.
@@ -57,7 +60,7 @@ Rules:
 - Name a domain in market terms: short, title case, vendor-neutral — never a product, brand or marketing name, and never the name of a company.
 - A domain is an area, not a single capability and not everything: do not make one domain for the whole table, and do not make a domain that only repeats the name of one row. A row that truly belongs to no other domain may have a domain of its own.
 - There is no limit on the number of domains and no number to aim for: make as many as the market has areas.
-- There is no "other" or "miscellaneous" domain.`;
+- There is no "other" or "miscellaneous" domain: do not make one catch-all domain for what is left.`;
 
 export function domainsTool(rowCodes: string[]): Record<string, unknown> {
   return {
@@ -96,6 +99,24 @@ export function domainsTool(rowCodes: string[]): Record<string, unknown> {
   };
 }
 
+/** A row of the table as the domains step sees it. */
+export interface DomainsRow {
+  /** "R1" … in table order. */
+  code: string;
+  /** What identifies the row: its normalized name. */
+  key: string;
+  name: string;
+  description: string;
+  /** The companies that have the row (their own capability on it, or any feature under it), in the fixed order. */
+  companies: Array<{ name: string; isOwn: boolean }>;
+  /** What the organization itself calls it (its own capabilities on the row). */
+  ownNames: string[];
+  /** The names of its feature rows. */
+  features: string[];
+  /** The organization has it: the own cell starts as found. */
+  ours: boolean;
+}
+
 /** A domain in the making: identified by `key` (its normalized name). */
 export interface DomainDraft {
   key: string;
@@ -129,17 +150,13 @@ export interface DomainsProductLine {
  * call only), and the rows — code, name, description, the companies that offer it (the organization marked), and
  * what the organization itself calls it.
  */
-export function renderDomains(orgName: string, productLines: DomainsProductLine[], known: KnownDomain[], rows: UnifyRow[]): string {
+export function renderDomains(orgName: string, productLines: DomainsProductLine[], known: KnownDomain[], rows: DomainsRow[]): string {
   const lines = productLines.filter((p) => p.name.trim()).map((p) => `- ${short(p.name, 80)}${p.description.trim() ? ` — ${short(p.description, 400)}` : ""}`);
   const rowLines = rows.map((r) => {
-    const companies: string[] = [];
-    for (const m of r.members) {
-      const label = `${short(m.company, 40)}${m.isOwn ? " (the organization itself)" : ""}`;
-      if (!companies.includes(label)) companies.push(label);
-    }
-    const own = [...new Set(r.members.filter((m) => m.isOwn).map((m) => m.name))];
-    const ours = own.length ? ` | the organization calls it: ${own.slice(0, DOMAINS_OWN_WORDINGS).map((n) => `"${short(n, 80)}"`).join(", ")}` : "";
-    return `${r.code} | ${short(r.name, 80)} | ${short(r.description, 200) || "(no description)"} | offered by: ${companies.join(", ")}${ours}`;
+    const companies = [...new Set(r.companies.map((c) => `${short(c.name, 40)}${c.isOwn ? " (the organization itself)" : ""}`))];
+    const ours = r.ownNames.length ? ` | the organization calls it: ${[...new Set(r.ownNames)].slice(0, DOMAINS_OWN_WORDINGS).map((n) => `"${short(n, 80)}"`).join(", ")}` : "";
+    const features = r.features.length ? ` | features: ${r.features.slice(0, DOMAINS_ROW_FEATURES).map((f) => short(f, 60)).join("; ")}${r.features.length > DOMAINS_ROW_FEATURES ? `; +${r.features.length - DOMAINS_ROW_FEATURES}` : ""}` : "";
+    return `${r.code} | ${short(r.name, 80)} | ${short(r.description, 200) || "(no description)"} | offered by: ${companies.join(", ")}${ours}${features}`;
   });
   const soFar = known.length ? `\n\nDOMAINS SO FAR:\n${known.map((d) => `${d.code} | ${short(d.name, 60)} | ${short(d.definition, 300)}`).join("\n")}` : "";
   return `THE ORGANIZATION: ${short(orgName, 80)}\n\nITS PRODUCT LINES:\n${lines.length ? lines.join("\n") : "none given"}${soFar}\n\nROWS:\n${rowLines.join("\n")}`;
@@ -167,7 +184,7 @@ export interface DomainsParsed {
  *     twice for a row is one answer.
  *   - A created domain no row was put in is dropped.
  */
-export function parseDomains(value: unknown, rows: UnifyRow[], known: KnownDomain[]): DomainsParsed {
+export function parseDomains(value: unknown, rows: Array<Pick<DomainsRow, "code" | "key">>, known: KnownDomain[]): DomainsParsed {
   const o = (value ?? {}) as Record<string, unknown>;
   const problems: string[] = [];
   const byRowCode = new Map(rows.map((r) => [r.code, r.key]));
@@ -226,30 +243,34 @@ export function parseDomains(value: unknown, rows: UnifyRow[], known: KnownDomai
   return { assigned, created: fresh.filter((d) => used.has(d.key)), problems, missing: rows.filter((r) => !assigned.has(r.key)).map((r) => r.key) };
 }
 
-export interface CatalogDomain extends DomainDraft {
+export interface CatalogDomain<T> extends DomainDraft {
   position: number;
-  rows: Array<{ row: UnifyRow; position: number; ours: boolean }>;
+  rows: Array<{ row: T; position: number }>;
 }
 
 /**
  * The catalog a setup run creates, in its stable order: the domains by their first row, the rows of a domain in
- * the order of the rows; capability positions count through the whole table in that order. `ours` = an item of
- * the organization's own source is on the row (the own cell starts as found). Throws when a row has no domain or
- * names a domain that does not exist — the step never creates a catalog with a row left out.
+ * the order of the rows; capability positions count through the whole table in that order. Throws when a row has
+ * no domain or names a domain that does not exist — the step never creates a catalog with a row left out.
  */
-export function planCatalog(rows: UnifyRow[], assigned: Map<string, string>, domains: DomainDraft[]): CatalogDomain[] {
+export function planCatalog<T extends { key: string; name: string }>(rows: T[], assigned: Map<string, string>, domains: DomainDraft[]): CatalogDomain<T>[] {
   const byKey = new Map(domains.map((d) => [d.key, d]));
-  const out = new Map<string, CatalogDomain>();
+  const out = new Map<string, CatalogDomain<T>>();
   for (const row of rows) {
     const key = assigned.get(row.key);
     const draft = key === undefined ? undefined : byKey.get(key);
     if (!draft) throw new Error(`the row "${row.name}" has no domain`);
     const domain = out.get(draft.key) ?? { ...draft, position: out.size, rows: [] };
-    domain.rows.push({ row, position: 0, ours: row.members.some((m) => m.isOwn) });
+    domain.rows.push({ row, position: 0 });
     out.set(draft.key, domain);
   }
   let position = 0;
   const list = [...out.values()];
   for (const d of list) for (const r of d.rows) r.position = position++;
   return list;
+}
+
+/** Is every row in exactly one domain? `assigned` holds one domain per row by construction (parseDomains refuses a second); what is left to check is a row with none. */
+export function rowsWithoutDomain(rows: Array<{ key: string }>, assigned: ReadonlyMap<string, string>): string[] {
+  return rows.filter((r) => !assigned.has(r.key)).map((r) => r.key);
 }

@@ -5,20 +5,21 @@ import { folderSkip, segmentsOf, sourceSkip, type PageTier } from "./kinds";
  *
  * A page used to be read only when its address had a known word (product, platform, pricing, docs …), which missed
  * products named by brand (/prisma, /cortex, /quantum, /product-brain). Now the site is cut into SECTIONS in code —
- * the stored pages under one address prefix — and PMOS AI labels each section once (the map step). What is read
- * follows from the label, by the rules in this file:
+ * the stored pages under one address prefix — and PMOS AI labels each section once (the map step):
  *
- *   help, release_notes, api_docs      → every page: what the product really does is written there (Daniel
- *                                        2026-11-16: release notes are "very very good content for capabilities",
- *                                        developer docs "must be prioritized high"). The old rule — index pages
- *                                        first, the articles only when a run went back for a gap — is gone: the
- *                                        reading is by chunks under one token budget (analysis/chunks.ts).
- *   pricing, product, compare          → every page
- *   news                               → weak: read only when the workspace setting readWeakPages is on
- *   noise                              → never read
+ *   product, pricing, compare, release_notes, api_docs, help, news   → a kind of content. WHETHER a kind is read is
+ *                                        not decided here: it is the installation's setting "What the analysis
+ *                                        reads" (analysis/reads.ts). The label gives the page its kind and how
+ *                                        strong its evidence is (news is weak: what is found only there is "low
+ *                                        confidence").
+ *   noise                              → says nothing about the product: never read
  *   a document (a PDF)                 → never skipped for its folder (datasheets live under /wp-content/uploads/):
- *                                        read, weak only in a news section
+ *                                        it has the kind of its section, or "docs" outside one
  *   a section with no label yet        → not read (the next run's map step labels it)
+ *
+ * Release notes win over where they sit: a page inside a help-center or a blog section that the map named as a
+ * release-notes page (SourcePage.readAs, analysis/plan.ts) IS a release-notes page — its kind, its place in the
+ * reading order and its switch are those of release notes.
  *
  * The ORDER pages are read in is the "where a PM looks" order (READ_ORDER): the strongest sources first.
  *
@@ -32,24 +33,29 @@ export function isSectionLabel(v: unknown): v is SectionLabel {
 }
 
 export interface LabelRule {
-  /** The page kind its evidence ranks as (kinds.ts KIND_RANK); "other" for a label that is never read. */
+  /** The page kind its evidence ranks as (kinds.ts KIND_RANK); "other" for noise. */
   kind: string;
+  /** How strong its evidence is: strong → "found", weak → "low confidence"; skip = it says nothing about the product. */
   tier: PageTier;
-  /** all = every page; weak = with readWeakPages only; never = not read. */
-  read: "all" | "weak" | "never";
 }
 
-/** Label → what is read and how its evidence ranks. Data: moving a label between rules is an edit of this table. */
+/** Label → how its evidence ranks. Whether a label is READ is the setting "What the analysis reads" (reads.ts), not this table. */
 export const LABEL_RULES: Record<SectionLabel, LabelRule> = {
-  product: { kind: "product", tier: "strong", read: "all" },
-  pricing: { kind: "pricing", tier: "strong", read: "all" },
-  compare: { kind: "content", tier: "strong", read: "all" },
-  help: { kind: "docs", tier: "strong", read: "all" },
-  release_notes: { kind: "docs", tier: "strong", read: "all" },
-  api_docs: { kind: "docs", tier: "strong", read: "all" },
-  news: { kind: "news", tier: "weak", read: "weak" },
-  noise: { kind: "other", tier: "skip", read: "never" },
+  product: { kind: "product", tier: "strong" },
+  pricing: { kind: "pricing", tier: "strong" },
+  compare: { kind: "content", tier: "strong" },
+  help: { kind: "docs", tier: "strong" },
+  release_notes: { kind: "docs", tier: "strong" },
+  api_docs: { kind: "docs", tier: "strong" },
+  news: { kind: "news", tier: "weak" },
+  noise: { kind: "other", tier: "skip" },
 };
+
+/** The sections whose pages the map looks at one by one (their address and title) to name the release-notes pages among them. */
+export const PAGE_PICK_LABELS: readonly SectionLabel[] = ["help", "news"];
+/** SourcePage.readAs: the map named the page a release-notes page / the map looked at it and it is not one. Null = not looked at yet. */
+export const READ_AS_RELEASE_NOTES = "release_notes";
+export const READ_AS_NONE = "none";
 
 /** A first-segment section with at least this many pages may be split one level deeper. */
 export const SPLIT_MIN_PAGES = 40;
@@ -67,8 +73,6 @@ export const MAP_SKIM_CHARS = 6000;
 export const FRAME_SHARE = 0.5;
 /** … and the source has at least this many sample pages; with fewer there is nothing to compare, and every line is the page's own. */
 export const FRAME_MIN_PAGES = 4;
-/** An index page of a section is at most this many path segments below the section's prefix (0 = its root, 1 = a direct child). */
-export const INDEX_DEPTH = 1;
 /** The site's own description of its content, for the map call. Never a page of the plan. */
 export const LLMS_TXT_PATH = "/llms.txt";
 
@@ -85,6 +89,8 @@ export interface PlanPage {
   hasText: boolean;
   chars: number;
   title?: string | null;
+  /** SourcePage.readAs: the map's word on a page of a help-center or blog section ("release_notes" | "none"); null or absent = not looked at. */
+  readAs?: string | null;
 }
 
 /** The host of an address as sections name it: lower case, no leading "www.", with a non-default port. "" when the address is not a URL. */
@@ -268,11 +274,6 @@ function cutAtWord(text: string, max: number): string {
   return (space > max * 0.6 ? head.slice(0, space) : head).trimEnd();
 }
 
-/** An index page of a section: its root or a direct child (INDEX_DEPTH). `pageSegments` and `sectionDepth` count path segments. */
-export function isIndexPage(pageSegments: number, sectionDepth: number): boolean {
-  return pageSegments - sectionDepth <= INDEX_DEPTH;
-}
-
 /** How one page is read. */
 export interface PageRead {
   /** Its section's label; null = no section, or a page code decides without one (a skipped folder, a document there). */
@@ -280,8 +281,8 @@ export interface PageRead {
   /** The page kind its evidence ranks as (kinds.ts KIND_RANK). */
   kind: string;
   tier: PageTier;
-  /** broad = in the broad read; deep = only when the run goes back for a gap; weak = in the broad read when readWeakPages is on; skip = never. */
-  role: "broad" | "deep" | "weak" | "skip";
+  /** broad = a page of a kind with strong evidence; weak = a page of a blog or news section; skip = never read (noise, no label, a skipped folder). */
+  role: "broad" | "weak" | "skip";
 }
 
 const SKIP = (kind: string, label: SectionLabel | null = null): PageRead => ({ label, kind, tier: "skip", role: "skip" });
@@ -317,8 +318,8 @@ export class ReadingPlan {
     return null;
   }
 
-  /** `kind` is SourcePage.kind (page | document | …). */
-  read(page: { url: string; sourceId: string; sourceType: string; kind: string }): PageRead {
+  /** `kind` is SourcePage.kind (page | document | …); `readAs` is SourcePage.readAs (the map's word on a page inside a help-center or blog section). */
+  read(page: { url: string; sourceId: string; sourceType: string; kind: string; readAs?: string | null }): PageRead {
     if (sourceSkip(page.sourceType)) return SKIP("skipped");
     if (isLlmsTxt(page.url)) return SKIP("other");
     const document = page.kind === "document";
@@ -328,46 +329,30 @@ export class ReadingPlan {
     if (skipped) return document ? asDocument(null) : SKIP(skipped);
     const section = this.sectionOf(page);
     if (!section) return document ? asDocument(null) : SKIP("other");
-    const rule = LABEL_RULES[section.label];
-    if (rule.read === "weak") return { label: section.label, kind: rule.kind, tier: "weak", role: "weak" };
-    if (rule.read === "all") return { label: section.label, kind: rule.kind, tier: "strong", role: "broad" };
-    if (document) return asDocument(section.label);
-    return SKIP(rule.kind, section.label);
+    // Release notes win over where they sit: a page of a help-center or blog section that the map named a release-notes page is one.
+    const label: SectionLabel = page.readAs === READ_AS_RELEASE_NOTES && PAGE_PICK_LABELS.includes(section.label) ? "release_notes" : section.label;
+    const rule = LABEL_RULES[label];
+    if (rule.tier === "weak") return { label, kind: rule.kind, tier: "weak", role: "weak" };
+    if (rule.tier === "strong") return { label, kind: rule.kind, tier: "strong", role: "broad" };
+    if (document) return asDocument(label);
+    return SKIP(rule.kind, label);
   }
 }
 
 /**
- * The pages the analysis may read, sorted by address, each with how it is read: broad and deep pages, plus weak
- * pages when the workspace reads them. Never: a page in state "removed", a page with no text, a skipped page.
+ * The pages of a company that have a kind — every page of a labeled section that is not noise — sorted by address,
+ * each with how it is read. Never: a page in state "removed", a page with no text, a skipped page. Which of these a
+ * run reads is the setting's (reads.ts splitByReads).
  */
-export function pickReadable<T extends Omit<PlanPage, "chars" | "title">>(pages: T[], plan: ReadingPlan, opts: { readWeak: boolean }): Array<T & { read: PageRead }> {
+export function pickReadable<T extends Omit<PlanPage, "chars" | "title">>(pages: T[], plan: ReadingPlan): Array<T & { read: PageRead }> {
   const out: Array<T & { read: PageRead }> = [];
   for (const p of pages) {
     if (p.state === "removed" || !p.hasText) continue;
     const read = plan.read(p);
     if (read.role === "skip") continue;
-    if (read.role === "weak" && !opts.readWeak) continue;
     out.push({ ...p, read });
   }
   return out.sort((a, b) => cmp(a.url, b.url));
-}
-
-/**
- * The reading order under a token budget: pricing, product, compare, then the help / release-notes / API-docs index
- * pages (and documents), then news, then deep pages. Lower reads first.
- */
-export function readGroup(read: PageRead): number {
-  if (read.role === "deep") return 5;
-  if (read.role === "weak") return 4;
-  if (read.kind === "pricing") return 0;
-  if (read.kind === "product") return 1;
-  if (read.kind === "content") return 2;
-  return 3;
-}
-
-/** Pages in reading order: by group (readGroup), inside a group by address. */
-export function sortForReading<T extends { url: string; read: PageRead }>(pages: T[]): T[] {
-  return [...pages].sort((a, b) => readGroup(a.read) - readGroup(b.read) || cmp(a.url, b.url));
 }
 
 // ————— Where a PM looks: the order pages are read in —————

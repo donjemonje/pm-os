@@ -1,256 +1,39 @@
-/** Capability Analysis — the parsers of the five prompts (analysis/prompts.ts): bad fields are dropped and counted, never thrown. Pure module. */
+/** Capability Analysis — the map, the match and the second look (analysis/prompts.ts): what is rendered, and what each parser keeps. Pure module. The reading's prompts are tested in competitors-analysis-reading.test.ts, unify's and the domains' next to their rules. */
 import { describe, expect, it } from "vitest";
 import {
-  comparePageLine,
   injectedMapAnswer,
+  injectedMapPagesAnswer,
   LLMS_TXT_MAX_CHARS,
+  LOOK_SYSTEM_PROMPT,
   lookTool,
   MAP_MAX_SECTIONS,
+  MAP_PAGES_BATCH,
+  MAP_PAGES_SYSTEM_PROMPT,
   MAP_SYSTEM_PROMPT,
   MAP_VERSION,
+  mapPagesTool,
   mapTool,
-  MAX_CAPABILITIES_PER_PAGE,
-  MAX_DESCRIPTION_CHARS,
+  MATCH_SYSTEM_PROMPT,
   MAX_ENUM,
   matchTool,
-  MERGE_TOOL,
+  parseLook,
   parseMap,
+  parseMapPages,
   parseMatch,
-  parseMerge,
-  parseResearch,
-  parseSecondLook,
+  renderLook,
   renderMap,
+  renderMapPages,
   renderMatchTail,
-  renderMergeCapabilities,
-  renderResearch,
-  RESEARCH_SYSTEM_PROMPT,
-  RESEARCH_TOOL,
+  type LookRow,
   type MapEntry,
+  type MapPageEntry,
   type MatchCatalog,
-  type MergeEntry,
 } from "@/lib/competitors/analysis/prompts";
+import { READ_TOOL, readChangesTool, WHERE_A_PM_LOOKS, type RequestPage } from "@/lib/competitors/analysis/reading";
 import { MAP_OPENING_CHARS, SECTION_LABELS } from "@/lib/competitors/analysis/sections";
+import { unifyCapabilitiesTool, unifyFeaturesTool, unifyReviewTool } from "@/lib/competitors/analysis/unify";
+import { domainsTool } from "@/lib/competitors/analysis/domains";
 import { FACTS_TOOL } from "@/lib/competitors/ai";
-
-const PAGE = `Acme Core
-Detect threats across your whole stack in real time.
-Single sign-on (SSO) is included in every plan.
-Role-based access control lets admins scope every role.
-Audit log export sends every admin action to your SIEM.
-Contact Jane Doe, CEO of Acme, for a demo.`;
-
-const cap = (name: string, quote: string, features: unknown[] = [], reasoning = "The page says so.") => ({ name, quote, reasoning, features });
-const feat = (name: string, quote: string, reasoning = "The page says so.") => ({ name, quote, reasoning });
-
-describe("parseResearch", () => {
-  it("keeps a capability and its features, each with the verified quote", () => {
-    const r = parseResearch({ capabilities: [cap("Access management", "Single sign-on (SSO) is included in every plan", [feat("RBAC", "Role-based access control lets admins scope every role")])] }, PAGE);
-    expect(r.findings).toEqual([
-      { kind: "capability", wording: "Access management", parentWording: null, quote: "Single sign-on (SSO) is included in every plan", reasoning: "The page says so.", description: null },
-      { kind: "feature", wording: "RBAC", parentWording: "Access management", quote: "Role-based access control lets admins scope every role", reasoning: "The page says so.", description: null },
-    ]);
-    expect(r.dropped).toEqual({ noQuote: 0, pii: 0, over: 0, overCapabilities: 0, overFeatures: 0 });
-  });
-  it("a capability whose quote is not on the page is dropped, and its features with it", () => {
-    const r = parseResearch({ capabilities: [cap("Threat hunting", "Hunt threats with our autonomous agents", [feat("RBAC", "Role-based access control lets admins scope every role")]), cap("Threat detection", "Detect threats across your whole stack in real time")] }, PAGE);
-    expect(r.findings.map((f) => f.wording)).toEqual(["Threat detection"]);
-    expect(r.dropped.noQuote).toBe(1);
-  });
-  it("a feature whose quote fails is dropped alone", () => {
-    const r = parseResearch({ capabilities: [cap("Access management", "Single sign-on (SSO) is included in every plan", [feat("SCIM", "SCIM provisioning for every directory"), feat("RBAC", "Role-based access control lets admins scope every role")])] }, PAGE);
-    expect(r.findings.map((f) => f.wording)).toEqual(["Access management", "RBAC"]);
-    expect(r.dropped.noQuote).toBe(1);
-  });
-  it("nothing about people: a finding that names a person is dropped", () => {
-    const r = parseResearch({ capabilities: [cap("Executive demos", "Contact Jane Doe, CEO of Acme, for a demo")] }, PAGE);
-    expect(r.findings).toEqual([]);
-    expect(r.dropped.pii).toBe(1);
-  });
-  it("the same wording twice on one page: the first wins, and its features hang under the first", () => {
-    const r = parseResearch({ capabilities: [
-      cap("Access Management", "Single sign-on (SSO) is included in every plan", [feat("RBAC", "Role-based access control lets admins scope every role")]),
-      cap("access-management™", "Role-based access control lets admins scope every role", [feat("rbac", "Role-based access control lets admins scope every role"), feat("Audit log export", "Audit log export sends every admin action to your SIEM")]),
-    ] }, PAGE);
-    expect(r.findings.map((f) => `${f.kind}:${f.wording}:${f.parentWording ?? ""}`)).toEqual(["capability:Access Management:", "feature:RBAC:Access Management", "feature:Audit log export:Access Management"]);
-  });
-  it("caps the list at 40 capabilities per page and counts the rest", () => {
-    const many = Array.from({ length: MAX_CAPABILITIES_PER_PAGE + 3 }, (_, i) => cap(`Capability ${i}`, "Detect threats across your whole stack in real time"));
-    const r = parseResearch({ capabilities: many }, PAGE);
-    expect(r.findings).toHaveLength(MAX_CAPABILITIES_PER_PAGE);
-    expect(r.dropped.over).toBe(3);
-  });
-  it("never throws on a malformed answer", () => {
-    expect(parseResearch(null, PAGE).findings).toEqual([]);
-    expect(parseResearch({ capabilities: "x" }, PAGE).findings).toEqual([]);
-    expect(parseResearch({ capabilities: [null, 3, { name: 7 }, { name: "", quote: "Detect threats across your whole stack" }] }, PAGE).findings).toEqual([]);
-  });
-  it("description: one sentence per capability and per feature, null when the page does not say, cut to the limit", () => {
-    const r = parseResearch({ capabilities: [
-      { ...cap("Access management", "Single sign-on (SSO) is included in every plan", [{ ...feat("RBAC", "Role-based access control lets admins scope every role"), description: "  Lets admins scope what every role may do. " }, { ...feat("Audit log export", "Audit log export sends every admin action to your SIEM"), description: "" }]), description: "Signs every user in once." },
-      { ...cap("Threat detection", "Detect threats across your whole stack in real time"), description: "d".repeat(MAX_DESCRIPTION_CHARS + 50) },
-      { ...cap("Detection", "Detect threats across your whole stack"), description: 7 },
-    ] }, PAGE);
-    expect(r.findings.map((f) => [f.wording, f.description])).toEqual([
-      ["Access management", "Signs every user in once."],
-      ["RBAC", "Lets admins scope what every role may do."],
-      ["Audit log export", null],
-      ["Threat detection", expect.any(String)],
-      ["Detection", null],
-    ]);
-    expect(r.findings[3].description!.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS + 1);
-  });
-  it("a description that names a person is emptied; the finding stays", () => {
-    const r = parseResearch({ capabilities: [{ ...cap("Threat detection", "Detect threats across your whole stack in real time"), description: "Built by Jane Doe, CEO of Acme." }] }, PAGE);
-    expect(r.findings).toHaveLength(1);
-    expect(r.findings[0].description).toBeNull();
-    expect(r.dropped.pii).toBe(0);
-  });
-  it("the schema asks for a description on every capability and every feature", () => {
-    const items = (RESEARCH_TOOL.input_schema.properties.capabilities as { items: { required: string[]; properties: { features: { items: { required: string[] } } } } }).items;
-    expect(items.required).toContain("description");
-    expect(items.properties.features.items.required).toContain("description");
-  });
-  it("a page of a compare section carries the COMPARISON PAGE line with the company that owns the site; any other page does not", () => {
-    const page = { url: "https://acme.example/compare/acme-vs-other", title: "Acme vs Other", text: "Acme has SSO. Other has no SSO." };
-    const out = renderResearch(page, { compareCompany: "Acme" });
-    expect(out).toBe("PAGE https://acme.example/compare/acme-vs-other\nTitle: Acme vs Other\nCOMPARISON PAGE: this page compares Acme with another company. List only what it says Acme itself offers; ignore every statement about the other company.\n\nAcme has SSO. Other has no SSO.");
-    expect(renderResearch(page)).not.toContain("COMPARISON PAGE");
-    expect(renderResearch(page, { compareCompany: null })).not.toContain("COMPARISON PAGE");
-    expect(renderResearch(page, { compareCompany: "  " })).not.toContain("COMPARISON PAGE");
-    // The same line, on its own: what Administration → Competitors shows next to the research prompt.
-    expect(out).toContain(comparePageLine("Acme"));
-    expect(comparePageLine("<the company>")).toBe("COMPARISON PAGE: this page compares <the company> with another company. List only what it says <the company> itself offers; ignore every statement about the other company.");
-    expect(RESEARCH_SYSTEM_PROMPT).toContain("COMPARISON PAGE");
-    expect(RESEARCH_SYSTEM_PROMPT).toContain("Ignore every statement about the other company");
-  });
-  it("renders one page, whole", () => {
-    const text = "x".repeat(50_000);
-    const out = renderResearch({ url: "https://acme.example/pricing", title: "Pricing", text, kind: "document", sourceLabel: "Website" });
-    expect(out.startsWith("PAGE https://acme.example/pricing\nTitle: Pricing\nSource: document · Website\n\n")).toBe(true);
-    expect(out.endsWith(text)).toBe(true);
-  });
-});
-
-describe("parseMerge", () => {
-  const e = (code: string, extra: Partial<MergeEntry> = {}): MergeEntry => ({ code, kind: "capability", parentId: null, name: code, pages: 1, quote: "q", known: false, ...extra });
-  const entries = [e("M1"), e("M2"), e("M3", { known: true }), e("M4", { known: true }), e("M5", { kind: "feature", parentId: "p1" }), e("M6", { kind: "feature", parentId: "p1" }), e("M7", { kind: "feature", parentId: "p2" })];
-  it("drops unknown codes and groups left with one member", () => {
-    expect(parseMerge({ groups: [{ members: ["M1", "M2", "M99"] }, { members: ["M3", "nope"] }] }, entries)).toEqual([["M1", "M2"]]);
-  });
-  it("a code in two groups stays in the first", () => {
-    expect(parseMerge({ groups: [{ members: ["M1", "M2"] }, { members: ["M2", "M3", "M1"] }] }, entries)).toEqual([["M1", "M2"]]);
-  });
-  it("a group that mixes kinds or capabilities is split", () => {
-    expect(parseMerge({ groups: [{ members: ["M1", "M5", "M2", "M6", "M7"] }] }, entries)).toEqual([["M1", "M2"], ["M5", "M6"]]);
-  });
-  it("two KNOWN entries are never merged: only the first stays in the group", () => {
-    expect(parseMerge({ groups: [{ members: ["M3", "M4", "M1"] }] }, entries)).toEqual([["M3", "M1"]]);
-  });
-  it("never throws on a malformed answer", () => {
-    expect(parseMerge(null, entries)).toEqual([]);
-    expect(parseMerge({ groups: [null, { members: "M1" }, { members: [1, null] }] }, entries)).toEqual([]);
-  });
-  it("renders the list with KNOWN marks", () => {
-    const out = renderMergeCapabilities("Acme", [e("M1", { name: "SSO", pages: 3, quote: 'Single "sign-on"' }), e("M2", { name: "Single sign-on", known: true })]);
-    expect(out).toContain("COMPANY: Acme");
-    expect(out).toContain(`M1 | SSO | 3 pages | "Single 'sign-on'"`);
-    expect(out).toContain(`M2 | Single sign-on | 1 page | "q" | KNOWN`);
-  });
-});
-
-describe("parseMatch", () => {
-  const catalog: MatchCatalog = {
-    ours: new Map([["K-aaaaaaaa", { kind: "capability" as const, id: "cap-1" }], ["F-bbbbbbbb", { kind: "feature" as const, id: "feat-1" }]]),
-    domains: new Map([["D-11111111", { id: "dom-active", state: "active" }], ["D-22222222", { id: "dom-suggested", state: "suggested" }]]),
-  };
-  const batch = [{ code: "T1", kind: "capability" as const }, { code: "T2", kind: "feature" as const }, { code: "T3", kind: "capability" as const }];
-  const row = (entry: string, extra: Record<string, string> = {}) => ({ entry, ours: "none", domain: "", newDomainName: "", newDomainDefinition: "", closestDomain: "", marketName: "", description: "", ...extra });
-  it("a code of ours is a match, to a capability or a feature, whatever the entry's kind", () => {
-    const r = parseMatch({ matches: [row("T1", { ours: "F-bbbbbbbb" }), row("T2", { ours: "K-aaaaaaaa", marketName: "ignored" })] }, batch, catalog);
-    expect(r.answers).toEqual([
-      { entry: "T1", ours: { kind: "feature", id: "feat-1" }, placement: null },
-      { entry: "T2", ours: { kind: "capability", id: "cap-1" }, placement: null },
-    ]);
-  });
-  it("an unknown code of ours counts as none, and is reported", () => {
-    const r = parseMatch({ matches: [row("T1", { ours: "K-zzzzzzzz", marketName: "Single Sign-On", domain: "D-11111111", closestDomain: "D-11111111" })] }, batch, catalog);
-    expect(r.unknownOurs).toEqual(["K-zzzzzzzz"]);
-    expect(r.answers[0]).toEqual({ entry: "T1", ours: null, placement: { domainId: "dom-active", newDomainName: "", newDomainDefinition: "", closestDomainId: "dom-active", marketName: "Single Sign-On", description: "" } });
-  });
-  it("an entry outside the batch is dropped; a duplicate entry keeps the first", () => {
-    const r = parseMatch({ matches: [row("T9", { ours: "K-aaaaaaaa" }), row("T1", { ours: "K-aaaaaaaa" }), row("T1")] }, batch, catalog);
-    expect(r.answers).toEqual([{ entry: "T1", ours: { kind: "capability", id: "cap-1" }, placement: null }]);
-  });
-  it("domain: a code of ours, or new with a name; anything else leaves it to the closest domain", () => {
-    const r = parseMatch({ matches: [
-      row("T1", { domain: "new", newDomainName: "Identity Security", newDomainDefinition: "Controls who gets in.", closestDomain: "D-11111111" }),
-      row("T3", { domain: "Identity", newDomainName: "Should be ignored", closestDomain: "D-22222222" }),
-    ] }, batch, catalog);
-    expect(r.answers[0].placement).toMatchObject({ domainId: null, newDomainName: "Identity Security", newDomainDefinition: "Controls who gets in.", closestDomainId: "dom-active" });
-    // Neither a code nor "new": no domain, no new name. And the closest domain must be an ACTIVE one.
-    expect(r.answers[1].placement).toMatchObject({ domainId: null, newDomainName: "", closestDomainId: null });
-  });
-  it("a suggested domain of ours can be the domain", () => {
-    const r = parseMatch({ matches: [row("T1", { domain: "D-22222222" })] }, batch, catalog);
-    expect(r.answers[0].placement?.domainId).toBe("dom-suggested");
-  });
-  it("a feature that is none of ours carries no domain: it follows its capability", () => {
-    const r = parseMatch({ matches: [row("T2", { domain: "D-11111111", closestDomain: "D-11111111", marketName: "SCIM provisioning" })] }, batch, catalog);
-    expect(r.answers[0].placement).toEqual({ domainId: null, newDomainName: "", newDomainDefinition: "", closestDomainId: null, marketName: "SCIM provisioning", description: "" });
-  });
-  it("a market name or description that names a person is emptied", () => {
-    const r = parseMatch({ matches: [row("T1", { marketName: "Founder John Smith", description: "Write to sales@acme.example" })] }, batch, catalog);
-    expect(r.answers[0].placement).toMatchObject({ marketName: "", description: "" });
-  });
-  it("our codes ride in the schema as an enum only while the set is small", () => {
-    const small = matchTool(["T1"], catalog) as { input_schema: { properties: { matches: { items: { properties: Record<string, { enum?: string[] }> } } } } };
-    expect(small.input_schema.properties.matches.items.properties.entry.enum).toEqual(["T1"]);
-    expect(small.input_schema.properties.matches.items.properties.ours.enum).toEqual(["none", "K-aaaaaaaa", "F-bbbbbbbb"]);
-    const big: MatchCatalog = { ours: new Map(Array.from({ length: MAX_ENUM + 1 }, (_, i) => [`K-${i}`, { kind: "capability" as const, id: `c${i}` }])), domains: catalog.domains };
-    const large = matchTool(["T1"], big) as typeof small;
-    expect(large.input_schema.properties.matches.items.properties.ours.enum).toBeUndefined();
-    expect(large.input_schema.properties.matches.items.properties.domain.enum).toEqual(["none", "new", "D-11111111", "D-22222222"]);
-    expect(large.input_schema.properties.matches.items.properties.closestDomain.enum).toEqual(["none", "D-11111111", "D-22222222"]);
-  });
-  it('"none" for a domain is no domain: the parser reads it like an empty answer', () => {
-    const r = parseMatch({ matches: [row("T1", { domain: "none", closestDomain: "none", marketName: "SCIM provisioning" }), row("T2", { domain: "none", closestDomain: "none" })] }, batch, catalog);
-    expect(r.answers[0].placement).toEqual({ domainId: null, newDomainName: "", newDomainDefinition: "", closestDomainId: null, marketName: "SCIM provisioning", description: "" });
-    expect(r.answers[1].placement).toMatchObject({ domainId: null, closestDomainId: null });
-    expect(r.unknownOurs).toEqual([]);
-  });
-  it("renders their list: a capability, then its features", () => {
-    const out = renderMatchTail("Acme", ["Identity Security"], [
-      { code: "T1", kind: "capability", parent: null, name: "Access management", quote: "Single sign-on" },
-      { code: "T2", kind: "feature", parent: { code: "T1" }, name: "RBAC", quote: "Role-based access" },
-    ]);
-    expect(out).toContain("DOMAINS PROPOSED EARLIER IN THIS RUN: Identity Security");
-    expect(out).toContain(`T1 | capability | Access management | "Single sign-on"\n  T2 | feature of T1 | RBAC | "Role-based access"`);
-  });
-});
-
-describe("parseSecondLook", () => {
-  const pages = [{ id: "p1", url: "https://acme.example/features", text: PAGE }, { id: "p2", url: "https://acme.example/pricing", text: "Plans start at ten seats. Enterprise adds audit log export." }];
-  const answer = (extra: Record<string, unknown> = {}) => ({ found: true, quote: "Single sign-on (SSO) is included in every plan", url: "https://acme.example/features", theirName: "SSO", reasoning: "Every plan includes it.", ...extra });
-  it("found: the page, the verified quote, their name, the reasoning", () => {
-    expect(parseSecondLook(answer(), pages)).toEqual({ found: true, pageId: "p1", quote: "Single sign-on (SSO) is included in every plan", wording: "SSO", reasoning: "Every plan includes it." });
-  });
-  it("not found when the model says so", () => {
-    expect(parseSecondLook({ found: false, quote: "", url: "", theirName: "", reasoning: "" }, pages)).toEqual({ found: false, quoteDropped: false });
-  });
-  it('not found with url "none" (what the schema offers for "no page")', () => {
-    expect(parseSecondLook({ found: false, quote: "", url: "none", theirName: "", reasoning: "" }, pages)).toEqual({ found: false, quoteDropped: false });
-    expect(parseSecondLook(answer({ url: "none" }), pages)).toEqual({ found: false, quoteDropped: false });
-  });
-  it("a page that was not offered does not count", () => {
-    expect(parseSecondLook(answer({ url: "https://acme.example/other" }), pages)).toEqual({ found: false, quoteDropped: false });
-  });
-  it("a quote that is not on THAT page does not count, and is counted as dropped", () => {
-    expect(parseSecondLook(answer({ url: "https://acme.example/pricing" }), pages)).toEqual({ found: false, quoteDropped: true });
-  });
-  it("nothing about people", () => {
-    expect(parseSecondLook(answer({ quote: "Contact Jane Doe, CEO of Acme, for a demo" }), pages)).toEqual({ found: false, quoteDropped: false });
-  });
-});
 
 describe("the map — parseMap, renderMap", () => {
   const entry = (code: string, path: string, pages = 3, extra: Partial<MapEntry["section"]> = {}): MapEntry => ({
@@ -329,6 +112,159 @@ describe("the map — parseMap, renderMap", () => {
   });
 });
 
+
+describe("the map, page by page — release notes inside a help center or a blog", () => {
+  const entries: MapPageEntry[] = [
+    { code: "P1", url: "https://support.acme.example/hc/en-us/articles/360060759874-Acme-Release-Notes", title: "Acme Release Notes", label: "help" },
+    { code: "P2", url: "https://support.acme.example/hc/en-us/articles/111-How-to-add-a-user", title: "How to add a user", label: "help" },
+    { code: "P3", url: "https://www.acme.example/blog/changelog-may-2026", title: "Changelog: May 2026", label: "news" },
+    { code: "P4", url: "https://www.acme.example/blog/why-roadmaps-fail", title: "", label: "news" },
+  ];
+  const codes = entries.map((e) => e.code);
+  it("the call shows each page with its code, the kind of place it sits in, its address and its title — never its text", () => {
+    expect(renderMapPages("Acme", entries)).toBe([
+      "COMPANY: Acme", "", "PAGES:",
+      'P1 | help center | support.acme.example/hc/en-us/articles/360060759874-Acme-Release-Notes | "Acme Release Notes"',
+      'P2 | help center | support.acme.example/hc/en-us/articles/111-How-to-add-a-user | "How to add a user"',
+      'P3 | blog | www.acme.example/blog/changelog-may-2026 | "Changelog: May 2026"',
+      "P4 | blog | www.acme.example/blog/why-roadmaps-fail | no title",
+    ].join("\n"));
+    expect(MAP_PAGES_BATCH).toBe(400);
+  });
+  it("the answer names the release-notes pages by code; every other page of the call is not one", () => {
+    const r = parseMapPages({ release_notes: ["P1", "P3", "P3"] }, codes);
+    expect([...r.releaseNotes]).toEqual(["P1", "P3"]);
+    expect(r.unknownCodes).toEqual([]);
+    expect(parseMapPages({ release_notes: [] }, codes).releaseNotes.size).toBe(0);
+  });
+  it("a closed set: a code that was not asked is reported, never guessed — the step fails the run on it", () => {
+    expect(parseMapPages({ release_notes: ["P1", "P9", ""] }, codes).unknownCodes).toEqual(["P9", "(none)"]);
+    for (const bad of [null, "x", {}, { release_notes: "P1" }]) expect(parseMapPages(bad, codes).releaseNotes.size).toBe(0);
+  });
+  it("the prompt says what a release-notes page is and is not, and that most help centers and blogs have none", () => {
+    for (const line of ["what was shipped in the product", "A how-to article, a guide, a FAQ", "is NOT one", "an empty list is a correct answer", "Use only the codes given"]) expect(MAP_PAGES_SYSTEM_PROMPT).toContain(line);
+    expect(JSON.stringify(mapPagesTool(codes))).toContain('"enum":["P1","P2","P3","P4"]');
+    expect(JSON.stringify(mapPagesTool(Array.from({ length: 400 }, (_, i) => `P${i + 1}`)))).not.toContain('"enum"');
+  });
+  it("TEST KNOB: the injected answer is built from a test's list of addresses or paths, and goes through the same parser", () => {
+    const injected = JSON.parse(injectedMapPagesAnswer(["/blog/changelog-may-2026", "https://support.acme.example/hc/en-us/articles/360060759874-Acme-Release-Notes"], entries));
+    expect(injected).toEqual({ release_notes: ["P1", "P3"] });
+    expect(JSON.parse(injectedMapPagesAnswer(undefined, entries))).toEqual({ release_notes: [] });
+  });
+});
+
+describe("the match — after setup: a company's new items against the rows that exist", () => {
+  const catalog: MatchCatalog = {
+    ours: new Map([["K-aaaaaaaa", { kind: "capability" as const, id: "cap-1" }], ["F-bbbbbbbb", { kind: "feature" as const, id: "feat-1" }]]),
+    domains: new Map([["D-11111111", { id: "dom-active", state: "active" }], ["D-22222222", { id: "dom-suggested", state: "suggested" }]]),
+  };
+  const batch = [{ code: "T1", kind: "capability" as const }, { code: "T2", kind: "feature" as const }, { code: "T3", kind: "capability" as const }];
+  const m = (entry: string, ours: string, extra: Record<string, unknown> = {}) => ({ entry, ours, domain: "none", marketName: "", description: "", ...extra });
+  it("an entry that is one of ours carries our row; an entry outside the batch is dropped; a duplicate keeps the first", () => {
+    const r = parseMatch({ matches: [m("T1", "K-aaaaaaaa"), m("T2", "F-bbbbbbbb"), m("T9", "K-aaaaaaaa"), m("T1", "none")] }, batch, catalog);
+    expect(r.answers).toEqual([{ entry: "T1", ours: { kind: "capability", id: "cap-1" }, placement: null }, { entry: "T2", ours: { kind: "feature", id: "feat-1" }, placement: null }]);
+  });
+  it("what matches nothing becomes a new row in an EXISTING domain: a capability names a domain of ours", () => {
+    const r = parseMatch({ matches: [m("T1", "none", { domain: "D-11111111", marketName: "Session Recording", description: "Records user sessions." })] }, batch, catalog);
+    expect(r.answers).toEqual([{ entry: "T1", ours: null, placement: { domainId: "dom-active", marketName: "Session Recording", description: "Records user sessions." } }]);
+    expect(r.noDomain).toEqual([]);
+  });
+  it("no new domain is made: a capability that names no domain of ours is NOT answered — it is asked again, no domain is guessed", () => {
+    const r = parseMatch({ matches: [m("T1", "none", { domain: "new", marketName: "X" }), m("T3", "none", { domain: "none", marketName: "Y" })] }, batch, catalog);
+    expect(r.answers).toEqual([]);
+    expect(r.noDomain).toEqual(["T1", "T3"]);
+    expect(MATCH_SYSTEM_PROMPT).toContain("Always one of ours — no new domain is made here");
+    expect(JSON.stringify(matchTool(["T1"], catalog))).not.toContain("newDomainName");
+  });
+  it("a feature that is none of ours carries no domain: it follows its capability", () => {
+    const r = parseMatch({ matches: [m("T2", "none", { domain: "D-11111111", marketName: "SAML", description: "Signs in with SAML." })] }, batch, catalog);
+    expect(r.answers).toEqual([{ entry: "T2", ours: null, placement: { domainId: null, marketName: "SAML", description: "Signs in with SAML." } }]);
+  });
+  it("an unknown code of ours counts as none, and is reported", () => {
+    const r = parseMatch({ matches: [m("T2", "K-zzzzzzzz", { marketName: "X" })] }, batch, catalog);
+    expect(r.unknownOurs).toEqual(["K-zzzzzzzz"]);
+    expect(r.answers[0]).toMatchObject({ ours: null });
+  });
+  it("a market name or description that names a person is emptied", () => {
+    const r = parseMatch({ matches: [m("T2", "none", { marketName: "Jane Doe, CEO of Acme, dashboard", description: "Built by jane.doe@acme.example." })] }, batch, catalog);
+    expect(r.answers[0].placement?.description).toBe("");
+  });
+  it("our codes ride in the schema as an enum only while the set is small", () => {
+    const tool = matchTool(["T1"], catalog) as { input_schema: { properties: { matches: { items: { properties: Record<string, { enum?: string[] }> } } } } };
+    const props = tool.input_schema.properties.matches.items.properties;
+    expect(props.entry.enum).toEqual(["T1"]);
+    expect(props.ours.enum).toEqual(["none", "K-aaaaaaaa", "F-bbbbbbbb"]);
+    expect(props.domain.enum).toEqual(["none", "D-11111111", "D-22222222"]);
+    const big: MatchCatalog = { ours: new Map(Array.from({ length: MAX_ENUM + 5 }, (_, i) => [`K-${i}`, { kind: "capability" as const, id: `c${i}` }])), domains: catalog.domains };
+    expect((matchTool(["T1"], big) as typeof tool).input_schema.properties.matches.items.properties.ours.enum).toBeUndefined();
+  });
+  it("renders their list: a capability with what it does, then its features", () => {
+    const text = renderMatchTail("Acme", [
+      { code: "T1", kind: "capability", name: "Session replay", description: "Records what users do.", quote: 'Watch every "session" again', parent: null },
+      { code: "T2", kind: "feature", name: "Rage clicks", description: "", quote: "", parent: { code: "T1" } },
+      { code: "T3", kind: "feature", name: "Heatmaps", description: "Shows where users click.", quote: "", parent: { name: "Analytics" } },
+    ]);
+    expect(text).toBe(`COMPANY: Acme\n\nTHEIR LIST:\nT1 | capability | Session replay — Records what users do. | "Watch every 'session' again"\n  T2 | feature of T1 | Rage clicks\n  T3 | feature of "Analytics" | Heatmaps — Shows where users click.`);
+  });
+  it("never throws on a malformed answer", () => {
+    for (const bad of [null, "x", {}, { matches: "no" }, { matches: [null, 7] }]) expect(parseMatch(bad, batch, catalog).answers).toEqual([]);
+  });
+});
+
+describe("the second look, in bulk — once per chunk of a company's pages", () => {
+  const rows: LookRow[] = [
+    { code: "R1", capabilityId: "k-sso", name: "Single Sign-On", description: "Signs users in through the company's identity provider.", aliases: ["SSO"], domain: "Security" },
+    { code: "R2", capabilityId: "k-audit", name: "Audit Log", description: "", aliases: [], domain: "Security" },
+  ];
+  const pages: RequestPage[] = [
+    { code: "P1", id: "page-1", url: "https://acme.example/security", hash: "h1", text: "Security\nSingle sign-on with SAML is included in every plan." },
+    { code: "P2", id: "page-2", url: "https://acme.example/admin", hash: "h2", text: "Admin\nEvery admin action is written to the audit trail and can be exported." },
+  ];
+  it("the call lists the rows of ours that are looked for — code, name, what it is, other names, its domain — then the pages", () => {
+    expect(renderLook("Acme", rows, "=== PAGE P1 …")).toBe([
+      "COMPANY: Acme", "", "CAPABILITIES OF OURS TO LOOK FOR:",
+      "R1 | Single Sign-On — Signs users in through the company's identity provider. (also known as: SSO) | domain: Security",
+      "R2 | Audit Log | domain: Security",
+      "", "=== PAGE P1 …",
+    ].join("\n"));
+  });
+  it("which of these does the company offer? — a row counts as found with its quote, on the page it names", () => {
+    const r = parseLook({ found: [{ capability: "R1", quote: "Single sign-on with SAML is included in every plan.", page: "P1", their_name: "Single sign-on" }] }, rows, pages);
+    expect(r.incidents).toEqual([]);
+    expect(r.found).toEqual([{ capabilityId: "k-sso", code: "R1", pageId: "page-1", pageHash: "h1", quote: "Single sign-on with SAML is included in every plan.", wording: "Single sign-on" }]);
+  });
+  it("…or nothing: an empty list is an answer; a row answered twice keeps its first answer", () => {
+    expect(parseLook({ found: [] }, rows, pages)).toEqual({ found: [], incidents: [] });
+    const twice = parseLook({ found: [
+      { capability: "R2", quote: "Every admin action is written to the audit trail", page: "P2", their_name: "Audit trail" },
+      { capability: "R2", quote: "can be exported", page: "P2", their_name: "Export" },
+    ] }, rows, pages);
+    expect(twice.found.map((f) => [f.code, f.wording])).toEqual([["R2", "Audit trail"]]);
+  });
+  it("a closed set of row codes: a code that was not asked is an incident, and nothing of it reaches the table", () => {
+    const r = parseLook({ found: [{ capability: "R7", quote: "Single sign-on with SAML is included in every plan.", page: "P1", their_name: "x" }] }, rows, pages);
+    expect(r.found).toEqual([]);
+    expect(r.incidents).toEqual([expect.objectContaining({ kind: "unknown_item", itemKind: "row", item: "R7" })]);
+  });
+  it("a quote that is not on the page it names is an incident — it says when another page of the request has it; a page that is not in the request too", () => {
+    const wrongPage = parseLook({ found: [{ capability: "R1", quote: "Single sign-on with SAML is included in every plan.", page: "P2", their_name: "SSO" }] }, rows, pages);
+    expect(wrongPage.found).toEqual([]);
+    expect(wrongPage.incidents).toEqual([expect.objectContaining({ kind: "quote_not_on_page", item: "Single Sign-On", pageUrl: "https://acme.example/admin", foundOn: "https://acme.example/security" })]);
+    const nowhere = parseLook({ found: [{ capability: "R2", quote: "A full audit log with a ten-year retention.", page: "P2", their_name: "" }] }, rows, pages);
+    expect(nowhere.incidents[0]).toMatchObject({ kind: "quote_not_on_page", foundOn: null });
+    expect(parseLook({ found: [{ capability: "R2", quote: "x", page: "P44", their_name: "" }] }, rows, pages).incidents[0]).toMatchObject({ kind: "unknown_page", pageCode: "P44" });
+  });
+  it("the prompt: only what the pages show, a related or broader offering is not it, and the guide of where a PM looks", () => {
+    for (const line of ["Leave out every capability the pages do not show", "A related or broader offering is not the capability", "Use only the capability codes given, each at most once"]) expect(LOOK_SYSTEM_PROMPT).toContain(line);
+    expect(LOOK_SYSTEM_PROMPT).toContain(WHERE_A_PM_LOOKS);
+    expect(JSON.stringify(lookTool(["R1", "R2"]))).toContain('"enum":["R1","R2"]');
+    expect(JSON.stringify(lookTool(["R1"]))).not.toContain("reasoning");
+  });
+  it("never throws on a malformed answer", () => {
+    for (const bad of [null, "x", {}, { found: "no" }, { found: [null, 3] }]) expect(() => parseLook(bad, rows, pages)).not.toThrow();
+  });
+});
+
 describe("the response schemas a model is sent", () => {
   /** Every enum in a schema, wherever it sits. */
   const enums = (node: unknown, path = "$"): Array<{ path: string; values: unknown[] }> => {
@@ -343,13 +279,20 @@ describe("the response schemas a model is sent", () => {
   };
   const tools: Array<[string, Record<string, unknown>]> = [
     ["map", mapTool(["S1", "S2"])],
-    ["research", RESEARCH_TOOL],
-    ["merge", MERGE_TOOL],
+    ["map, page by page", mapPagesTool(["P1", "P2"])],
+    ["reading", READ_TOOL],
+    ["reading, changes", readChangesTool(["K1"], ["K1", "K1.1"])],
+    ["reading, changes of an empty list", readChangesTool([], [])],
+    ["unify, capabilities", unifyCapabilitiesTool(["A1", "B1"], ["R1"])],
+    ["unify, review", unifyReviewTool(["R1", "R2"])],
+    ["unify, features", unifyFeaturesTool(["A1.1"], ["R1"], ["R2"], true)],
+    ["unify, moved features", unifyFeaturesTool(["A1.1"], ["R1"], [], false)],
+    ["domains", domainsTool(["R1", "R2"])],
     ["match", matchTool(["T1", "T2"], catalog)],
-    ["second look", lookTool(["https://acme.example/features", "https://acme.example/pricing"])],
+    ["second look", lookTool(["R1", "R2"])],
     ["facts", FACTS_TOOL],
   ];
-  it("no enum holds an empty string: Gemini refuses the whole request (HTTP 400 — the first real run failed on it)", () => {
+  it("no enum holds an empty string and no enum is empty: Gemini refuses the whole request (HTTP 400 — the first real run failed on it)", () => {
     for (const [name, tool] of tools) {
       for (const e of enums(tool)) {
         expect(e.values.length, `${name} ${e.path}`).toBeGreaterThan(0);
@@ -360,8 +303,6 @@ describe("the response schemas a model is sent", () => {
   it('a field that may stay without a value offers "none" in its closed set', () => {
     const match = matchTool(["T1"], catalog) as { input_schema: { properties: { matches: { items: { properties: Record<string, { enum?: string[] }> } } } } };
     expect(match.input_schema.properties.matches.items.properties.domain.enum?.[0]).toBe("none");
-    expect(match.input_schema.properties.matches.items.properties.closestDomain.enum?.[0]).toBe("none");
-    const look = lookTool(["https://acme.example/features"]) as { input_schema: { properties: Record<string, { enum?: string[] }> } };
-    expect(look.input_schema.properties.url.enum).toEqual(["none", "https://acme.example/features"]);
+    expect(match.input_schema.properties.matches.items.properties.ours.enum?.[0]).toBe("none");
   });
 });

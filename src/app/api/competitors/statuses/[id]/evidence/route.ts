@@ -15,8 +15,10 @@ const MAX_EVIDENCE = 50;
  *   /api/competitors/statuses/<cellId>/evidence?kind=feature  a feature cell
  * → { evidence: [{ quote, url, title, reasoning, wording, tier }] }
  *
- * The evidence is not copied on the cell: it is the findings of the competitor's items matched to the row (for a
- * capability also the findings of its active features, and second-look findings that answer it).
+ * The evidence is not copied on the cell: it is the proofs of the competitor's items matched to the row (for a
+ * capability also the proofs of its items on the row's active features — a company that has any feature of a row
+ * has the row — and second-look findings that answer it). `reasoning` is "" for everything the chunked reading
+ * found (the description covers it); a finding of the old per-page reading still carries one.
  */
 export async function GET(req: Request, { params }: Params) {
   const ctx = await competitorsGuard();
@@ -43,16 +45,16 @@ export async function GET(req: Request, { params }: Params) {
   }
   const findings = await db.pageFinding.findMany({
     where,
-    select: { id: true, origin: true, quote: true, reasoning: true, description: true, wording: true, item: { select: { name: true } }, page: { select: { url: true, title: true, kind: true, sourceId: true, source: { select: { type: true } } } } },
+    select: { id: true, origin: true, quote: true, reasoning: true, description: true, wording: true, item: { select: { name: true } }, page: { select: { url: true, title: true, kind: true, sourceId: true, readAs: true, source: { select: { type: true } } } } },
   });
   // A finding's tier and kind come from its page's place in the competitor's reading plan, as when the cell was filled.
   const plan = await loadReadingPlan(where.competitorId);
   const titleOf = new Map(findings.map((f) => [f.page.url, f.page.title]));
   const evidence: Evidence[] = [];
   for (const f of findings) {
-    const t = plan.read({ url: f.page.url, sourceId: f.page.sourceId, sourceType: f.page.source.type, kind: f.page.kind });
+    const t = plan.read({ url: f.page.url, sourceId: f.page.sourceId, sourceType: f.page.source.type, kind: f.page.kind, readAs: f.page.readAs });
     if (t.tier === "skip") continue;
-    evidence.push({ findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "research", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording, description: f.description });
+    evidence.push({ findingId: f.id, pageUrl: f.page.url, tier: t.tier, pageKind: t.kind, origin: f.origin === "second_look" ? "second_look" : "reading", quote: f.quote, reasoning: f.reasoning, wording: f.item?.name ?? f.wording, description: f.description });
   }
   return NextResponse.json({
     evidence: rankEvidence(evidence)

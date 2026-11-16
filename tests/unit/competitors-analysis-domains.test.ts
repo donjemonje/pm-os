@@ -1,19 +1,16 @@
 /** Capability Analysis — the setup run's domains step (analysis/domains.ts): the input, the answer's closed sets, every row exactly one domain, the stable order. Pure module. */
 import { describe, expect, it } from "vitest";
-import { DOMAINS_SYSTEM_PROMPT, domainKey, domainsTool, knownDomains, parseDomains, planCatalog, renderDomains } from "@/lib/competitors/analysis/domains";
-import { orderUnifyItems, rowsOf, type UnifyItem } from "@/lib/competitors/analysis/unify";
+import { DOMAINS_SYSTEM_PROMPT, domainKey, domainsTool, knownDomains, parseDomains, planCatalog, renderDomains, rowsWithoutDomain, type DomainsRow } from "@/lib/competitors/analysis/domains";
+import { rowKey } from "@/lib/competitors/analysis/unify";
 
-const ORDER = ["us", "en", "bg"];
-const NAMES: Record<string, string> = { us: "Aha", en: "Enterpret", bg: "Bagel AI" };
-const I = (id: string, competitorId: string, name: string, row: string): UnifyItem => ({ id, competitorId, company: NAMES[competitorId], isOwn: competitorId === "us", name, description: null, row: { name: row, description: `${row} description.` } });
-const rows = rowsOf(orderUnifyItems([
-  I("1", "us", "Idea portal", "Feedback Collection"),
-  I("2", "us", "Roadmaps", "Product Roadmaps"),
-  I("3", "en", "Feedback inbox", "Feedback Collection"),
-  I("4", "en", "Theme detection", "Feedback Theme Detection"),
-  I("5", "bg", "SSO", "Single Sign-On"),
-  I("6", "bg", "Roadmap views", "Product Roadmaps"),
-], ORDER));
+const AHA = { name: "Aha", isOwn: true };
+const row = (code: string, name: string, companies: Array<{ name: string; isOwn: boolean }>, ownNames: string[] = [], features: string[] = []): DomainsRow => ({ code, key: rowKey(name), name, description: `${name} description.`, companies, ownNames, features, ours: companies.some((c) => c.isOwn) });
+const rows: DomainsRow[] = [
+  row("R1", "Feedback Collection", [AHA, { name: "Enterpret", isOwn: false }], ["Idea portal"], ["Feedback forms", "Email intake"]),
+  row("R2", "Product Roadmaps", [AHA, { name: "Bagel AI", isOwn: false }], ["Roadmaps"]),
+  row("R3", "Feedback Theme Detection", [{ name: "Enterpret", isOwn: false }]),
+  row("R4", "Single Sign-On", [{ name: "Bagel AI", isOwn: false }]),
+];
 // R1 Feedback Collection, R2 Product Roadmaps, R3 Feedback Theme Detection, R4 Single Sign-On
 const key = (code: string) => rows.find((r) => r.code === code)!.key;
 
@@ -21,7 +18,7 @@ describe("the input of the domains call", () => {
   const text = renderDomains("Aha", [{ name: "Ideas", description: "Collect and rank feedback." }, { name: "Roadmaps", description: "" }], [], rows);
   it("carries the client's own language: its product lines and what it calls its capabilities", () => {
     expect(text).toContain("ITS PRODUCT LINES:\n- Ideas — Collect and rank feedback.\n- Roadmaps");
-    expect(text).toContain('R1 | Feedback Collection | Feedback Collection description. | offered by: Aha (the organization itself), Enterpret | the organization calls it: "Idea portal"');
+    expect(text).toContain('R1 | Feedback Collection | Feedback Collection description. | offered by: Aha (the organization itself), Enterpret | the organization calls it: "Idea portal" | features: Feedback forms; Email intake');
   });
   it("lists every row with its code, name, description and the companies that have it", () => {
     expect(text).toContain("R3 | Feedback Theme Detection | Feedback Theme Detection description. | offered by: Enterpret");
@@ -129,8 +126,8 @@ describe("the catalog the step creates", () => {
   it("capability positions count through the whole table in that order", () => {
     expect(catalog.flatMap((d) => d.rows.map((r) => [r.row.name, r.position]))).toEqual([["Feedback Collection", 0], ["Feedback Theme Detection", 1], ["Product Roadmaps", 2], ["Single Sign-On", 3]]);
   });
-  it("a row the organization's own source has starts as ours", () => {
-    expect(catalog.flatMap((d) => d.rows.map((r) => [r.row.name, r.ours]))).toEqual([["Feedback Collection", true], ["Feedback Theme Detection", false], ["Product Roadmaps", true], ["Single Sign-On", false]]);
+  it("a row the organization has — its own capability on it, or any feature of its own under it — starts as ours", () => {
+    expect(catalog.flatMap((d) => d.rows.map((r) => [r.row.name, r.row.ours]))).toEqual([["Feedback Collection", true], ["Feedback Theme Detection", false], ["Product Roadmaps", true], ["Single Sign-On", false]]);
   });
   it("every row is in exactly one domain", () => {
     const all = catalog.flatMap((d) => d.rows.map((r) => r.row.key));
@@ -142,5 +139,19 @@ describe("the catalog the step creates", () => {
     partial.delete(key("R3"));
     expect(() => planCatalog(rows, partial, drafts)).toThrow(/Feedback Theme Detection/);
     expect(() => planCatalog(rows, new Map([...assigned, [key("R4"), "no such domain"]]), drafts)).toThrow(/Single Sign-On/);
+  });
+});
+
+describe("every row in exactly one domain — checked before the catalog is created", () => {
+  it("a row with no domain is named; a full assignment has none", () => {
+    expect(rowsWithoutDomain(rows, new Map([[rows[0].key, "d"], [rows[1].key, "d"]]))).toEqual([rows[2].key, rows[3].key]);
+    expect(rowsWithoutDomain(rows, new Map(rows.map((r) => [r.key, "d"])))).toEqual([]);
+  });
+  it("an answer that puts one row in two domains is unusable — nothing of it is used", () => {
+    const parsed = parseDomains({ domains: [{ code: "D1", name: "Feedback", definition: "" }, { code: "D2", name: "Planning", definition: "" }], rows: [{ row: "R1", domain: "D1" }, { row: "R1", domain: "D2" }] }, rows, []);
+    expect(parsed.problems).toEqual(["row R1 was put in two domains — every row has exactly one"]);
+  });
+  it("no catch-all: the prompt forbids one domain for what is left", () => {
+    expect(DOMAINS_SYSTEM_PROMPT).toContain("do not make one catch-all domain for what is left");
   });
 });

@@ -1,8 +1,8 @@
 /** Capability Analysis — the cell rules (analysis/cells.ts): the table is filled in code from the evidence. Pure module. */
 import { describe, expect, it } from "vitest";
-import { bestDescription, cellFromEvidence, rankEvidence, type Evidence } from "@/lib/competitors/analysis/cells";
+import { bestDescription, cellFromEvidence, evidenceByRow, rankEvidence, type Evidence, type RowFinding } from "@/lib/competitors/analysis/cells";
 
-const e = (findingId: string, extra: Partial<Evidence> = {}): Evidence => ({ findingId, pageUrl: `https://acme.example/${findingId}`, tier: "strong", pageKind: "product", origin: "research", quote: `quote ${findingId}`, reasoning: "why", wording: "their name", description: null, ...extra });
+const e = (findingId: string, extra: Partial<Evidence> = {}): Evidence => ({ findingId, pageUrl: `https://acme.example/${findingId}`, tier: "strong", pageKind: "product", origin: "reading", quote: `quote ${findingId}`, reasoning: "why", wording: "their name", description: null, ...extra });
 
 describe("cellFromEvidence — the three rules", () => {
   it("at least one finding from a strong page → found", () => {
@@ -68,5 +68,47 @@ describe("rankEvidence", () => {
     const list = [e("b"), e("a")];
     rankEvidence(list);
     expect(list.map((x) => x.findingId)).toEqual(["b", "a"]);
+  });
+});
+
+describe("the cell rule: a company has a row when it has its OWN capability on it OR ANY FEATURE under it", () => {
+  const finding = (id: string, item: RowFinding["item"], extra: Partial<RowFinding> = {}): RowFinding => ({ evidence: e(id), item, lookCapabilityId: null, ...extra });
+  const capabilityOfFeature = new Map([["f-sso", "k-security"], ["f-audit", "k-security"], ["f-gantt", "k-roadmaps"]]);
+  it("its own capability on the row: the cell's proof is that capability's quote", () => {
+    const rows = evidenceByRow([finding("a", { capabilityId: "k-roadmaps", featureId: null })], capabilityOfFeature);
+    expect(cellFromEvidence(rows.byCapability.get("k-roadmaps") ?? [])).toMatchObject({ value: "found", best: { findingId: "a" } });
+    expect(rows.byFeature.size).toBe(0);
+  });
+  it("no capability of its own on the row, but a feature under it: the company HAS the row — the proof is the feature's quote", () => {
+    const rows = evidenceByRow([finding("sso", { capabilityId: null, featureId: "f-sso" })], capabilityOfFeature);
+    expect(cellFromEvidence(rows.byCapability.get("k-security") ?? [])).toMatchObject({ value: "found", best: { findingId: "sso" } });
+    // … and the feature row gets its own mark for the company.
+    expect(cellFromEvidence(rows.byFeature.get("f-sso") ?? []).value).toBe("found");
+    expect(cellFromEvidence(rows.byFeature.get("f-audit") ?? []).value).toBe("not_found");
+  });
+  it("neither: the company does not have the row", () => {
+    const rows = evidenceByRow([finding("g", { capabilityId: null, featureId: "f-gantt" })], capabilityOfFeature);
+    expect(cellFromEvidence(rows.byCapability.get("k-security") ?? []).value).toBe("not_found");
+  });
+  it("both: every proof counts for the row, each feature only for itself", () => {
+    const rows = evidenceByRow([finding("k", { capabilityId: "k-security", featureId: null }), finding("sso", { capabilityId: null, featureId: "f-sso" }), finding("audit", { capabilityId: null, featureId: "f-audit" })], capabilityOfFeature);
+    expect(rows.byCapability.get("k-security")?.map((x) => x.findingId)).toEqual(["k", "sso", "audit"]);
+    expect(rows.byFeature.get("f-sso")?.map((x) => x.findingId)).toEqual(["sso"]);
+  });
+  it("a feature that is not active any more (it is not in the map) proves nothing for its capability", () => {
+    const rows = evidenceByRow([finding("x", { capabilityId: null, featureId: "f-removed" })], capabilityOfFeature);
+    expect(rows.byCapability.size).toBe(0);
+    expect(rows.byFeature.get("f-removed")).toHaveLength(1);
+  });
+  it("a second look's finding answers the row it was asked about; an item with no saved match proves nothing yet", () => {
+    const rows = evidenceByRow([
+      { evidence: e("look", { origin: "second_look" }), item: null, lookCapabilityId: "k-roadmaps" },
+      finding("unmatched", { capabilityId: null, featureId: null }),
+    ], capabilityOfFeature);
+    expect(rows.byCapability.get("k-roadmaps")?.map((x) => x.findingId)).toEqual(["look"]);
+    expect(rows.byCapability.size).toBe(1);
+  });
+  it("the reading's proof is shown before a second look's on the same kind of page", () => {
+    expect(rankEvidence([e("look", { origin: "second_look" }), e("read")]).map((x) => x.findingId)).toEqual(["read", "look"]);
   });
 });

@@ -1,4 +1,5 @@
 import { emptyCounters, readCounters, sumCounters, type Counters } from "./counters";
+import { readNotRead, type NotReadByKind } from "./reads";
 import { readUsage, rollUp, type StepUsage } from "./usage";
 
 /**
@@ -113,6 +114,23 @@ export function analysisFillsTable(state: OrgSetupState): boolean {
   return state === "done";
 }
 
+/**
+ * The steps of a run of ONE company, by the organization's setup state:
+ *   setup not done   → map, reading — and it stops: the company's list is ready, no row is created (the setup run
+ *                      builds the table from every company's list together).
+ *   setup done       → map, reading (only the pages that are new or changed), match (the new items against the rows
+ *                      that exist; what matches nothing becomes a new row in an existing domain), second look (OUR
+ *                      rows the company has no item for), apply, facts.
+ *   the own site     → no second look and no profile facts: what its items say is ours.
+ */
+export function analysisPath(state: OrgSetupState, isOwn: boolean): readonly string[] {
+  if (!analysisFillsTable(state)) return ["map", "reading"];
+  return isOwn ? ["map", "reading", "match", "apply"] : ["map", "reading", "match", "second_look", "apply", "facts"];
+}
+
+/** The steps of THE SETUP RUN of an organization, in order: every company is mapped and read, then one unify and one domains step for all, then the table is filled — the own site first. */
+export const SETUP_PATH: readonly string[] = ["map", "reading", "unify", "domains", "apply (the own site: OUR column)", "second_look", "apply", "facts"];
+
 /** May the team add a domain or a capability by hand? Only when setup is done: until then the setup run builds the first catalog, and it builds it only in an empty one. */
 export function catalogEditable(state: OrgSetupState): boolean {
   return state === "done";
@@ -195,7 +213,7 @@ export function companiesInSetup<T extends SetupCompany>(companies: T[]): { work
 // ————— Progress (CompetitorAnalysis.setup) —————
 
 /** Where one company is in the setup run. */
-export type SetupStage = "waiting" | "map" | "research" | "merge" | "unify" | "match" | "second_look" | "apply" | "facts" | "done";
+export type SetupStage = "waiting" | "map" | "reading" | "research" | "merge" | "unify" | "match" | "second_look" | "apply" | "facts" | "done";
 
 export interface SetupCompanyProgress {
   competitorId: string;
@@ -209,6 +227,8 @@ export interface SetupCompanyProgress {
   counters: Counters;
   /** Its tokens by step and model (usage.ts). */
   usage: StepUsage[];
+  /** What the reading left out of this company because its kind is off in "What the analysis reads" (reads.ts): pages and tokens per kind. */
+  notRead: NotReadByKind;
 }
 
 export interface SetupProgress {
@@ -227,7 +247,8 @@ export function emptySetupProgress(): SetupProgress {
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-const STAGES: readonly string[] = ["waiting", "map", "research", "merge", "unify", "match", "second_look", "apply", "facts", "done"];
+/** "research" and "merge" are stages of the old per-page reading: kept so the progress of an old run still reads. */
+const STAGES: readonly string[] = ["waiting", "map", "reading", "research", "merge", "unify", "match", "second_look", "apply", "facts", "done"];
 
 /** The stored progress (a Json column), checked field by field: anything that is not progress reads as empty. */
 export function readSetupProgress(raw: unknown): SetupProgress {
@@ -253,6 +274,7 @@ export function readSetupProgress(raw: unknown): SetupProgress {
       appliedAt: typeof o.appliedAt === "string" ? o.appliedAt : null,
       counters: readCounters(o.counters),
       usage: readUsage(o.usage),
+      notRead: readNotRead(o.notRead),
     });
   }
   return out;

@@ -1,22 +1,23 @@
-import { arr, pageMeta, str } from "../ai";
+import { arr, str } from "../ai";
 import { checkPii } from "../pii";
-import { wordingKey } from "./items";
-import { quoteChecker, verifyQuote } from "./quotes";
+import type { IncidentDraft, RequestPage } from "./reading";
+import { WHERE_A_PM_LOOKS } from "./reading";
+import { quoteChecker } from "./quotes";
 import { isSectionLabel, MAP_OPENING_CHARS, prefixPath, SECTION_LABELS, type Section, type SectionLabel } from "./sections";
 
 /**
- * The prompts of the setup run's two own steps live next to their rules: analysis/unify.ts (unify, unify review)
- * and analysis/domains.ts (domains). Administration → Competitors lists every prompt, these included.
+ * Three prompts of the capability analysis (Capability Analysis, "How the analysis runs"): the map, the match and
+ * the second look. The others live next to their rules: the reading in analysis/reading.ts, unify in
+ * analysis/unify.ts, domains in analysis/domains.ts. Administration → Competitors lists every prompt.
  *
- * The five prompts of the capability analysis (Capability Analysis, "How the analysis runs"). Each has a version,
- * the system text, the tool (the JSON schema the answer is held to), a render function for the user content and a
- * parse function that validates the answer field by field and returns typed, cleaned data. A parser never throws
- * on a bad field: it drops it and counts it.
+ * Each prompt has a version, the system text, the tool (the JSON schema the answer is held to), a render function
+ * for the user content and a parse function that validates the answer field by field and returns typed, cleaned
+ * data. A parser never throws on a bad field: it drops it and counts it.
  *
  * PMOS AI never decides a cell. The map labels the sections of the site that code built (closed codes, closed
- * labels), skimming a few sample pages of each: address, title and first lines. Research lists what a page offers, in the page's words, with a quote; the quote is checked in code.
- * Merge groups wordings. Match answers with OUR codes (a closed set), never free names. The second look answers
- * one capability from its most likely pages. The cells are filled by fixed rules (cells.ts).
+ * labels), skimming a few sample pages of each. The match answers with OUR codes (a closed set), never free names.
+ * The second look answers, for the rows of ours a company has no item for, which of them a chunk of its pages
+ * shows — by row code, with a quote that is checked in code. The cells are filled by fixed rules (cells.ts).
  *
  * Pure: no database, no network.
  */
@@ -26,13 +27,6 @@ import { isSectionLabel, MAP_OPENING_CHARS, prefixPath, SECTION_LABELS, type Sec
  * map-2 (2026-11-15): the map skims the sample pages — each carries its first lines, not only its title and address.
  */
 export const MAP_VERSION = "map-2";
-
-/** Bumping RESEARCH_VERSION makes every page of every competitor due again (it is part of SourcePage.analyzedKey). */
-export const RESEARCH_VERSION = "research-2";
-export const MERGE_VERSION = "merge-1";
-/** Bumping MATCH_VERSION invalidates nothing: a saved match is a decision. */
-export const MATCH_VERSION = "match-2";
-export const LOOK_VERSION = "look-2";
 
 /** Closed sets up to this size ride in the response schema as an enum; larger ones are enforced by the parser only. */
 export const MAX_ENUM = 120;
@@ -165,276 +159,115 @@ export function injectedMapAnswer(labels: Record<string, string> | undefined, en
   });
 }
 
-// ————— 1. Research: one call per page —————
+// ————— Map, page by page: the release-notes pages inside a help center or a blog —————
 
-export const RESEARCH_SYSTEM_PROMPT = `You read one page of a company's website for a product team that studies this company. List every capability the page says the company offers, and under each capability the features the page describes for it.
+/**
+ * Release notes win over where they sit (Daniel 2026-11-16): a company may keep its release notes as an article of
+ * its help center, or publish its changelog as blog posts. A section label is not enough there, so for the
+ * sections labeled help or news the map also looks at the pages one by one — address and title only, never the
+ * text — and names the release-notes pages by code (a closed set). Asked once per page: the answer is kept on the
+ * page (SourcePage.readAs).
+ */
+export const MAP_PAGES_VERSION = "map-pages-1";
 
-A capability is something a buyer would list as a requirement when choosing a product. A feature is a detail of how a capability works.
+export const MAP_PAGES_SYSTEM_PROMPT = `A product team studies one company to learn what its product does. Below are pages of the company's help center or of its blog — each with a code, the kind of place it sits in, its address and its title. Some companies publish their RELEASE NOTES there: a changelog article, "what's new" or "product updates" posts, a page per release. Name those pages.
 
-Rules:
-- Use their words. The name is the name the page itself uses, as short as the page allows (at most 80 characters). Do not rename, generalise or translate it.
-- For every capability and every feature give one exact quote from the page that shows it: copied character for character, one continuous passage of at most 300 characters, no ellipsis, nothing added, nothing joined from two places.
-- For every capability and every feature give one sentence of reasoning: why this quote means the company offers it.
-- For every capability and every feature give a description: one plain sentence saying what it does, taken only from what this page says. When the page does not say what it does, leave the description empty. Never fill it from what you know.
-- A page marked COMPARISON PAGE compares the company named there with another company. List only what the page says that company itself offers. Ignore every statement about the other company: nothing the other company offers or lacks is listed, and no quote is taken from a passage about the other company.
-- Only what this page says the company itself offers today. Not what its customers or partners do, not what an article discusses in general, not plans or roadmaps, not job requirements, not legal text, not menu labels.
-- A page that offers nothing (an article about the industry, a legal page, an empty page) has an empty list. An empty list is a correct answer.
-- Nothing about people: no names, titles or contact details.`;
+A release-notes page says what was shipped in the product: new features, improvements and fixes, by release or by date. A how-to article, a guide, a FAQ, an opinion or marketing post, a customer story, an event or a company announcement is NOT one — also when it mentions a new feature.
 
-const FINDING_PROPS = {
-  name: { type: "string", description: "The name the page uses, at most 80 characters." },
-  quote: { type: "string", description: "One exact, continuous passage from the page, at most 300 characters." },
-  reasoning: { type: "string", description: "One sentence: why this quote means the company offers it." },
-  description: { type: "string", description: "One plain sentence of what it does, taken only from this page. Empty when the page does not say." },
-};
+Answer with the codes of the release-notes pages. Use only the codes given. Most help centers and blogs have none: an empty list is a correct answer. Do not guess from a code or from the order of the pages: decide from the address and the title.`;
 
-export const RESEARCH_TOOL = {
-  name: "list_capabilities",
-  description: "Record every capability the page says the company offers, with the features under each.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      capabilities: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            ...FINDING_PROPS,
-            features: { type: "array", items: { type: "object", properties: FINDING_PROPS, required: ["name", "quote", "reasoning", "description"] } },
-          },
-          required: ["name", "quote", "reasoning", "description", "features"],
-        },
-      },
+/** Pages per call of the page pick. A line is a code, an address and a title: about 40 tokens. */
+export const MAP_PAGES_BATCH = 400;
+export const MAP_PAGES_MAX_TOKENS = 8_000;
+
+export function mapPagesTool(codes: string[]): Record<string, unknown> {
+  return {
+    name: "name_release_notes",
+    description: "Record the codes of the pages that are release notes.",
+    input_schema: {
+      type: "object" as const,
+      properties: { release_notes: { type: "array", items: { type: "string", description: "A page code, e.g. P7.", ...(codes.length <= MAX_ENUM ? { enum: codes } : {}) } } },
+      required: ["release_notes"],
     },
-    required: ["capabilities"],
-  },
-};
-
-export const RESEARCH_MAX_TOKENS = 8000;
-export const MAX_CAPABILITIES_PER_PAGE = 40;
-export const MAX_FEATURES_PER_CAPABILITY = 30;
-/** A finding's description is cut to this many characters. */
-export const MAX_DESCRIPTION_CHARS = 300;
-
-export interface PromptPage {
-  url: string;
-  title: string;
-  text: string;
-  /** SourcePage.kind */
-  kind?: string;
-  /** Source type label ("Help center", "Datasheets & documents"). */
-  sourceLabel?: string;
+  };
 }
 
-/** The extra instruction the research call gets on a page of a "compare" section: one line in the page's header, naming the company that owns the site. */
-export function comparePageLine(company: string): string {
-  return `COMPARISON PAGE: this page compares ${company} with another company. List only what it says ${company} itself offers; ignore every statement about the other company.`;
+export interface MapPageEntry {
+  /** "P1" … in the order of the call. */
+  code: string;
+  url: string;
+  title: string;
+  /** The label of the section it sits in: "help" | "news". */
+  label: string;
+}
+
+/** "support.acme.com/hc/articles/360-release-notes" — an address without its scheme. */
+function addressOf(url: string): string {
+  return url.replace(/^[a-z]+:\/\//i, "");
+}
+
+export function renderMapPages(company: string, entries: MapPageEntry[]): string {
+  const lines = entries.map((e) => `${e.code} | ${e.label === "news" ? "blog" : "help center"} | ${addressOf(e.url)} | ${e.title ? `"${short(e.title, 120)}"` : "no title"}`);
+  return `COMPANY: ${company.replace(/\s+/g, " ").trim()}\n\nPAGES:\n${lines.join("\n")}`;
 }
 
 /**
- * One page, whole: no cut, no other page. `compareCompany` is set for a page of a "compare" section (the company
- * that owns the site): the page then carries the COMPARISON PAGE line — only that company's own claims are listed.
+ * The release-notes pages of one answer, as codes. A code that was not asked is reported, never guessed: the step
+ * treats it as an unusable answer and fails the run. A code named twice counts once. Every page of the call the
+ * answer does not name is NOT a release-notes page — that is an answer too, and it is kept.
  */
-export function renderResearch(page: PromptPage, opts: { compareCompany?: string | null } = {}): string {
-  const meta = pageMeta(page);
-  const company = opts.compareCompany?.replace(/\s+/g, " ").trim();
-  const compare = company ? `\n${comparePageLine(company)}` : "";
-  return `PAGE ${page.url}\nTitle: ${page.title}${meta ? `\nSource: ${meta}` : ""}${compare}\n\n${page.text}`;
+export function parseMapPages(value: unknown, codes: string[]): { releaseNotes: Set<string>; unknownCodes: string[] } {
+  const asked = new Set(codes);
+  const releaseNotes = new Set<string>();
+  const unknownCodes: string[] = [];
+  for (const c of arr((value as Record<string, unknown> | null)?.release_notes)) {
+    const code = typeof c === "string" ? c.trim() : "";
+    if (asked.has(code)) releaseNotes.add(code);
+    else unknownCodes.push(code || "(none)");
+  }
+  return { releaseNotes, unknownCodes };
 }
 
-export interface ResearchFinding {
-  kind: "capability" | "feature";
-  /** Their name for it, as the page says it. */
-  wording: string;
-  /** For a feature: the wording of the capability it sits under on this page. */
-  parentWording: string | null;
-  quote: string;
-  reasoning: string;
-  /** One plain sentence of what it does, from this page only; null when the page does not say. */
-  description: string | null;
-}
-
-export interface ResearchDropped {
-  /** The quote is not on the page (or there was none). */
-  noQuote: number;
-  /** The finding named a person. */
-  pii: number;
-  /** Beyond 40 capabilities per page or 30 features per capability: the sum of the two below. */
-  over: number;
-  /** Capabilities beyond MAX_CAPABILITIES_PER_PAGE that the answer listed and were left out. */
-  overCapabilities: number;
-  /** Features beyond MAX_FEATURES_PER_CAPABILITY, under the capabilities that were kept. */
-  overFeatures: number;
+/**
+ * TEST KNOB: the JSON text PMOS AI would have answered for a page-pick call, built from a test's list of
+ * release-notes pages (settings.ts TestAiAnswers.releaseNotes): full addresses, or paths ("/blog/changelog-may").
+ */
+export function injectedMapPagesAnswer(releaseNotes: string[] | undefined, entries: MapPageEntry[]): string {
+  const named = new Set(releaseNotes ?? []);
+  const path = (url: string) => {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url;
+    }
+  };
+  return JSON.stringify({ release_notes: entries.filter((e) => named.has(e.url) || named.has(path(e.url))).map((e) => e.code) });
 }
 
 const piiIn = (...texts: string[]) => texts.some((t) => checkPii(t).hit);
 /** A text that names a person is emptied. */
 const clean = (text: string): string => (checkPii(text).hit ? "" : text);
-
-export function parseResearch(value: unknown, pageText: string): { findings: ResearchFinding[]; dropped: ResearchDropped } {
-  const findings: ResearchFinding[] = [];
-  const dropped: ResearchDropped = { noQuote: 0, pii: 0, over: 0, overCapabilities: 0, overFeatures: 0 };
-  const check = quoteChecker(pageText);
-  /** capability wording key → the wording that won; its features hang under that wording. */
-  const capabilityByKey = new Map<string, string>();
-  const featureKeys = new Set<string>();
-  const one = (o: Record<string, unknown>): { name: string; quote: string; reasoning: string; description: string | null } | null => {
-    const name = str(o.name, 80);
-    if (!name || !wordingKey(name)) return null;
-    const quote = typeof o.quote === "string" ? check(o.quote) : null;
-    if (!quote) {
-      dropped.noQuote++;
-      return null;
-    }
-    const reasoning = str(o.reasoning, 300);
-    if (piiIn(name, quote, reasoning)) {
-      dropped.pii++;
-      return null;
-    }
-    // A description that names a person is emptied; the finding stays (its quote was checked above).
-    return { name, quote, reasoning, description: clean(str(o.description, MAX_DESCRIPTION_CHARS)) || null };
-  };
-  const capabilities = arr((value as Record<string, unknown> | null)?.capabilities);
-  dropped.overCapabilities = Math.max(0, capabilities.length - MAX_CAPABILITIES_PER_PAGE);
-  dropped.over += dropped.overCapabilities;
-  for (const c of capabilities.slice(0, MAX_CAPABILITIES_PER_PAGE)) {
-    const o = (c ?? {}) as Record<string, unknown>;
-    const name = str(o.name, 80);
-    const key = wordingKey(name);
-    let parentWording = key ? capabilityByKey.get(key) ?? null : null;
-    if (!parentWording) {
-      // A capability whose quote fails (or that names a person) is dropped, and its features with it: no parent, no place in the list.
-      const cap = one(o);
-      if (!cap) continue;
-      capabilityByKey.set(key, cap.name);
-      findings.push({ kind: "capability", wording: cap.name, parentWording: null, quote: cap.quote, reasoning: cap.reasoning, description: cap.description });
-      parentWording = cap.name;
-    }
-    const features = arr(o.features);
-    dropped.overFeatures += Math.max(0, features.length - MAX_FEATURES_PER_CAPABILITY);
-    dropped.over += Math.max(0, features.length - MAX_FEATURES_PER_CAPABILITY);
-    for (const f of features.slice(0, MAX_FEATURES_PER_CAPABILITY)) {
-      const fo = (f ?? {}) as Record<string, unknown>;
-      const fkey = `${wordingKey(parentWording)}>${wordingKey(str(fo.name, 80))}`;
-      // The same feature listed twice under one capability: the first wins.
-      if (featureKeys.has(fkey)) continue;
-      const feature = one(fo);
-      if (!feature) continue;
-      featureKeys.add(fkey);
-      findings.push({ kind: "feature", wording: feature.name, parentWording, quote: feature.quote, reasoning: feature.reasoning, description: feature.description });
-    }
-  }
-  return { findings, dropped };
-}
-
-// ————— 2. Merge: the competitor's own list —————
-
-export const MERGE_SYSTEM_PROMPT = `Below is a numbered list of capabilities, or of features under their capabilities, found on the pages of one company's website. Some entries are the same thing under different wording. Group the entries that are the same thing.
-
-Rules:
-- Two entries are the same thing only when a buyer would treat them as one line of a requirements list. A broader thing and a narrower thing are not the same.
-- Features are grouped only with features under the same capability.
-- Entries marked KNOWN are lists merged by earlier scans. A new entry may join a KNOWN entry. Two KNOWN entries are never put in one group.
-- List only groups of two or more entries. An entry that stands alone is not listed.`;
-
-export const MERGE_TOOL = {
-  name: "group_entries",
-  description: "Record the groups of entries that are the same thing.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      groups: {
-        type: "array",
-        items: { type: "object", properties: { members: { type: "array", items: { type: "string", description: "An entry code, e.g. M7." } } }, required: ["members"] },
-      },
-    },
-    required: ["groups"],
-  },
-};
-
-export const MERGE_MAX_TOKENS = 12000;
-/** Capability lines per merge call; more are split into consecutive calls. */
-export const MERGE_MAX_CAPABILITY_LINES = 800;
-/** Feature lines per merge call; a capability's features are never split across calls. */
-export const MERGE_MAX_FEATURE_LINES = 500;
-
-export interface MergeEntry {
-  /** "M1" … in the order of the call. */
-  code: string;
-  kind: "capability" | "feature";
-  /** For a feature: the item id of its capability (features merge only inside one capability). */
-  parentId: string | null;
-  name: string;
-  /** Distinct pages that carry it. */
-  pages: number;
-  /** Its top quote. */
-  quote: string;
-  /** Merged by an earlier run. */
-  known: boolean;
-}
-
 const short = (s: string, max: number) => (s.length > max ? `${s.slice(0, max).trimEnd()}…` : s).replace(/\s+/g, " ").replace(/"/g, "'");
 
-export function renderMergeCapabilities(company: string, entries: MergeEntry[]): string {
-  const lines = entries.map((e) => `${e.code} | ${e.name} | ${e.pages} page${e.pages === 1 ? "" : "s"} | "${short(e.quote, 120)}"${e.known ? " | KNOWN" : ""}`);
-  return `COMPANY: ${company}\n\nCAPABILITIES:\n${lines.join("\n")}`;
-}
+// ————— Match: a company's new items against the rows that exist —————
 
-export function renderMergeFeatures(company: string, parents: Array<{ name: string; entries: MergeEntry[] }>): string {
-  const blocks = parents.map((p) => `CAPABILITY: ${p.name}\n${p.entries.map((e) => `  ${e.code} | ${e.name} | "${short(e.quote, 120)}"${e.known ? " | KNOWN" : ""}`).join("\n")}`);
-  return `COMPANY: ${company}\n\n${blocks.join("\n\n")}`;
-}
+/** Bumping MATCH_VERSION invalidates nothing: a saved match is a decision. match-3 (2026-11-16): an entry that is none of ours goes into an EXISTING domain — no new domain is proposed. */
+export const MATCH_VERSION = "match-3";
 
-/**
- * The groups of an answer, as entry codes: unknown codes dropped; a code that appears in two groups stays in the
- * first; a group that mixes kinds or (for features) capabilities is split; of several KNOWN entries in one group
- * only the first stays; groups left with fewer than two members are dropped.
- */
-export function parseMerge(value: unknown, entries: MergeEntry[]): string[][] {
-  const byCode = new Map(entries.map((e) => [e.code, e]));
-  const used = new Set<string>();
-  const out: string[][] = [];
-  for (const g of arr((value as Record<string, unknown> | null)?.groups)) {
-    const members = arr((g as Record<string, unknown> | null)?.members);
-    /** kind + parent → the codes of this group that belong together. */
-    const parts = new Map<string, { codes: string[]; hasKnown: boolean }>();
-    for (const m of members) {
-      const code = typeof m === "string" ? m.trim() : "";
-      const e = byCode.get(code);
-      if (!e || used.has(code)) continue;
-      const key = `${e.kind}|${e.parentId ?? ""}`;
-      const part = parts.get(key) ?? { codes: [], hasKnown: false };
-      if (e.known && part.hasKnown) continue;
-      if (e.known) part.hasKnown = true;
-      part.codes.push(code);
-      parts.set(key, part);
-      used.add(code);
-    }
-    for (const part of parts.values()) {
-      if (part.codes.length >= 2) out.push(part.codes);
-      else for (const c of part.codes) used.delete(c);
-    }
-  }
-  return out;
-}
+export const MATCH_SYSTEM_PROMPT = `You match one company's list of capabilities and features to the rows of a product team's comparison table.
 
-// ————— 3. Match and place: their list against ours —————
-
-export const MATCH_SYSTEM_PROMPT = `You match one company's list of capabilities and features to a product team's own list.
-
-OUR LIST is grouped by domain. Each domain has the team's definition: read the definitions first, they say what belongs in each domain. Every domain, capability and feature of ours has a code. THEIR LIST has codes too.
+OUR TABLE is grouped by domain. Each domain has the team's definition: read the definitions first, they say what belongs in each domain. Every domain, capability and feature of ours has a code. THEIR LIST has codes too; each entry comes with what it does, in the company's own words.
 
 For each entry of THEIR LIST answer:
 - ours: the code of the capability or feature of ours that is the same thing, or "none". Match by what it is, not by its name. A capability of theirs can be a feature of ours, and a feature of theirs can be a capability of ours. Give a code only when you are confident it is the same thing; otherwise answer "none".
 
-For an entry with ours = "none":
-- marketName: the most common name for it in the market. Vendor-neutral: never a product, brand or marketing name.
+An entry with ours = "none" becomes a new row of the table. For it give:
+- marketName: the name the market uses for it. Vendor-neutral: never a product, brand or marketing name.
 - description: one plain sentence saying what it does.
-- If it is a capability: domain = the code of the domain of ours it belongs in, or "new" when no domain of ours fits. With "new" give newDomainName (short, title case, a market term) and newDomainDefinition (one sentence). Always give closestDomain: the code of the existing domain of ours that fits best, also when you answer "new".
-- Never propose a domain that is in REMOVED DOMAINS, or a rewording of one. Answer with the closest existing domain instead.
-- If it is a feature: answer "none" for domain and closestDomain and leave newDomainName and newDomainDefinition empty. It follows its capability.
+- If it is a capability: domain = the code of the domain of ours it belongs in. Always one of ours — no new domain is made here.
+- If it is a feature: answer "none" for domain. It follows its capability.
 
-For an entry with ours = a code, answer "none" for domain and closestDomain and leave every other field empty.`;
+For an entry with ours = a code, answer "none" for domain and leave marketName and description empty.`;
 
 export const MATCH_MAX_TOKENS = 12000;
 /** Entries of their list per match call. */
@@ -457,8 +290,7 @@ export interface MatchBatchEntry {
 /** The tool of one batch: `entry` is always a closed set; our codes ride as an enum only while the set is small. */
 export function matchTool(entryCodes: string[], catalog: MatchCatalog): Record<string, unknown> {
   const ours = ["none", ...catalog.ours.keys()];
-  const domains = [NO_VALUE, "new", ...catalog.domains.keys()];
-  const closest = [NO_VALUE, ...catalog.domains.keys()];
+  const domains = [NO_VALUE, ...catalog.domains.keys()];
   const closed = (values: string[]) => (values.length <= MAX_ENUM ? { enum: values } : {});
   return {
     name: "match_entries",
@@ -473,14 +305,11 @@ export function matchTool(entryCodes: string[], catalog: MatchCatalog): Record<s
             properties: {
               entry: { type: "string", enum: entryCodes },
               ours: { type: "string", description: 'A K- or F-code of ours, or "none".', ...closed(ours) },
-              domain: { type: "string", description: 'A D-code of ours, "new", or "none" (a feature, or an entry that is one of ours).', ...closed(domains) },
-              newDomainName: { type: "string" },
-              newDomainDefinition: { type: "string" },
-              closestDomain: { type: "string", description: 'A D-code of ours, or "none" (a feature, or an entry that is one of ours).', ...closed(closest) },
+              domain: { type: "string", description: 'A D-code of ours for a capability that is none of ours; "none" for a feature, or for an entry that is one of ours.', ...closed(domains) },
               marketName: { type: "string" },
               description: { type: "string" },
             },
-            required: ["entry", "ours", "domain", "newDomainName", "newDomainDefinition", "closestDomain", "marketName", "description"],
+            required: ["entry", "ours", "domain", "marketName", "description"],
           },
         },
       },
@@ -493,26 +322,25 @@ export interface MatchTheirEntry extends MatchBatchEntry {
   /** For a feature: the T-code of its capability when that is in the same batch, else that capability's name. */
   parent: { code: string } | { name: string } | null;
   name: string;
+  /** What it does, in the company's own words; "" when its list does not say. */
+  description: string;
   quote: string;
 }
 
-export function renderMatchTail(company: string, proposedDomains: string[], entries: MatchTheirEntry[]): string {
+export function renderMatchTail(company: string, entries: MatchTheirEntry[]): string {
+  const what = (e: MatchTheirEntry) => `${e.name}${e.description ? ` — ${short(e.description, 240)}` : ""}${e.quote ? ` | "${short(e.quote, 120)}"` : ""}`;
   const lines = entries.map((e) => {
-    if (e.kind === "capability") return `${e.code} | capability | ${e.name} | "${short(e.quote, 120)}"`;
+    if (e.kind === "capability") return `${e.code} | capability | ${what(e)}`;
     const under = e.parent ? ("code" in e.parent ? e.parent.code : `"${e.parent.name}"`) : "a capability not listed";
-    return `  ${e.code} | feature of ${under} | ${e.name} | "${short(e.quote, 120)}"`;
+    return `  ${e.code} | feature of ${under} | ${what(e)}`;
   });
-  return `COMPANY: ${company}\n\nDOMAINS PROPOSED EARLIER IN THIS RUN: ${proposedDomains.length ? proposedDomains.join(", ") : "none"}\n\nTHEIR LIST:\n${lines.join("\n")}`;
+  return `COMPANY: ${company}\n\nTHEIR LIST:\n${lines.join("\n")}`;
 }
 
 /** The match call's answer for an item that is none of ours — what the apply step turns into a row. */
 export interface Placement {
-  /** A domain of ours (active or suggested) the capability belongs in; null = a new domain, or unknown. */
+  /** For a capability: the domain of ours it belongs in. Null for a feature (it follows its capability). */
   domainId: string | null;
-  newDomainName: string;
-  newDomainDefinition: string;
-  /** The existing active domain that fits best. */
-  closestDomainId: string | null;
   marketName: string;
   description: string;
 }
@@ -523,14 +351,16 @@ export type MatchAnswer =
 
 /**
  * The answers of one batch. An entry outside the batch is dropped; a duplicate entry keeps the first; an `ours`
- * that is neither a code of ours nor "none" counts as "none" (and is reported); `domain` must be a D-code or "new"
- * (anything else leaves the placement to closestDomain); closestDomain must be an active domain of ours.
+ * that is neither a code of ours nor "none" counts as "none" (and is reported). A capability that is none of ours
+ * must name a domain of ours: with any other answer the entry is NOT answered — it is in `noDomain` and the step
+ * asks it again (no domain is guessed for it).
  */
-export function parseMatch(value: unknown, batch: MatchBatchEntry[], catalog: MatchCatalog): { answers: MatchAnswer[]; unknownOurs: string[] } {
+export function parseMatch(value: unknown, batch: MatchBatchEntry[], catalog: MatchCatalog): { answers: MatchAnswer[]; unknownOurs: string[]; noDomain: string[] } {
   const kinds = new Map(batch.map((b) => [b.code, b.kind]));
   const seen = new Set<string>();
   const answers: MatchAnswer[] = [];
   const unknownOurs: string[] = [];
+  const noDomain: string[] = [];
   for (const m of arr((value as Record<string, unknown> | null)?.matches)) {
     const o = (m ?? {}) as Record<string, unknown>;
     const entry = typeof o.entry === "string" ? o.entry.trim() : "";
@@ -544,89 +374,139 @@ export function parseMatch(value: unknown, batch: MatchBatchEntry[], catalog: Ma
       continue;
     }
     if (oursCode && oursCode.toLowerCase() !== "none") unknownOurs.push(oursCode);
-    const placement: Placement = { domainId: null, newDomainName: "", newDomainDefinition: "", closestDomainId: null, marketName: clean(str(o.marketName, 80)), description: clean(str(o.description, 300)) };
+    const placement: Placement = { domainId: null, marketName: clean(str(o.marketName, 80)), description: clean(str(o.description, 300)) };
     if (kind === "capability") {
-      const domainCode = typeof o.domain === "string" ? o.domain.trim() : "";
-      const domain = catalog.domains.get(domainCode);
-      if (domain) {
-        placement.domainId = domain.id;
-      } else if (domainCode.toLowerCase() === "new") {
-        placement.newDomainName = clean(str(o.newDomainName, 60));
-        placement.newDomainDefinition = clean(str(o.newDomainDefinition, 300));
+      const domain = catalog.domains.get(typeof o.domain === "string" ? o.domain.trim() : "");
+      if (!domain) {
+        noDomain.push(entry);
+        continue;
       }
-      const closest = catalog.domains.get(typeof o.closestDomain === "string" ? o.closestDomain.trim() : "");
-      placement.closestDomainId = closest && closest.state === "active" ? closest.id : null;
+      placement.domainId = domain.id;
     }
     answers.push({ entry, ours: null, placement });
   }
-  return { answers, unknownOurs };
+  return { answers, unknownOurs, noDomain };
 }
 
-// ————— 4. Second look: one capability of ours that got no match —————
+// ————— Second look, in bulk: the rows of ours a company has no item for —————
 
-export const LOOK_SYSTEM_PROMPT = `A product team wants to know whether one company offers one capability. You get the capability with the team's definition, and the pages of the company's website most likely to mention it.
+/** look-3 (2026-11-16): one request per chunk of the company's pages for ALL the rows that are due, instead of one request per capability. */
+export const LOOK_VERSION = "look-3";
 
-Answer whether the pages show that the company offers this capability.
-- If they do: found = true; quote = the exact passage that shows it (copied character for character, one continuous passage of at most 300 characters); url = the address of the page the quote is on (one of the PAGE lines); theirName = the name the company uses for it; reasoning = one sentence: why this quote means they offer it.
-- If they do not: found = false, url = "none" and every other field empty.
-A related or broader offering is not this capability. Do not guess.`;
+export const LOOK_SYSTEM_PROMPT = `A product team compares its own product with another company's. You get capabilities of the team's own product that the reading of the other company did not find — each with a code, its name and what it is — and then pages of that company's own material. Each page has a code, its address, its kind, its title and its text.
 
-export const LOOK_MAX_TOKENS = 1000;
+Say which of these capabilities the pages show the company offers.
+- For each one the pages show: its code; one exact passage that shows it, copied character for character from ONE page — one continuous passage of at most 300 characters, nothing added, no ellipsis; the code of the page the quote is on; and the name the company itself uses for it.
+- Leave out every capability the pages do not show. An empty list is a correct answer.
+A related or broader offering is not the capability. Do not guess. Use only the capability codes given, each at most once.
+A block marked SITE FRAME holds the lines a site repeats on most of its pages, shown once. It is not a page: take no quote from it.
 
-export function lookTool(urls: string[]): Record<string, unknown> {
+${WHERE_A_PM_LOOKS}`;
+
+export const LOOK_MAX_TOKENS = 16_000;
+
+export function lookTool(rowCodes: string[]): Record<string, unknown> {
   return {
     name: "second_look",
-    description: "Record whether the pages show that the company offers the capability.",
+    description: "Record which of the capabilities the pages show the company offers, each with its quote and page.",
     input_schema: {
       type: "object" as const,
       properties: {
-        found: { type: "boolean" },
-        quote: { type: "string" },
-        url: { type: "string", description: 'The address of the page the quote is on (one of the PAGE lines); "none" when not found.', ...(urls.length <= MAX_ENUM ? { enum: [NO_VALUE, ...urls] } : {}) },
-        theirName: { type: "string" },
-        reasoning: { type: "string" },
+        found: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              capability: { type: "string", description: "The code of the capability, e.g. R4.", ...(rowCodes.length <= MAX_ENUM ? { enum: rowCodes } : {}) },
+              quote: { type: "string", description: "One exact, continuous passage from ONE page, at most 300 characters." },
+              page: { type: "string", description: "The code of the page the quote is on, e.g. P12." },
+              their_name: { type: "string", description: "The name the company uses for it." },
+            },
+            required: ["capability", "quote", "page", "their_name"],
+          },
+        },
       },
-      required: ["found", "quote", "url", "theirName", "reasoning"],
+      required: ["found"],
     },
   };
 }
 
-export function renderSecondLook(
-  capability: { name: string; description: string; aliases: string[] },
-  domain: { name: string; description: string },
-  company: string,
-  pages: PromptPage[],
-): string {
-  const head = [
-    `CAPABILITY: ${capability.name}`,
-    capability.description.trim() || null,
-    capability.aliases.length ? `Also known as: ${capability.aliases.join(", ")}` : null,
-    `DOMAIN: ${domain.name}`,
-    domain.description.trim() || null,
-  ].filter(Boolean).join("\n");
-  const blocks = pages.map((p) => {
-    const meta = pageMeta(p);
-    return `### PAGE ${p.url}\nTitle: ${p.title}${meta ? `\nSource: ${meta}` : ""}\n${p.text}`;
-  });
-  return `${head}\n\nCOMPANY: ${company}\n\n${blocks.join("\n\n")}`;
+/** A row of ours as a second look asks about it. */
+export interface LookRow {
+  /** "R1" … in table order, for this run's look. */
+  code: string;
+  capabilityId: string;
+  name: string;
+  description: string;
+  aliases: string[];
+  domain: string;
 }
 
-export type SecondLookAnswer =
-  | { found: true; pageId: string; quote: string; wording: string; reasoning: string }
-  /** `quoteDropped`: the model said found, but its quote is not on the page it named. */
-  | { found: false; quoteDropped: boolean };
+/** The user content of one second-look request: the company, the rows still looked for, the pages of the chunk. */
+export function renderLook(company: string, rows: LookRow[], pagesText: string): string {
+  const lines = rows.map((r) => `${r.code} | ${short(r.name, 80)}${r.description.trim() ? ` — ${short(r.description, 300)}` : ""}${r.aliases.length ? ` (also known as: ${r.aliases.map((a) => short(a, 60)).join(", ")})` : ""} | domain: ${short(r.domain, 60)}`);
+  return `COMPANY: ${company.replace(/\s+/g, " ").trim()}\n\nCAPABILITIES OF OURS TO LOOK FOR:\n${lines.join("\n")}\n\n${pagesText}`;
+}
 
-/** "Found" counts only when the page is one of those given, the quote is on that page, and nothing names a person. */
-export function parseSecondLook(value: unknown, pages: Array<{ id: string; url: string; text: string }>): SecondLookAnswer {
-  const o = (value ?? {}) as Record<string, unknown>;
-  if (o.found !== true) return { found: false, quoteDropped: false };
-  const url = typeof o.url === "string" ? o.url.trim() : "";
-  const page = pages.find((p) => p.url === url);
-  if (!page) return { found: false, quoteDropped: false };
-  const quote = typeof o.quote === "string" ? verifyQuote(o.quote, page.text) : null;
-  if (!quote) return { found: false, quoteDropped: true };
-  const wording = str(o.theirName, 80);
-  const reasoning = str(o.reasoning, 300);
-  if (piiIn(quote, wording, reasoning)) return { found: false, quoteDropped: false };
-  return { found: true, pageId: page.id, quote, wording, reasoning };
+export interface LookFound {
+  capabilityId: string;
+  /** The row's code in this request. */
+  code: string;
+  pageId: string;
+  pageHash: string;
+  quote: string;
+  /** The company's own name for it; "" when the answer gave none. */
+  wording: string;
+}
+
+/**
+ * The answer of one second-look request. "Found" counts only when the code is one of the rows asked, the page is
+ * one of the request's and the quote is on that page. A code that was not asked, a page that is not in the request
+ * and a quote that is not on its page are INCIDENTS: nothing of them reaches the table. A row answered twice keeps
+ * its first answer that passed. A quote or a name that names a person is left out.
+ */
+export function parseLook(value: unknown, rows: LookRow[], pages: RequestPage[]): { found: LookFound[]; incidents: IncidentDraft[] } {
+  const byCode = new Map(rows.map((r) => [r.code.toLowerCase(), r]));
+  const pageOf = new Map(pages.map((p) => [p.code.toLowerCase(), p]));
+  const checks = new Map<string, (quote: string) => string | null>();
+  const check = (p: RequestPage, quote: string) => {
+    let c = checks.get(p.id);
+    if (!c) {
+      c = quoteChecker(p.text);
+      checks.set(p.id, c);
+    }
+    return c(quote);
+  };
+  const found: LookFound[] = [];
+  const incidents: IncidentDraft[] = [];
+  const done = new Set<string>();
+  for (const f of arr((value as Record<string, unknown> | null)?.found)) {
+    const o = (f ?? {}) as Record<string, unknown>;
+    const code = typeof o.capability === "string" ? o.capability.trim() : "";
+    const quote = typeof o.quote === "string" ? o.quote : "";
+    const pageCode = typeof o.page === "string" ? o.page.trim() : "";
+    const row = byCode.get(code.toLowerCase());
+    const base = { itemKind: "row", parent: null, quote, pageCode };
+    if (!row) {
+      incidents.push({ kind: "unknown_item", ...base, item: code || "(none)", pageUrl: null, pageId: null, pageHash: null, foundOn: null });
+      continue;
+    }
+    if (done.has(row.code)) continue;
+    const page = pageOf.get(pageCode.toLowerCase());
+    if (!page) {
+      incidents.push({ kind: "unknown_page", ...base, item: row.name, pageUrl: null, pageId: null, pageHash: null, foundOn: null });
+      continue;
+    }
+    const stored = check(page, quote);
+    if (!stored) {
+      const other = pages.find((p) => p.id !== page.id && check(p, quote));
+      incidents.push({ kind: "quote_not_on_page", ...base, item: row.name, pageUrl: page.url, pageId: page.id, pageHash: page.hash, foundOn: other?.url ?? null });
+      continue;
+    }
+    const wording = str(o.their_name, 80);
+    if (piiIn(stored, wording)) continue;
+    done.add(row.code);
+    found.push({ capabilityId: row.capabilityId, code: row.code, pageId: page.id, pageHash: page.hash, quote: stored, wording });
+  }
+  return { found, incidents };
 }

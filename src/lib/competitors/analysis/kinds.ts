@@ -10,7 +10,7 @@
  *
  * Three tiers:
  *   strong — read; evidence from it makes a cell "found"
- *   weak   — read only when the workspace setting readWeakPages is on; evidence from weak pages alone = "low confidence"
+ *   weak   — a blog or news page: read only when "Blog and news" is on in "What the analysis reads" (reads.ts); evidence from weak pages alone = "low confidence"
  *   skip   — never read
  *
  * Pure: no database, no network.

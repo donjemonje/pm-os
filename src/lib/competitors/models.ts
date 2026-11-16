@@ -38,10 +38,10 @@ export const MODEL_ENV: Record<ModelRole, string> = {
 /** The prompts of the feature, in run order, and the role that makes each. Data: moving a prompt to another role is an edit of this table. */
 export const PROMPT_ROLES = {
   map: "read",
-  research: "read",
-  merge: "match",
-  unify: "match",
+  reading: "read",
+  unify: "judge",
   unify_review: "judge",
+  unify_features: "judge",
   domains: "judge",
   match: "match",
   second_look: "read",

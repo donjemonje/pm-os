@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "../../db";
-import { AnswerError, callTool, CapacityError, EndpointError, type CallOptions } from "../ai";
-import { callFailureMessage, competitorsModels, competitorsThinking, modelsLine, thinkingLine, type ModelRole } from "../models";
+import { AnswerError, callTool, CapacityError, EndpointError, type CallOptions, type Usage } from "../ai";
+import { callFailureMessage, competitorsModels, competitorsThinking, modelsLine, retiredThinkingOverride, THINKING_ENV_ALL, thinkingLine, type ModelRole } from "../models";
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
-import { aiStepEnabled, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
-import { getCompetitorsConfig } from "../store";
+import { aiStepEnabled, analysisReads, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
 import { analysisBaseWaitMs, analysisMaxSpeed, analysisTpm, emptyPacing, MAX_WAIT_MS, PACE_START_SPEED, Pacer, pacingLine, readPacing, recordPushback, runPaced, TokenBudget, type PacedOptions, type PacedResult, type PacingRecord } from "./pacing";
 import { runAlertDue, runAlertEmail } from "./alert";
 import { ReadingBudget } from "./budget";
@@ -14,13 +13,15 @@ import { capLine, capLines, CAPS, capsForEvent, capsHeadline, capsOf, clearState
 import { emptyCounters, readCounters, type Counters } from "./counters";
 import { factsStep } from "./facts";
 import { analysisMayRun, queueFilter } from "./gate";
-import { goBackStep } from "./goback";
+import { emptyIncidents, incidentLine, incidentsForEvent, incidentsHeadline, incidentsOf, readIncidents, recordIncident, type Incident, type IncidentLog } from "./incidents";
 import { mapStep } from "./plan";
+import { readingStep } from "./read-step";
+import { effectiveReads, READ_KINDS, readsLine, type NotReadByKind, type ReadSetting } from "./reads";
 import type { ReadingPlan } from "./sections";
 import { moveSetupState, setupWalk, workspaceSetupState } from "./setup";
-import { analysisFillsTable, readSetupProgress, setupTotals, type SetupCompany, type SetupProgress, type SetupStage } from "./setup-rules";
+import { analysisPath, readSetupProgress, setupTotals, type SetupCompany, type SetupProgress, type SetupStage } from "./setup-rules";
 import { addUsage, readUsage, usageByModel, usageByModelText, usageLine, usageSince, type StepUsage } from "./usage";
-import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLookStep } from "./steps";
+import { applyStep, matchStep, secondLookStep } from "./steps";
 
 /**
  * The analysis run (Capability Analysis, "How the analysis runs").
@@ -37,27 +38,29 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  *   running | waiting ──no heartbeat for 10 min──▶ queued (staleCount + 1; at 3 → failed "stale"); the worker that
  *                      held it, if it is still alive, finds it is no longer the owner and stops without writing
  *   running ──all steps done──▶ done
- *   running ──an unusable answer in map / merge / match, too many failed pages, 24 h of waiting for capacity, an endpoint
+ *   running ──an unusable answer (map, reading, unify, domains, match), 24 h of waiting for capacity, an endpoint
  *                      that failed 7 times in a row (6 waits, 45 min), any other error──▶ failed
  *   queued | running | waiting ──the competitor was removed──▶ cancelled
  *
- * The steps of one run ("Map, read, go back"):
- *   map (label the sections of the site: the reading plan) → research (the broad read) → merge → match →
- *   go back for the gaps (at most 2 rounds: pick pages → research → merge → match) → second look → apply → facts.
+ * The steps of one run of a company, after its organization was set up:
+ *   map (label the sections of the site: the reading plan) → reading (the company's new or changed pages, in a few
+ *   chunks, against its list so far: analysis/read-step.ts) → match (its new items against the rows that exist; what
+ *   matches nothing becomes a new row in an existing domain) → second look (OUR rows it has no item for, asked in
+ *   bulk per chunk) → apply (the cells, by fixed rules) → facts.
  *
  * The run keeps no fragile state: every start walks the steps from the first, and each step computes its to-do from
- * the tables (analysis/plan.ts, analysis/steps.ts). A run that stopped — rate limit, crash, deploy — continues with
- * what is left. The cursor holds only what cannot be derived: the pages each go-back round chose, and the facts baseline.
+ * the tables. A run that stopped — rate limit, crash, deploy — continues with what is left. The cursor holds only
+ * what cannot be derived: the facts baseline, and how far a second look got.
  *
  * The token budget (analysis/budget.ts; Administration → Competitors, one number for the installation): every token
- * of the run counts. When the next reading call (research, go-back research, a second look) would pass it, no
- * further reading call starts; merge, match, apply and facts still run, so the table is filled from what was read.
+ * of the run counts. When the next reading call (a chunk of the reading, a second look) would pass it, no
+ * further reading call starts; match, apply and facts still run, so the table is filled from what was read.
  * The run ends "done" with budgetReached and the pages left unread in its counters; they stay due for the next run.
  *
  * Two things changed with the setup run (analysis/setup.ts, 2026-11-15):
  *   - A run fills the table only in an organization whose SETUP IS DONE — an explicit state of the organization
  *     (setup-rules.ts: required → in setup → done), not a guess from its catalog. Until then a run does
- *     map → research → merge and stops "done": the competitor's clean list is ready, and no row is created.
+ *     map → reading and stops "done": the company's list is ready, and no row is created.
  *   - The organization's own source (own.ts) is analysed like a competitor up to the match; then it fills OUR column
  *     (steps.ts applyOwnCells) instead of a competitor's cells, with no second look and no facts step.
  * The setup run itself is a row of this table (kind "setup", attached to the own source) and takes its turn in this
@@ -66,7 +69,9 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
  *
  * Limits are safety nets (analysis/caps.ts): a run that hits one records it on the run row, says so in its log, in
  * the finished event and in Administration → Competitors — and a run that failed or hit any cap sends ONE email to
- * support (analysis/alert.ts). The tokens of every call are kept by step and model (analysis/usage.ts).
+ * support (analysis/alert.ts). So is an INCIDENT (analysis/incidents.ts): an answer that should never happen — a
+ * quote that is not on the page it names — is kept on the run as a case, never just dropped.
+ * The tokens and the time of every call are kept by step and model (analysis/usage.ts).
  *
  * Where it executes: local dev and the e2e server run it in the app's Node process (inline runner), like scans;
  * production runs it in the scanner job (`--analysis <id>`), one execution per run. A failed run is not retried by
@@ -76,7 +81,7 @@ import { applyStep, matchStep, mergeStep, planResearch, researchStep, secondLook
 /** "sources" = an address of the company was removed (address-search.ts): what its pages said leaves the picture. Automatic, like "scan" and "catalog". */
 export type AnalysisTrigger = "scan" | "catalog" | "manual" | "sources";
 /** "unify" and "domains" are steps of a setup run only. */
-export type AnalysisStepName = "map" | "research" | "merge" | "unify" | "domains" | "match" | "go_back" | "second_look" | "apply" | "facts";
+export type AnalysisStepName = "map" | "reading" | "unify" | "domains" | "match" | "second_look" | "apply" | "facts";
 export const ACTIVE_ANALYSIS_STATUSES = ["queued", "running", "waiting"] as const;
 /** A run whose runner stopped reporting this many times fails. */
 export const MAX_STALE = 3;
@@ -108,6 +113,17 @@ export { emptyCounters, readCounters, type Counters } from "./counters";
 /** What a step passes with a call: everything but the model and the thinking level — the step names the ROLE (models.ts), the engine resolves both. */
 export type StepCallOptions = Omit<CallOptions, "model" | "thinking"> & { role: ModelRole };
 
+/** What a call gives back to its step: the answer, and what it cost. */
+export interface StepCallResult<T> {
+  value: T;
+  /** Input + output tokens (what the pacing counts). */
+  tokens: number;
+  usage: Usage;
+  /** How long the call took, and the model that answered. */
+  ms: number;
+  model: string;
+}
+
 export interface AnalysisLogLine {
   at: string;
   level: "info" | "warn" | "error";
@@ -124,11 +140,13 @@ export interface RunContext {
   setup: boolean;
   /** The competitor's reading plan (sections.ts): set by the map step, read by every later step (plan.ts planOf). */
   plan: ReadingPlan | null;
-  /** Workspace settings, read once at the claim. */
-  readWeak: boolean;
-  minPagesForNewRow: number;
-  /** The most second looks this run makes in all (CompetitorsConfig.secondLooksPerRun). */
-  maxSecondLooks: number;
+  /**
+   * "What the analysis reads" for this company (analysis/reads.ts): the installation's setting, read once at the
+   * claim — one switch per kind of content. The reading asks this and nothing else.
+   */
+  reads: ReadSetting;
+  /** The reading step says what it left out because its kind is off: recorded on the run (a configuration, not a cap). */
+  setNotRead: (notRead: NotReadByKind) => void;
   /** The model of the "read" role: the one that makes the second look, so the one a look's key carries (secondlook.ts lookKey). */
   model: string;
   /** The model of each role in this run (models.ts), resolved once at the claim. */
@@ -144,17 +162,23 @@ export interface RunContext {
    * written to the log as a warn line. Never silent, never an error: the run goes on.
    */
   cap: (cap: CapId, r: { limit: number; undone: number; also?: number; times?: number }) => void;
-  /** One model call through the run's accounting. Returns the value and the tokens it used (input + output). */
-  call: <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => Promise<{ value: T; tokens: number }>;
+  /**
+   * An incident for this context's company (analysis/incidents.ts): an answer that should never happen — a quote
+   * that is not on the page it names, a page or an item outside the closed set. Kept on the run as a case; the step
+   * leaves the finding out of the table.
+   */
+  incident: (i: Omit<Incident, "at" | "step" | "competitorId" | "company">) => void;
+  /** One model call through the run's accounting. Returns the value and what it cost. */
+  call: <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => Promise<StepCallResult<T>>;
   /** The run's token budget: the gate of every reading call (budget.ts). */
   reading: ReadingBudget;
   /**
    * The one loop every step uses (pacing.ts runPaced), with the run's pacing, waiting and cancelling wired in.
-   * `reading: true` marks the calls of the loop as READING calls (research, go-back research, second look): each
+   * `reading: true` marks the calls of the loop as READING calls (a chunk of the reading, a second look): each
    * passes the run's token budget before it starts; the items not started are counted in the result's `left`.
    */
   paced: <T>(o: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => Promise<PacedResult>;
-  /** Save the one thing that cannot be derived (the facts baseline). */
+  /** Save what cannot be derived (the facts baseline, how far a second look got). */
   saveCursor: (patch: Record<string, unknown>) => Promise<void>;
   /** The apply step finished: the cells are current as of `at`. */
   markApplied: (at: Date) => Promise<void>;
@@ -326,8 +350,10 @@ export function echoRunLog(to: ((line: AnalysisLogLine) => void) | null): void {
 export interface SetupEnv {
   run: { id: string; workspaceId: string; ownCompetitorId: string; startedById: string | null; startedAt: Date; injected: boolean; resumed: boolean };
   model: string;
-  /** "read low · match high · judge high": how much each role thinks in this run (models.ts thinkingFor). */
+  /** "read medium · match high · judge medium": how much each role thinks in this run (models.ts thinkingFor). */
   thinking: string;
+  /** "What the analysis reads" in this run (analysis/reads.ts). */
+  reads: ReadSetting;
   /** The run's recorded progress (CompetitorAnalysis.setup): written with every heartbeat. */
   progress: SetupProgress;
   log: RunContext["log"];
@@ -343,6 +369,8 @@ export interface SetupEnv {
   setStage: (competitorId: string, stage: SetupStage) => void;
   /** The caps one company hit in this run so far (its record carries them). */
   capsOf: (competitorId: string) => CapHit[];
+  /** The incidents one company had in this run so far (its record carries them). */
+  incidentsOf: (competitorId: string) => IncidentLog;
   flush: () => Promise<void>;
 }
 
@@ -352,6 +380,8 @@ export async function runAnalysis(id: string): Promise<void> {
   const model = modelsLine(models);
   // How much each role thinks (models.ts thinkingFor), resolved once like the models.
   const thinking = competitorsThinking();
+  /** The retired one-value-for-all setting, when the environment still sets it: said in the log, never honoured. */
+  const retired = retiredThinkingOverride();
   // The claim's owner token: every later write of this worker carries it in its `where`.
   const token = randomUUID();
   // The claim: only the head of the queue can be claimed, and only once — so two runs never execute together.
@@ -380,6 +410,11 @@ export async function runAnalysis(id: string): Promise<void> {
   let usage: StepUsage[] = readUsage(row.usage);
   /** The caps this run hit (caps.ts): one entry per cap and company. [] = no cap was hit. */
   const caps: CapHit[] = readCaps(row.caps);
+  /** "What the analysis reads" when this run ran (set at the start of the walk), and what a run of one company left out because its kind is off. */
+  let runReads: ReadSetting | null = null;
+  let notRead: NotReadByKind = {};
+  /** The incidents of this run (incidents.ts): answers that should never happen, each kept as a case. */
+  const incidents: IncidentLog = readIncidents(row.incidents) ?? emptyIncidents();
   // The run's speed (pacing.ts): it starts fast, goes faster while calls succeed and halves when the provider pushes
   // back. One pacer for the whole run — every step, and in a setup run every company, shares what it learned.
   const pacer = new Pacer(PACE_START_SPEED, analysisMaxSpeed());
@@ -419,6 +454,9 @@ export async function runAnalysis(id: string): Promise<void> {
     if (lines.length > MAX_LOG_LINES) recordCap(caps, { cap: "log_lines", limit: MAX_LOG_LINES, competitorId: null, company: null, undone: lines.length - MAX_LOG_LINES });
     return {
       counters: counters as unknown as Prisma.InputJsonValue, usage: usage as unknown as Prisma.InputJsonValue, caps: caps as unknown as Prisma.InputJsonValue, pacing: pacing() as unknown as Prisma.InputJsonValue,
+      ...(incidents.total ? { incidents: incidents as unknown as Prisma.InputJsonValue } : {}),
+      // The kinds that were on when the run ran, and — for a run of one company — what it left out (a setup run keeps that per company).
+      ...(runReads ? { reads: { kinds: runReads, notRead } as unknown as Prisma.InputJsonValue } : {}),
       log: lines.slice(-MAX_LOG_LINES) as unknown as Prisma.InputJsonValue, pagesTotal: progress.pagesTotal, pagesDone: progress.pagesDone,
       ...(setup ? { setup: setup as unknown as Prisma.InputJsonValue } : {}),
     };
@@ -444,7 +482,9 @@ export async function runAnalysis(id: string): Promise<void> {
     // TEST KNOB, read ONCE per run: a run flagged injected whose answers are gone fails — it can never reach a real model.
     const answers = await testAiAnswers(row.competitorId);
     if (row.injected && !answers) throw new AnalysisError("other", "test answers were cleared before the run started (test knob) — no model is called");
-    const config = await getCompetitorsConfig(row.workspaceId);
+    // "What the analysis reads": one setting for the installation, read once — the run records it and says it in its log.
+    const reads = await analysisReads();
+    runReads = reads;
     const pace = new TokenBudget(analysisTpm());
     let okCalls = 0;
     let refused = 0;
@@ -486,6 +526,8 @@ export async function runAnalysis(id: string): Promise<void> {
       markApplied: (at: Date) => Promise<void>;
       /** Put before every log line of the context ("[Acme] "). */
       prefix: string;
+      /** Where what the reading left out (a kind that is off) is kept: the run's own record, or the company's entry of a setup run. */
+      setNotRead: (notRead: NotReadByKind) => void;
     }
     const contextFor = (t: Target): RunContext => {
       const c = t.counters;
@@ -501,9 +543,9 @@ export async function runAnalysis(id: string): Promise<void> {
         competitor: t.competitor,
         setup: isSetup,
         plan: null,
-        readWeak: config.readWeakPages,
-        minPagesForNewRow: config.minPagesForNewRow,
-        maxSecondLooks: config.secondLooksPerRun,
+        // The installation's setting; a company's own override would be laid on top here (none exists today).
+        reads: effectiveReads(reads, null),
+        setNotRead: t.setNotRead,
         model: models.read,
         models,
         answers: t.answers,
@@ -516,6 +558,13 @@ export async function runAnalysis(id: string): Promise<void> {
           // A cap that bites on every page says so once; the run's last lines carry the totals.
           if (recorded.fresh || (recorded.changed && CAPS[cap].mode !== "event")) log("warn", `Cap hit — ${capLine(recorded.hit)}`);
         },
+        incident: (i) => {
+          const one: Incident = { ...i, at: new Date().toISOString(), step, competitorId: t.capsFor.id, company: t.capsFor.name };
+          recordIncident(incidents, one);
+          c.incidents++;
+          // Never silent: every case is a line of the run's log.
+          log("warn", `INCIDENT — ${incidentLine(one)}`, one.pageUrl ?? undefined);
+        },
         call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => {
           const { role, ...rest } = opts;
           const callModel = models[role];
@@ -527,6 +576,7 @@ export async function runAnalysis(id: string): Promise<void> {
             throw new CapacityError("PMOS AI has no capacity (test knob)");
           }
           let r;
+          const callStarted = Date.now();
           try {
             r = await callTool<T>(system, shared, tail, tool, { ...rest, model: callModel, thinking: thinking[role] });
           } catch (e) {
@@ -538,7 +588,7 @@ export async function runAnalysis(id: string): Promise<void> {
               c.outputTokens += e.usage.output;
               c.cachedTokens += e.usage.cached;
               c.thinkingTokens += e.usage.thinking;
-              addUsage(t.usage, step, callModel, e.usage);
+              addUsage(t.usage, step, callModel, e.usage, Date.now() - callStarted);
               throw e;
             }
             if (e instanceof CapacityError) throw e;
@@ -552,8 +602,9 @@ export async function runAnalysis(id: string): Promise<void> {
           c.cachedTokens += r.usage.cached;
           // The model's own thinking is billed as output: counted there, and kept apart (usage.ts).
           c.thinkingTokens += r.usage.thinking;
-          addUsage(t.usage, step, callModel, r.usage);
-          return { value: r.value, tokens: r.usage.input + r.usage.output };
+          const ms = Date.now() - callStarted;
+          addUsage(t.usage, step, callModel, r.usage, ms);
+          return { value: r.value, tokens: r.usage.input + r.usage.output, usage: r.usage, ms, model: callModel };
         },
         paced: async <T>({ reading: isReading, ...o }: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => {
           const held = { calls: pace.holds, ms: pace.heldMs };
@@ -617,7 +668,7 @@ export async function runAnalysis(id: string): Promise<void> {
         const calls = counters.calls - before.calls;
         if (calls > 0) {
           const unusable = counters.unusableAnswers - before.unusableAnswers;
-          // The step's cost, model by model (a go-back round reads with one model and merges and matches with another).
+          // The step's cost, model by model.
           log("info", `Step ${name.replace("_", " ")}: ${usageByModel(usageSince(usage, usedBefore)).map(usageLine).join("; ") || `${calls} PMOS AI call${calls === 1 ? "" : "s"}`}${unusable ? ` · ${unusable} unusable answer${unusable === 1 ? "" : "s"}` : ""} · ${Math.round((Date.now() - started) / 1000)} s`);
         }
       }
@@ -631,7 +682,8 @@ export async function runAnalysis(id: string): Promise<void> {
       await setupWalk({
         run: { id, workspaceId: row.workspaceId, ownCompetitorId: row.competitorId, startedById: row.startedById, startedAt: claimed.startedAt, injected: row.injected, resumed: claimed.resumed },
         model,
-        thinking: thinkingLine(thinking),
+        thinking: `${thinkingLine(thinking)}${retired ? ` (${THINKING_ENV_ALL}="${retired}" is set and ignored)` : ""}`,
+        reads,
         progress: setup,
         log,
         inStep,
@@ -640,7 +692,7 @@ export async function runAnalysis(id: string): Promise<void> {
           if (known) return known;
           let entry = setup.companies.find((x) => x.competitorId === c.id);
           if (!entry) {
-            entry = { competitorId: c.id, name: c.name, own: c.isOwn, stage: "waiting", pagesTotal: 0, pagesDone: 0, appliedAt: null, counters: emptyCounters(), usage: [] };
+            entry = { competitorId: c.id, name: c.name, own: c.isOwn, stage: "waiting", pagesTotal: 0, pagesDone: 0, appliedAt: null, counters: emptyCounters(), usage: [], notRead: {} };
             setup.companies.push(entry);
           }
           entry.name = c.name;
@@ -661,16 +713,20 @@ export async function runAnalysis(id: string): Promise<void> {
               await flush();
             },
             prefix: `[${c.name}] `,
+            setNotRead: (n) => {
+              mine.notRead = n;
+            },
           });
           made.set(c.id, ctx);
           return ctx;
         },
-        shared: contextFor({ competitor: company(row.competitor), capsFor: { id: null, name: null }, counters: setup.shared, usage: setup.sharedUsage, progress: { pagesTotal: 0, pagesDone: 0 }, answers: row.injected ? answers : null, cursor, markApplied: async () => undefined, prefix: "" }),
+        shared: contextFor({ competitor: company(row.competitor), capsFor: { id: null, name: null }, counters: setup.shared, usage: setup.sharedUsage, progress: { pagesTotal: 0, pagesDone: 0 }, answers: row.injected ? answers : null, cursor, markApplied: async () => undefined, prefix: "", setNotRead: () => undefined }),
         setStage: (competitorId, stage) => {
           const entry = setup.companies.find((x) => x.competitorId === competitorId);
           if (entry) entry.stage = stage;
         },
         capsOf: (competitorId) => capsOf(caps, competitorId),
+        incidentsOf: (competitorId) => incidentsOf(incidents, competitorId),
         flush,
       });
     } else {
@@ -687,36 +743,38 @@ export async function runAnalysis(id: string): Promise<void> {
           if (!(await own({ appliedAt: at }))) throw new RunLost();
         },
         prefix: "",
+        setNotRead: (n) => {
+          notRead = n;
+        },
       });
       const reading = ctx.reading;
       const isOwn = row.competitor.isOwn;
       log("info", `Analysis ${claimed.resumed ? "continued" : "started"} (${row.trigger}) for ${row.competitor.name}${isOwn ? " — the organization's own site" : ""}${answers ? " — PMOS AI answers injected (test knob), no model is called" : ` — ${model} — thinking: ${thinkingLine(thinking)}`}`);
+      if (retired && !answers) log("warn", `${THINKING_ENV_ALL} is set to "${retired}" in this environment and is IGNORED: each role thinks at its own level (${thinkingLine(thinking)})`);
+      log("info", `${readsLine(reads)} (Administration → Competitors → What the analysis reads)`);
       // The map first: what is read follows from the reading plan. No plan, no read — a failed map fails the run.
       await inStep("map", () => mapStep(ctx));
-      await setStep("research");
-      const plan = await planResearch(ctx);
       await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_started", {
         analysisId: id, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, resumed: claimed.resumed, own: isOwn,
-        mapSections: counters.mapSections, pagesPicked: plan.picked, pagesDeep: plan.deep, pagesToRead: plan.todo.length, readWeak: config.readWeakPages, model, injected: Boolean(answers),
+        mapSections: counters.mapSections, reads: READ_KINDS.filter((k) => reads[k]).join(","), model, injected: Boolean(answers),
       });
-      await inStep("research", () => researchStep(ctx, plan));
-      await inStep("merge", () => mergeStep(ctx));
+      // The reading: the pages that are new or changed, in chunks, against the company's list so far.
+      await inStep("reading", () => readingStep(ctx));
       // A run fills the table only in an organization whose setup is done (an explicit state, setup-rules.ts): no row is created before.
       const setupState = await workspaceSetupState(row.workspaceId);
-      if (!analysisFillsTable(setupState)) {
-        log("info", `${setupState === "in_setup" ? "The setup run of this organization has not finished" : "The setup of this organization is required and has not been started"}: the run stops after the clean-up. ${row.competitor.name}'s list is ready — it gets its rows and its cells in the setup run (--setup ${row.workspaceId})`);
+      const path = analysisPath(setupState, isOwn);
+      if (!path.includes("match")) {
+        log("info", `${setupState === "in_setup" ? "The setup run of this organization has not finished" : "The setup of this organization is required and has not been started"}: the run stops after the reading. ${row.competitor.name}'s list is ready — it gets its rows and its cells in the setup run (--setup ${row.workspaceId})`);
       } else {
+        // The company's new items against the rows that exist; what matches nothing becomes a new row in an existing domain.
         await inStep("match", () => matchStep(ctx));
-        // Their capabilities that came out thin (no description beyond marketing pages, no feature …): read their most
-        // likely deep pages, then merge and match again — at most 2 rounds (analysis/gaps.ts).
-        await inStep("go_back", () => goBackStep(ctx));
         // The own source: what its items say is ours — no second look, no profile facts (own.ts).
-        const lookWaiting = isOwn ? new Set<string>() : await inStep("second_look", () => secondLookStep(ctx));
+        const lookWaiting = path.includes("second_look") ? await inStep("second_look", () => secondLookStep(ctx)) : new Set<string>();
         await inStep("apply", () => applyStep(ctx, lookWaiting));
-        if (!isOwn) await inStep("facts", () => factsStep(ctx));
+        if (path.includes("facts")) await inStep("facts", () => factsStep(ctx));
       }
       if (reading.reached) {
-        log("warn", `The token budget of this run was reached (${(counters.inputTokens + counters.outputTokens).toLocaleString("en-US")} of ${counters.budget.toLocaleString("en-US")} tokens used): ${counters.pagesUnread} page${counters.pagesUnread === 1 ? "" : "s"} left unread${counters.secondLooksWaiting ? `, ${counters.secondLooksWaiting} second look${counters.secondLooksWaiting === 1 ? "" : "s"} not made` : ""}. They stay due — the next run of ${row.competitor.name} continues with a fresh budget`);
+        log("warn", `The token budget of this run was reached (${(counters.inputTokens + counters.outputTokens).toLocaleString("en-US")} of ${counters.budget.toLocaleString("en-US")} tokens used): ${counters.pagesUnread} page${counters.pagesUnread === 1 ? "" : "s"} left unread${counters.secondLooksWaiting ? `, ${counters.secondLooksWaiting} row${counters.secondLooksWaiting === 1 ? "" : "s"} not looked for` : ""}. They stay due — the next run of ${row.competitor.name} continues with a fresh budget`);
       }
     }
     sync();
@@ -724,6 +782,8 @@ export async function runAnalysis(id: string): Promise<void> {
     // Limits are safety nets: the run's last lines say whether one was hit, each with what it left undone.
     if (caps.length) log("warn", `${capsHeadline(caps)} in this run — ${capLines(caps).join("; ")}`);
     else log("info", `${capsHeadline(caps)} in this run`);
+    // So is an incident: an answer that should never happen is counted here and kept as a case on the run.
+    log(incidents.total ? "warn" : "info", `${incidentsHeadline(incidents)} in this run`);
     log("info", `${what} done in ${Math.round((Date.now() - t0) / 1000)} s · ${counters.pagesRead} page${counters.pagesRead === 1 ? "" : "s"} read · ${counters.calls} PMOS AI call${counters.calls === 1 ? "" : "s"} · ${counters.inputTokens + counters.outputTokens} tokens${counters.thinkingTokens ? ` (${counters.inputTokens} input, ${counters.outputTokens} output — ${counters.thinkingTokens} of the output was the models' own thinking)` : ""}`);
   } catch (e) {
     if (lost || e instanceof RunLost) {
@@ -764,12 +824,12 @@ export async function runAnalysis(id: string): Promise<void> {
     if (outcome !== "done") await moveSetupState(row.workspaceId, "run_stopped").catch((e) => console.error("[competitors] the setup state could not be written", id, e));
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_setup_finished", {
       analysisId: id, outcome, step, companies: setup.companies.length, rows: setup.rows, domains: setup.domains, features: setup.features,
-      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, thinkingTokens: counters.thinkingTokens, thinking: thinkingLine(thinking), tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total,
+      calls: counters.calls, tokens: counters.inputTokens + counters.outputTokens, inputTokens: counters.inputTokens, outputTokens: counters.outputTokens, cachedTokens: counters.cachedTokens, thinkingTokens: counters.thinkingTokens, thinking: thinkingLine(thinking), tokensByModel: usageByModelText(usage), models: model, pagesRead: counters.pagesRead, ...capsForEvent(caps), ...incidentsForEvent(incidents), speedPeak: pacing().peak, pushbacks: paced.total,
       durationMs: Date.now() - t0, totalMs: Date.now() - claimed.startedAt.getTime(), resumed: claimed.resumed, errorKind: errorKind ?? "none", error,
     });
   } else {
     await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_finished", {
-      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, thinking: thinkingLine(thinking), ...capsForEvent(caps), speedPeak: pacing().peak, pushbacks: paced.total, errorKind: errorKind ?? "none", error,
+      analysisId: id, competitorId: row.competitorId, trigger: row.trigger, outcome, step, durationMs: Date.now() - t0, ...counters, budgetReached: counters.budgetReached > 0, tokensByModel: usageByModelText(usage), models: model, thinking: thinkingLine(thinking), ...capsForEvent(caps), ...incidentsForEvent(incidents), speedPeak: pacing().peak, pushbacks: paced.total, errorKind: errorKind ?? "none", error,
     });
   }
   await alertSupport(id);
@@ -778,7 +838,7 @@ export async function runAnalysis(id: string): Promise<void> {
 }
 
 /**
- * The ONE email of a run to support (analysis/alert.ts): sent when the run ended failed or hit any cap. Read from
+ * The ONE email of a run to support (analysis/alert.ts): sent when the run ended failed, hit any cap or had an incident. Read from
  * the run row after it was closed, so the email says what the row says. Called once per ending — by the worker that
  * closed the run, or by the stale sweep that gave it up. A send that fails never fails anything: it is logged, and
  * recorded (cmp_run_alert, sent false).
@@ -788,19 +848,20 @@ async function alertSupport(id: string): Promise<void> {
     const run = await db.competitorAnalysis.findUnique({
       where: { id },
       select: {
-        id: true, kind: true, workspaceId: true, status: true, step: true, error: true, errorKind: true, caps: true, counters: true, model: true, startedAt: true, finishedAt: true, startedById: true,
+        id: true, kind: true, workspaceId: true, status: true, step: true, error: true, errorKind: true, caps: true, incidents: true, counters: true, model: true, startedAt: true, finishedAt: true, startedById: true,
         competitor: { select: { name: true, isOwn: true, workspace: { select: { organization: { select: { name: true } } } } } },
       },
     });
     if (!run || (run.status !== "done" && run.status !== "failed")) return;
     const hit = readCaps(run.caps);
-    if (!runAlertDue({ outcome: run.status, caps: hit.length })) return;
+    const cases = readIncidents(run.incidents);
+    if (!runAlertDue({ outcome: run.status, caps: hit.length, incidents: cases.total })) return;
     const c = readCounters(run.counters);
     // Loaded here: local.ts (the scanner's own support alerts) and the mailer are not needed by a run that ends clean.
     const [{ SUPPORT_EMAIL, appUrl }, { sendEmail }] = await Promise.all([import("../local"), import("../../mailer")]);
     const email = runAlertEmail({
       kind: run.kind, outcome: run.status, organization: run.competitor.workspace.organization.name, company: run.competitor.name, ownSite: run.competitor.isOwn, runId: run.id, workspaceId: run.workspaceId,
-      step: run.step, error: run.error, errorKind: run.errorKind, caps: hit, models: run.model ?? "", calls: c.calls, inputTokens: c.inputTokens, outputTokens: c.outputTokens,
+      step: run.step, error: run.error, errorKind: run.errorKind, caps: hit, incidents: cases, models: run.model ?? "", calls: c.calls, inputTokens: c.inputTokens, outputTokens: c.outputTokens,
       startedAt: run.startedAt, finishedAt: run.finishedAt ?? new Date(), appUrl: appUrl(),
     });
     let sent = false;
@@ -810,7 +871,7 @@ async function alertSupport(id: string): Promise<void> {
     } catch (e) {
       console.error("[competitors] the run's alert email to support could not be sent", id, e);
     }
-    await recordCompetitorEvent(run.workspaceId, run.startedById, "cmp_run_alert", { analysisId: id, kind: run.kind, outcome: run.status, sent, ...capsForEvent(hit) });
+    await recordCompetitorEvent(run.workspaceId, run.startedById, "cmp_run_alert", { analysisId: id, kind: run.kind, outcome: run.status, sent, ...capsForEvent(hit), ...incidentsForEvent(cases) });
   } catch (e) {
     console.error("[competitors] the run's alert to support failed", id, e);
   }

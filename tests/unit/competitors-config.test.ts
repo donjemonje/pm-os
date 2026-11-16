@@ -10,7 +10,7 @@ import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    const defaults = { notifyUserIds: [], baselineUntil: null, readWeakPages: false, minPagesForNewRow: 1, secondLooksPerRun: 500 };
+    const defaults = { notifyUserIds: [], baselineUntil: null };
     expect(mergeCompetitorsConfig(null)).toEqual(defaults);
     expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual(defaults);
     expect(mergeCompetitorsConfig("junk")).toEqual(defaults);
@@ -18,23 +18,8 @@ describe("mergeCompetitorsConfig", () => {
     expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
     expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
   });
-  it("analysis settings: weak pages are off by default (Daniel 2026-11-11: start lean); a new row needs 1 page, clamped to 1–5", () => {
-    expect(mergeCompetitorsConfig({}).readWeakPages).toBe(false);
-    expect(mergeCompetitorsConfig({ readWeakPages: true }).readWeakPages).toBe(true);
-    expect(mergeCompetitorsConfig({ readWeakPages: "yes" }).readWeakPages).toBe(false);
-    expect(mergeCompetitorsConfig({}).minPagesForNewRow).toBe(1);
-    expect(mergeCompetitorsConfig({ minPagesForNewRow: 2 }).minPagesForNewRow).toBe(2);
-    expect(mergeCompetitorsConfig({ minPagesForNewRow: 0 }).minPagesForNewRow).toBe(1);
-    expect(mergeCompetitorsConfig({ minPagesForNewRow: 9 }).minPagesForNewRow).toBe(5);
-    expect(mergeCompetitorsConfig({ minPagesForNewRow: 2.6 }).minPagesForNewRow).toBe(3);
-    expect(mergeCompetitorsConfig({ minPagesForNewRow: "3" }).minPagesForNewRow).toBe(1);
-    expect(mergeCompetitorsConfig({}).secondLooksPerRun).toBe(500);
-    // A value an organization saved stays as saved — also the old default.
-    expect(mergeCompetitorsConfig({ secondLooksPerRun: 30 }).secondLooksPerRun).toBe(30);
-    expect(mergeCompetitorsConfig({ secondLooksPerRun: 80 }).secondLooksPerRun).toBe(80);
-    expect(mergeCompetitorsConfig({ secondLooksPerRun: 0 }).secondLooksPerRun).toBe(1);
-    expect(mergeCompetitorsConfig({ secondLooksPerRun: 9000 }).secondLooksPerRun).toBe(500);
-    expect(mergeCompetitorsConfig({ secondLooksPerRun: "80" }).secondLooksPerRun).toBe(500);
+  it("the old analysis settings are gone and a stored value of them is ignored: whether blog and news are read is the installation's setting now", () => {
+    expect(mergeCompetitorsConfig({ readWeakPages: true, minPagesForNewRow: 3, secondLooksPerRun: 30 })).toEqual({ notifyUserIds: [], baselineUntil: null });
   });
   it("carries the PRD's numbers: every 2 days, no page limit, 8 h per scan, 10 GB of page text, stale after 10 min (Daniel 2026-11-09)", () => {
     expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);

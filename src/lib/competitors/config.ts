@@ -21,29 +21,15 @@ export interface CompetitorsConfig {
   notifyUserIds: string[];
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
   baselineUntil: string | null;
-  /**
-   * Analysis: are weak pages read — the sections of a site the reading plan labels "news" (blog, news, press;
-   * analysis/sections.ts)? Off = only strong pages (product, pricing, compare, help, release notes, API docs) are
-   * read and "low confidence" is not produced (Daniel 2026-11-11: start lean).
-   */
-  readWeakPages: boolean;
-  /** Analysis: how many distinct pages must carry an item that is none of our rows before it becomes a new row (1–5). */
-  minPagesForNewRow: number;
-  /**
-   * Analysis: the most second looks one run makes (one PMOS AI call per capability of ours with no evidence, 1–500).
-   * The capabilities beyond it keep waiting — no cell is written for them — and the competitor's next run goes on.
-   * A safety net (Daniel 2026-11-15): the default is the maximum, so a first table has no blank cell because of it;
-   * a run that reaches it records a cap hit (analysis/caps.ts). A value an organization saved stays as saved.
-   */
-  secondLooksPerRun: number;
+  // Three older analysis settings are gone and a stored value of them is ignored: readWeakPages (whether blog and
+  // news are read is the installation's setting "What the analysis reads" now — analysis/reads.ts, one source of
+  // truth), minPagesForNewRow (an item of a company's list has one proof) and secondLooksPerRun (the second look asks
+  // about all rows at once, per chunk).
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
   notifyUserIds: [],
   baselineUntil: null,
-  readWeakPages: false,
-  minPagesForNewRow: 1,
-  secondLooksPerRun: 500,
 };
 
 // ————— Scanner rules (Website Scanning PRD, 2026-11-04) —————
@@ -130,13 +116,6 @@ export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
   return {
     notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
     baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
-    readWeakPages: typeof r.readWeakPages === "boolean" ? r.readWeakPages : DEFAULT_COMPETITORS_CONFIG.readWeakPages,
-    minPagesForNewRow: typeof r.minPagesForNewRow === "number" && Number.isFinite(r.minPagesForNewRow)
-      ? Math.min(5, Math.max(1, Math.round(r.minPagesForNewRow)))
-      : DEFAULT_COMPETITORS_CONFIG.minPagesForNewRow,
-    secondLooksPerRun: typeof r.secondLooksPerRun === "number" && Number.isFinite(r.secondLooksPerRun)
-      ? Math.min(500, Math.max(1, Math.round(r.secondLooksPerRun)))
-      : DEFAULT_COMPETITORS_CONFIG.secondLooksPerRun,
   };
 }
 

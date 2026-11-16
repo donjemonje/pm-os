@@ -7,15 +7,19 @@
  * to support (analysis/alert.ts). A run that hit none shows "no cap was hit".
  *
  * What is a cap: a hard limit that leaves work undone or changes the result. Batching that only splits a list into
- * calls is not one — unless the split changes the result (a merge, a unify review or a domains step that could not
- * see its whole list in one call). Reading-depth rules (news off by default, index pages before deep pages) are
- * design, not caps.
+ * calls is not one — unless the split changes the result (a unify or a domains step that could not see its whole
+ * list in one call). Reading rules (news off by default) are design, not caps.
+ *
+ * The caps of the old per-page reading (RETIRED_CAP_IDS) are no longer recorded by anything; their definitions stay
+ * so a run from before 2026-11-16 still shows what it hit.
  *
  * Pure: no database, no network.
  */
 
-export const CAP_IDS = [
-  "token_budget",
+/** Caps a run can hit today. */
+export const ACTIVE_CAP_IDS = ["token_budget", "unify_split", "domains_split", "llms_txt_chars", "log_lines", "speed_ceiling", "tpm_ceiling"] as const;
+/** Caps of the per-page reading, the merge step, the go-back rounds and the per-capability second look: nothing records them any more. */
+export const RETIRED_CAP_IDS = [
   "second_looks_per_run",
   "go_back_rounds",
   "go_back_pages_per_item",
@@ -26,12 +30,8 @@ export const CAP_IDS = [
   "second_look_chars",
   "merge_split",
   "unify_review_split",
-  "domains_split",
-  "llms_txt_chars",
-  "log_lines",
-  "speed_ceiling",
-  "tpm_ceiling",
 ] as const;
+export const CAP_IDS = [...ACTIVE_CAP_IDS, ...RETIRED_CAP_IDS] as const;
 export type CapId = (typeof CAP_IDS)[number];
 
 const n = (v: number) => v.toLocaleString("en-US");
@@ -76,8 +76,9 @@ export const CAPS: Record<CapId, CapDefinition> = {
   token_budget: {
     label: "token budget per company per run",
     mode: "state",
-    undone: (h) => [h.undone ? `${s(h.undone, "page")} left unread` : "", h.also ? `${s(h.also, "second look")} not made` : ""].filter(Boolean).join(", ") || "reading stopped",
+    undone: (h) => [h.undone ? `${s(h.undone, "page")} left unread` : "", h.also ? `${s(h.also, "row")} of ours not looked for on every chunk` : ""].filter(Boolean).join(", ") || "reading stopped",
   },
+  unify_split: { label: "capabilities per unify call", mode: "once", undone: (h) => `the capabilities were unified in ${s(h.undone, "call")}: the same capability in two calls can become two rows (one review of all rows follows)` },
   second_looks_per_run: { label: "second looks per run", mode: "state", undone: (h) => `${s(h.undone, "capability", "capabilities")} not checked` },
   go_back_rounds: {
     label: "go-back rounds per run",
