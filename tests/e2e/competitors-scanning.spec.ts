@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
 import type { PrismaClient } from "@prisma/client";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
 import { BIG_PAGE_MARKERS, HOVER_HINTS, HOVER_HINTS_NOT_A_HINT, PAGE_PATHS, type FakeSite } from "../fixtures/fake-site/fake-site";
@@ -224,8 +224,13 @@ async function startProbe(): Promise<{ url: string; set(on: boolean): void; clos
 }
 /** The station's own files in its state dir: what the menu bar icon reads, and the scan's saved place. */
 const stationStatus = (dir: string) => JSON.parse(readFileSync(join(dir, "status.json"), "utf8")) as { state: string; message: string; pagesRead: number | null };
-const savedPlace = (dir: string) =>
-  existsSync(join(dir, "scan-state.json")) ? (JSON.parse(readFileSync(join(dir, "scan-state.json"), "utf8")) as { scanId: string; queue: string[]; pagesRead: number; stopped?: { reason: string; at: string } }) : null;
+// One file per scan under scan-state/ since the station reads several sites at the same time (2026-11-16); the rows that
+// read it run one scan, so the folder holds one file or none.
+const savedPlace = (dir: string) => {
+  const folder = join(dir, "scan-state");
+  const file = existsSync(folder) ? readdirSync(folder).find((n) => n.endsWith(".json")) : undefined;
+  return file ? (JSON.parse(readFileSync(join(folder, file), "utf8")) as { scanId: string; queue: string[]; pagesRead: number; stopped?: { reason: string; at: string } }) : null;
+};
 const logOf = (scan: { log: unknown }) => (Array.isArray(scan.log) ? (scan.log as { msg: string; level?: string }[]) : []).map((l) => l.msg);
 function exited(child: ChildProcess): Promise<number | null> {
   return new Promise((r) => child.once("exit", (code) => r(code)));
