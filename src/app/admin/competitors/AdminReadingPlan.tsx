@@ -2,22 +2,23 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
-import type { AdminPlanRun, AdminPlanSection } from "@/app/api/admin/competitors/plan/route";
+import type { AdminPlanRun, AdminPlanSection, AdminReading } from "@/app/api/admin/competitors/plan/route";
 import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ImportOrg } from "./AdminImport";
-import { RunCaps, RunPacing, RunUsage } from "./RunUsage";
+import { RunCaps, RunChunks, RunIncidents, RunPacing, RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Reading plan (PM-OS admin only, read-only). Pick an organization and one of its
  * competitors: its reading plan — the sections of its site, the label PMOS AI gave each one (the label decides
- * what the analysis reads), their size — and its latest analysis runs: what was read, what the token budget left
- * unread, how many times the run went back for gaps. Nothing is edited here; customers never see this.
+ * what the analysis reads), their size — its reading (the chunks of pages that were sent to PMOS AI, what each
+ * answer did, the labels that were seen but not explained) — and its latest analysis runs: what was read, what the
+ * token budget left unread, its caps and its incidents. Nothing is edited here; customers never see this.
  */
 
 /** Every string of the section (admin screens keep their strings in the component). */
 const COPY = {
   title: "Reading plan and analysis runs",
-  intro: "Read-only. An organization's own site is listed first, labeled; it is read like a competitor's. The analysis cuts a competitor's stored pages into sections and PMOS AI labels each section once; the label decides what is read. Product, pricing and compare sections are read whole. Help, release notes and API docs are read by their index pages; their deeper pages are read only when a run goes back for a gap. News is read only when the organization reads weak pages. Noise is never read.",
+  intro: "Read-only. An organization's own site is listed first, labeled; it is read like a competitor's. The analysis cuts a competitor's stored pages into sections and PMOS AI labels each section once; the label is the section's kind. Which kinds are read is the setting \"What the analysis reads\" above — the kinds that are on are read whole, the strongest sources first (release notes, help, API docs, pricing, product, compare, news), in a few large chunks of related pages. A release-notes page inside a help center or a blog is read as release notes. Noise is never read.",
   organization: "Organization",
   competitor: "Competitor",
   pickCompetitor: "Pick a competitor",
@@ -31,6 +32,11 @@ const COPY = {
   plan: "Reading plan",
   noPlan: "No reading plan yet. The competitor's first analysis run makes it.",
   planTotals: (sections: number, pages: number, tokens: number) => `${sections} section${sections === 1 ? "" : "s"} · ${pages.toLocaleString("en-US")} page${pages === 1 ? "" : "s"} · about ${tokens.toLocaleString("en-US")} tokens to read all of it`,
+  reading: "Reading — the chunks",
+  readingIntro: (capabilities: number, features: number) => `Its list today: ${capabilities.toLocaleString("en-US")} capabilit${capabilities === 1 ? "y" : "ies"}, ${features.toLocaleString("en-US")} feature${features === 1 ? "" : "s"}. One row per request: the first request of a company returns its list, a later one what its pages change in it. Newest first; hover a row for its first and last page.`,
+  unexplained: (count: number) => `Seen but not explained (${count})`,
+  unexplainedHint: "Bare labels — a line of a plan table or of a list — that no page explains. They are not features and are not in the table.",
+  noUnexplained: "No label was seen without an explanation.",
   runs: "Latest analysis runs",
   noRuns: "No analysis run yet.",
   byCode: "code",
@@ -41,7 +47,16 @@ const COPY = {
   models: "Models",
   noBudget: "–",
   labels: { product: "product", pricing: "pricing", compare: "compare", help: "help", release_notes: "release notes", api_docs: "API docs", news: "news", noise: "noise" } as Record<string, string>,
-  read: { product: "read whole", pricing: "read whole", compare: "read whole, own claims only", help: "index pages; deeper pages on a gap", release_notes: "index pages; deeper pages on a gap", api_docs: "index pages; deeper pages on a gap", news: "only with weak pages on", noise: "never read" } as Record<string, string>,
+  /** The place of a kind in the reading order ("where a PM looks"). */
+  order: { release_notes: "1st", help: "2nd", api_docs: "3rd", pricing: "4th", product: "5th", compare: "6th, own claims only", news: "last, low confidence" } as Record<string, string>,
+  isRead: (order: string) => `read (${order})`,
+  notRead: "not read — its kind is off",
+  neverRead: "never read",
+  releaseNotesInside: (count: number) => `${count.toLocaleString("en-US")} release-notes page${count === 1 ? "" : "s"} inside: read as release notes`,
+  settingNow: "What the analysis reads now",
+  notReadNow: "Left out of this company by that setting (a setting, not a limit)",
+  ranWith: "This run",
+  ranNotRead: "left out",
 };
 
 const INPUT = "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-400 disabled:opacity-60";
@@ -74,7 +89,7 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
 }
 
-type State = { status: "idle" } | { status: "loading" } | { status: "failed"; error: string } | { status: "ready"; sections: AdminPlanSection[]; runs: AdminPlanRun[] };
+type State = { status: "idle" } | { status: "loading" } | { status: "failed"; error: string } | { status: "ready"; sections: AdminPlanSection[]; runs: AdminPlanRun[]; reading: AdminReading };
 
 export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; currentOrgId: string | null }) {
   const [orgId, setOrgId] = useState(() => (orgs.some((o) => o.id === currentOrgId) ? currentOrgId! : orgs[0]?.id ?? ""));
@@ -91,8 +106,8 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
     try {
       const res = await fetch(`/api/admin/competitors/plan?competitorId=${encodeURIComponent(id)}`);
       const json = await res.json();
-      if (!res.ok || !Array.isArray(json.sections) || !Array.isArray(json.runs)) throw new Error(json.error ?? COPY.failed);
-      setState({ status: "ready", sections: json.sections, runs: json.runs });
+      if (!res.ok || !Array.isArray(json.sections) || !Array.isArray(json.runs) || !json.reading) throw new Error(json.error ?? COPY.failed);
+      setState({ status: "ready", sections: json.sections, runs: json.runs, reading: json.reading });
     } catch (e) {
       setState({ status: "failed", error: e instanceof Error && e.message ? e.message : COPY.failed });
     }
@@ -171,7 +186,10 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                           {s.sourceType !== "website" && <span className="ml-2 font-sans text-slate-500">{COMPETITORS_COPY.profile.sourceTypes[s.sourceType] ?? s.sourceType}</span>}
                         </td>
                         <td className={TD}><span className={`rounded-full border px-2 py-px text-[11px] font-semibold ${LABEL_CHIP[s.label] ?? LABEL_CHIP.noise}`}>{COPY.labels[s.label] ?? s.label}</span></td>
-                        <td className={`${TD} text-slate-500`}>{COPY.read[s.label] ?? "–"}</td>
+                        <td className={`${TD} text-slate-500`} data-testid="admin-plan-section-read">
+                          {s.label === "noise" ? COPY.neverRead : s.read ? COPY.isRead(COPY.order[s.label] ?? "") : COPY.notRead}
+                          {s.releaseNotesPages > 0 && <span className="block text-blue-700">{COPY.releaseNotesInside(s.releaseNotesPages)}</span>}
+                        </td>
                         <td className={`${TD} text-right tabular-nums`}>{s.pages.toLocaleString("en-US")}</td>
                         <td className={`${TD} text-right tabular-nums`}>{s.tokens.toLocaleString("en-US")}</td>
                         <td className={TD}>{when(s.labeledAt)} <span className="text-slate-400">· {s.labeledBy === "code" ? COPY.byCode : COPY.byAi}</span></td>
@@ -183,6 +201,27 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
             </>
           )}
 
+          <h3 className="mb-1 mt-5 text-xs font-bold uppercase tracking-wide text-slate-500">{COPY.reading}</h3>
+          <div className="mb-2 text-xs text-slate-500" data-testid="admin-reading-list">{COPY.readingIntro(state.reading.capabilities, state.reading.features)}</div>
+          <div className="mb-2 text-xs text-slate-600" data-testid="admin-reading-setting">
+            <div><span className="font-semibold">{COPY.settingNow}:</span> {state.reading.reads}</div>
+            {state.reading.notRead && <div><span className="font-semibold">{COPY.notReadNow}:</span> {state.reading.notRead}</div>}
+          </div>
+          <div className="max-h-[360px] overflow-auto rounded-lg border border-slate-200 p-2"><RunChunks chunks={state.reading.chunks} /></div>
+          <details className="mt-2 text-xs" data-testid="admin-unexplained">
+            <summary className="cursor-pointer text-slate-600">{COPY.unexplained(state.reading.unexplained.length)}</summary>
+            <div className="mt-1 text-slate-500">{COPY.unexplainedHint}</div>
+            {state.reading.unexplained.length === 0 ? (
+              <div className="mt-1 text-slate-500">{COPY.noUnexplained}</div>
+            ) : (
+              <ul className="mt-1 list-disc pl-4">
+                {state.reading.unexplained.map((u) => (
+                  <li key={`${u.label}|${u.url ?? ""}`} data-testid="admin-unexplained-label">{u.label}{u.url && <span className="text-slate-400"> — {u.url}</span>}</li>
+                ))}
+              </ul>
+            )}
+          </details>
+
           <h3 className="mb-1 mt-5 text-xs font-bold uppercase tracking-wide text-slate-500">{COPY.runs}</h3>
           {state.runs.length === 0 ? (
             <div className="text-sm text-slate-500" data-testid="admin-plan-no-runs">{COPY.noRuns}</div>
@@ -190,7 +229,7 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
             <div className="overflow-auto rounded-lg border border-slate-200">
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
-                  <tr><th className={TH}>Status</th><th className={TH}>Step</th><th className={`${TH} text-right`}>Pages read / left unread</th><th className={`${TH} text-right`}>Tokens used of the budget</th><th className={`${TH} text-right`}>Go-back rounds</th><th className={TH}>Started</th><th className={TH}>Finished</th><th className={TH}>Error</th></tr>
+                  <tr><th className={TH}>Status</th><th className={TH}>Step</th><th className={`${TH} text-right`}>Pages read / left unread</th><th className={`${TH} text-right`}>Tokens used of the budget</th><th className={`${TH} text-right`}>Requests: reading / second look</th><th className={TH}>Started</th><th className={TH}>Finished</th><th className={TH}>Error</th></tr>
                 </thead>
                 <tbody>
                   {state.runs.map((r) => (
@@ -203,14 +242,15 @@ export function AdminReadingPlan({ orgs, currentOrgId }: { orgs: ImportOrg[]; cu
                         {r.tokensUsed.toLocaleString("en-US")} of {r.budget ? r.budget.toLocaleString("en-US") : COPY.noBudget}
                         {r.budgetReached && <span className="ml-2 rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800">{COPY.budgetReached}</span>}
                       </td>
-                      <td className={`${TD} text-right tabular-nums`}>{r.goBackRounds}{r.goBackPages ? <span className="text-slate-400"> · {r.goBackPages} page{r.goBackPages === 1 ? "" : "s"}</span> : null}</td>
+                      <td className={`${TD} text-right tabular-nums`}>{r.readRequests} / {r.lookRequests}</td>
                       <td className={TD}>{when(r.startedAt)}</td>
                       <td className={TD}>{when(r.finishedAt)}</td>
                       <td className={`${TD} max-w-[280px] text-red-700`}>{r.error ?? ""}</td>
                     </tr>
                     <tr data-testid="admin-plan-run-tokens">
                       <td className="px-3 pb-2" colSpan={8}>
-                        <div className="mb-1.5"><RunCaps caps={r.caps} recorded={r.recorded} active={r.status === "queued" || r.status === "running" || r.status === "waiting"} /></div>
+                        <div className="mb-1.5 flex flex-wrap items-start gap-2"><RunCaps caps={r.caps} recorded={r.recorded} active={r.status === "queued" || r.status === "running" || r.status === "waiting"} /><RunIncidents incidents={r.incidents} total={r.incidentsTotal} /></div>
+                        {r.reads && <div className="mb-1 text-slate-600" data-testid="admin-plan-run-reads"><span className="font-semibold">{COPY.ranWith}:</span> {r.reads}{r.notRead && <span className="text-slate-500"> · {COPY.ranNotRead}: {r.notRead}</span>}</div>}
                         <details>
                           <summary className="cursor-pointer text-slate-500">{COPY.tokensPerStep}: {COPY.tokens(r.inputTokens, r.outputTokens, r.cachedTokens, r.thinkingTokens)}</summary>
                           <div className="mt-1.5">

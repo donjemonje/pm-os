@@ -5,7 +5,7 @@ import { Loader2, RefreshCw } from "lucide-react";
 import type { AdminSetupRun, AdminSetupState } from "@/app/api/admin/competitors/setup/route";
 import { ORG_SETUP_STATES, type OrgSetupState } from "@/lib/competitors/analysis/setup-rules";
 import type { ImportOrg } from "./AdminImport";
-import { RunCaps, RunPacing, RunUsage } from "./RunUsage";
+import { RunCaps, RunChunks, RunIncidents, RunPacing, RunUsage } from "./RunUsage";
 
 /**
  * Administration → Competitors → Setup runs (PM-OS admin only). Pick an organization: its setup state (required →
@@ -17,7 +17,7 @@ import { RunCaps, RunPacing, RunUsage } from "./RunUsage";
 /** Every string of the section (admin screens keep their strings in the component). */
 const COPY = {
   title: "Setup runs",
-  intro: "Setup is a state of the organization: required → in setup → done. Turning Competitors on (Enablements) makes it required; the setup run moves it to in setup and, when it has finished, to done. Until it is done an analysis creates no row and the organization's Competitors pages say \"being set up\". The setup run reads the organization's own site and every competitor, unifies their capabilities into rows, builds the domains from the rows and fills the table. It is started by hand from the scanner command line (--own-site <workspaceId> <url>, then --setup <workspaceId>), and a run that stopped is continued by the same command. The runs below are read-only; the state can be set by hand.",
+  intro: "Setup is a state of the organization: required → in setup → done. Turning Competitors on (Enablements) makes it required; the setup run moves it to in setup and, when it has finished, to done. Until it is done an analysis creates no row and the organization's Competitors pages say \"being set up\". The setup run reads the organization's own site and every competitor — each in a few large chunks of related pages, strongest sources first — unifies their lists into rows and feature rows, builds the domains from the rows and fills the table. It is started by hand from the scanner command line (--own-site <workspaceId> <url>, then --setup <workspaceId>), and a run that stopped is continued by the same command (--setup <workspaceId> --fresh starts over instead). The table as text: --table <workspaceId>. The runs below are read-only; the state can be set by hand.",
   organization: "Organization",
   noOrganizations: "No organization yet.",
   loading: "Loading the setup runs…",
@@ -26,8 +26,8 @@ const COPY = {
   state: { done: "Done", in_setup: "In setup", required: "Required" } as Record<string, string>,
   stateHint: {
     done: "The organization is set up: analysis runs create rows and fill cells, and its pages show the table.",
-    in_setup: "A setup run was queued and has not finished. Until it has, analysis runs stop after the clean-up and create no row; the pages say \"being set up\".",
-    required: "Competitors is on and the setup run has not been started. Analysis runs stop after the clean-up and create no row; the pages say \"being set up\".",
+    in_setup: "A setup run was queued and has not finished. Until it has, analysis runs stop after the reading and create no row; the pages say \"being set up\".",
+    required: "Competitors is on and the setup run has not been started. Analysis runs stop after the reading and create no row; the pages say \"being set up\".",
   } as Record<string, string>,
   stateFromData: "Never set — read from the organization's data: a catalog means done, a setup run that did not finish means in setup, anything else required.",
   setState: "Set the state by hand",
@@ -44,9 +44,11 @@ const COPY = {
   tokensPerStep: "Tokens per step and model — the whole run",
   sharedTokens: "Of those, the calls that belong to no company (unify, domains)",
   companyTokens: "Tokens per step and model",
+  notRead: "Not read — the kind was off (a setting, not a limit)",
+  companyChunks: (count: number) => `Reading: ${count} request${count === 1 ? "" : "s"} — its chunks, their pages and tokens, what each answer did`,
   models: "Models",
   own: "own site",
-  stages: { waiting: "waiting", map: "map", research: "research", merge: "merge", unify: "unify", match: "match", second_look: "second look", apply: "apply", facts: "facts", done: "done" } as Record<string, string>,
+  stages: { waiting: "waiting", map: "map", reading: "reading", research: "research", merge: "merge", unify: "unify", match: "match", second_look: "second look", apply: "apply", facts: "facts", done: "done" } as Record<string, string>,
 };
 
 const INPUT = "w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm outline-none focus:border-slate-400 disabled:opacity-60";
@@ -181,8 +183,10 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                   <span className="font-mono text-slate-400">{r.id}</span>
                 </div>
                 {r.error && <div className="border-b border-slate-200 px-3 py-2 text-xs text-red-700" data-testid="admin-setup-run-error">{r.error}</div>}
-                <div className="border-b border-slate-200 px-3 py-2" data-testid="admin-setup-run-caps">
+                {r.reads && <div className="border-b border-slate-200 px-3 py-2 text-xs text-slate-600" data-testid="admin-setup-run-reads">{r.reads}</div>}
+                <div className="flex flex-wrap items-start gap-2 border-b border-slate-200 px-3 py-2" data-testid="admin-setup-run-caps">
                   <RunCaps caps={r.caps} recorded active={r.status === "queued" || r.status === "running" || r.status === "waiting"} />
+                  <RunIncidents incidents={r.incidents} total={r.incidentsTotal} />
                 </div>
                 <div className="border-b border-slate-200 px-3 py-2 text-xs" data-testid="admin-setup-run-tokens">
                   {r.model && <div className="mb-1 text-slate-500">{COPY.models}: <span className="font-mono">{r.model}</span></div>}
@@ -221,6 +225,14 @@ export function AdminSetupRuns({ orgs, currentOrgId }: { orgs: ImportOrg[]; curr
                         <tr data-testid="admin-setup-company-tokens">
                           <td className="px-3 pb-2" colSpan={5}>
                             {c.caps.length > 0 && <div className="mb-1.5"><RunCaps caps={c.caps} recorded /></div>}
+                            {c.notRead && <div className="mb-1.5 text-slate-600" data-testid="admin-setup-company-not-read"><span className="font-semibold">{COPY.notRead}:</span> {c.notRead}</div>}
+                            {c.incidents.length > 0 && <div className="mb-1.5"><RunIncidents incidents={c.incidents} /></div>}
+                            {c.chunks.length > 0 && (
+                              <details className="mb-1">
+                                <summary className="cursor-pointer text-slate-500" data-testid="admin-setup-company-chunks">{COPY.companyChunks(c.chunks.length)}</summary>
+                                <div className="mt-1.5 overflow-auto"><RunChunks chunks={c.chunks} /></div>
+                              </details>
+                            )}
                             <details>
                               <summary className="cursor-pointer text-slate-500">{COPY.companyTokens}: {COPY.tokens(c.inputTokens, c.outputTokens, c.cachedTokens, c.thinkingTokens)}</summary>
                               <div className="mt-1.5"><RunUsage usage={c.usage} calls={c.calls} /></div>

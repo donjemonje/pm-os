@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
-import type { AdminSourceRow } from "@/app/api/admin/competitors/settings/route";
+import type { AdminReads, AdminSourceRow } from "@/app/api/admin/competitors/settings/route";
 import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ScannerKeyRow } from "@/lib/competitors/local";
 
@@ -12,11 +12,26 @@ import type { ScannerKeyRow } from "@/lib/competitors/local";
  * (default OFF for now), the local stations' machine keys (created once,
  * rotated by the poller, revoked here), and every source's scan frequency in
  * days. No retention setting: a change replaces a page's text (PRD).
+ * Also the two settings of the analysis that are the installation's: the token
+ * budget per company per run, and "What the analysis reads" — one switch per
+ * kind of content (analysis/reads.ts).
  */
+
+/** Every string of the "What the analysis reads" section (the labels and help lines of the kinds come with the data). */
+const READS_COPY = {
+  title: "What the analysis reads",
+  intro: "One switch per kind of content, for every organization. A run reads the kinds that are on, and records which they were. Turning a kind off deletes nothing; turning it on makes its pages due — the next run of each company reads them.",
+  on: "ON",
+  off: "OFF",
+  default: (on: boolean) => `default ${on ? "on" : "off"}`,
+  now: "Now",
+  releaseNotes: "Release notes win over where they sit: with the help center or the blog off, a release-notes page inside it is still read while Release notes is on.",
+};
 
 interface Payload {
   settings: { remoteScanEnabled: boolean; analysisDisabled: boolean; analysisTokenBudget: number };
   budgetLimits: { min: number; max: number; default: number };
+  reads: AdminReads;
   keys: ScannerKeyRow[];
   sources: AdminSourceRow[];
   testKnobs: boolean;
@@ -168,6 +183,27 @@ export function AdminScanning() {
           <BudgetField value={data.settings.analysisTokenBudget} limits={data.budgetLimits} busy={busy} onSave={(n) => patch({ analysisTokenBudget: n })} />
           {data.testKnobs && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800" title="COMPETITORS_TEST_KNOBS=on — the clock and the scheduler tick can be set from the tests. Never in production.">Test knobs on</span>}
         </div>
+      </section>
+
+      {/* What the analysis reads */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5" data-testid="admin-analysis-reads">
+        <h2 className="text-sm font-bold">{READS_COPY.title}</h2>
+        <p className="mb-3 mt-0.5 text-xs text-slate-500">{READS_COPY.intro}</p>
+        <div className="grid grid-cols-1 gap-x-8 gap-y-3 md:grid-cols-2">
+          {data.reads.kinds.map((k) => (
+            <label key={k.kind} className="flex items-start gap-3 text-sm" data-testid={`admin-reads-${k.kind}`}>
+              <input type="checkbox" checked={k.on} disabled={busy} onChange={(e) => void patch({ analysisReads: { [k.kind]: e.target.checked } })} className="mt-0.5 h-4 w-4" />
+              <span>
+                <span className="font-medium">{k.label}</span>
+                <span className={`ml-2 rounded-full px-2 py-px text-[11px] font-semibold ${k.on ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{k.on ? READS_COPY.on : READS_COPY.off}</span>
+                <span className="ml-2 text-[11px] text-slate-400">{READS_COPY.default(k.default)}</span>
+                <span className="block text-xs text-slate-500">{k.help}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-3 text-xs text-slate-600" data-testid="admin-reads-line"><span className="font-semibold">{READS_COPY.now}:</span> {data.reads.line}</p>
+        <p className="mt-1 text-xs text-slate-500">{READS_COPY.releaseNotes}</p>
       </section>
 
       {/* Stations */}

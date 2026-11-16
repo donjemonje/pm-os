@@ -420,7 +420,7 @@ function CompetitorLine({ c, busy, scanning, canEdit, nextScanAt, onScan, onLog,
           ? C.settings.analysisQueued
           : analysis.status === "waiting"
             ? C.settings.analysisWaiting(analysis.resumeAt ? timeUntil(analysis.resumeAt) : "")
-            : analysis.step === "research" && analysis.pagesTotal > 0
+            : analysis.step === "reading" && analysis.pagesTotal > 0
               ? C.settings.analyzingPages(analysis.pagesDone, analysis.pagesTotal)
               : C.settings.analysisStep[analysis.step] ?? C.matrix.analyzing
       : status === "never"

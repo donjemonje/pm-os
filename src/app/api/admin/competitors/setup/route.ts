@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { db } from "@/lib/db";
 import { capLines, capsOf, readCaps } from "@/lib/competitors/analysis/caps";
+import { CHUNK_SELECT, chunkView, type ChunkView } from "@/lib/competitors/analysis/chunk-view";
+import { incidentLine, incidentsOf, readIncidents } from "@/lib/competitors/analysis/incidents";
+import { notReadLine, readRunReads, readsLine } from "@/lib/competitors/analysis/reads";
 import { readCounters } from "@/lib/competitors/analysis/counters";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { setSetupState, workspaceSetup } from "@/lib/competitors/analysis/setup";
@@ -42,6 +45,12 @@ export interface AdminSetupCompany {
   usage: StepUsage[];
   /** The caps hit for this company, one line each. */
   caps: string[];
+  /** What the run left out of this company because its kind was off in "What the analysis reads" — "" when nothing. A setting, not a cap. */
+  notRead: string;
+  /** Its incidents in this run, one line each (answers that should never happen); [] = none. */
+  incidents: string[];
+  /** The reading requests this run made for the company, in order: its chunks, their pages and tokens, what each answer did. */
+  chunks: ChunkView[];
 }
 
 export interface AdminSetupRun {
@@ -65,6 +74,12 @@ export interface AdminSetupRun {
   sharedUsage: StepUsage[];
   /** Every cap the run hit, one line each — the company named on the line; [] = no cap was hit. */
   caps: string[];
+  /** The kinds that were on when the run ran ("Reading: … — not read: …"); null for a run from before the setting existed. */
+  reads: string | null;
+  /** Every incident of the run, one line each — the company named on the line; [] = none. */
+  incidents: string[];
+  /** All incidents of the run, also the ones no longer listed. */
+  incidentsTotal: number;
   /** How the run paced itself and every pushback of the provider (analysis/pacing.ts); null for a run from before it was recorded. */
   pacing: PacingView | null;
   /** The models of the run ("read … · match … · judge …"). */
@@ -103,10 +118,12 @@ export async function GET(req: Request) {
       where: { workspaceId, kind: "setup" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: MAX_RUNS,
-      select: { id: true, status: true, step: true, counters: true, usage: true, caps: true, pacing: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
+      select: { id: true, status: true, step: true, counters: true, usage: true, caps: true, incidents: true, reads: true, pacing: true, model: true, setup: true, createdAt: true, startedAt: true, finishedAt: true, error: true },
     }),
   ]);
   if (!setup) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // The reading requests of these runs, per company: its chunks.
+  const chunks = runs.length ? await db.competitorChunk.findMany({ where: { analysisId: { in: runs.map((r) => r.id) } }, orderBy: [{ createdAt: "asc" }, { position: "asc" }], select: { ...CHUNK_SELECT, competitorId: true } }) : [];
   const body: AdminSetupState = {
     workspaceId,
     state: setup.state,
@@ -118,15 +135,19 @@ export async function GET(req: Request) {
       const c = readCounters(r.counters);
       const progress = readSetupProgress(r.setup);
       const hit = readCaps(r.caps);
+      const cases = readIncidents(r.incidents);
+      const ran = readRunReads(r.reads);
       return {
+        reads: ran ? readsLine(ran.kinds) : null,
         id: r.id, status: r.status, step: r.step,
         companies: progress.companies.map((x) => ({
           competitorId: x.competitorId, name: x.name, own: x.own, stage: x.stage, pagesRead: x.counters.pagesRead, pagesUnread: x.counters.pagesUnread,
           tokensUsed: x.counters.inputTokens + x.counters.outputTokens, inputTokens: x.counters.inputTokens, outputTokens: x.counters.outputTokens, cachedTokens: x.counters.cachedTokens, thinkingTokens: x.counters.thinkingTokens,
           budgetReached: x.counters.budgetReached > 0, calls: x.counters.calls, usage: sortUsage(x.usage), caps: capLines(capsOf(hit, x.competitorId)),
+          notRead: notReadLine(x.notRead), incidents: incidentsOf(cases, x.competitorId).list.map(incidentLine), chunks: chunks.filter((k) => k.analysisId === r.id && k.competitorId === x.competitorId).map(chunkView),
         })),
         rows: progress.rows, domains: progress.domains, features: progress.features, calls: c.calls, tokensUsed: c.inputTokens + c.outputTokens, inputTokens: c.inputTokens, outputTokens: c.outputTokens, cachedTokens: c.cachedTokens, thinkingTokens: c.thinkingTokens,
-        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), caps: capLines(hit), pacing: pacingView(r.pacing), model: r.model, budget: c.budget,
+        usage: sortUsage(readUsage(r.usage)), sharedUsage: sortUsage(progress.sharedUsage), caps: capLines(hit), incidents: cases.list.map(incidentLine), incidentsTotal: cases.total, pacing: pacingView(r.pacing), model: r.model, budget: c.budget,
         queuedAt: r.createdAt.toISOString(), startedAt: r.startedAt?.toISOString() ?? null, finishedAt: r.finishedAt?.toISOString() ?? null, error: r.error,
       };
     }),
