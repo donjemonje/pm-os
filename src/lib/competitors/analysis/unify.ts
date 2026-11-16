@@ -43,7 +43,12 @@ export const UNIFY_CAPABILITY_BATCH = 80;
 export const UNIFY_FEATURE_BATCH = 120;
 /** Feature names shown under a capability in a call of kind A, as a hint of what it covers. */
 export const UNIFY_HINT_FEATURES = 10;
-export const UNIFY_MAX_TOKENS = 24_000;
+/**
+ * Visible output tokens a unify call may take; the call's thinking is on top (ai.ts adds 16,000 of headroom). The
+ * judge model thinks a lot on this task — the hand test of 2026-11-16 billed 14.7k of 17.7k output tokens as
+ * thinking for 175 codes — so the answer's own room is generous: a call that runs out of it fails the run.
+ */
+export const UNIFY_MAX_TOKENS = 32_000;
 export const UNIFY_REVIEW_MAX_TOKENS = 8_000;
 /** Closed sets up to this size ride in the response schema as an enum; larger ones are enforced by the parser only. */
 const MAX_ENUM = 120;
