@@ -42,7 +42,7 @@ import { contentHash, htmlToText, titleOf } from "./html";
 import { modelFor, thinkingFor } from "./models";
 import { isPublicWebsite } from "./netguard";
 import { MAX_PAGE_CHARS } from "./pages";
-import { aiStepEnabled, noteStoredChars, testAiAnswers } from "./settings";
+import { aiStepEnabled, getGlobalScanSettings, noteStoredChars, testAiAnswers } from "./settings";
 import { InvalidUrlError, normalizeWebsite, pageKey, siteHost } from "./url";
 
 /**
@@ -224,6 +224,9 @@ export async function storeLlmsTxt(workspaceId: string, source: { id: string; ur
   return "written";
 }
 
+/** Why a search did nothing while remote scanning is off (Administration → Competitors). */
+export const REMOTE_OFF_NOTE = "Remote scanning is off: the server fetches nothing from a company's site. The search for other addresses waits until the scan station can do it.";
+
 export type SearchOutcome =
   | { skipped: "no_company" | "running" }
   | { status: "done" | "undecided"; candidates: number; added: Array<{ sourceId: string; kind: AddressKind; url: string; via: FoundVia }>; alreadyThere: number; removedByPm: number; note: string };
@@ -298,6 +301,10 @@ export async function searchAddresses(
     let finding: Finding | null = null;
     let tokens = 0;
     try {
+      // Website Scanning PRD: with remote scanning OFF the server fetches nothing from a company's site — only the
+      // station on the PM's machine reads sites (so sites do not block us). The search makes server requests (home
+      // page, llms.txt, guessed names), so it does not run until it is moved to the station. Daniel 2026-11-16.
+      if (!(await getGlobalScanSettings()).remoteScanEnabled) throw new Error(REMOTE_OFF_NOTE);
       finding = await findCandidates(site, opts.home ?? null);
       if (website) await storeLlmsTxt(competitor.workspaceId, website, finding.llms);
       const screened = screenCandidates(finding.candidates, knownAddresses(competitor.sources, competitor.host));
@@ -335,7 +342,7 @@ export async function searchAddresses(
     } catch (e) {
       // A site that does not answer, PMOS AI without capacity, anything else: nothing is added, the next search tries again.
       result = { ...result, status: "undecided", note: (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 300) };
-      console.error("[competitors] the search for other addresses could not decide", competitorId, e);
+      if (!(e instanceof Error && e.message === REMOTE_OFF_NOTE)) console.error("[competitors] the search for other addresses could not decide", competitorId, e);
     }
 
     const stored: AddressSearchResult = { status: result.status, at: new Date().toISOString(), trigger: opts.trigger, candidates: result.candidates, added: result.added.length, note: result.note };
