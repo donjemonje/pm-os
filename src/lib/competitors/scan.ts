@@ -25,7 +25,7 @@ import { isPdfUrl, pageKey, sourceSiteHost } from "./url";
 /**
  * One scan of one source, in two halves (Website Scanning PRD 2026-11-04).
  * A scan ENDS when the pages are stored. What the pages say — capabilities,
- * features, the table's cells, the profile facts — is read by the analysis:
+ * features, the table's cells — is read by the analysis:
  * its own queued run after the scan (analysis/engine.ts), queued here at the
  * end of every scan that read at least one page.
  *

@@ -335,7 +335,6 @@ export const COMPETITORS_COPY = {
       match: "Analyzing · matching to your capabilities",
       second_look: "Analyzing · second look",
       apply: "Analyzing · filling the table",
-      facts: "Analyzing · profile facts",
     } as Record<string, string>,
     analysisQueued: "Analysis queued",
     analysisWaiting: (when: string) => `Analysis waiting for PMOS AI · continues ${when}`,

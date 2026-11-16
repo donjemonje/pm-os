@@ -234,11 +234,9 @@ export interface TestAiAnswers {
   match?: string[];
   /** Second look: the answer of the n-th second-look request of this company in a run (one per chunk). Missing → {"found": []}. */
   secondLook?: string[];
-  /** Facts: every chunk gets this answer. Missing → {"facts": []}. */
-  facts?: string;
   /**
    * A setup run only, read from the answers of the organization's OWN source (analysis/setup.ts) — every company of
-   * an injected setup run must have answers of its own for its map, reading, second looks and facts:
+   * an injected setup run must have answers of its own for its map, reading and second looks:
    *   unify         — the answer of the n-th unify call about capabilities. Missing while one still needs a row → the run FAILS.
    *   unifyReview   — the answer of the review call (made only when the capabilities took more than one call). Missing → {"merge": []}.
    *   unifyFeatures — the answer of the n-th unify call about features (an injected run makes them one at a time, in
@@ -275,7 +273,8 @@ const isJson = (v: unknown): v is string => {
 export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "answers must be an object" };
   const r = raw as Record<string, unknown>;
-  if ("classify" in r) return { error: "the classify / facts shape is gone: use map, reading, match, secondLook, facts, rateLimit" };
+  if ("classify" in r) return { error: "the classify / facts shape is gone: use map, releaseNotes, reading, match, secondLook, rateLimit" };
+  if ("facts" in r) return { error: "the profile-facts step is gone: a run makes no facts call, so it takes no facts answer" };
   if ("research" in r || "merge" in r) return { error: "the per-page research and the merge are gone: use reading (the answer of each reading request, in order)" };
   const out: TestAiAnswers = {};
   if (r.map !== undefined) {
@@ -296,10 +295,6 @@ export function readTestAiAnswers(raw: unknown): TestAiAnswers | { error: string
     if (r[key] === undefined) continue;
     if (!Array.isArray(r[key]) || !(r[key] as unknown[]).every(isJson)) return { error: `${key} must be a list of JSON texts` };
     out[key] = r[key] as string[];
-  }
-  if (r.facts !== undefined) {
-    if (!isJson(r.facts)) return { error: "facts must be JSON text" };
-    out.facts = r.facts;
   }
   if (r.unifyReview !== undefined) {
     if (!isJson(r.unifyReview)) return { error: "unifyReview must be JSON text" };

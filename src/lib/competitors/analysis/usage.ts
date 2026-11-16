@@ -13,7 +13,7 @@
  */
 
 export interface StepUsage {
-  /** The engine's step when the call was made: map | research | merge | unify | domains | match | go_back | second_look | apply | facts. */
+  /** The engine's step when the call was made: map | reading | unify | domains | match | second_look | apply (an old run also: research | merge | go_back | facts). */
   step: string;
   model: string;
   /** Calls that were made and billed — the ones whose answer was unusable included. */
@@ -38,7 +38,7 @@ export interface TokenSum {
   ms: number;
 }
 
-/** The order steps are shown in: the order they run. A step that is not on the list comes last. */
+/** The order steps are shown in: the order they run — "research", "merge", "go_back" and "facts" are steps of old runs only, kept so their rows keep their place. A step that is not on the list comes last. */
 export const STEP_ORDER: readonly string[] = ["map", "reading", "research", "merge", "unify", "domains", "match", "go_back", "second_look", "apply", "facts"];
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);

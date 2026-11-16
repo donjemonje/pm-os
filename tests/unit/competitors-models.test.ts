@@ -71,8 +71,8 @@ describe("role → model", () => {
     expect(competitorsModels({ COMPETITORS_MODEL: "gemini-4-hydrogen" })).toEqual({ read: "gemini-4-argon", match: "gemini-4-argon", judge: "gemini-4-carbon" });
     expect(competitorsModels({ COMPETITORS_MODEL: "something-else" })).toEqual(competitorsModels({}));
   });
-  it("every prompt has its role: read for the map, the reading, the second look, facts and the pick of a company's other addresses; match for the match; judge for unify and the domains", () => {
-    expect(PROMPT_ROLES).toEqual({ map: "read", reading: "read", unify: "judge", unify_review: "judge", unify_features: "judge", domains: "judge", match: "match", second_look: "read", facts: "read", addresses: "read" });
+  it("every prompt has its role: read for the map, the reading, the second look and the pick of a company's other addresses; match for the match; judge for unify and the domains", () => {
+    expect(PROMPT_ROLES).toEqual({ map: "read", reading: "read", unify: "judge", unify_review: "judge", unify_features: "judge", domains: "judge", match: "match", second_look: "read", addresses: "read" });
     expect(modelOfPrompt("reading", {})).toBe("gemini-4-argon");
     expect(modelOfPrompt("map", {})).toBe("gemini-4-argon");
     expect(modelOfPrompt("unify", {})).toBe("gemini-4-carbon");

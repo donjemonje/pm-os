@@ -6,7 +6,6 @@ import { ownSourceOf } from "../own-site";
 import { testAiAnswers } from "../settings";
 import { DOMAINS_MAX_ROWS, DOMAINS_MAX_TOKENS, DOMAINS_SYSTEM_PROMPT, domainsTool, knownDomains, parseDomains, planCatalog, renderDomains, rowsWithoutDomain, type DomainDraft, type DomainsRow } from "./domains";
 import { AnalysisError, kickAnalyses, type RunContext, type SetupEnv } from "./engine";
-import { factsStep } from "./facts";
 import { wordingKey } from "./items";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import { mapStep } from "./plan";
@@ -69,8 +68,8 @@ import {
  *   4. domains    — one step over all rows + the client's language → the domains and each row's domain (domains.ts);
  *                   the catalog is created here, in ONE transaction: domains, rows, feature rows, each item's row
  *   5. fill       — the own source fills OUR column; then per competitor: a second look in bulk for OUR rows it
- *                   has no item for (the parity question), the cells, and
- *   6. facts      — the profile facts (never for the own source)
+ *                   has no item for (the parity question), and the cells.
+ * (No profile-facts step any more: the run is about the table.)
  *
  * Resumable like an analysis run: every start walks the steps from the first and each computes its to-do from the
  * tables. The catalog exists or it does not (step 4 is one transaction): while it does not, steps 3–4 have work;
@@ -691,9 +690,6 @@ export async function setupWalk(env: SetupEnv): Promise<void> {
     const waiting = await env.inStep("second_look", () => secondLookStep(ctx));
     env.setStage(c.id, "apply");
     await env.inStep("apply", () => applyCells(ctx, waiting));
-    // 6. The profile facts — never for the own source.
-    env.setStage(c.id, "facts");
-    await env.inStep("facts", () => factsStep(ctx));
     await recordCompany(env, c, ctx);
   }
 

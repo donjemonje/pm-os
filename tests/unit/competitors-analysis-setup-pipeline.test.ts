@@ -132,16 +132,17 @@ describe("unify → review → features → domains → catalog → cells", () =
 
 describe("the two paths", () => {
   it("the setup run: every company is mapped and read, then ONE unify and ONE domains step for all, then the table is filled — the own site first", () => {
-    expect([...SETUP_PATH]).toEqual(["map", "reading", "unify", "domains", "apply (the own site: OUR column)", "second_look", "apply", "facts"]);
+    expect([...SETUP_PATH]).toEqual(["map", "reading", "unify", "domains", "apply (the own site: OUR column)", "second_look", "apply"]);
     expect(SETUP_PATH).not.toContain("match");
-    for (const gone of ["research", "merge", "go_back"]) expect(SETUP_PATH).not.toContain(gone);
+    for (const gone of ["research", "merge", "go_back", "facts"]) expect(SETUP_PATH).not.toContain(gone);
   });
-  it("after setup, a run of one company: map → reading of what is new or changed → match to the rows that exist → second look → fill → facts", () => {
-    expect([...analysisPath("done", false)]).toEqual(["map", "reading", "match", "second_look", "apply", "facts"]);
+  it("after setup, a run of one company: map → reading of what is new or changed → match to the rows that exist → second look → fill. No profile-facts step: the run is about the table", () => {
+    expect([...analysisPath("done", false)]).toEqual(["map", "reading", "match", "second_look", "apply"]);
+    for (const state of ["required", "in_setup", "done"] as const) for (const own of [true, false]) expect(analysisPath(state, own)).not.toContain("facts");
     expect(analysisPath("done", false)).not.toContain("unify");
     expect(analysisPath("done", false)).not.toContain("domains");
   });
-  it("after setup, the organization's own site: no second look and no profile facts — what its items say is ours", () => {
+  it("after setup, the organization's own site: no second look — what its items say is ours", () => {
     expect([...analysisPath("done", true)]).toEqual(["map", "reading", "match", "apply"]);
   });
   it("before setup is done a run of one company stops after the reading: its list is ready, no row is created", () => {

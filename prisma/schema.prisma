@@ -860,12 +860,12 @@ model CompetitorAnalysis {
   startedById  String?
   /// "queued" | "running" | "waiting" (PMOS AI has no capacity; sleeping until resumeAt) | "done" | "failed" | "cancelled"
   status       String     @default("queued")
-  /// Display only — where the run is: "map" | "reading" | "match" | "second_look" | "apply" | "facts" | "done"
-  /// (a setup run also: "unify" | "domains"; a run from before 2026-11-16 also "research" | "merge" | "go_back").
+  /// Display only — where the run is: "map" | "reading" | "match" | "second_look" | "apply" | "done"
+  /// (a setup run also: "unify" | "domains"; a run from before 2026-11-16 also "research" | "merge" | "go_back" | "facts").
   /// A resumed run never trusts it: every step recomputes its own to-do from the tables.
   step         String     @default("research")
-  /// What cannot be derived: { factsBaselineSources: string[], look: { fingerprint, rows, done } } — the sources whose
-  /// first facts read this is, and how far a second look got (the chunks it asked), so a run that stopped goes on after them.
+  /// What cannot be derived: { look: { fingerprint, rows, done } } — how far a second look got (the chunks it asked),
+  /// so a run that stopped goes on after them. (An old run may also hold factsBaselineSources, of the facts step that is gone.)
   /// A setup run keeps one such object per company under { companies: { <competitorId>: {…} } }, and { unify: { reviewed } }.
   cursor       Json       @default("{}")
   /// Set while status = "waiting".
@@ -1166,6 +1166,9 @@ model FeatureStatus {
 
 /// A lean-profile fact read off the website. `kind` is a closed list:
 /// tagline | product | pricingTier | integration | certification | customer | vertical.
+/// Since 2026-11-16 no run writes these: the profile-facts step of the analysis is gone (the run is about the
+/// table). The rows that exist stay and are shown (Profile tab, feed, timeline); a PM can still add and edit facts
+/// by hand; a scan still marks a fact whose source page is gone as unreachable.
 model ProfileFact {
   id           String     @id @default(uuid())
   workspaceId  String
@@ -1440,9 +1443,9 @@ model SourcePage {
   /// "<READ_VERSION>:<hash>" of the text the reading last read (analysis/reading.ts); a different value = the page is due.
   analyzedKey String?
   analyzedAt  DateTime?
-  /// Set when the page's research answer was unusable; cleared when the page is read again.
+  /// No longer written (it marked a page whose per-page research answer was unusable); the reading clears it.
   analysisError String?
-  /// "<FACTS_VERSION>:<hash>" of the text the facts step last read.
+  /// No longer written or read: the profile-facts step is gone (2026-11-16). Left in place for a later cleanup push.
   factsKey    String?
   updatedAt   DateTime         @updatedAt
 

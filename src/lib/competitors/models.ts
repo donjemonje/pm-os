@@ -3,7 +3,7 @@
  * 2026-11-16: the defaults after the reading was rebuilt and tested by hand).
  *
  * Three roles, with their defaults in code:
- *   read  — gemini-4-argon:  map, the reading (a company in chunks), second look, facts, the pick of a company's
+ *   read  — gemini-4-argon:  map, the reading (a company in chunks), second look, the pick of a company's
  *                            other addresses. Not gemini-4-hydrogen: it cannot go below "low" thinking and billed
  *                            ~57% of its output as thinking on the reading (measured 2026-11-15).
  *   match — gemini-4-argon:  match (a company's new items against the rows that exist).
@@ -45,7 +45,6 @@ export const PROMPT_ROLES = {
   domains: "judge",
   match: "match",
   second_look: "read",
-  facts: "read",
   // Not a step of an analysis run: the search for a company's other addresses (addresses.ts) asks what each candidate is.
   addresses: "read",
 } as const satisfies Record<string, ModelRole>;
@@ -78,7 +77,7 @@ export function modelsLine(models: Record<ModelRole, string>): string {
  * The thinking level of a role. A model's own thinking is billed as output, so how much a call thinks is a setting
  * per role, like its model, with the defaults in code (Daniel 2026-11-16: "start with medium, see results, maybe
  * high" — never "low" for the steps that build the table):
- *   read  — medium: map, the reading, second look, facts, other addresses.
+ *   read  — medium: map, the reading, second look, other addresses.
  *   match — high:   match — deciding which row of ours a company's item is.
  *   judge — medium: unify and domains — the calls that shape the catalog.
  * Each role has an environment override — COMPETITORS_THINKING_READ, _MATCH, _JUDGE. A value that is not a level

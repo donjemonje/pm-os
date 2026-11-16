@@ -11,7 +11,6 @@ import { runAlertDue, runAlertEmail } from "./alert";
 import { ReadingBudget } from "./budget";
 import { capLine, capLines, CAPS, capsForEvent, capsHeadline, capsOf, clearStateCaps, readCaps, recordCap, type CapHit, type CapId } from "./caps";
 import { emptyCounters, readCounters, type Counters } from "./counters";
-import { factsStep } from "./facts";
 import { analysisMayRun, queueFilter } from "./gate";
 import { emptyIncidents, incidentLine, incidentsForEvent, incidentsHeadline, incidentsOf, readIncidents, recordIncident, type Incident, type IncidentLog } from "./incidents";
 import { mapStep } from "./plan";
@@ -46,15 +45,18 @@ import { applyStep, matchStep, secondLookStep } from "./steps";
  *   map (label the sections of the site: the reading plan) → reading (the company's new or changed pages, in a few
  *   chunks, against its list so far: analysis/read-step.ts) → match (its new items against the rows that exist; what
  *   matches nothing becomes a new row in an existing domain) → second look (OUR rows it has no item for, asked in
- *   bulk per chunk) → apply (the cells, by fixed rules) → facts.
+ *   bulk per chunk) → apply (the cells, by fixed rules).
+ * (The profile-facts step that used to end a run is gone — Daniel 2026-11-16: only the table matters now. It read
+ * every stored page of a competitor and cost more than everything else together. The facts a profile already holds
+ * stay and are shown; no run writes new ones.)
  *
  * The run keeps no fragile state: every start walks the steps from the first, and each step computes its to-do from
  * the tables. A run that stopped — rate limit, crash, deploy — continues with what is left. The cursor holds only
- * what cannot be derived: the facts baseline, and how far a second look got.
+ * what cannot be derived: how far a second look got.
  *
  * The token budget (analysis/budget.ts; Administration → Competitors, one number for the installation): every token
  * of the run counts. When the next reading call (a chunk of the reading, a second look) would pass it, no
- * further reading call starts; match, apply and facts still run, so the table is filled from what was read.
+ * further reading call starts; match and apply still run, so the table is filled from what was read.
  * The run ends "done" with budgetReached and the pages left unread in its counters; they stay due for the next run.
  *
  * Two things changed with the setup run (analysis/setup.ts, 2026-11-15):
@@ -62,7 +64,7 @@ import { applyStep, matchStep, secondLookStep } from "./steps";
  *     (setup-rules.ts: required → in setup → done), not a guess from its catalog. Until then a run does
  *     map → reading and stops "done": the company's list is ready, and no row is created.
  *   - The organization's own source (own.ts) is analysed like a competitor up to the match; then it fills OUR column
- *     (steps.ts applyOwnCells) instead of a competitor's cells, with no second look and no facts step.
+ *     (steps.ts applyOwnCells) instead of a competitor's cells, with no second look.
  * The setup run itself is a row of this table (kind "setup", attached to the own source) and takes its turn in this
  * queue: the claim, the heartbeat, the waiting, the stale sweep and the close below are shared; its steps are
  * analysis/setup.ts.
@@ -81,7 +83,7 @@ import { applyStep, matchStep, secondLookStep } from "./steps";
 /** "sources" = an address of the company was removed (address-search.ts): what its pages said leaves the picture. Automatic, like "scan" and "catalog". */
 export type AnalysisTrigger = "scan" | "catalog" | "manual" | "sources";
 /** "unify" and "domains" are steps of a setup run only. */
-export type AnalysisStepName = "map" | "reading" | "unify" | "domains" | "match" | "second_look" | "apply" | "facts";
+export type AnalysisStepName = "map" | "reading" | "unify" | "domains" | "match" | "second_look" | "apply";
 export const ACTIVE_ANALYSIS_STATUSES = ["queued", "running", "waiting"] as const;
 /** A run whose runner stopped reporting this many times fails. */
 export const MAX_STALE = 3;
@@ -178,7 +180,7 @@ export interface RunContext {
    * passes the run's token budget before it starts; the items not started are counted in the result's `left`.
    */
   paced: <T>(o: Pick<PacedOptions<T>, "items" | "concurrency" | "estimate" | "work" | "onAnswerError"> & { reading?: boolean }) => Promise<PacedResult>;
-  /** Save what cannot be derived (the facts baseline, how far a second look got). */
+  /** Save what cannot be derived (how far a second look got). */
   saveCursor: (patch: Record<string, unknown>) => Promise<void>;
   /** The apply step finished: the cells are current as of `at`. */
   markApplied: (at: Date) => Promise<void>;
@@ -768,10 +770,9 @@ export async function runAnalysis(id: string): Promise<void> {
       } else {
         // The company's new items against the rows that exist; what matches nothing becomes a new row in an existing domain.
         await inStep("match", () => matchStep(ctx));
-        // The own source: what its items say is ours — no second look, no profile facts (own.ts).
+        // The own source: what its items say is ours — no second look (own.ts).
         const lookWaiting = path.includes("second_look") ? await inStep("second_look", () => secondLookStep(ctx)) : new Set<string>();
         await inStep("apply", () => applyStep(ctx, lookWaiting));
-        if (path.includes("facts")) await inStep("facts", () => factsStep(ctx));
       }
       if (reading.reached) {
         log("warn", `The token budget of this run was reached (${(counters.inputTokens + counters.outputTokens).toLocaleString("en-US")} of ${counters.budget.toLocaleString("en-US")} tokens used): ${counters.pagesUnread} page${counters.pagesUnread === 1 ? "" : "s"} left unread${counters.secondLooksWaiting ? `, ${counters.secondLooksWaiting} row${counters.secondLooksWaiting === 1 ? "" : "s"} not looked for` : ""}. They stay due — the next run of ${row.competitor.name} continues with a fresh budget`);

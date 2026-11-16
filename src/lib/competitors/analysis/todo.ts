@@ -5,51 +5,9 @@
  * Pure: no database, no network.
  */
 
-import { isLlmsTxt } from "./sections";
-
-/** "<version>:<hash>" — what SourcePage.analyzedKey / factsKey hold: the prompt version and the text that was read. A page whose key is not the key of its current text is due (the reading: analysis/read-step.ts planChunks; the facts: factsTodo). */
+/** "<version>:<hash>" — what SourcePage.analyzedKey holds: the prompt version and the text that was read. A page whose key is not the key of its current text is due (analysis/read-step.ts planChunks). */
 export function readKey(version: string, hash: string): string {
   return `${version}:${hash}`;
-}
-
-const byUrl = <T extends { url: string }>(a: T, b: T) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0);
-
-/** The stored pages the facts step still has to read (every tier), in address order. */
-export function factsTodo<T extends { url: string; hash: string; factsKey: string | null; state: string; hasText: boolean }>(pages: T[], version: string): T[] {
-  // The site's /llms.txt is stored for the map step only (sections.ts isLlmsTxt): it is never read as a page.
-  return pages.filter((p) => p.state !== "removed" && p.hasText && !isLlmsTxt(p.url) && p.factsKey !== readKey(version, p.hash)).sort(byUrl);
-}
-
-/**
- * The sources whose first facts read this is: a source with no page that was ever read for facts. What such a read
- * finds is the baseline, not news.
- */
-export function factsBaselineSources(sourceIds: string[], pages: Array<{ sourceId: string; factsKey: string | null }>): string[] {
-  const read = new Set(pages.filter((p) => p.factsKey != null).map((p) => p.sourceId));
-  return sourceIds.filter((id) => !read.has(id));
-}
-
-/**
- * The facts baseline a run inherits. A run that stopped in the middle of the facts step (it failed, it was
- * cancelled) left some pages of a first-read source unread — and the pages it did read now carry a factsKey, so
- * factsBaselineSources() alone would call the rest "news". The next run therefore takes the baseline over from the
- * competitor's last unfinished run: `earlier` is the competitor's other runs, newest first; the first one that
- * decided a baseline hands it on, unless a run that finished ("done": every page was read) comes before it.
- */
-export function carriedFactsBaseline(earlier: Array<{ status: string; cursor: unknown }>): string[] {
-  for (const run of earlier) {
-    if (run.status === "done") return [];
-    const cursor = run.cursor && typeof run.cursor === "object" && !Array.isArray(run.cursor) ? (run.cursor as Record<string, unknown>) : {};
-    const list = cursor.factsBaselineSources;
-    if (Array.isArray(list)) return list.filter((x): x is string => typeof x === "string");
-  }
-  return [];
-}
-
-/** The baseline of a run: the sources never read for facts, plus the inherited ones that still exist. No source twice. */
-export function factsBaseline(sourceIds: string[], pages: Array<{ sourceId: string; factsKey: string | null }>, carried: string[]): string[] {
-  const known = new Set(sourceIds);
-  return [...new Set([...factsBaselineSources(sourceIds, pages), ...carried.filter((id) => known.has(id))])];
 }
 
 /**

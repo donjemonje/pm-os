@@ -2,9 +2,9 @@
  * The token budget of one analysis run (Capability Analysis, "Map, read, go back").
  *
  * One number for the whole installation, set in Administration → Competitors: "Analysis token budget per
- * competitor, per run". It counts every token of the run — the map, the reading, match, second looks, facts
+ * competitor, per run". It counts every token of the run — the map, the reading, match, second looks
  * (the run's own counters). When the next READING call (a chunk of the reading, a chunk of a second look) would
- * pass it, no further reading call starts in this run. Match, apply and facts still run, so the table is filled
+ * pass it, no further reading call starts in this run. Match and apply still run, so the table is filled
  * from what was read. Pages left unread stay due: the competitor's next run continues with a fresh budget.
  *
  * Reading order under a budget is fixed (sections.ts READ_ORDER, the "where a PM looks" order): release notes,

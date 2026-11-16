@@ -1,11 +1,6 @@
 import { requireAdminPage } from "@/lib/admin-auth";
 import { getAdminOrg } from "@/lib/admin-org";
-import {
-  FACTS_SYSTEM_PROMPT,
-  FACTS_TOOL,
-  FACTS_VERSION,
-  getCompetitorsGeminiLocation,
-} from "@/lib/competitors/ai";
+import { getCompetitorsGeminiLocation } from "@/lib/competitors/ai";
 import { ADDRESS_PICK_SYSTEM_PROMPT, ADDRESS_PICK_VERSION, addressPickTool, GUESS_NAMES, MAX_CANDIDATES } from "@/lib/competitors/addresses";
 import { competitorsModels, competitorsThinking, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, retiredThinkingOverride, THINKING_DEFAULTS, THINKING_ENV, THINKING_ENV_ALL, type PromptId } from "@/lib/competitors/models";
 import { CHUNK_MAX_TOKENS } from "@/lib/competitors/analysis/chunks";
@@ -49,9 +44,9 @@ export default async function AdminCompetitorsPage() {
   const thinking = competitorsThinking();
   const retiredThinking = retiredThinkingOverride();
   /** What each role is used for, next to its model. */
-  const ROLE_USE: Record<string, string> = { read: "map, the reading (a company in chunks), second look, facts, other addresses", match: "match (after setup: a company's new items against the rows that exist)", judge: "unify (capabilities, the review, features), domains" };
+  const ROLE_USE: Record<string, string> = { read: "map, the reading (a company in chunks), second look, other addresses", match: "match (after setup: a company's new items against the rows that exist)", judge: "unify (capabilities, the review, features), domains" };
   /** The prompt of the list → its id in models.ts PROMPT_ROLES (the role decides the model). */
-  const PROMPT_OF: Record<string, PromptId> = { map: "map", guide: "reading", reading: "reading", unify: "unify", "unify-review": "unify_review", "unify-features": "unify_features", domains: "domains", match: "match", look: "second_look", facts: "facts", addresses: "addresses" };
+  const PROMPT_OF: Record<string, PromptId> = { map: "map", guide: "reading", reading: "reading", unify: "unify", "unify-review": "unify_review", "unify-features": "unify_features", domains: "domains", match: "match", look: "second_look", addresses: "addresses" };
   const prompts: Array<{ id: string; title: string; note: string; text: string; tool: unknown; extra?: { label: string; text: string; tool?: unknown } }> = [
     {
       id: "map",
@@ -124,13 +119,6 @@ export default async function AdminCompetitorsPage() {
       tool: lookTool(["R1", "R2", "…"]),
     },
     {
-      id: "facts",
-      title: `9 · Profile facts — the last step of the run, one call per chunk of pages (${FACTS_VERSION})`,
-      note: "Never made for the organization's own site. Reads the pages whose text changed since the last facts read and returns the lean profile: tagline, products, pricing tiers, integrations, certifications, named customers, verticals — each with its URL. Pages are cut to 6,000 characters and packed into chunks for this prompt only.",
-      text: FACTS_SYSTEM_PROMPT,
-      tool: FACTS_TOOL,
-    },
-    {
       id: "addresses",
       title: `Other addresses — not part of a run: one call per search of a company's other addresses (${ADDRESS_PICK_VERSION})`,
       note: `Made when a competitor or the organization's own site is added, and after every scan of a main website that read a page. Code finds the candidates first: links on the home page that leave the site and look like help, docs, developers or release notes (by text or address); the addresses the site's llms.txt lists; and the names ${GUESS_NAMES.join(", ")} in front of the domain — a guess counts only when a made-up name on the same domain does not give the same answer and the page is not the main site again. Addresses the company already has, and addresses a PM removed, are left out. PMOS AI gets each remaining candidate (at most ${MAX_CANDIDATES}) with its code, address, how it was found, the link text, the page's title and first lines, and says what it is: help center, developer docs, release notes, or not worth scanning. Codes and kinds are closed sets: an answer that names a code that was not asked, or a kind outside the list, is unusable — the search records "could not decide" and adds nothing; it never fails the add of a competitor or a scan. Every address it names becomes a source and its first scan is queued at once.`,
@@ -174,7 +162,7 @@ export default async function AdminCompetitorsPage() {
             <dt className="text-slate-500">Vertex region</dt>
             <dd className="font-mono text-xs">{getCompetitorsGeminiLocation()} <span className="font-sans text-slate-400">for gemini-* models (COMPETITORS_GEMINI_LOCATION → global; the newest Gemini models are served on the global endpoint only)</span> · {getCompetitorsVertexLocation()} <span className="font-sans text-slate-400">for any other model (COMPETITORS_VERTEX_LOCATION → IDEAS_VERTEX_LOCATION → eu)</span></dd>
             <dt className="text-slate-500">Prompt versions</dt>
-            <dd className="font-mono text-xs">{[MAP_VERSION, MAP_PAGES_VERSION, READ_VERSION, UNIFY_VERSION, DOMAINS_VERSION, MATCH_VERSION, LOOK_VERSION, FACTS_VERSION].join(" · ")}</dd>
+            <dd className="font-mono text-xs">{[MAP_VERSION, MAP_PAGES_VERSION, READ_VERSION, UNIFY_VERSION, DOMAINS_VERSION, MATCH_VERSION, LOOK_VERSION].join(" · ")}</dd>
             <dt className="text-slate-500">Input</dt>
             <dd className="text-xs text-slate-600">Page text only (no HTML, no images). The map skims: section addresses and, for a few sample pages of each section, the title and the first lines (about 300 characters) — never a whole page. The reading sends whole pages, many at once: a chunk of related pages per request, nothing trimmed (lines a site repeats on most of its pages are shown once per request). The second look sends the same chunks with the rows it asks about. Our table is sent only to the match call, as a shared prefix. Unify and Domains (a setup run only) see names, one-sentence descriptions and company names — never page text. PMOS AI never decides a table cell: cells are filled in code, by fixed rules, from quotes that were checked against the stored page. Every call streams its answer, so a long answer is not cut by a timeout.</dd>
           </dl>

@@ -1,6 +1,5 @@
 import { GoogleGenAI, ThinkingLevel, Type, type Schema } from "@google/genai";
 import { getVertexProjectId } from "../vertex-config";
-import { FACT_KINDS, type FactKind } from "./config";
 import { modelFor, providerOf, type ModelProvider, type ThinkingLevelName } from "./models";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 
@@ -13,20 +12,18 @@ import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
  * runs on Claude through the Vertex Anthropic client (forced tool use). Both
  * paths validate the answer field by field.
  *
- * This module is the model boundary: callTool (one structured call, with the tokens it used and typed errors),
- * the string cleaners, and the profile-facts prompt. The five prompts of the capability analysis (map, research,
- * merge, match, second look) live in analysis/prompts.ts; who calls what, and when, is analysis/steps.ts.
- * The organization itself is never scanned: its catalog and own statuses are entered by its PMs.
+ * This module is the model boundary: callTool (one structured call, with the tokens it used and typed errors) and
+ * the string cleaners. It holds no prompt: the prompts of the capability analysis live next to their rules
+ * (analysis/prompts.ts, reading.ts, unify.ts, domains.ts), the pick of a company's other addresses in addresses.ts.
+ * The profile-facts prompt that used to live here is gone with its step (Daniel 2026-11-16: "we don't care about
+ * profile now, only the table"); the facts a profile already holds stay and are shown — nothing writes new ones.
  *
  * Pages are sent as text only. A shared prefix (when a prompt has one) goes first so that provider-side
  * caching can apply; the per-call tail follows.
  */
 
-/** Bumping it makes every stored page due for the facts step again (it is part of SourcePage.factsKey). */
-export const FACTS_VERSION = "facts-1";
-
 export type CompetitorsProvider = ModelProvider;
-/** The provider of a model; with no model given, of the "read" model (the facts step sizes its chunks by it). */
+/** The provider of a model; with no model given, of the "read" model. */
 export function getCompetitorsProvider(model = modelFor("read")): CompetitorsProvider {
   return providerOf(model);
 }
@@ -70,76 +67,6 @@ function toGeminiSchema(node: Record<string, unknown>): Schema {
   if (typeof node.minimum === "number") out.minimum = node.minimum;
   if (typeof node.maximum === "number") out.maximum = node.maximum;
   return out;
-}
-
-/** Facts only: a page's text is cut to this in a facts call. The research step of the analysis sends the full text. */
-const MAX_PAGE_CHARS = 6000;
-/** Facts only: page text per call. Gemini's window is large; Claude's calls stay smaller. */
-export function maxTotalChars(provider = getCompetitorsProvider()): number {
-  return provider === "gemini" ? 300_000 : 90_000;
-}
-
-export interface PageText {
-  url: string;
-  title: string;
-  text: string;
-  /** What the text is (page | document | article | transcript | capture | quotes) — shown to the model. */
-  kind?: string;
-  /** Source type label ("Help center", "Datasheets & documents") — shown to the model. */
-  sourceLabel?: string;
-  /** Publish/capture date the source states, ISO — shown to the model. */
-  observedAt?: string | null;
-}
-
-function pageBody(p: PageText): string {
-  return p.text.length > MAX_PAGE_CHARS ? p.text.slice(0, MAX_PAGE_CHARS) + "\n[…]" : p.text;
-}
-
-/** What a page weighs in a facts call: its text after the per-page cut, plus its header. */
-export function packedSize(chars: number, urlLength: number): number {
-  return Math.min(chars, MAX_PAGE_CHARS) + (chars > MAX_PAGE_CHARS ? "\n[…]".length : 0) + urlLength + 40;
-}
-
-/** Items in order, packed into chunks of at most `limit` (an item larger than the limit goes alone); none is dropped. */
-export function chunkBySize<T>(items: T[], sizeOf: (item: T) => number, limit: number): T[][] {
-  const chunks: T[][] = [];
-  let cur: T[] = [];
-  let total = 0;
-  for (const item of items) {
-    const len = sizeOf(item);
-    if (cur.length && total + len > limit) {
-      chunks.push(cur);
-      cur = [];
-      total = 0;
-    }
-    cur.push(item);
-    total += len;
-  }
-  if (cur.length) chunks.push(cur);
-  return chunks;
-}
-
-/**
- * Split pages into facts calls: each chunk fits maxTotalChars after per-page
- * truncation. A site of 50 pages is one chunk; a thousand documents are many,
- * run in order.
- */
-export function chunkPages(pages: PageText[], limit = maxTotalChars()): PageText[][] {
-  return chunkBySize(pages, (p) => packedSize(p.text.length, p.url.length), limit);
-}
-
-/** What a page is, in one line for the model: its kind when it is not a web page, its source, its date. "" when there is nothing to say. */
-export function pageMeta(p: Pick<PageText, "kind" | "sourceLabel" | "observedAt">): string {
-  return [p.kind && p.kind !== "page" ? p.kind : null, p.sourceLabel ?? null, p.observedAt ? `dated ${p.observedAt.slice(0, 10)}` : null].filter(Boolean).join(" · ");
-}
-
-export function packPages(pages: PageText[]): string {
-  return pages
-    .map((p) => {
-      const meta = pageMeta(p);
-      return `### PAGE ${p.url}\nTitle: ${p.title}${meta ? `\nSource: ${meta}` : ""}\n${pageBody(p)}`;
-    })
-    .join("\n\n");
 }
 
 /**
@@ -398,126 +325,6 @@ export function cut(s: string, max: number): string {
 /** A model's string as stored: tidied, cut at a word boundary; "" for anything that is not a string. */
 export const str = (v: unknown, max = 500): string => (typeof v === "string" ? cut(tidy(v), max) : "");
 export const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-
-// ————— Lean-profile facts —————
-
-export const FACTS_SYSTEM_PROMPT = `You extract company facts from a competitor's public sources (website, documents, help center, press, jobs — each page says which) for a product team's competitor profile.
-
-Return facts of these kinds only:
-- tagline: the one-line positioning statement (at most one).
-- product: each named product, module or plan family the company sells.
-- pricingTier: each named pricing tier or plan (names only, no prices).
-- integration: each named third-party product it integrates with.
-- certification: each named certification or compliance standard (SOC 2, ISO 27001, FedRAMP…).
-- customer: each named customer company shown as a customer, logo or case study.
-- vertical: each industry it says it serves.
-- funding: a funding round or acquisition amount as stated ("Series C $40M", "acquired by Mastercard for $2.65B").
-- headcount: the company size as stated ("1,000+ employees").
-- hiring: an open-roles statement as stated ("49 open positions").
-- ownership: public / private / subsidiary of X, as stated.
-- hq: the headquarters city and country, as stated.
-- founded: the founding year, as stated.
-- milestone: a dated company event the pages state — founding, acquisition, launch, rename, new office (one short line each).
-Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). For a product, customer, funding, milestone, hiring or ownership fact also write the news for a product manager who will not open the page: "headline" — one line saying what happened (≤ 90 characters, e.g. "Recorded Future released an MCP server for external AI agents"), and "summary" — two plain sentences on what it is and why it matters, from the page only (≤ 300 characters, no marketing words). For the other kinds leave headline and summary empty. Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate: one fact per thing. When the profile already holds a fact (KNOWN FACTS) and a page restates it, return it with exactly the known wording so it is recognised — never a reworded copy; add its date when the page states one.`;
-
-export const FACTS_TOOL = {
-  name: "extract_facts",
-  description: "Record the company facts found on the pages.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      facts: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            kind: { type: "string", enum: [...FACT_KINDS] },
-            value: { type: "string" },
-            url: { type: "string" },
-            date: { type: "string", description: "Date the page states for the fact: YYYY-MM-DD, YYYY-MM or YYYY; empty when none." },
-            headline: { type: "string", description: "One line saying what happened; empty for tagline/pricing/integration/certification/vertical/headcount/hq/founded." },
-            summary: { type: "string", description: "Two plain sentences: what it is and why it matters, from the page; empty when headline is empty." },
-          },
-          required: ["kind", "value", "url", "date", "headline", "summary"],
-        },
-      },
-    },
-    required: ["facts"],
-  },
-};
-
-export interface ExtractedFact {
-  kind: FactKind;
-  value: string;
-  url: string;
-  /** "YYYY", "YYYY-MM" or "YYYY-MM-DD"; null when the page states none. */
-  date: string | null;
-  /** The news in one line and two sentences, for the feed and the email; null for facts that are not news. */
-  headline: string | null;
-  summary: string | null;
-}
-
-/** A stated date → a Date at the start of its period, or null. */
-export function factDateOf(v: string | null | undefined): Date | null {
-  const m = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/.exec((v ?? "").trim());
-  if (!m) return null;
-  const y = Number(m[1]);
-  const month = m[2] ? Number(m[2]) : 1;
-  const day = m[3] ? Number(m[3]) : 1;
-  if (y < 1900 || y > new Date().getUTCFullYear() + 1 || month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const d = new Date(Date.UTC(y, month - 1, day));
-  // A day past the month's end rolls over — refuse it rather than invent a date.
-  return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? d : null;
-}
-
-export interface KnownFact { kind: string; value: string }
-/** Known facts shown to the model so restatements keep their wording (and merge on upsert). */
-export const MAX_KNOWN_FACTS = 1500;
-
-/** The facts of one answer, field by field; duplicates inside the answer dropped. */
-export function parseFacts(value: unknown): ExtractedFact[] {
-  const seen = new Set<string>();
-  const facts: ExtractedFact[] = [];
-  for (const f of arr((value as Record<string, unknown> | null)?.facts)) {
-    const o = (f ?? {}) as Record<string, unknown>;
-    const kind = str(o.kind, 20);
-    const v = str(o.value, 80);
-    if (!(FACT_KINDS as readonly string[]).includes(kind) || !v) continue;
-    const key = factKey(kind, v);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const date = str(o.date, 10);
-    facts.push({ kind: kind as FactKind, value: v, url: str(o.url, 500), date: factDateOf(date) ? date : null, headline: str(o.headline, 120) || null, summary: str(o.summary, 400) || null });
-  }
-  return facts;
-}
-
-/** One fact = one kind and one value, whatever its letter case. */
-export function factKey(kind: string, value: string): string {
-  return `${kind}|${value.toLowerCase()}`;
-}
-
-/** What one facts call is asked: the known facts (so restatements keep their wording) and one chunk of pages. */
-export function renderFactsTail(competitorName: string, known: KnownFact[], chunk: PageText[], part: number, parts: number): string {
-  const knownBlock = known.length ? `KNOWN FACTS (already on the profile):\n${known.slice(0, MAX_KNOWN_FACTS).map((f) => `- ${f.kind}: ${f.value}`).join("\n")}\n\n` : "";
-  return `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${parts > 1 ? ` (part ${part} of ${parts})` : ""}:\n\n${packPages(chunk)}`;
-}
-
-/** The shared prefix and the answer size of a facts call. The call itself, the loop over chunks, the pacing and the saving are analysis/facts.ts. */
-export const FACTS_SHARED = "Extract facts for the competitor profile.";
-export const FACTS_MAX_TOKENS = 6000;
-
-/** A run reads the pages in several chunks: a fact an earlier chunk of the run already returned is not returned again. `seen` is the run's memory (factKey). */
-export function dedupeFacts(facts: ExtractedFact[], seen: Set<string>): ExtractedFact[] {
-  const out: ExtractedFact[] = [];
-  for (const f of facts) {
-    const key = factKey(f.kind, f.value);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(f);
-  }
-  return out;
-}
 
 /** The level as Gemini takes it. Which level a call gets is decided by its role (models.ts thinkingFor), environment overrides included; not given = HIGH. */
 function thinkingLevel(asked?: ThinkingName): ThinkingLevel {

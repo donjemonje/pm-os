@@ -59,6 +59,13 @@ describe("renderRunEmail", () => {
   const gap = { capability: "Autonomous hunting", domain: "Operations", from: "not_found" as const, to: "found" as const, own: "not_found" as const, kind: "gap" as const, quote: "Hunt across your stack", sourceUrl: "https://acme.example/products/hunt", product: "Acme Hunt", summary: null, imageUrl: null };
   const fact = { kind: "product", value: "Acme MCP generally available", sourceUrl: "https://acme.example/blog/mcp", factDate: "2026-09-28T00:00:00.000Z", headline: null, summary: null, imageUrl: null };
 
+  it("no run writes profile facts any more: an email with none says nothing about facts — no chip, no line", () => {
+    const mail = renderRunEmail(run([base({ changes: [gap] })]))!;
+    expect(mail.html).toContain("Gap opened");
+    expect(mail.html).not.toContain("new on the site");
+    expect(mail.text).not.toContain("new on the site");
+    expect(summarize(run([base({ changes: [gap] })]), 1).facts).toBe(0);
+  });
   it("sends nothing when no competitor changed", () => {
     expect(renderRunEmail(run([], ["Acme Intel"]))).toBeNull();
   });

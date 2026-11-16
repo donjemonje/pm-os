@@ -114,10 +114,10 @@ describe("roll-ups", () => {
   });
   it("what a step cost is what was added since it started, model by model — the line the run log carries", () => {
     const before = list.map((r) => ({ ...r }));
-    addUsage(list, "facts", H, { input: 7_000, output: 600, cached: 1_000 });
-    addUsage(list, "facts", H, { input: 3_000, output: 400, cached: 0 });
+    addUsage(list, "apply", H, { input: 7_000, output: 600, cached: 1_000 });
+    addUsage(list, "apply", H, { input: 3_000, output: 400, cached: 0 });
     const step = usageSince(list, before);
-    expect(step).toEqual([{ step: "facts", model: H, calls: 2, input: 10_000, output: 1_000, cached: 1_000, thinking: 0, ms: 0 }]);
+    expect(step).toEqual([{ step: "apply", model: H, calls: 2, input: 10_000, output: 1_000, cached: 1_000, thinking: 0, ms: 0 }]);
     expect(usageByModel(step).map(usageLine)).toEqual([`${H}: 2 calls · 10,000 input + 1,000 output tokens (1,000 cached)`]);
     expect(usageLine({ model: C, calls: 1, input: 30_000, output: 5_000, cached: 0, thinking: 0, ms: 0 })).toBe(`${C}: 1 call · 30,000 input + 5,000 output tokens`);
     expect(usageSince(list, list.map((r) => ({ ...r })))).toEqual([]);

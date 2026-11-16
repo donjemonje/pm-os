@@ -65,7 +65,6 @@ export interface Counters {
   cellsLow: number;
   cellsNotFound: number;
   cellsChanged: number;
-  factsNew: number;
   /** A setup run only (analysis/setup.ts): unify calls about capabilities, unify calls about features, domains calls. */
   unifyCalls: number;
   unifyFeatureCalls: number;
@@ -80,7 +79,7 @@ export function emptyCounters(): Counters {
     pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, thinkingTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
-    newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0, factsNew: 0,
+    newCapabilities: 0, newFeatures: 0, newDomains: 0, cellsFound: 0, cellsLow: 0, cellsNotFound: 0, cellsChanged: 0,
     unifyCalls: 0, unifyFeatureCalls: 0, domainsCalls: 0, itemsExcluded: 0,
   };
 }

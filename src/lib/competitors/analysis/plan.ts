@@ -65,7 +65,6 @@ export interface StoredPage {
   sourceType: string;
   hasText: boolean;
   analyzedKey: string | null;
-  factsKey: string | null;
   /** The map's word on a page of a help-center or blog section (sections.ts): "release_notes" | "none" | null = not looked at. */
   readAs: string | null;
 }
@@ -74,11 +73,11 @@ export interface StoredPage {
 export async function loadPages(competitorId: string): Promise<StoredPage[]> {
   const rows = await db.sourcePage.findMany({
     where: { source: { competitorId } },
-    select: { id: true, url: true, title: true, hash: true, chars: true, state: true, kind: true, sourceId: true, analyzedKey: true, factsKey: true, readAs: true, source: { select: { type: true } } },
+    select: { id: true, url: true, title: true, hash: true, chars: true, state: true, kind: true, sourceId: true, analyzedKey: true, readAs: true, source: { select: { type: true } } },
   });
   // "Has text" without loading it: a page that was read has characters; a page whose text was dropped has none.
   const textless = new Set((await db.sourcePage.findMany({ where: { source: { competitorId }, text: null }, select: { id: true } })).map((p) => p.id));
-  return rows.map((r) => ({ id: r.id, url: r.url, title: r.title, hash: r.hash, chars: r.chars, state: r.state, kind: r.kind, sourceId: r.sourceId, sourceType: r.source.type, hasText: !textless.has(r.id), analyzedKey: r.analyzedKey, factsKey: r.factsKey, readAs: r.readAs }));
+  return rows.map((r) => ({ id: r.id, url: r.url, title: r.title, hash: r.hash, chars: r.chars, state: r.state, kind: r.kind, sourceId: r.sourceId, sourceType: r.source.type, hasText: !textless.has(r.id), analyzedKey: r.analyzedKey, readAs: r.readAs }));
 }
 
 /** The competitor's saved reading plan. Empty before its first map step: nothing is read without a label. */

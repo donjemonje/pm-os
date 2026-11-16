@@ -16,7 +16,7 @@ import { clockOffsetMs, scanTimeLimitMs, setClockOffsetMs, readTestAiAnswers, se
  *   POST { storageLimitChars } → a smaller PM-OS store limit (null = the default); WS-36
  *   POST { aiAnswers: { competitorId, answers } } → the model's raw answers for that competitor's analysis runs
  *                             (settings.ts TestAiAnswers: map by section address (label words), reading, match and
- *                             secondLook by request number, facts, rateLimit — and for a setup run unify,
+ *                             secondLook by request number, rateLimit — and for a setup run unify,
  *                             unifyReview, unifyFeatures, domains; every answer but map's is JSON text). A run with
  *                             injected answers never calls a model, also when COMPETITORS_AI=off. answers: null clears.
  */

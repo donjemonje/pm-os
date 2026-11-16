@@ -134,7 +134,7 @@ export interface AnalysisRow {
   id: string;
   /** "queued" | "running" | "waiting" | "done" | "failed" | "cancelled" */
   status: string;
-  /** "map" | "reading" | "match" | "second_look" | "apply" | "facts" | "done" */
+  /** "map" | "reading" | "match" | "second_look" | "apply" | "done" */
   step: string;
   pagesDone: number;
   pagesTotal: number;

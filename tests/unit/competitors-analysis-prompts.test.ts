@@ -33,7 +33,6 @@ import { READ_TOOL, readChangesTool, WHERE_A_PM_LOOKS, type RequestPage } from "
 import { MAP_OPENING_CHARS, SECTION_LABELS } from "@/lib/competitors/analysis/sections";
 import { unifyCapabilitiesTool, unifyFeaturesTool, unifyReviewTool } from "@/lib/competitors/analysis/unify";
 import { domainsTool } from "@/lib/competitors/analysis/domains";
-import { FACTS_TOOL } from "@/lib/competitors/ai";
 
 describe("the map — parseMap, renderMap", () => {
   const entry = (code: string, path: string, pages = 3, extra: Partial<MapEntry["section"]> = {}): MapEntry => ({
@@ -290,7 +289,6 @@ describe("the response schemas a model is sent", () => {
     ["domains", domainsTool(["R1", "R2"])],
     ["match", matchTool(["T1", "T2"], catalog)],
     ["second look", lookTool(["R1", "R2"])],
-    ["facts", FACTS_TOOL],
   ];
   it("no enum holds an empty string and no enum is empty: Gemini refuses the whole request (HTTP 400 — the first real run failed on it)", () => {
     for (const [name, tool] of tools) {

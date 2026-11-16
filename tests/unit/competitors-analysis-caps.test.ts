@@ -227,7 +227,7 @@ describe("one email per run", () => {
     expect(email.text).toContain("Limits hit: none");
   });
   it("a failed run that also hit a limit says both in one subject", () => {
-    expect(runAlertEmail({ ...base, outcome: "failed", step: "facts", error: "x", caps: base.caps.slice(0, 1) }).subject).toBe("[PM-OS] Analysis failed and hit 1 limit: Productboard (Aha)");
+    expect(runAlertEmail({ ...base, outcome: "failed", step: "apply", error: "x", caps: base.caps.slice(0, 1) }).subject).toBe("[PM-OS] Analysis failed and hit 1 limit: Productboard (Aha)");
   });
   it("a setup run is about the organization, and says how to continue it", () => {
     const email = runAlertEmail({ ...base, kind: "setup", company: "Aha", outcome: "failed", step: "reading", error: "Reading request 2 of 3 for Productboard (269 pages) got an unusable answer", errorKind: "answer", caps: [] });

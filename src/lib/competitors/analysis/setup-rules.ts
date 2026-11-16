@@ -120,16 +120,16 @@ export function analysisFillsTable(state: OrgSetupState): boolean {
  *                      builds the table from every company's list together).
  *   setup done       → map, reading (only the pages that are new or changed), match (the new items against the rows
  *                      that exist; what matches nothing becomes a new row in an existing domain), second look (OUR
- *                      rows the company has no item for), apply, facts.
- *   the own site     → no second look and no profile facts: what its items say is ours.
+ *                      rows the company has no item for), apply.
+ *   the own site     → no second look: what its items say is ours.
  */
 export function analysisPath(state: OrgSetupState, isOwn: boolean): readonly string[] {
   if (!analysisFillsTable(state)) return ["map", "reading"];
-  return isOwn ? ["map", "reading", "match", "apply"] : ["map", "reading", "match", "second_look", "apply", "facts"];
+  return isOwn ? ["map", "reading", "match", "apply"] : ["map", "reading", "match", "second_look", "apply"];
 }
 
 /** The steps of THE SETUP RUN of an organization, in order: every company is mapped and read, then one unify and one domains step for all, then the table is filled — the own site first. */
-export const SETUP_PATH: readonly string[] = ["map", "reading", "unify", "domains", "apply (the own site: OUR column)", "second_look", "apply", "facts"];
+export const SETUP_PATH: readonly string[] = ["map", "reading", "unify", "domains", "apply (the own site: OUR column)", "second_look", "apply"];
 
 /** May the team add a domain or a capability by hand? Only when setup is done: until then the setup run builds the first catalog, and it builds it only in an empty one. */
 export function catalogEditable(state: OrgSetupState): boolean {
@@ -247,7 +247,7 @@ export function emptySetupProgress(): SetupProgress {
 }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-/** "research" and "merge" are stages of the old per-page reading: kept so the progress of an old run still reads. */
+/** "research", "merge" and "facts" are stages no run has any more: kept so the progress of an old run still reads. */
 const STAGES: readonly string[] = ["waiting", "map", "reading", "research", "merge", "unify", "match", "second_look", "apply", "facts", "done"];
 
 /** The stored progress (a Json column), checked field by field: anything that is not progress reads as empty. */
