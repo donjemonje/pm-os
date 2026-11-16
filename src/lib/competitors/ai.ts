@@ -112,16 +112,35 @@ export class EndpointError extends Error {
   }
 }
 
+/** The most of an unusable answer's text that is kept as evidence. */
+export const RAW_ANSWER_KEPT = 2_000;
+
+/**
+ * The text of an unusable answer as it is kept: whole up to RAW_ANSWER_KEPT characters; of a longer one the start
+ * and the end (where a cut-off or a second object shows), with how much was left out in between.
+ */
+export function rawForRecord(text: string, max: number = RAW_ANSWER_KEPT): string {
+  if (text.length <= max) return text;
+  const tail = Math.floor(max / 4);
+  const head = max - tail;
+  return `${text.slice(0, head)} …[${(text.length - max).toLocaleString("en-US")} characters left out]… ${text.slice(-tail)}`;
+}
+
 /**
  * The model answered (HTTP 200) but the answer is unusable: invalid JSON, no structured answer, empty, or cut off.
- * The call was made and is billed: `usage` carries its tokens so the run counts them.
+ * The call was made and is billed: `usage` carries its tokens so the run counts them. `raw` is the answer's text as
+ * it came (rawForRecord) — the evidence: the run keeps it in its log and as an incident, so the next occurrence can
+ * be read instead of guessed (the first real run lost a 75-character "invalid JSON" answer with nothing kept).
+ * Null when the provider gave no text at all.
  */
 export class AnswerError extends Error {
   usage: Usage;
-  constructor(message: string, usage: Usage = NO_USAGE) {
+  raw: string | null;
+  constructor(message: string, usage: Usage = NO_USAGE, raw: string | null = null) {
     super(message);
     this.name = "AnswerError";
     this.usage = usage;
+    this.raw = raw === null ? null : rawForRecord(raw);
   }
 }
 
@@ -202,6 +221,9 @@ export interface CollectedStream {
   /** Why the model stopped: the last finish reason a piece carried ("unknown" when none did). */
   finish: string;
   usage: Usage;
+  /** How many pieces the stream had, and how many of them carried answer text — said when an answer is unusable, to tell a bad answer from a bad join. */
+  pieces: number;
+  textPieces: number;
 }
 
 /** A streamed answer put together: the text of all pieces in order, the last finish reason, the last usage report. Pure. */
@@ -209,13 +231,18 @@ export async function collectStream(stream: AsyncIterable<StreamPiece>): Promise
   let text = "";
   let finish = "unknown";
   let usage: StreamPiece["usageMetadata"] | undefined;
+  let pieces = 0;
+  let textPieces = 0;
   for await (const piece of stream) {
+    pieces++;
     const candidate = piece.candidates?.[0];
+    const before = text.length;
     for (const part of candidate?.content?.parts ?? []) if (typeof part.text === "string" && !part.thought) text += part.text;
+    if (text.length > before) textPieces++;
     if (candidate?.finishReason != null) finish = String(candidate.finishReason);
     if (piece.usageMetadata) usage = piece.usageMetadata;
   }
-  return { text, finish, usage: geminiUsage(usage) };
+  return { text, finish, usage: geminiUsage(usage), pieces, textPieces };
 }
 
 /**
@@ -269,12 +296,14 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
       throw asCapacityError(e);
     }
     const { text, finish, usage } = collected;
-    if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish})`, usage);
-    if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${text.length} chars)`, usage);
+    // An unusable answer keeps its text (AnswerError.raw) and says how the stream delivered it.
+    const came = `${text.length} chars in ${collected.textPieces} of ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"}`;
+    if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish}, ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"})`, usage, text);
+    if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${came})`, usage, text);
     try {
       return { value: JSON.parse(text) as T, usage };
-    } catch {
-      throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`, usage);
+    } catch (e) {
+      throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${came}): ${e instanceof Error ? e.message.slice(0, 120) : "not parseable"}`, usage, text);
     }
   }
   let message;

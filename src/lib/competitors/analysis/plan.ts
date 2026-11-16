@@ -3,6 +3,7 @@ import { db } from "../../db";
 import { COMPETITORS_COPY as C } from "../copy";
 import { OWN_MATERIAL_SOURCE_TYPE } from "../own";
 import { syncProductLinesPage } from "../own-site";
+import { looksForReleaseNotes } from "./reads";
 import { AnalysisError, type RunContext } from "./engine";
 import { estimateTokens, OUTPUT_RESERVE } from "./pacing";
 import {
@@ -211,7 +212,23 @@ export async function mapStep(ctx: RunContext): Promise<void> {
  * The page pick. To-do: the stored pages of sections labeled help or news that the map never looked at (readAs is
  * null), in address order, MAP_PAGES_BATCH per call. Every call is saved in one write per answer — the pages it
  * named are release notes, every other page of the call is not — so a run that stopped asks only what is left.
- * A code that was not asked is an unusable answer and fails the run, like the section map.
+ *
+ * Not asked at all while "Release notes" is off in "What the analysis reads": the answer would change nothing that
+ * is read. The pages stay not looked at and are asked about the moment release notes are turned on.
+ *
+ * AN ANSWER THAT CANNOT BE USED DOES NOT STOP THE RUN HERE (decided after the first real run, 2026-11-16, where one
+ * unparseable answer of 19 calls stopped a whole setup run). That is right for THIS call and only for it:
+ *   - it is a closed-set question asked once per page, and nothing of an unusable answer is saved — neither a "yes"
+ *     nor a "no": the pages of that call simply stay not looked at;
+ *   - nothing later in the run needs them looked at: a page that was not looked at is what its section is (a help
+ *     or a blog page), exactly as before this step existed;
+ *   - the next run of the company finds those pages on this very to-do and asks about them again — the same
+ *     mechanism that continues a stopped run, with no retry inside this run and nothing left to chance;
+ *   - it is not silent: the case is kept on the run as an incident with the answer's text as it came (engine.ts),
+ *     it is a line of the log, it is counted (mapPagesUnanswered), and the run sends its one email to support.
+ * "Cannot be used" = the model boundary could not read it (invalid JSON, empty, cut off), or it named a page code
+ * that was not asked. The section map above is different and still fails the run on either: every later step
+ * reads by its labels.
  */
 async function pickReleaseNotes(ctx: RunContext, pages: StoredPage[], plan: ReadingPlan): Promise<void> {
   const todo = pages
@@ -220,6 +237,10 @@ async function pickReleaseNotes(ctx: RunContext, pages: StoredPage[], plan: Read
     .filter((x): x is { page: StoredPage; label: SectionLabel } => x.label != null && PAGE_PICK_LABELS.includes(x.label))
     .sort((a, b) => compareAddress(a.page.url, b.page.url));
   const known = pages.filter((p) => p.readAs === READ_AS_RELEASE_NOTES && p.state !== "removed").length;
+  if (todo.length && !looksForReleaseNotes(ctx.reads)) {
+    ctx.log("info", `Map, page by page: not asked — "Release notes" is off in "What the analysis reads", so naming the release-notes pages among ${todo.length} help-center and blog page${todo.length === 1 ? "" : "s"} would change nothing that is read. They are looked at when it is turned on`);
+    return;
+  }
   if (!todo.length) {
     if (known) ctx.log("info", `Release notes inside help-center and blog sections: ${known} page${known === 1 ? "" : "s"} named by earlier runs — no new page to look at`);
     return;
@@ -228,6 +249,13 @@ async function pickReleaseNotes(ctx: RunContext, pages: StoredPage[], plan: Read
   for (let i = 0; i < todo.length; i += MAP_PAGES_BATCH) batches.push(todo.slice(i, i + MAP_PAGES_BATCH));
   ctx.log("info", `Map, page by page: ${todo.length} page${todo.length === 1 ? "" : "s"} of help-center and blog sections not looked at yet — asking PMOS AI which of them are release notes (address and title only), in ${batches.length} call${batches.length === 1 ? "" : "s"}`);
   let named = 0;
+  let unanswered = 0;
+  /** The pages of a call whose answer could not be used stay not looked at: nothing is saved for them, and the next run asks again. */
+  const leave = (batch: (typeof batches)[number], why: string) => {
+    unanswered += batch.length;
+    ctx.counters.mapPagesUnanswered += batch.length;
+    ctx.log("warn", `Map, page by page: the answer for ${batch.length} page${batch.length === 1 ? "" : "s"} (${batch[0].page.url} … ${batch[batch.length - 1].page.url}) could not be used — ${why}. Nothing of it is saved: these pages stay not looked at (each is read as what its section is) and the next run of ${ctx.competitor.name} asks about them again. The case is kept as an incident`);
+  };
   await ctx.paced({
     items: batches,
     // The calls do not depend on each other: they go at the run's own speed. A run with injected answers makes them one at a time.
@@ -240,8 +268,12 @@ async function pickReleaseNotes(ctx: RunContext, pages: StoredPage[], plan: Read
       const r = await ctx.call<Record<string, unknown>>(MAP_PAGES_SYSTEM_PROMPT, "", renderMapPages(ctx.competitor.name, entries), mapPagesTool(entries.map((e) => e.code)), { role: "read", maxTokens: MAP_PAGES_MAX_TOKENS, injected });
       ctx.counters.mapCalls++;
       const parsed = parseMapPages(r.value, entries.map((e) => e.code));
-      // A closed set: a code that was not asked is an unusable answer — nothing of it is saved.
-      if (parsed.unknownCodes.length) throw new AnalysisError("answer", `PMOS AI's page-by-page map answer named ${parsed.unknownCodes.length} page code${parsed.unknownCodes.length === 1 ? "" : "s"} that ${parsed.unknownCodes.length === 1 ? "was" : "were"} not asked (${parsed.unknownCodes.slice(0, 3).join(", ")})`);
+      // A closed set: a code that was not asked makes the answer unusable — nothing of it is saved, the case is kept.
+      if (parsed.unknownCodes.length) {
+        ctx.incident({ kind: "unknown_item", request: null, itemKind: "page", item: parsed.unknownCodes.slice(0, 10).join(", "), parent: null, quote: "", pageCode: "", pageUrl: null, pageId: null, pageHash: null, foundOn: null });
+        leave(batch, `it named ${parsed.unknownCodes.length} page code${parsed.unknownCodes.length === 1 ? "" : "s"} that ${parsed.unknownCodes.length === 1 ? "was" : "were"} not asked (${parsed.unknownCodes.slice(0, 3).join(", ")})`);
+        return r.tokens;
+      }
       const yes = batch.filter((_, n) => parsed.releaseNotes.has(entries[n].code)).map((x) => x.page.id);
       const no = batch.filter((_, n) => !parsed.releaseNotes.has(entries[n].code)).map((x) => x.page.id);
       await db.$transaction([
@@ -255,6 +287,8 @@ async function pickReleaseNotes(ctx: RunContext, pages: StoredPage[], plan: Read
       ctx.counters.mapReleaseNotes += yes.length;
       return r.tokens;
     },
+    // The model boundary could not read the answer (the engine kept its text as an incident): this call's pages stay not looked at, the others go on.
+    onAnswerError: async (batch, e) => leave(batch, e.message),
   });
-  ctx.log("info", `Map, page by page: ${named} of ${todo.length} page${todo.length === 1 ? " is" : "s are"} release notes${named ? " — read as release notes, whatever the switch of the help center or the blog says" : ""}${known ? ` (${known} named by earlier runs)` : ""}`);
+  ctx.log(unanswered ? "warn" : "info", `Map, page by page: ${named} of ${todo.length - unanswered} page${todo.length - unanswered === 1 ? " is" : "s are"} release notes${named ? " — read as release notes, whatever the switch of the help center or the blog says" : ""}${known ? ` (${known} named by earlier runs)` : ""}${unanswered ? ` — ${unanswered} page${unanswered === 1 ? " was" : "s were"} not looked at: the answer of ${unanswered === 1 ? "its" : "their"} call could not be used; the next run asks again` : ""}`);
 }

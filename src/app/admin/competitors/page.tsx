@@ -55,7 +55,7 @@ export default async function AdminCompetitorsPage() {
       text: MAP_SYSTEM_PROMPT,
       tool: mapTool(["S1", "S2", "…"]),
       extra: {
-        label: `Map, page by page (${MAP_PAGES_VERSION}) — release notes inside a help center or a blog: for the sections labeled help or news, the pages are shown one by one (address and title only, ${MAP_PAGES_BATCH} per call) and PMOS AI names the release-notes pages by code. Such a page is read as release notes, whatever the switch of the help center or the blog says. A page is asked about once; a code that was not asked fails the run`,
+        label: `Map, page by page (${MAP_PAGES_VERSION}) — release notes inside a help center or a blog: for the sections labeled help or news, the pages are shown one by one (address and title only, ${MAP_PAGES_BATCH} per call) and PMOS AI names the release-notes pages by code. Such a page is read as release notes, whatever the switch of the help center or the blog says. A page is asked about once. Not asked while Release notes is off. An answer that cannot be used (unreadable, or naming a code that was not asked) saves nothing and does not stop the run: its pages stay not looked at, the case is kept as an incident with the answer's text, and the next run asks about them again`,
         text: MAP_PAGES_SYSTEM_PROMPT,
         tool: mapPagesTool(["P1", "P2", "…"]),
       },

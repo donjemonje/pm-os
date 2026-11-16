@@ -1,6 +1,6 @@
 /** Competitors — the model boundary (lib/competitors/ai.ts): the string cleaners, an unusable answer, a streamed answer; and the page key that keeps a video id. Pure parts only. */
 import { describe, expect, it } from "vitest";
-import { AnswerError, CALL_TIMEOUT_MS, collectStream, cut, NO_USAGE, tidy, type StreamPiece } from "@/lib/competitors/ai";
+import { AnswerError, CALL_TIMEOUT_MS, collectStream, cut, NO_USAGE, RAW_ANSWER_KEPT, rawForRecord, tidy, type StreamPiece } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
 
 describe("tidy", () => {
@@ -67,9 +67,55 @@ describe("a streamed answer (no default timeout can cut a long answer)", () => {
     expect(cut.finish).toBe("MAX_TOKENS");
     expect(cut.usage.output).toBe(7);
     const empty = await collectStream(pieces([]));
-    expect(empty).toEqual({ text: "", finish: "unknown", usage: { ...NO_USAGE } });
+    expect(empty).toEqual({ text: "", finish: "unknown", usage: { ...NO_USAGE }, pieces: 0, textPieces: 0 });
   });
   it("the one explicit ceiling of a call is an hour — far above the 5 minutes a default used to allow", () => {
     expect(CALL_TIMEOUT_MS).toBe(60 * 60_000);
+  });
+});
+
+describe("an unusable answer keeps its text — the evidence (first real run: \"invalid JSON (finish: STOP, 75 chars)\" and nothing left to read)", () => {
+  /** A plain answer of the page-by-page map with seven codes is exactly 75 characters — and valid. */
+  const ordinary = '{"release_notes": ["P201", "P202", "P203", "P204", "P205", "P206", "P207"]}';
+  it("an ordinary answer of that call can be 75 characters long and parse: the length alone says nothing", () => {
+    expect(ordinary).toHaveLength(75);
+    expect(JSON.parse(ordinary)).toEqual({ release_notes: ["P201", "P202", "P203", "P204", "P205", "P206", "P207"] });
+  });
+  it("whatever made it unreadable — a markdown fence, two objects joined, a piece lost or doubled in the join, a cut — the text is kept as it came", () => {
+    const candidates = [
+      '```json\n{"release_notes": []}\n```',
+      '{"release_notes": []}{"release_notes": []}',
+      '{"release_notes": ["P201", "P202", "P2"P204", "P205"]}',
+      '{"release_notes": ["P201", "P202", "P203", "P203", "P20',
+      "[]\n[]",
+    ];
+    for (const text of candidates) {
+      expect(() => JSON.parse(text), text).toThrow();
+      const e = new AnswerError("PMOS AI (gemini-4-argon) returned invalid JSON", { ...NO_USAGE, input: 20_000, output: 30 }, text);
+      expect(e.raw).toBe(text);
+      expect(e.usage.input).toBe(20_000);
+    }
+  });
+  it("an empty answer keeps the empty text; a provider that gave no text at all keeps null", () => {
+    expect(new AnswerError("empty", NO_USAGE, "").raw).toBe("");
+    expect(new AnswerError("no structured answer").raw).toBeNull();
+  });
+  it("a long unusable answer keeps its start and its end — where a cut or a second object shows — and says how much was left out", () => {
+    const long = `{"capabilities": [${"x".repeat(10_000)}]}{"oops": 1}`;
+    const kept = rawForRecord(long);
+    expect(kept.startsWith('{"capabilities": [xxx')).toBe(true);
+    expect(kept.endsWith(']}{"oops": 1}')).toBe(true);
+    expect(kept).toContain(`…[${(long.length - RAW_ANSWER_KEPT).toLocaleString("en-US")} characters left out]…`);
+    expect(kept.length).toBeLessThan(RAW_ANSWER_KEPT + 60);
+    expect(rawForRecord("short")).toBe("short");
+    expect(new AnswerError("x", NO_USAGE, long).raw).toBe(kept);
+  });
+  it("the stream says how it delivered the answer: how many pieces, how many carried text — to tell a bad answer from a bad join", async () => {
+    async function* pieces(list: StreamPiece[]): AsyncGenerator<StreamPiece> {
+      for (const p of list) yield p;
+    }
+    const text = (t: string, thought = false): StreamPiece => ({ candidates: [{ content: { parts: [{ text: t, thought }] } }] });
+    const r = await collectStream(pieces([text("thinking…", true), text('{"release_notes": ['), text('"P201"'), text("]}"), { candidates: [{ finishReason: "STOP" }] }]));
+    expect(r).toMatchObject({ text: '{"release_notes": ["P201"]}', finish: "STOP", pieces: 5, textPieces: 3 });
   });
 });

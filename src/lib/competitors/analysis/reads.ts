@@ -101,6 +101,16 @@ export function readsLine(setting: ReadSetting): string {
   return `Reading: ${on.join(", ") || "nothing"}${off.length ? ` — not read: ${off.join(", ")}` : ""}`;
 }
 
+/**
+ * Does the map look for release-notes pages inside help-center and blog sections (analysis/plan.ts)? Only while
+ * "Release notes" is on: with it off the answer would change nothing that is read. It is asked whether the help
+ * center and the blog themselves are on or off — a release-notes page reads first and counts as strong evidence
+ * either way — so flipping those two switches needs no new look.
+ */
+export function looksForReleaseNotes(setting: ReadSetting): boolean {
+  return setting.release_notes;
+}
+
 /** What a company has of a kind that is OFF. */
 export interface NotRead {
   pages: number;

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ALERT_INCIDENT_LINES, runAlertDue, runAlertEmail, type RunAlertInput } from "@/lib/competitors/analysis/alert";
 import { ANALYSIS_TOKEN_BUDGET_DEFAULT } from "@/lib/competitors/analysis/budget";
 import { ACTIVE_CAP_IDS, CAP_IDS, capLine, capLines, CAPS, capsForEvent, capsHeadline, capsOf, clearStateCaps, readCaps, recordCap, RETIRED_CAP_IDS, type CapHit, type CapId } from "@/lib/competitors/analysis/caps";
-import { emptyIncidents, incidentLine, INCIDENTS_KEPT, incidentsForEvent, incidentsHeadline, incidentsOf, readIncidents, recordIncident, type Incident } from "@/lib/competitors/analysis/incidents";
+import { emptyIncidents, INCIDENT_ANSWER_KEPT, INCIDENT_QUOTE_KEPT, incidentLine, INCIDENTS_KEPT, incidentsForEvent, incidentsHeadline, incidentsOf, readIncidents, recordIncident, type Incident } from "@/lib/competitors/analysis/incidents";
 
 const PB = { competitorId: "pb", company: "Productboard" };
 const RUN = { competitorId: null, company: null };
@@ -126,6 +126,20 @@ describe("an incident: a finding whose quote is not on the page it names is a bu
   it("a page or an item that was not given is an incident too", () => {
     expect(incidentLine(incident({ kind: "unknown_page", pageCode: "P9999", pageUrl: null }))).toBe('Productboard: feature "Voice input" (under "Productboard Spark") names the page "P9999", which is not a page of the request — reading request 2 — quote: "Press Ctrl+M anywhere to start recording."');
     expect(incidentLine(incident({ kind: "unknown_item", itemKind: "capability", item: "K77", step: "second_look", request: null }))).toBe('Productboard: the answer named capability "K77", which is not in the list it was given — second look');
+  });
+  it("an answer that could not be read at all is an incident too: what was wrong, and the answer's text as it came — whole, not cut like a quote", () => {
+    const raw = '{"release_notes": ["P201", "P202", "P2"P204", "P205"]}';
+    const unusable = incident({ kind: "unusable_answer", step: "map", request: null, itemKind: "answer", item: "PMOS AI (gemini-4-argon) returned invalid JSON (finish: STOP, 75 chars in 3 of 4 pieces): Unexpected token", parent: null, quote: raw, pageCode: "", pageUrl: null, pageId: null, pageHash: null });
+    expect(incidentLine(unusable)).toBe(`Productboard: PMOS AI's answer could not be read — map — PMOS AI (gemini-4-argon) returned invalid JSON (finish: STOP, 75 chars in 3 of 4 pieces): Unexpected token — the answer as it came: "${raw}"`);
+    expect(incidentLine({ ...unusable, quote: "" })).toContain("the answer as it came: (no text)");
+    const log = emptyIncidents();
+    recordIncident(log, { ...unusable, quote: "y".repeat(5_000) });
+    recordIncident(log, incident({ quote: "q".repeat(5_000) }));
+    expect(log.list.map((i) => i.quote.length)).toEqual([INCIDENT_ANSWER_KEPT, INCIDENT_QUOTE_KEPT]);
+    expect(readIncidents(JSON.parse(JSON.stringify(log))).list[0].kind).toBe("unusable_answer");
+    expect(incidentsForEvent(log).incidentKinds).toBe("quote_not_on_page,unusable_answer");
+    // It is part of the run's one email like any incident.
+    expect(runAlertDue({ outcome: "done", caps: 0, incidents: log.total })).toBe(true);
   });
   it("every incident is counted; the first INCIDENTS_KEPT keep their details; a long quote is cut", () => {
     const log = emptyIncidents();

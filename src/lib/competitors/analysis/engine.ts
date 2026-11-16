@@ -540,6 +540,13 @@ export async function runAnalysis(id: string): Promise<void> {
       const say: RunContext["log"] = (level, msg, url) => log(level, `${t.prefix}${msg}`, url);
       // What was true at the end of the company's last walk (pages left unread, looks not made) is decided again by this one.
       clearStateCaps(caps, t.capsFor.id);
+      /** An answer that should never happen, for this context's company: kept on the run as a case, counted, and a line of the log. Never silent. */
+      const noteIncident = (i: Omit<Incident, "at" | "step" | "competitorId" | "company">) => {
+        const one: Incident = { ...i, at: new Date().toISOString(), step, competitorId: t.capsFor.id, company: t.capsFor.name };
+        recordIncident(incidents, one);
+        c.incidents++;
+        log("warn", `INCIDENT — ${incidentLine(one)}`, one.pageUrl ?? undefined);
+      };
       return {
         run: { id, workspaceId: row.workspaceId, competitorId: row.competitorId, trigger: row.trigger, scanId: row.scanId, startedById: row.startedById, cursor: t.cursor },
         competitor: t.competitor,
@@ -560,13 +567,7 @@ export async function runAnalysis(id: string): Promise<void> {
           // A cap that bites on every page says so once; the run's last lines carry the totals.
           if (recorded.fresh || (recorded.changed && CAPS[cap].mode !== "event")) log("warn", `Cap hit — ${capLine(recorded.hit)}`);
         },
-        incident: (i) => {
-          const one: Incident = { ...i, at: new Date().toISOString(), step, competitorId: t.capsFor.id, company: t.capsFor.name };
-          recordIncident(incidents, one);
-          c.incidents++;
-          // Never silent: every case is a line of the run's log.
-          log("warn", `INCIDENT — ${incidentLine(one)}`, one.pageUrl ?? undefined);
-        },
+        incident: noteIncident,
         call: async <T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: StepCallOptions) => {
           const { role, ...rest } = opts;
           const callModel = models[role];
@@ -591,6 +592,8 @@ export async function runAnalysis(id: string): Promise<void> {
               c.cachedTokens += e.usage.cached;
               c.thinkingTokens += e.usage.thinking;
               addUsage(t.usage, step, callModel, e.usage, Date.now() - callStarted);
+              // The evidence is kept whatever the step does next (stop the run, or go on): what was wrong, and the answer's text as it came.
+              noteIncident({ kind: "unusable_answer", request: null, itemKind: "answer", item: e.message, parent: null, quote: e.raw ?? "", pageCode: "", pageUrl: null, pageId: null, pageHash: null, foundOn: null });
               throw e;
             }
             if (e instanceof CapacityError) throw e;

@@ -1,6 +1,6 @@
 /** Capability Analysis — "What the analysis reads" (analysis/reads.ts): one switch per kind of content, for the installation; release notes win over where they sit; a setting, not a cap. Pure module. */
 import { describe, expect, it } from "vitest";
-import { checkReadSetting, effectiveReads, notReadLine, READ_DEFAULTS, READ_KIND_TEXT, READ_KINDS, readKindOf, readNotRead, readRunReads, readSettingOf, readsLine, splitByReads, storedReadSetting, type ReadSetting } from "@/lib/competitors/analysis/reads";
+import { checkReadSetting, effectiveReads, looksForReleaseNotes, notReadLine, READ_DEFAULTS, READ_KIND_TEXT, READ_KINDS, readKindOf, readNotRead, readRunReads, readSettingOf, readsLine, splitByReads, storedReadSetting, type ReadSetting } from "@/lib/competitors/analysis/reads";
 import { pickReadable, ReadingPlan, READ_ORDER, SECTION_LABELS, sortByWhereAPmLooks, type PlanPage, type SectionLabel } from "@/lib/competitors/analysis/sections";
 
 const HOST = "acme.example";
@@ -91,6 +91,20 @@ describe("release notes win over where they sit", () => {
     expect(read).not.toContain("/changelog/2026");
     expect(read).toContain("/help/sso");
     expect(read).toContain("/blog/opinion");
+  });
+  it("the map looks for them only while Release notes is on — whether the help center and the blog are on or off", () => {
+    expect(looksForReleaseNotes(READ_DEFAULTS)).toBe(true);
+    expect(looksForReleaseNotes({ ...READ_DEFAULTS, help: true, news: true })).toBe(true);
+    expect(looksForReleaseNotes({ ...READ_DEFAULTS, release_notes: false })).toBe(false);
+    expect(looksForReleaseNotes({ ...READ_DEFAULTS, release_notes: false, help: true, news: true })).toBe(false);
+  });
+  it("a page the map could not look at (its call's answer was unusable) is what its section is — nothing later depends on the look", () => {
+    const notLooked = pickReadable([page("/help/maybe-release-notes"), page("/blog/maybe-changelog")], plan);
+    expect(notLooked.map((p) => p.read.label)).toEqual(["news", "help"]);
+    expect(splitByReads(notLooked, READ_DEFAULTS).read).toEqual([]);
+    // Looked at by a later run and named: it becomes due as a release-notes page.
+    const named = pickReadable([page("/help/maybe-release-notes", { readAs: "release_notes" })], plan);
+    expect(splitByReads(named, READ_DEFAULTS).read.map((p) => p.read.label)).toEqual(["release_notes"]);
   });
   it("they are read first, with the other release notes — where a PM looks first", () => {
     const ordered = sortByWhereAPmLooks(splitByReads(withKind, READ_DEFAULTS).read).map((p) => p.id);

@@ -15,6 +15,8 @@ export interface Counters {
   /** The map, page by page: pages of help-center and blog sections it looked at in this run, and the ones it named release notes. */
   mapPagesAsked: number;
   mapReleaseNotes: number;
+  /** Pages of a page-by-page map call whose answer could not be used: they stay not looked at and the next run asks about them again (each such call is an incident). */
+  mapPagesUnanswered: number;
   /** The reading: the requests made (one per chunk of pages), and the second look's requests (one per chunk too). */
   readRequests: number;
   lookRequests: number;
@@ -75,7 +77,7 @@ export interface Counters {
 
 export function emptyCounters(): Counters {
   return {
-    mapSections: 0, mapLabeled: 0, mapCalls: 0, mapPagesAsked: 0, mapReleaseNotes: 0, readRequests: 0, lookRequests: 0, incidents: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
+    mapSections: 0, mapLabeled: 0, mapCalls: 0, mapPagesAsked: 0, mapReleaseNotes: 0, mapPagesUnanswered: 0, readRequests: 0, lookRequests: 0, incidents: 0, goBackRounds: 0, goBackPages: 0, budget: 0, budgetReached: 0, pagesUnread: 0,
     pagesRead: 0, pagesFailed: 0, calls: 0, unusableAnswers: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, thinkingTokens: 0, waits: 0, waitedMs: 0,
     findings: 0, findingsRemoved: 0, quotesDropped: 0, piiHits: 0, itemsNew: 0, mergeCalls: 0, mergeSplits: 0,
     matchCalls: 0, matchedByName: 0, matchedByAi: 0, placed: 0, secondLooks: 0, secondLookFound: 0, secondLooksWaiting: 0,
