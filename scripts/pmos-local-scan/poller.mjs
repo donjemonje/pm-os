@@ -17,6 +17,16 @@
  * run the station checks in again every 15 minutes, so a scan requested in the
  * meantime starts without waiting for the running ones to end.
  *
+ * With every scan of a company's MAIN website the station also brings what the
+ * search for the company's other addresses needs (help center, developer docs,
+ * release notes) — Daniel 2026-11-16: the search follows the scan lanes, so
+ * while remote scanning is off PM-OS itself requests nothing from a company's
+ * site. Right after the home page is handed in: the site's /llms.txt, then the
+ * short list of addresses PM-OS gives (what the company named, the guessed
+ * names in front of its domain, one made-up name), one request per pause, stop
+ * on 429; PM-OS applies every rule (addresses.mjs). PM-OS says which scans
+ * want it (`addresses: true` in the waiting list); an older PM-OS never does.
+ *
  * What the station is doing is written to <state-dir>/status.json, which the
  * menu bar indicator (menubar.swift) shows. The station is a server:
  * it holds a machine key with no expiry (~/.pmos/station-key), which PM-OS
@@ -56,13 +66,16 @@
  *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit) — per scan
  *   --state-dir PATH     where the status file, the saved places and the log live (default ~/.pmos)
  *   --recheck-ms N       while scans run, ask PM-OS for new waiting scans this often (default 15 min)
+ *   --allow-private      TESTS ONLY: the search for other addresses may ask addresses on this machine (a fixture site)
  */
 import { execFile, spawn } from "node:child_process";
+import { lookup } from "node:dns/promises";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runAddressStep } from "./addresses.mjs";
 import { adoptLegacyPlace, clearPlace, loadPlace, loadPlaces, markStopped, savePlace } from "./places.mjs";
 import { NO_SCAN, orderWaiting, parallelLimit, pickNext, siteKey, statusOf } from "./schedule.mjs";
 
@@ -92,6 +105,8 @@ const MAX_RENDERS = 40;
 /** The render's own Chrome profile (never the PM's). One folder, so one render at a time — see renderWithChrome. */
 const CHROME_PROFILE = join(STATE_DIR, "chrome-profile");
 const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
+/** TESTS ONLY: the search for other addresses may ask addresses on this machine (a fixture site). Never set on a real station. */
+const ALLOW_PRIVATE = has("allow-private");
 /** A browser's own identity — this is a person's machine, not the PM-OS crawler. */
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -515,11 +530,18 @@ async function runFetch(job, limits, post, saved, scan) {
   }
   /** Pages read but lost on the way in: PM-OS refused the page AND the not-read note for it. Reported with done as not attempted. */
   let lost = saved?.lost ?? 0;
+  // The search for the company's other addresses (help center, developer docs, release notes) follows the scan lanes:
+  // with a scan of a company's main website (job.addresses) the station brings what the search needs, once, right
+  // after it handed the home page in (addresses.mjs). A scan that continues after a stop does not bring it again.
+  const homeKey = pageKey(new URL(job.siteUrl), job.siteUrl);
+  let addressesDone = !job.addresses || saved?.addresses === "done";
   /** The scan's place, with the page being read still first in the queue — a stop in the middle of a page reads it again. */
-  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0 });
+  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0, ...(addressesDone && job.addresses ? { addresses: "done" } : {}) });
   while (queue.length) {
     if (elapsedBefore + Date.now() - t0 > limits.ms) break;
     const url = queue.shift();
+    /** The home page as it is handed in, when the search for the company's other addresses is still to be fed. */
+    let homePage = null;
     scan.save(place(url));
     // The pause between two pages of THIS site. Other sites are read by other scans in the meantime; no other scan of
     // this site runs (schedule.mjs), so the site sees one request per pause, as it always did.
@@ -584,6 +606,7 @@ async function runFetch(job, limits, post, saved, scan) {
     if (body.status === "ok" && body.html) {
       // Headless Chrome for what plain HTTP cannot show: a page with no text, or a home/hub page whose menus are built by JavaScript.
       const u = new URL(url);
+      const plainHtml = body.html;
       const links = inSiteLinks(body.html, body.finalUrl || url, host);
       const empty = roughText(body.html).length < 200;
       if (renders < MAX_RENDERS && (empty || (isHub(u) && links < 8)) && (await chromeAvailable())) {
@@ -604,6 +627,7 @@ async function runFetch(job, limits, post, saved, scan) {
           // skip
         }
       }
+      if (!addressesDone && url === homeKey) homePage = { url, finalUrl: body.finalUrl || url, html: body.html, ...(body.rendered ? { plainHtml } : {}) };
       delete body.finalUrl;
       delete body.rendered;
     }
@@ -641,6 +665,20 @@ async function runFetch(job, limits, post, saved, scan) {
       continue;
     }
     log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);
+    if (homePage) {
+      // PM-OS has the home page: bring the rest of what the search for the company's other addresses needs — the site's
+      // /llms.txt and what the addresses PM-OS lists answer. One request per pause, like the pages; it never fails the scan.
+      await runAddressStep({
+        siteUrl: job.siteUrl,
+        home: homePage,
+        call: (payload) => api(`/api/competitors/local/scans/${job.scanId}/addresses`, { method: "POST", headers: { authorization: `Bearer ${job.token}` }, body: JSON.stringify(payload) }),
+        pause: () => (PAUSE_MS > 0 ? sleep(PAUSE_MS) : Promise.resolve()),
+        online,
+        deps: { fetch: (u, init) => fetch(u, init), lookup: (h) => lookup(h, { all: true }), allowPrivate: ALLOW_PRIVATE, userAgent: BROWSER_UA, timeoutMs: 20_000 },
+        log,
+      });
+      addressesDone = true;
+    }
   }
   return { notAttempted: queue.length + lost };
 }

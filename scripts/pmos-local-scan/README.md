@@ -33,6 +33,17 @@ Nine waiting sites used to take the sum of their times. Different sites have no 
 - Log (`local-scan.log`): every line of a scan starts with its site — `[acme.com]   new https://acme.com/pricing` — so parallel scans stay readable (`grep '\[acme.com\]'`).
 - Status file (`status.json`, read by the menu bar icon): `competitor`, `site`, `pagesRead` and `scanStartedAt` describe the **oldest running scan**, `waiting` is the number of scans not started yet — what they always meant. New: `running` (how many scans are being read) and `scans` (one entry per running scan: `scanId`, `competitor`, `site`, `pagesRead`, `startedAt`, `state`). The menu line reads "scanning Acme + 4 more · …" once the menu app is rebuilt (`sh scripts/pmos-local-scan/install-menu.sh`); the installed one keeps working and shows the oldest scan.
 
+## A company's other addresses (2026-11-16)
+
+PM-OS looks for a company's help center, developer docs and release notes on other addresses than its main site. That search follows the scan lanes: while remote scanning is off, PM-OS itself requests nothing from a company's site, so the station brings what the search needs **with every scan of a company's main website** (`addresses: true` on the scan in the waiting list; never with a scan of a help center, developer docs or release notes).
+
+- **When:** right after the home page was handed in, once per scan. A scan that continues after a stop does not do it again.
+- **What it requests:** the site's `/llms.txt` (redirects inside the site only), then the short list of addresses PM-OS gives — the made-up name first, then what the company named (links of its home page, addresses of its llms.txt) and the guessed names in front of its domain (`help.`, `support.`, `docs.` …). 32 addresses at most, each asked once.
+- **What it hands in** (`POST /api/competitors/local/scans/<id>/addresses`, the scan token, two calls): first the home page it read (as handed in; plus the plain answer when Chrome rendered it) and what `/llms.txt` answered → PM-OS answers with the list; then the same plus, for every address, the status, where it landed and the start of the page (500,000 characters). The station applies no rule: which link is a candidate, whether a guess counts and what an address is are decided by PM-OS.
+- **Manners:** one request at a time with the scan's pause before each (`--pause-ms`), a browser's identity. `/llms.txt` answers 429 → nothing more is asked for the search in this scan. An address of the list answers 429 → the station stops asking and reports what it has. Either way PM-OS looks again with the next scan. Offline during the step → nothing is reported (no address is judged "not there" because the Mac was offline).
+- **Never a private address:** an address that is not a public one — by its name or by what the name resolves to — is not requested, and a redirect to one is not followed. `--allow-private` lifts this for a fixture site in tests; never set it on a real station.
+- **It never costs the scan:** whatever goes wrong (PM-OS refuses the call, an older PM-OS without the route), the log says so in a line that starts with `other addresses:` and the scan goes on.
+
 ## Flags (tests and troubleshooting)
 
     node scripts/pmos-local-scan/poller.mjs --app-url http://localhost:3205 --key-file /tmp/key \
