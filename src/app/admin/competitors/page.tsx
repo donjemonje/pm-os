@@ -7,7 +7,7 @@ import {
   getCompetitorsGeminiLocation,
 } from "@/lib/competitors/ai";
 import { ADDRESS_PICK_SYSTEM_PROMPT, ADDRESS_PICK_VERSION, addressPickTool, GUESS_NAMES, MAX_CANDIDATES } from "@/lib/competitors/addresses";
-import { competitorsModels, competitorsThinking, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, THINKING_DEFAULTS, THINKING_ENV, THINKING_ENV_ALL, type PromptId } from "@/lib/competitors/models";
+import { competitorsModels, competitorsThinking, MODEL_DEFAULTS, MODEL_ENV, MODEL_ROLES, PROMPT_ROLES, providerOf, retiredThinkingOverride, THINKING_DEFAULTS, THINKING_ENV, THINKING_ENV_ALL, type PromptId } from "@/lib/competitors/models";
 import { DOMAINS_SYSTEM_PROMPT, DOMAINS_VERSION, domainsTool } from "@/lib/competitors/analysis/domains";
 import {
   comparePageLine,
@@ -61,6 +61,7 @@ export default async function AdminCompetitorsPage() {
   const importOrgs: ImportOrg[] = planOrgs.map((o) => ({ ...o, competitors: o.competitors.filter((c) => !c.isOwn) }));
   const models = competitorsModels();
   const thinking = competitorsThinking();
+  const retiredThinking = retiredThinkingOverride();
   /** What each role is used for, next to its model. */
   const ROLE_USE: Record<string, string> = { read: "map, research (the broad read and the go-back), second look, facts", match: "merge, unify batches, match", judge: "unify review, domains" };
   /** The prompt of the list → its id in models.ts PROMPT_ROLES (the role decides the model). */
@@ -161,10 +162,13 @@ export default async function AdminCompetitorsPage() {
             </dd>
             <dt className="text-slate-500">Thinking</dt>
             <dd className="text-xs">
-              <div className="mb-1 text-slate-400">How much a model thinks before it answers is a setting per role. Thinking is billed as output; each run records it apart from the answer. {THINKING_ENV_ALL} overrides all three roles at once.</div>
+              <div className="mb-1 text-slate-400">How much a model thinks before it answers is a setting per role. Thinking is billed as output; each run records it apart from the answer. {THINKING_ENV_ALL} (one value for every role) is retired and decides nothing.</div>
+              {retiredThinking && (
+                <div className="mb-1 text-amber-700" data-testid="admin-thinking-retired">{THINKING_ENV_ALL} is set to &quot;{retiredThinking}&quot; in this environment and is ignored: each role uses its own setting below.</div>
+              )}
               {MODEL_ROLES.map((role) => (
                 <div key={role} className="font-mono" data-testid="admin-thinking-role">
-                  {role}: {thinking[role]} <span className="font-sans text-slate-400">({THINKING_ENV[role]} → {THINKING_DEFAULTS[role]}{role === "read" ? "; the lowest level the reading model accepts" : ""})</span>
+                  {role}: {thinking[role]} <span className="font-sans text-slate-400">({THINKING_ENV[role]} → {THINKING_DEFAULTS[role]})</span>
                 </div>
               ))}
             </dd>

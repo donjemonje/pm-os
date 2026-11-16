@@ -256,6 +256,42 @@ export function geminiUsage(u: { promptTokenCount?: number; candidatesTokenCount
 }
 
 /**
+ * The one explicit ceiling of a model call: 60 minutes. No call is cut by a default any more (the first chunked
+ * reading test, 2026-11-16, lost a 5-minute answer to Node's 300-second fetch timeout); a call that passes this
+ * ceiling is stopped and fails as an unusable answer. Long on purpose: the first request of a big company writes its
+ * whole list (tens of thousands of output tokens at ~40 tokens a second).
+ */
+export const CALL_TIMEOUT_MS = 60 * 60_000;
+
+/** One piece of a streamed answer, as the provider sends it: some text parts (the model's own thoughts are marked), and on the last pieces why it stopped and what it used. */
+export interface StreamPiece {
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: unknown }>;
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number };
+}
+
+export interface CollectedStream {
+  /** The answer's text: every text part of every piece, in order — never a thought part. */
+  text: string;
+  /** Why the model stopped: the last finish reason a piece carried ("unknown" when none did). */
+  finish: string;
+  usage: Usage;
+}
+
+/** A streamed answer put together: the text of all pieces in order, the last finish reason, the last usage report. Pure. */
+export async function collectStream(stream: AsyncIterable<StreamPiece>): Promise<CollectedStream> {
+  let text = "";
+  let finish = "unknown";
+  let usage: StreamPiece["usageMetadata"] | undefined;
+  for await (const piece of stream) {
+    const candidate = piece.candidates?.[0];
+    for (const part of candidate?.content?.parts ?? []) if (typeof part.text === "string" && !part.thought) text += part.text;
+    if (candidate?.finishReason != null) finish = String(candidate.finishReason);
+    if (piece.usageMetadata) usage = piece.usageMetadata;
+  }
+  return { text, finish, usage: geminiUsage(usage) };
+}
+
+/**
  * One structured call. `shared` goes first (the part that repeats across calls of a run, "" when there is none),
  * `tail` after it.
  *
@@ -277,9 +313,14 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
   const model = opts.model;
   const contents = shared ? `${shared}\n\n${tail}` : tail;
   if (getCompetitorsProvider(model) === "gemini") {
-    let response;
+    // The answer is STREAMED (Daniel 2026-11-16): a long answer arrives piece by piece, so no default timeout of the
+    // runtime (Node's fetch gives up after 300 s without a first byte, or 300 s between two pieces) can cut it. The
+    // structured output is the same — the JSON text comes in pieces and is put together here. One explicit ceiling
+    // stays, CALL_TIMEOUT_MS: the SDK raises the runtime's two timeouts to it and aborts the call when it passes.
+    const started = Date.now();
+    let collected: CollectedStream;
     try {
-      response = await getGemini().models.generateContent({
+      const stream = await getGemini().models.generateContentStream({
         model,
         contents,
         config: {
@@ -291,15 +332,16 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
           maxOutputTokens: opts.maxTokens + 16000,
           responseMimeType: "application/json",
           responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
+          httpOptions: { timeout: CALL_TIMEOUT_MS },
         },
       });
+      collected = await collectStream(stream);
     } catch (e) {
+      // Our own ceiling passed: the call is not asked again by itself — a call this long is a bug to look at, not a blip.
+      if (Date.now() - started >= CALL_TIMEOUT_MS - 1000) throw new AnswerError(`PMOS AI (${model}) did not finish its answer within ${Math.round(CALL_TIMEOUT_MS / 60_000)} minutes — the call was stopped`);
       throw asCapacityError(e);
     }
-    const u = response.usageMetadata;
-    const usage: Usage = geminiUsage(u);
-    const text = response.text ?? "";
-    const finish = String(response.candidates?.[0]?.finishReason ?? "unknown");
+    const { text, finish, usage } = collected;
     if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish})`, usage);
     if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${text.length} chars)`, usage);
     try {

@@ -12,6 +12,7 @@ import {
   modelsLine,
   PROMPT_ROLES,
   providerOf,
+  retiredThinkingOverride,
   THINKING_DEFAULTS,
   THINKING_ENV,
   THINKING_ENV_ALL,
@@ -21,60 +22,63 @@ import {
 } from "@/lib/competitors/models";
 
 describe("role → thinking level", () => {
-  it("a level per role, with the reading role at the lowest level its model accepts", () => {
-    expect(THINKING_DEFAULTS).toEqual({ read: "low", match: "high", judge: "high" });
-    expect(competitorsThinking({})).toEqual({ read: "low", match: "high", judge: "high" });
-    // "minimal" is a level, but the reading model refuses it (measured 2026-11-15): the default is the lowest it takes.
+  it("a level per role: medium for the reading role and for unify and domains — never low for the steps that build the table", () => {
+    expect(THINKING_DEFAULTS).toEqual({ read: "medium", match: "high", judge: "medium" });
+    expect(competitorsThinking({})).toEqual({ read: "medium", match: "high", judge: "medium" });
     expect(THINKING_LEVELS).toEqual(["minimal", "low", "medium", "high"]);
-    expect(THINKING_LEVELS.indexOf(THINKING_DEFAULTS.read)).toBe(1);
   });
   it("each role has its own override", () => {
     expect(THINKING_ENV).toEqual({ read: "COMPETITORS_THINKING_READ", match: "COMPETITORS_THINKING_MATCH", judge: "COMPETITORS_THINKING_JUDGE" });
     expect(thinkingFor("read", { COMPETITORS_THINKING_READ: "minimal" })).toBe("minimal");
-    expect(competitorsThinking({ COMPETITORS_THINKING_MATCH: " Medium " })).toEqual({ read: "low", match: "medium", judge: "high" });
-    expect(competitorsThinking({ COMPETITORS_THINKING_READ: "high", COMPETITORS_THINKING_MATCH: "low", COMPETITORS_THINKING_JUDGE: "medium" })).toEqual({ read: "high", match: "low", judge: "medium" });
+    expect(competitorsThinking({ COMPETITORS_THINKING_MATCH: " Medium " })).toEqual({ read: "medium", match: "medium", judge: "medium" });
+    expect(competitorsThinking({ COMPETITORS_THINKING_READ: "high", COMPETITORS_THINKING_MATCH: "low", COMPETITORS_THINKING_JUDGE: "high" })).toEqual({ read: "high", match: "low", judge: "high" });
   });
-  it("COMPETITORS_THINKING keeps working as the override for all roles — over a role's own override too", () => {
+  it("the old COMPETITORS_THINKING forces nothing any more: with it set to low, every role keeps its own level", () => {
     expect(THINKING_ENV_ALL).toBe("COMPETITORS_THINKING");
-    expect(competitorsThinking({ COMPETITORS_THINKING: "low" })).toEqual({ read: "low", match: "low", judge: "low" });
-    expect(competitorsThinking({ COMPETITORS_THINKING: "medium", COMPETITORS_THINKING_JUDGE: "high" })).toEqual({ read: "medium", match: "medium", judge: "medium" });
+    expect(competitorsThinking({ COMPETITORS_THINKING: "low" })).toEqual({ read: "medium", match: "high", judge: "medium" });
+    expect(competitorsThinking({ COMPETITORS_THINKING: "low", COMPETITORS_THINKING_JUDGE: "high" })).toEqual({ read: "medium", match: "high", judge: "high" });
+  });
+  it("a value still set in the retired variable is reported, so a run and the admin screen can say it is ignored", () => {
+    expect(retiredThinkingOverride({ COMPETITORS_THINKING: " low " })).toBe("low");
+    expect(retiredThinkingOverride({ COMPETITORS_THINKING: "  " })).toBeNull();
+    expect(retiredThinkingOverride({})).toBeNull();
   });
   it("a value that is not a level is no override", () => {
-    expect(competitorsThinking({ COMPETITORS_THINKING: "off", COMPETITORS_THINKING_READ: "0", COMPETITORS_THINKING_MATCH: "  " })).toEqual({ read: "low", match: "high", judge: "high" });
-    expect(thinkingFor("judge", { COMPETITORS_THINKING: "none", COMPETITORS_THINKING_JUDGE: "medium" })).toBe("medium");
+    expect(competitorsThinking({ COMPETITORS_THINKING_READ: "0", COMPETITORS_THINKING_MATCH: "  " })).toEqual({ read: "medium", match: "high", judge: "medium" });
+    expect(thinkingFor("judge", { COMPETITORS_THINKING: "none", COMPETITORS_THINKING_JUDGE: "high" })).toBe("high");
   });
   it("one line for the run log", () => {
-    expect(thinkingLine(competitorsThinking({}))).toBe("read low · match high · judge high");
+    expect(thinkingLine(competitorsThinking({}))).toBe("read medium · match high · judge medium");
   });
 });
 
 describe("role → model", () => {
-  it("the defaults are the Gemini 4 line-up: read = hydrogen, match = argon, judge = carbon", () => {
-    expect(competitorsModels({})).toEqual({ read: "gemini-4-hydrogen", match: "gemini-4-argon", judge: "gemini-4-carbon" });
-    expect(MODEL_DEFAULTS).toEqual({ read: "gemini-4-hydrogen", match: "gemini-4-argon", judge: "gemini-4-carbon" });
+  it("the defaults are the Gemini 4 line-up: read = argon (hydrogen bills most of its reading output as thinking), match = argon, judge = carbon", () => {
+    expect(competitorsModels({})).toEqual({ read: "gemini-4-argon", match: "gemini-4-argon", judge: "gemini-4-carbon" });
+    expect(MODEL_DEFAULTS).toEqual({ read: "gemini-4-argon", match: "gemini-4-argon", judge: "gemini-4-carbon" });
   });
   it("each role has its own override", () => {
     expect(MODEL_ENV).toEqual({ read: "COMPETITORS_MODEL_READ", match: "COMPETITORS_MODEL_MATCH", judge: "COMPETITORS_MODEL_JUDGE" });
     expect(modelFor("read", { COMPETITORS_MODEL_READ: "gemini-4-neon" })).toBe("gemini-4-neon");
-    expect(competitorsModels({ COMPETITORS_MODEL_MATCH: " claude-x " })).toEqual({ read: "gemini-4-hydrogen", match: "claude-x", judge: "gemini-4-carbon" });
+    expect(competitorsModels({ COMPETITORS_MODEL_MATCH: " claude-x " })).toEqual({ read: "gemini-4-argon", match: "claude-x", judge: "gemini-4-carbon" });
     expect(competitorsModels({ COMPETITORS_MODEL_READ: "a", COMPETITORS_MODEL_MATCH: "b", COMPETITORS_MODEL_JUDGE: "c" })).toEqual({ read: "a", match: "b", judge: "c" });
   });
   it("a blank override is no override", () => {
     expect(modelFor("judge", { COMPETITORS_MODEL_JUDGE: "   " })).toBe("gemini-4-carbon");
     expect(modelFor("judge", { COMPETITORS_MODEL_JUDGE: "" })).toBe("gemini-4-carbon");
   });
-  it("the old single COMPETITORS_MODEL forces nothing: with it set to argon, read and judge keep their own models", () => {
-    expect(competitorsModels({ COMPETITORS_MODEL: "gemini-4-argon" })).toEqual({ read: "gemini-4-hydrogen", match: "gemini-4-argon", judge: "gemini-4-carbon" });
+  it("the old single COMPETITORS_MODEL forces nothing: with it set to hydrogen, every role keeps its own model", () => {
+    expect(competitorsModels({ COMPETITORS_MODEL: "gemini-4-hydrogen" })).toEqual({ read: "gemini-4-argon", match: "gemini-4-argon", judge: "gemini-4-carbon" });
     expect(competitorsModels({ COMPETITORS_MODEL: "something-else" })).toEqual(competitorsModels({}));
   });
   it("every prompt has its role: read for map, research, second look, facts and the pick of a company's other addresses; match for merge, unify and match; judge for the unify review and the domains", () => {
     expect(PROMPT_ROLES).toEqual({ map: "read", research: "read", merge: "match", unify: "match", unify_review: "judge", domains: "judge", match: "match", second_look: "read", facts: "read", addresses: "read" });
-    expect(modelOfPrompt("research", {})).toBe("gemini-4-hydrogen");
+    expect(modelOfPrompt("research", {})).toBe("gemini-4-argon");
     expect(modelOfPrompt("unify", {})).toBe("gemini-4-argon");
     expect(modelOfPrompt("domains", { COMPETITORS_MODEL_JUDGE: "gemini-4-xenon" })).toBe("gemini-4-xenon");
   });
   it("a run names all three", () => {
-    expect(modelsLine(competitorsModels({}))).toBe("read gemini-4-hydrogen · match gemini-4-argon · judge gemini-4-carbon");
+    expect(modelsLine(competitorsModels({}))).toBe("read gemini-4-argon · match gemini-4-argon · judge gemini-4-carbon");
   });
   it("a gemini-* id runs on Gemini, anything else on the Anthropic provider", () => {
     expect(providerOf("gemini-4-carbon")).toBe("gemini");

@@ -60,23 +60,24 @@ env:
       - RUNTIME
   # PMOS AI models for competitors (Gemini — covered by the GCP credits): a model
   # per role, with the defaults in code (src/lib/competitors/models.ts):
-  #   read  = gemini-4-hydrogen (map, research, second look, facts)
-  #   match = gemini-4-argon    (merge, unify batches, match)
-  #   judge = gemini-4-carbon   (unify review, domains)
+  #   read  = gemini-4-argon  (map, the reading of a company in chunks, second look, facts, other addresses)
+  #   match = gemini-4-argon  (match: a company's new items against the rows that exist)
+  #   judge = gemini-4-carbon (unify, domains)
   # Set one of these only to override a default. A gemini-* id runs on Gemini
   # with a response schema; anything else on Claude. The old single
   # COMPETITORS_MODEL is read by nothing any more.
   # - variable: COMPETITORS_MODEL_READ
-  #   value: "gemini-4-hydrogen"
+  #   value: "gemini-4-argon"
   #   availability:
   #     - RUNTIME
   # - variable: COMPETITORS_MODEL_MATCH
   # - variable: COMPETITORS_MODEL_JUDGE
   # How much each role thinks before it answers (thinking is billed as output
   # and recorded apart on every run), with the defaults in code (models.ts):
-  #   read = low (the lowest level gemini-4-hydrogen accepts), match = high, judge = high
+  #   read = medium, match = high, judge = medium
   # Set COMPETITORS_THINKING_READ / _MATCH / _JUDGE (minimal | low | medium | high)
-  # only to override one role; COMPETITORS_THINKING still overrides all three.
+  # only to override one role. The old COMPETITORS_THINKING (one value for all
+  # roles) is NOT honoured any more: a value set there decides nothing.
   # - variable: COMPETITORS_THINKING_READ
   # - variable: COMPETITORS_THINKING_MATCH
   # - variable: COMPETITORS_THINKING_JUDGE
