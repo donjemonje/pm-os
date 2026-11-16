@@ -5,193 +5,79 @@ import {
   ADDRESS_PICK_MAX_TOKENS,
   ADDRESS_PICK_SYSTEM_PROMPT,
   addressPickTool,
-  addressRefusal,
-  answeredPage,
-  controlAddress,
-  guessCandidates,
-  guessVerdict,
+  checkManualAddress,
   injectedAddressPick,
   isScannedAddress,
   knownAddresses,
-  linkCandidates,
-  linksWithText,
-  llmsCandidates,
-  llmsTxtLinks,
-  looksLikeLlmsTxt,
-  MAX_CANDIDATES,
-  mergeCandidates,
-  OPENING_CHARS,
+  manualAddressMustAnswer,
   parseAddressPick,
   pickEntries,
+  readAddressSearch,
   renderAddressPick,
   screenCandidates,
+  searchLane,
   SEARCH_STALE_MS,
-  siteAddressOf,
+  SEARCH_WAITS_NOTE,
   SKIP_KIND,
   type AddressSearchResult,
-  type Answer,
-  type Candidate,
   type FoundVia,
-  type RawCandidate,
 } from "./addresses";
+import { findCandidates as findWith, type Finding } from "./address-finding";
 import { callTool } from "./ai";
 import { recordCompetitorEvent } from "./analytics";
 import { ACTIVE_SCAN_STATUSES, isAddressKind, type AddressKind } from "./config";
-import { fetchPlain, type FetchedPage } from "./fetcher";
-import { contentHash, htmlToText, titleOf } from "./html";
+import { fetchPlain } from "./fetcher";
+import { contentHash } from "./html";
 import { modelFor, thinkingFor } from "./models";
 import { isPublicWebsite } from "./netguard";
 import { MAX_PAGE_CHARS } from "./pages";
 import { aiStepEnabled, getGlobalScanSettings, noteStoredChars, testAiAnswers } from "./settings";
-import { InvalidUrlError, normalizeWebsite, pageKey, siteHost } from "./url";
+import { InvalidUrlError, normalizeWebsite, pageKey } from "./url";
 
 /**
  * The search for a company's OTHER ADDRESSES, and the two things a PM does with them — add one, remove one
- * (Website Scanning, "Other addresses of a company"). The rules are addresses.ts; this is the network and the
- * database side.
+ * (Website Scanning, "Other addresses of a company"). The rules are addresses.ts; getting from the company's site
+ * to the candidates is address-finding.ts; this is the database side and PMOS AI.
  *
- * When it runs: when a competitor is added, when the organization's own site is added, and again at the end of
- * every scan of the main website (companies add a help center later). Always server-side: the station is not
- * involved in the finding.
+ * When it runs: with every scan of a company's main website — so also when a competitor or the organization's own
+ * site is added, because adding queues a first scan (companies add a help center later, so every scan looks again).
  *
- * What it does: fetch the home page, take its links (1); fetch /llms.txt, store it as a page of the website source
- * for the map step, take its addresses (2); ask the common names in front of the domain and one made-up name, keep
- * the guesses that prove something (3); leave out what the company already has and what a PM removed; ask PMOS AI
- * what each new address is (4); every address it names a help center, developer docs or release notes becomes a
- * source of the company and its first scan is queued at once, like an onboarding scan. No approval step: PM-OS
- * gives results, the team edits them.
+ * Who requests the company's site follows the scan lanes (addresses.ts searchLane; Website Scanning PRD: remote
+ * scanning has a global on/off, default OFF, and when off every scan goes to the local lane):
+ *   - the scan station read the main website and handed in what the search needs with its scan (the route
+ *     local/scans/<id>/addresses): the search runs from that report and requests nothing;
+ *   - no report, remote scanning ON: the server requests the site itself — when the company is added and at the
+ *     end of a scan. A site that refuses the server is handed to the station by the scan lanes, and that scan
+ *     brings the report;
+ *   - no report, remote scanning OFF: the server requests NOTHING from the company's site. The search waits for
+ *     the station's next scan of the main website.
+ *
+ * What it does with the material: the links of the home page (1); the addresses of /llms.txt, which is also stored
+ * as a page of the website source for the map step (2); the common names in front of the domain and one made-up
+ * name, keeping the guesses that prove something (3); leave out what the company already has and what a PM removed;
+ * ask PMOS AI what each new address is (4); every address it names a help center, developer docs or release notes
+ * becomes a source of the company and its first scan is queued at once, like an onboarding scan. No approval step:
+ * PM-OS gives results, the team edits them.
  *
  * It never blocks anything: a search that fails — a site that does not answer, PMOS AI without capacity, an answer
  * with a code outside the closed set — records "could not decide", adds nothing and is tried again after the next
  * scan of the website. It never fails the add of a competitor and never changes how a scan ended.
  *
- * Security: every address is checked with the public-address guard (netguard.ts) before anything is fetched from
- * it, and is fetched with the scanner's own fetcher — its timeouts, its user agent, its redirect guard.
+ * Security: when the server requests, every address is checked with the public-address guard (netguard.ts) before
+ * anything is fetched from it, and is fetched with the scanner's own fetcher — its timeouts, its user agent, its
+ * redirect guard. The station runs the same guard on its own machine (scripts/pmos-local-scan/addresses.mjs).
  *
  * Nothing here may import next/headers: the scanner CLI runs it (`--own-site`, and at the end of a scan).
  */
 
-/** Addresses fetched at once during a search. */
-const FETCHES_AT_ONCE = 4;
-
-async function inBatches<T, R>(items: T[], work: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    for (;;) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await work(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(FETCHES_AT_ONCE, items.length) }, worker));
-  return out;
-}
-
-const NO_ANSWER = (url: string, error: string): Answer => ({ url, status: 0, error, finalUrl: url, title: "", text: "" });
-
-function answerOf(url: string, page: FetchedPage): Answer {
-  return { url, status: page.status, error: page.binary ? "binary" : page.error ?? null, finalUrl: page.finalUrl || url, title: page.html ? titleOf(page.html) : "", text: page.text };
-}
-
-/** Ask one address: the public-address guard first, then one plain GET (redirects are followed to public hosts only). */
-async function ask(url: string): Promise<Answer> {
-  if (!(await isPublicWebsite(url))) return NO_ANSWER(url, "private");
-  return answerOf(url, await fetchPlain(url));
-}
-
-export interface Finding {
-  /** The addresses that may be worth scanning: they answer (or the company itself links to them), one per site. */
-  candidates: Candidate[];
-  /** Candidates left out because there were more than MAX_CANDIDATES. */
-  dropped: number;
-  /** How many candidates each way found, before they were merged. */
-  byMethod: Record<FoundVia, number>;
-  /** The site's llms.txt: its text, "gone" when the site answers not-found for it, null when it could not be read this time. */
-  llms: { url: string; text: string } | "gone" | null;
-  /** The home page could not be read: no links were taken. */
-  homeUnread: string | null;
-}
+export type { Finding } from "./address-finding";
 
 /**
- * Steps 1–3 for one site: what the network says, no database. `home` is the home page when the caller already
- * fetched it (the add route probes the site); `token` names the made-up host of the verification.
+ * Steps 1–3 for one site, requested by THE SERVER (address-finding.ts findCandidates with the scanner's fetcher and
+ * the public-address guard). Only searchAddresses calls it, and only in the "server" lane — remote scanning ON.
  */
-export async function findCandidates(site: { url: string; host: string }, home: { html: string; finalUrl: string } | null, token: string = randomBytes(4).toString("hex")): Promise<Finding> {
-  // 1. The company's own links.
-  let homePage = home;
-  let homeUnread: string | null = null;
-  let homeAnswer: Answer | null = null;
-  if (!homePage) {
-    if (await isPublicWebsite(site.url)) {
-      const page = await fetchPlain(site.url, { host: site.host });
-      homeAnswer = answerOf(site.url, page);
-      if (page.html && !page.error) homePage = { html: page.html, finalUrl: page.finalUrl || site.url };
-      else homeUnread = page.errorDetail ?? page.error ?? "no answer";
-    } else {
-      homeUnread = "not a public address";
-    }
-  }
-  const fromLinks = homePage ? linkCandidates(linksWithText(homePage.html, homePage.finalUrl), site.host) : [];
-
-  // 2. llms.txt — redirects stay inside the site: another site's file says nothing about this one.
-  let llms: Finding["llms"] = null;
-  let fromLlms: RawCandidate[] = [];
-  const llmsUrl = new URL("/llms.txt", site.url).href;
-  if (await isPublicWebsite(llmsUrl)) {
-    const page = await fetchPlain(llmsUrl, { host: site.host });
-    if (page.status >= 200 && page.status < 300 && !page.binary && !page.error && looksLikeLlmsTxt(page.html)) {
-      llms = { url: llmsUrl, text: page.html };
-      fromLlms = llmsCandidates(llmsTxtLinks(page.html, llmsUrl), site.host);
-    } else if (page.error === "notfound" || (page.status >= 200 && page.status < 300 && !page.binary)) {
-      // Not found, or the site's own page served for an address it does not have: there is no llms.txt.
-      llms = "gone";
-    }
-  }
-
-  // What the company itself named is asked once each: where does it land, what does it show.
-  const named = mergeCandidates([...fromLinks, ...fromLlms].map((c) => ({ ...c, title: "", opening: "" })), MAX_CANDIDATES);
-  const namedAnswers = await inBatches(named.candidates, (c) => ask(c.url));
-  const found: Array<RawCandidate & { title: string; opening: string }> = [];
-  named.candidates.forEach((c, i) => {
-    const a = namedAnswers[i];
-    // The company links to it, so it stays a candidate unless the address is plainly not there or leads back.
-    if (a.status === 0 || a.error === "notfound" || a.error === "private") return;
-    let landed: URL;
-    try {
-      landed = new URL(a.finalUrl);
-    } catch {
-      return;
-    }
-    if (addressRefusal(landed, site.host)) return;
-    const page = answeredPage(a);
-    found.push({ ...c, url: siteAddressOf(landed), host: siteHost(landed), title: page ? a.title : "", opening: page ? a.text.slice(0, OPENING_CHARS) : "" });
-  });
-
-  // 3. Common names in front of the domain, verified against a made-up name. A name the company already named is not guessed.
-  const namedHosts = new Set([...named.candidates.map((c) => c.host), ...found.map((c) => c.host)]);
-  const guesses = guessCandidates(site).filter((g) => !namedHosts.has(g.host));
-  let guessed = 0;
-  if (guesses.length) {
-    const [control, ...answers] = await inBatches([controlAddress(site, token), ...guesses.map((g) => g.url)], ask);
-    // The home page as an answer, for "the page that answers is not the main site again".
-    if (!homeAnswer && homePage) homeAnswer = { url: site.url, status: 200, error: null, finalUrl: homePage.finalUrl, title: titleOf(homePage.html), text: htmlToText(homePage.html) };
-    guesses.forEach((g, i) => {
-      const verdict = guessVerdict(answers[i], control, { host: site.host, home: homeAnswer });
-      if (!verdict.counts) return;
-      guessed++;
-      found.push({ ...g, url: verdict.url, host: verdict.host, title: answers[i].title, opening: answers[i].text.slice(0, OPENING_CHARS) });
-    });
-  }
-
-  const merged = mergeCandidates(found, MAX_CANDIDATES);
-  return {
-    candidates: merged.candidates,
-    dropped: named.dropped + merged.dropped,
-    byMethod: { link: fromLinks.length, llms: fromLlms.length, guess: guessed },
-    llms,
-    homeUnread,
-  };
+export function findCandidates(site: { url: string; host: string }, home: { html: string; finalUrl: string } | null, token: string = randomBytes(4).toString("hex")): Promise<Finding> {
+  return findWith(site, home, token, { fetch: fetchPlain, isPublic: isPublicWebsite });
 }
 
 /**
@@ -223,9 +109,6 @@ export async function storeLlmsTxt(workspaceId: string, source: { id: string; ur
   noteStoredChars(text.length - (page.text == null ? 0 : page.chars));
   return "written";
 }
-
-/** Why a search did nothing while remote scanning is off (Administration → Competitors). */
-export const REMOTE_OFF_NOTE = "Remote scanning is off: the server fetches nothing from a company's site. The search for other addresses waits until the scan station can do it.";
 
 export type SearchOutcome =
   | { skipped: "no_company" | "running" }
@@ -281,8 +164,14 @@ export async function searchAddresses(
     /** "added" = the company was just added; "scan" = a scan of its website ended; "manual" = asked by hand (the scanner CLI `--addresses`). */
     trigger: "added" | "scan" | "manual";
     userId?: string | null;
-    /** The home page, when the caller already fetched it. */
+    /** The home page, when the caller already fetched it — used only when the server requests the site itself (remote scanning ON). */
     home?: { html: string; finalUrl: string } | null;
+    /**
+     * What the scan station handed in with its scan of the company's main website, already turned into candidates
+     * (address-finding.ts assembleFinding): the search runs from it and requests nothing from the site. `scanId` is
+     * that scan; `note` says what the station could not do (it stopped asking after a slow-down answer).
+     */
+    station?: { finding: Finding; scanId: string; note?: string } | null;
     /** The caller already took the company's search (claimAddressSearch) — a route does, so its answer already says "looking". */
     claimedAt?: Date | null;
   },
@@ -300,12 +189,24 @@ export async function searchAddresses(
     let result: Extract<SearchOutcome, { status: string }> = { status: "done", candidates: 0, added: [], alreadyThere: 0, removedByPm: 0, note: "" };
     let finding: Finding | null = null;
     let tokens = 0;
+    // The search follows the scan lanes (Website Scanning PRD; Daniel 2026-11-16): the station's report when there is
+    // one; else the server's own requests, only while remote scanning is ON; else nothing is requested at all.
+    const lane = searchLane({ remoteOn: (await getGlobalScanSettings()).remoteScanEnabled, stationReport: Boolean(opts.station) });
+    if (lane === "wait") {
+      // Remote scanning is OFF and no station report came: the search has not run. It is recorded as waiting — the
+      // pages say "looking" while a scan of the main website is waiting or being read — unless an earlier search
+      // already left a result: that one stands until the station's next scan brings a new one.
+      const earlier = readAddressSearch(competitor.addressSearch);
+      const waiting: AddressSearchResult = { status: "waiting", at: new Date().toISOString(), trigger: opts.trigger, candidates: 0, added: 0, note: SEARCH_WAITS_NOTE, scanId: null };
+      await db.competitor.updateMany({
+        where: { id: competitorId, addressSearchStartedAt: claimedAt },
+        data: { addressSearchStartedAt: null, ...(earlier && earlier.status !== "waiting" ? {} : { addressSearch: waiting as unknown as Prisma.InputJsonValue }) },
+      });
+      claimedAt = null;
+      return { status: "undecided", candidates: 0, added: [], alreadyThere: 0, removedByPm: 0, note: SEARCH_WAITS_NOTE };
+    }
     try {
-      // Website Scanning PRD: with remote scanning OFF the server fetches nothing from a company's site — only the
-      // station on the PM's machine reads sites (so sites do not block us). The search makes server requests (home
-      // page, llms.txt, guessed names), so it does not run until it is moved to the station. Daniel 2026-11-16.
-      if (!(await getGlobalScanSettings()).remoteScanEnabled) throw new Error(REMOTE_OFF_NOTE);
-      finding = await findCandidates(site, opts.home ?? null);
+      finding = opts.station ? opts.station.finding : await findCandidates(site, opts.home ?? null);
       if (website) await storeLlmsTxt(competitor.workspaceId, website, finding.llms);
       const screened = screenCandidates(finding.candidates, knownAddresses(competitor.sources, competitor.host));
       result = { ...result, candidates: screened.fresh.length, alreadyThere: screened.alreadyThere.length, removedByPm: screened.removedByPm.length };
@@ -342,16 +243,17 @@ export async function searchAddresses(
     } catch (e) {
       // A site that does not answer, PMOS AI without capacity, anything else: nothing is added, the next search tries again.
       result = { ...result, status: "undecided", note: (e instanceof Error ? e.message : String(e)).replace(/\s+/g, " ").slice(0, 300) };
-      if (!(e instanceof Error && e.message === REMOTE_OFF_NOTE)) console.error("[competitors] the search for other addresses could not decide", competitorId, e);
+      console.error("[competitors] the search for other addresses could not decide", competitorId, e);
     }
+    if (opts.station?.note) result = { ...result, note: [result.note, opts.station.note].filter(Boolean).join(" · ").slice(0, 300) };
 
-    const stored: AddressSearchResult = { status: result.status, at: new Date().toISOString(), trigger: opts.trigger, candidates: result.candidates, added: result.added.length, note: result.note };
+    const stored: AddressSearchResult = { status: result.status, at: new Date().toISOString(), trigger: opts.trigger, candidates: result.candidates, added: result.added.length, note: result.note, scanId: opts.station?.scanId ?? null };
     await db.competitor.updateMany({ where: { id: competitorId, addressSearchStartedAt: claimedAt }, data: { addressSearchStartedAt: null, addressSearch: stored as unknown as Prisma.InputJsonValue } });
     claimedAt = null;
     const kinds = new Map<string, number>();
     for (const a of result.added) kinds.set(a.kind, (kinds.get(a.kind) ?? 0) + 1);
     await recordCompetitorEvent(competitor.workspaceId, userId, "cmp_sources_found", {
-      competitorId, own: competitor.isOwn, trigger: opts.trigger, outcome: result.status,
+      competitorId, own: competitor.isOwn, trigger: opts.trigger, lane, outcome: result.status,
       found: finding?.candidates.length ?? 0, byLink: finding?.byMethod.link ?? 0, byLlms: finding?.byMethod.llms ?? 0, byGuess: finding?.byMethod.guess ?? 0, overLimit: finding?.dropped ?? 0,
       alreadyThere: result.alreadyThere, removedByPm: result.removedByPm, asked: result.candidates, chosen: result.added.length,
       kinds: [...kinds.entries()].map(([k, n]) => `${k}:${n}`).join(","), llmsTxt: finding?.llms && finding.llms !== "gone" ? true : false, homeUnread: Boolean(finding?.homeUnread), tokens,
@@ -369,29 +271,34 @@ export async function searchAddresses(
 export type AddAddressResult = { sourceId: string; restored: boolean } | { error: "invalid" | "private" | "kind" | "main_site" | "exists" | "unreachable" };
 
 /**
- * A PM adds an address by hand: validated like a website (a public site that answers — bot protection counts as
- * answering), refused when it is the company's main site or an address the company already has. An address a PM
- * removed earlier comes back under the kind given now, with the pages it had. Its first scan is queued at once.
+ * A PM adds an address by hand: a well-formed public web address, refused when it is the company's main site or an
+ * address the company already has. An address a PM removed earlier comes back under the kind given now, with the
+ * pages it had. Its first scan is queued at once.
+ *
+ * Must it answer? That follows the scan lanes (addresses.ts manualAddressMustAnswer). Remote scanning ON: the
+ * server asks it once and refuses an address that does not answer (bot protection counts as answering). Remote
+ * scanning OFF: the server requests nothing from it — the address is taken as it is, and its first scan, read by
+ * the station, says if it does not answer.
  */
 export async function addAddress(competitor: { id: string; workspaceId: string; host: string; isOwn: boolean }, input: { address: string; kind: unknown }, userId: string | null): Promise<AddAddressResult> {
   if (!isAddressKind(input.kind)) return { error: "kind" };
-  const kind = input.kind;
-  let site: { url: string; host: string };
+  let normalized: { url: string; host: string };
   try {
-    site = normalizeWebsite(input.address);
+    normalized = normalizeWebsite(input.address);
   } catch (e) {
     return { error: e instanceof InvalidUrlError && e.reason === "private" ? "private" : "invalid" };
   }
-  if (site.host === competitor.host) return { error: "main_site" };
   const sources = await db.competitorSource.findMany({ where: { competitorId: competitor.id }, orderBy: { createdAt: "asc" } });
-  // Its other addresses on this site — never a source a collector fed (addresses.ts knownAddresses).
-  const same = sources.filter((s) => isScannedAddress({ ...s, removedAt: null }, competitor.host) && siteHost(new URL(s.url)) === site.host);
-  if (same.some((s) => !s.removedAt)) return { error: "exists" };
+  const checked = checkManualAddress(normalized, input.kind, competitor.host, sources);
+  if ("error" in checked) return checked;
+  const { site, kind, removed } = checked;
+  // The name must resolve to public addresses only (a name lookup — nothing is requested from the site).
   if (!(await isPublicWebsite(site.url))) return { error: "private" };
-  const probe = await fetchPlain(site.url);
-  if (probe.status === 0) return { error: "unreachable" };
+  if (manualAddressMustAnswer((await getGlobalScanSettings()).remoteScanEnabled)) {
+    const probe = await fetchPlain(site.url);
+    if (probe.status === 0) return { error: "unreachable" };
+  }
 
-  const removed = same.find((s) => s.removedAt);
   let sourceId: string;
   if (removed) {
     await db.competitorSource.update({ where: { id: removed.id }, data: { type: kind, url: site.url, removedAt: null, removedById: null, foundVia: "manual", foundText: null, lastStatus: "never", lastError: null } });

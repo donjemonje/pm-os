@@ -106,7 +106,8 @@ export function browserAvailable(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
-function classify(status: number, html: string, xRobots: string): Pick<FetchedPage, "error" | "errorDetail" | "needsBrowser"> {
+/** What an HTTP answer is, from its status, its body and its X-Robots-Tag header (lower case). Also applied to the answers the scan station reports (address-finding.ts). */
+export function classify(status: number, html: string, xRobots: string): Pick<FetchedPage, "error" | "errorDetail" | "needsBrowser"> {
   if (status === 429) return { error: "slowdown", errorDetail: "HTTP 429 Too Many Requests", needsBrowser: false };
   const wall = looksLikeBotWall(status, html);
   if (wall) return { error: "botwall", errorDetail: "bot protection", needsBrowser: true };

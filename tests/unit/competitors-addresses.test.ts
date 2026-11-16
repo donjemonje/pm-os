@@ -352,7 +352,7 @@ describe("4 — PMOS AI picks: codes and kinds are closed sets", () => {
 
 describe("what a search leaves behind", () => {
   it("the stored result is read field by field", () => {
-    expect(readAddressSearch({ status: "done", at: "2026-11-15T10:00:00.000Z", trigger: "scan", candidates: 3, added: 2, note: "" })).toEqual({ status: "done", at: "2026-11-15T10:00:00.000Z", trigger: "scan", candidates: 3, added: 2, note: "" });
+    expect(readAddressSearch({ status: "done", at: "2026-11-15T10:00:00.000Z", trigger: "scan", candidates: 3, added: 2, note: "" })).toEqual({ status: "done", at: "2026-11-15T10:00:00.000Z", trigger: "scan", candidates: 3, added: 2, note: "", scanId: null });
     expect(readAddressSearch({ status: "undecided", at: "2026-11-15T10:00:00.000Z" })).toMatchObject({ status: "undecided", candidates: 0, added: 0, note: "" });
     expect(readAddressSearch({ status: "running", at: "x" })).toBeNull();
     expect(readAddressSearch(null)).toBeNull();

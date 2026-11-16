@@ -702,13 +702,19 @@ export async function runScan(scanId: string): Promise<void> {
     console.error("[competitors] could not start the next queued scan", e);
   }
 
-  // The company's other addresses — help center, developer docs, release notes — are looked for again after every
+  // The company's other addresses — help center, developer docs, release notes — are looked for again with every
   // scan of its main website that read a page: companies add these later. The scan has ended; whatever the search
   // does, it changes nothing about it (address-search.ts never throws, and an address it adds gets a scan of its own).
+  // The search follows the lanes (addresses.ts searchLane). A scan the station read brought what the search needs
+  // while it was reading (the route local/scans/<id>/addresses) and the search ran then: nothing is left to do here.
+  // Otherwise — a remote scan, or a station that brought no report — the server requests the site itself only while
+  // remote scanning is ON; while it is OFF nothing is requested and the search waits for the station's next scan.
   if (source.type === "website" && log.read > 0) {
     try {
       const { searchAddresses } = await import("./address-search");
-      await searchAddresses(competitor.id, { trigger: "scan", userId: scan.startedById });
+      const { readAddressSearch } = await import("./addresses");
+      const company = await db.competitor.findUnique({ where: { id: competitor.id }, select: { addressSearch: true } });
+      if (readAddressSearch(company?.addressSearch)?.scanId !== scanId) await searchAddresses(competitor.id, { trigger: "scan", userId: scan.startedById });
     } catch (e) {
       console.error("[competitors] the search for other addresses after the scan failed", scanId, e);
     }

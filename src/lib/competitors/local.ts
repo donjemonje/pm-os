@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { db } from "../db";
 import { sendEmail } from "../mailer";
+import { stationSearchesWith } from "./addresses";
 import { ACTIVE_SCAN_STATUSES, KEY_ROTATE_DAYS, KEY_ROTATION_GRACE_MS, LOCAL_ALERT_MS, SCAN_TOKEN_GRACE_MS, STALE_MS, STATION_OFF_ALERT_EVERY_MS, STATION_ONLINE_MS } from "./config";
 import { lastStationOffAlert, noteStationOffAlert, now } from "./settings";
 
@@ -230,6 +231,13 @@ export interface WaitingScan {
   /** The time limit the runner must respect (no page limit, Daniel 2026-11-09). */
   ceiling: { ms: number };
   waitingSince: string;
+  /**
+   * True for a scan of a company's MAIN website: with it the station also brings what the search for the company's
+   * other addresses needs — the home page's links, /llms.txt and what the addresses it is given answer — through
+   * POST /api/competitors/local/scans/<id>/addresses (addresses.ts searchLane). A station that does not know the
+   * field reads the site as before.
+   */
+  addresses: boolean;
 }
 
 /**
@@ -248,7 +256,7 @@ export async function listWaiting(ceilingValue: { ms: number }): Promise<Waiting
   const reqs = await db.localScanRequest.findMany({
     where: { state: "waiting", scan: { status: "pending_local" } },
     orderBy: { createdAt: "asc" },
-    include: { scan: { select: { id: true, workspaceId: true } }, source: { select: { url: true, competitor: { select: { name: true, host: true, deletedAt: true } } } } },
+    include: { scan: { select: { id: true, workspaceId: true } }, source: { select: { url: true, type: true, competitor: { select: { name: true, host: true, deletedAt: true } } } } },
   });
   const out: WaitingScan[] = [];
   for (const r of reqs) {
@@ -264,6 +272,7 @@ export async function listWaiting(ceilingValue: { ms: number }): Promise<Waiting
       knownUrls: known.map((k) => k.url),
       ceiling: ceilingValue,
       waitingSince: r.createdAt.toISOString(),
+      addresses: stationSearchesWith({ sourceType: r.source.type }),
     });
   }
   return out;

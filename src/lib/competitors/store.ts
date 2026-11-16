@@ -2,7 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
 import { mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
-import { isScannedAddress, readAddressSearch, searchRunning } from "./addresses";
+import { isScannedAddress, readAddressSearch, searchLooking, searchRunning } from "./addresses";
 import { orgSetupState, type OrgSetupState } from "./analysis/setup-rules";
 import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
 import { siteHost } from "./url";
@@ -449,10 +449,16 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       foundVia: s.foundVia ?? null,
     };
   };
-  const addressSearchRow = (c: { addressSearchStartedAt?: Date | null; addressSearch?: unknown }): AddressSearchRow => ({
-    running: searchRunning(c.addressSearchStartedAt, nowMs),
-    status: readAddressSearch(c.addressSearch)?.status ?? null,
-  });
+  // A search that waits for the scan station (remote scanning OFF) is "looking" while a scan of the company's main
+  // website is waiting or being read: that scan brings what the search needs. With no such scan it shows nothing.
+  const addressSearchRow = (c: { addressSearchStartedAt?: Date | null; addressSearch?: unknown; sources: { id: string; type: string }[] }): AddressSearchRow => {
+    const stored = readAddressSearch(c.addressSearch);
+    const website = c.sources.find((s) => s.type === "website");
+    return {
+      running: searchLooking(c.addressSearchStartedAt, stored, website != null && activeBySource.has(website.id), nowMs),
+      status: stored && stored.status !== "waiting" ? stored.status : null,
+    };
+  };
   const config = mergeCompetitorsConfig(workspace?.competitorsConfig);
   const [members, activeRun, lastRun, feed] = await Promise.all([
     workspace

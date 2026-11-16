@@ -561,12 +561,82 @@ export function injectedAddressPick(kinds: Record<string, string> | undefined, e
   return JSON.stringify({ addresses: entries.map((e) => ({ code: e.code, kind: kinds?.[e.candidate.host] ?? kinds?.["*"] ?? SKIP_KIND })) });
 }
 
+// ————— Who gets what the search needs: the search follows the scan lanes —————
+
+/**
+ * The search needs three things from the company's site: the links of its home page, its /llms.txt, and what a
+ * handful of addresses answer (the ones the company named, the guessed names, the made-up name). Who requests them
+ * follows the scan lanes (Website Scanning PRD: remote scanning has a global on/off, default OFF; when off every
+ * scan goes to the local lane — the server requests nothing from a company's site):
+ *
+ *   station  the scan station read the company's main website and handed these things in with its scan: the search
+ *            uses the report and requests nothing;
+ *   server   no report, and remote scanning is ON: the server requests them itself (remote first). A site that
+ *            refuses the server is handed to the station by the scan lanes (a Blocked remote scan becomes a local
+ *            one), and that scan brings the report;
+ *   wait     no report, and remote scanning is OFF: nothing is requested. The search waits for the station's next
+ *            scan of the company's main website.
+ */
+export type SearchLane = "station" | "server" | "wait";
+
+export function searchLane(o: { remoteOn: boolean; stationReport: boolean }): SearchLane {
+  if (o.stationReport) return "station";
+  return o.remoteOn ? "server" : "wait";
+}
+
+/**
+ * Does the station bring what the search needs with this scan? With every scan it reads of a company's MAIN
+ * website — whatever the remote switch says: with remote ON a website scan reaches the station only because the
+ * site refused the server. Never with a scan of a help center, developer docs or release notes.
+ */
+export function stationSearchesWith(scan: { sourceType: string }): boolean {
+  return scan.sourceType === "website";
+}
+
+/**
+ * A PM adds an address by hand: must it answer before it is taken? Only when the server may request it at all —
+ * remote scanning ON. With remote OFF a well-formed public address is taken as it is, and its first scan (read by
+ * the station) says if it does not answer.
+ */
+export function manualAddressMustAnswer(remoteOn: boolean): boolean {
+  return remoteOn;
+}
+
+/** A source of the company as the hand-add check sees it. */
+type KnownSource = { type: string; url: string; removedAt?: Date | string | null };
+
+export type ManualAddressCheck<S extends KnownSource> =
+  | { site: { url: string; host: string }; kind: AddressKind; /** The same address, removed by a PM earlier: it comes back. */ removed: S | null }
+  | { error: "kind" | "main_site" | "exists" };
+
+/**
+ * What can be said about a hand-added address without asking it: its kind is one of the three, it is not the
+ * company's main site, and the company does not already have it. `site` is the address after it was normalized
+ * (url.ts normalizeWebsite — a public web address); `sources` are the company's sources.
+ */
+export function checkManualAddress<S extends KnownSource>(site: { url: string; host: string }, kind: unknown, mainHost: string, sources: S[]): ManualAddressCheck<S> {
+  if (!isAddressKind(kind)) return { error: "kind" };
+  if (site.host === mainHost) return { error: "main_site" };
+  // Its other addresses on this site — never a source a collector fed (knownAddresses).
+  const same = sources.filter((s) => isScannedAddress({ ...s, removedAt: null }, mainHost) && siteHost(new URL(s.url)) === site.host);
+  if (same.some((s) => !s.removedAt)) return { error: "exists" };
+  return { site, kind, removed: same.find((s) => s.removedAt) ?? null };
+}
+
 // ————— What a search leaves behind —————
 
-/** What the last search of a company that finished says (Competitor.addressSearch). */
+/** Why a search is waiting, for Administration. */
+export const SEARCH_WAITS_NOTE = "Remote scanning is off: the server requests nothing from a company's site. The scan station brings what the search needs with its next scan of the company's main website.";
+/** The note of the one-hour guard of 2026-11-16 (stored as "undecided"): read as waiting. */
+const GUARD_NOTE_START = "Remote scanning is off: the server fetches nothing from a company's site.";
+
+/** What the last search of a company says (Competitor.addressSearch). */
 export interface AddressSearchResult {
-  /** "done" = it ran to the end; "undecided" = PMOS AI could not say what the candidates are, nothing was added. */
-  status: "done" | "undecided";
+  /**
+   * "done" = it ran to the end; "undecided" = PMOS AI could not say what the candidates are, nothing was added;
+   * "waiting" = it has not run: it waits for the scan station's next scan of the company's main website.
+   */
+  status: "done" | "undecided" | "waiting";
   /** When it finished (ISO). */
   at: string;
   /** "added" = the company was just added; "scan" = a scan of its website ended. */
@@ -577,15 +647,27 @@ export interface AddressSearchResult {
   added: number;
   /** Why nothing was decided, for Administration; "" otherwise. */
   note: string;
+  /** The scan whose station report this search used; null when the server requested the site itself, or nothing was requested. */
+  scanId: string | null;
 }
 
 /** The stored result (a Json column), checked field by field; null for anything that is not one. */
 export function readAddressSearch(raw: unknown): AddressSearchResult | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
-  if ((r.status !== "done" && r.status !== "undecided") || typeof r.at !== "string") return null;
+  if ((r.status !== "done" && r.status !== "undecided" && r.status !== "waiting") || typeof r.at !== "string") return null;
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
-  return { status: r.status, at: r.at, trigger: typeof r.trigger === "string" ? r.trigger : "", candidates: num(r.candidates), added: num(r.added), note: typeof r.note === "string" ? r.note : "" };
+  const note = typeof r.note === "string" ? r.note : "";
+  const status = r.status === "undecided" && note.startsWith(GUARD_NOTE_START) ? "waiting" : r.status;
+  return { status, at: r.at, trigger: typeof r.trigger === "string" ? r.trigger : "", candidates: num(r.candidates), added: num(r.added), note, scanId: typeof r.scanId === "string" && r.scanId ? r.scanId : null };
+}
+
+/**
+ * Is the search "looking" as the pages show it? Yes while one works, and while it waits for the station and a scan
+ * of the company's main website is waiting or being read — that scan brings what the search needs.
+ */
+export function searchLooking(startedAt: Date | string | null | undefined, stored: AddressSearchResult | null, websiteScanActive: boolean, now: number = Date.now()): boolean {
+  return searchRunning(startedAt, now) || (stored?.status === "waiting" && websiteScanActive);
 }
 
 /** A search that started this long ago and never finished is no longer running (its process stopped): the next one takes over. */
