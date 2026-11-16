@@ -249,9 +249,9 @@ describe("pickReadable", () => {
 
 describe("where a PM looks — the order pages are read in", () => {
   const plan = planOf({ "/": "product", "/pricing": "pricing", "/compare": "compare", "/help": "help", "/blog": "news", "/prisma": "product", "/api": "api_docs", "/changelog": "release_notes" });
-  it("the strongest sources first: help center, release notes, API docs, the pricing page, product pages, comparison pages, news", () => {
-    expect([...READ_ORDER]).toEqual(["help", "release_notes", "api_docs", "pricing", "product", "compare", "news"]);
-    expect(["/help/a/b", "/changelog/2026", "/api/users", "/pricing", "/prisma/x", "/compare/a", "/blog/a"].map((p) => readRank(read(plan, p)))).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  it("the strongest sources first: release notes, help center, API docs, the pricing page, product pages, comparison pages, news", () => {
+    expect([...READ_ORDER]).toEqual(["release_notes", "help", "api_docs", "pricing", "product", "compare", "news"]);
+    expect(["/changelog/2026", "/help/a/b", "/api/users", "/pricing", "/prisma/x", "/compare/a", "/blog/a"].map((p) => readRank(read(plan, p)))).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
   it("a document outside every section reads with the product pages", () => {
     expect(readRank(read(plan, "/uploads/sheet.pdf", { kind: "document" }))).toBe(READ_ORDER.indexOf("product"));
@@ -268,7 +268,7 @@ describe("where a PM looks — the order pages are read in", () => {
   it("the whole order: by kind of source, inside a kind by address", () => {
     const paths = ["/help/a/b", "/blog/a", "/prisma/b", "/", "/api", "/compare/z", "/pricing", "/help", "/prisma/a", "/compare/a", "/changelog/2026"];
     const sorted = sortByWhereAPmLooks(pickReadable(paths.map((p) => page(p)), plan, { readWeak: true }));
-    expect(sorted.map((p) => p.id)).toEqual(["/help", "/help/a/b", "/changelog/2026", "/api", "/pricing", "/", "/prisma/a", "/prisma/b", "/compare/a", "/compare/z", "/blog/a"]);
+    expect(sorted.map((p) => p.id)).toEqual(["/changelog/2026", "/help", "/help/a/b", "/api", "/pricing", "/", "/prisma/a", "/prisma/b", "/compare/a", "/compare/z", "/blog/a"]);
   });
   it("deterministic: the same pages in any order give the same order", () => {
     const paths = ["/help/a/b", "/prisma/b", "/", "/api", "/pricing", "/help"];

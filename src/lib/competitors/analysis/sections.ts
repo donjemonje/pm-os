@@ -374,13 +374,13 @@ export function sortForReading<T extends { url: string; read: PageRead }>(pages:
 
 /**
  * "Where a PM looks" (Daniel 2026-11-16), as labels, strongest first: marketing pages are how a company wants to
- * look; what its product really does is in the help center, the release notes and the developer docs, then in the
- * pricing page's plan table, then on product pages, then on comparison pages; news comes last. The chunks of a
+ * look; what its product really does is in the release notes first, then the help center, then the developer docs,
+ * then in the pricing page's plan table, then on product pages, then on comparison pages; news comes last. The chunks of a
  * company are read in this order (analysis/chunks.ts), so its list is built from the strongest sources and the
  * weaker ones only add. The same order is spelled out for PMOS AI in the reading prompt (analysis/reading.ts
  * WHERE_A_PM_LOOKS). Data: moving a label is an edit of this list.
  */
-export const READ_ORDER: readonly SectionLabel[] = ["help", "release_notes", "api_docs", "pricing", "product", "compare", "news"];
+export const READ_ORDER: readonly SectionLabel[] = ["release_notes", "help", "api_docs", "pricing", "product", "compare", "news"];
 
 /** A page's place in the order: the index of its section's label; a page with no label (a document outside every section) reads with the product pages. */
 export function readRank(read: Pick<PageRead, "label">): number {
