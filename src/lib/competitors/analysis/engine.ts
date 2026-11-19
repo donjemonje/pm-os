@@ -6,7 +6,7 @@ import { callFailureMessage, competitorsModels, competitorsThinking, modelsLine,
 import { recordCompetitorEvent } from "../analytics";
 import { HEARTBEAT_MS, STALE_MS } from "../config";
 import { aiStepEnabled, analysisReads, analysisTokenBudget, now, testAiAnswers, type TestAiAnswers } from "../settings";
-import { analysisBaseWaitMs, analysisMaxSpeed, analysisTpm, emptyPacing, MAX_WAIT_MS, PACE_START_SPEED, Pacer, pacingLine, readPacing, recordPushback, runPaced, TokenBudget, type PacedOptions, type PacedResult, type PacingRecord } from "./pacing";
+import { analysisBaseWaitMs, analysisMaxSpeed, analysisTpm, emptyPacing, MAX_WAIT_MS, PACE_START_SPEED, Pacer, pacingLine, PUSHBACK_MESSAGE_KEPT, readPacing, recordPushback, runPaced, TokenBudget, type PacedOptions, type PacedResult, type PacingRecord } from "./pacing";
 import { runAlertDue, runAlertEmail } from "./alert";
 import { ReadingBudget } from "./budget";
 import { capLine, capLines, CAPS, capsForEvent, capsHeadline, capsOf, clearStateCaps, readCaps, recordCap, type CapHit, type CapId } from "./caps";
@@ -630,8 +630,8 @@ export async function runAnalysis(id: string): Promise<void> {
               c.waitedMs += ms;
               // Every pushback is recorded on the run: when, in which step, at what speed, the speed after, how long it waits.
               const speed = cause.speed ?? { from: pacer.speed, to: pacer.speed };
-              recordPushback(paced, { at: new Date().toISOString(), step, company: t.capsFor.name, reason: cause.transient ? "endpoint" : "capacity", speed: speed.from, next: speed.to, waitMs: ms, retryAfterMs: cause.retryAfterMs });
-              say("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, 160)})` : "PMOS AI has no capacity"} — slowing from ${speed.from} to ${speed.to} call${speed.to === 1 ? "" : "s"} at once, waiting ${Math.round(ms / 1000)} s${cause.retryAfterMs ? " (the provider asked for it)" : ""}, then continuing from where it stopped (pushback ${attempt} in a row)`);
+              recordPushback(paced, { at: new Date().toISOString(), step, company: t.capsFor.name, reason: cause.transient ? "endpoint" : "capacity", speed: speed.from, next: speed.to, waitMs: ms, retryAfterMs: cause.retryAfterMs, message: cause.message.slice(0, PUSHBACK_MESSAGE_KEPT) });
+              say("warn", `${cause.transient ? `PMOS AI did not answer (${cause.message.slice(0, PUSHBACK_MESSAGE_KEPT)})` : `PMOS AI has no capacity (${cause.message.slice(0, PUSHBACK_MESSAGE_KEPT)})`} — slowing from ${speed.from} to ${speed.to} call${speed.to === 1 ? "" : "s"} at once, waiting ${Math.round(ms / 1000)} s${cause.retryAfterMs ? " (the provider asked for it)" : ""}, then continuing from where it stopped (pushback ${attempt} in a row)`);
               await own({ status: "waiting", resumeAt });
               await flush();
               await recordCompetitorEvent(row.workspaceId, row.startedById, "cmp_analysis_waiting", { analysisId: id, competitorId: t.competitor.id, kind: row.kind, step, waitMs: ms, attempt, reason: cause.transient ? "endpoint" : "capacity", speedFrom: speed.from, speedTo: speed.to });

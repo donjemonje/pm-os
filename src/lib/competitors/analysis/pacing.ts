@@ -144,7 +144,12 @@ export interface Pushback {
   waitMs: number;
   /** What the server asked for, when it did. */
   retryAfterMs: number | null;
+  /** What the failed call said, with its cause (the first PUSHBACK_MESSAGE_KEPT characters): the reason itself, so it can be read later instead of guessed. Absent on records from before it was kept. */
+  message?: string;
 }
+
+/** The most of a failed call's text that a pushback keeps. */
+export const PUSHBACK_MESSAGE_KEPT = 400;
 
 /** The pacing of a run (CompetitorAnalysis.pacing): where it started, its ceiling, how fast it got, and every pushback. */
 export interface PacingRecord {
@@ -185,6 +190,7 @@ export function readPacing(raw: unknown): PacingRecord | null {
     pushbacks.push({
       at: o.at, step: o.step, company: typeof o.company === "string" && o.company ? o.company : null, reason: o.reason === "endpoint" ? "endpoint" : "capacity",
       speed: num(o.speed), next: num(o.next), waitMs: num(o.waitMs), retryAfterMs: typeof o.retryAfterMs === "number" && Number.isFinite(o.retryAfterMs) ? o.retryAfterMs : null,
+      ...(typeof o.message === "string" && o.message ? { message: o.message } : {}),
     });
   }
   return { start: num(r.start), max: num(r.max), peak: num(r.peak) || num(r.start), speed: num(r.speed) || num(r.start), pushbacks, total: Math.max(num(r.total), pushbacks.length) };

@@ -147,6 +147,10 @@ describe("Pacer — the run paces itself from the provider's answers", () => {
     expect(record.pushbacks[1]).toEqual({ at: "2026-11-15T10:00:02.000Z", step: "research", company: null, reason: "endpoint", speed: 8, next: 4, waitMs: 60_000, retryAfterMs: 30_000 });
     // The stored record reads back as written; anything else is "not recorded".
     expect(readPacing(JSON.parse(JSON.stringify({ ...record, peak: 16, speed: 4 })))).toEqual({ ...record, peak: 16, speed: 4 });
+    // A pushback keeps what the failed call said (2026-11-19), and reads it back.
+    const said = emptyPacing({ start: 8, max: 64, peak: 8, speed: 8 });
+    recordPushback(said, pushback(3, { reason: "endpoint", message: "fetch failed (UND_ERR_HEADERS_TIMEOUT: Headers Timeout Error)" }));
+    expect(readPacing(JSON.parse(JSON.stringify(said)))?.pushbacks[0].message).toBe("fetch failed (UND_ERR_HEADERS_TIMEOUT: Headers Timeout Error)");
     expect(readPacing(null)).toBeNull();
     expect(readPacing([])).toBeNull();
     expect(readPacing({ pushbacks: [] })).toBeNull();

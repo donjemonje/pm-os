@@ -2,6 +2,7 @@ import { GoogleGenAI, ThinkingLevel, Type, type Schema } from "@google/genai";
 import { getVertexProjectId } from "../vertex-config";
 import { modelFor, providerOf, type ModelProvider, type ThinkingLevelName } from "./models";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
+import { allowLongCalls } from "./long-calls";
 
 /**
  * PMOS AI for competitors: structured calls, never free text. The model is
@@ -183,12 +184,35 @@ export function isNetworkError(e: unknown): boolean {
  * failure (500, 502, 504, a network error) → TransientError. Anything else — a refused request, a bad schema, no
  * permission — is returned untouched and stops the run.
  */
+/** The most of a provider error's text that a capacity or transient error keeps (300 used to cut the reason off mid-sentence). */
+export const ERROR_TEXT_KEPT = 600;
+
+/** Our own runtime gave up on a silent request (Node's fetch: no response headers, or no new piece of the body, within its limit). */
+const RUNTIME_CUT = /\bUND_ERR_(HEADERS|BODY)_TIMEOUT\b/;
+
+/**
+ * What an error says, with its cause: "fetch failed" alone hides why (a reset, a DNS failure, our own timeout).
+ * A request cut by our own runtime is named as such — the provider did not refuse it, and asking again the same way
+ * ends the same way.
+ */
+export function errorText(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  const cause = (e as { cause?: unknown } | null)?.cause;
+  if (!cause || typeof cause !== "object") return message;
+  const c = cause as { name?: unknown; code?: unknown; message?: unknown };
+  const code = typeof c.code === "string" ? c.code : typeof c.name === "string" ? c.name : "";
+  const said = typeof c.message === "string" ? c.message : "";
+  const detail = [code, said].filter(Boolean).join(": ");
+  if (!detail) return message;
+  return RUNTIME_CUT.test(code) ? `${message} (${detail}) — our own runtime cut a silent request; the provider did not refuse it` : `${message} (${detail})`;
+}
+
 export function asCapacityError(e: unknown): unknown {
   if (e instanceof CapacityError) return e;
   const status = (e as { status?: unknown } | null)?.status;
-  const message = e instanceof Error ? e.message : String(e);
-  if (status === 429 || status === 503 || status === 529 || /RESOURCE_EXHAUSTED/.test(message)) return new CapacityError(message.slice(0, 300), retryAfterOf(e));
-  if (status === 500 || status === 502 || status === 504 || isNetworkError(e)) return new TransientError(message.slice(0, 300), retryAfterOf(e));
+  const message = errorText(e);
+  if (status === 429 || status === 503 || status === 529 || /RESOURCE_EXHAUSTED/.test(message)) return new CapacityError(message.slice(0, ERROR_TEXT_KEPT), retryAfterOf(e));
+  if (status === 500 || status === 502 || status === 504 || isNetworkError(e)) return new TransientError(message.slice(0, ERROR_TEXT_KEPT), retryAfterOf(e));
   return e;
 }
 
@@ -267,10 +291,12 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
   const model = opts.model;
   const contents = shared ? `${shared}\n\n${tail}` : tail;
   if (getCompetitorsProvider(model) === "gemini") {
-    // The answer is STREAMED (Daniel 2026-11-16): a long answer arrives piece by piece, so no default timeout of the
-    // runtime (Node's fetch gives up after 300 s without a first byte, or 300 s between two pieces) can cut it. The
-    // structured output is the same — the JSON text comes in pieces and is put together here. One explicit ceiling
-    // stays, CALL_TIMEOUT_MS: the SDK raises the runtime's two timeouts to it and aborts the call when it passes.
+    // The answer is STREAMED (Daniel 2026-11-16): a long answer arrives piece by piece. Streaming alone does not
+    // protect the call: the model thinks before its first piece, and Node's fetch gives up on a request that is
+    // silent for 300 s (no first byte, or 300 s between two pieces). The SDK's httpOptions.timeout only aborts the
+    // call when it passes; it does NOT raise the runtime's two limits on Node 24 (found 2026-11-19). So the limits
+    // are raised here for model hosts (long-calls.ts), to the one explicit ceiling, CALL_TIMEOUT_MS.
+    allowLongCalls(CALL_TIMEOUT_MS);
     const started = Date.now();
     let collected: CollectedStream;
     try {

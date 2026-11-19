@@ -119,3 +119,59 @@ describe("an unusable answer keeps its text — the evidence (first real run: \"
     expect(r).toMatchObject({ text: '{"release_notes": ["P201"]}', finish: "STOP", pieces: 5, textPieces: 3 });
   });
 });
+
+// ————— Long model calls (2026-11-19): Node cuts a request that is silent for 300 s; the limit is raised per host —————
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { getGlobalDispatcher } from "undici";
+import { allowLongCalls, isModelHost, restoreDispatcher } from "@/lib/competitors/long-calls";
+import { asCapacityError as asCapacity, errorText, TransientError as Transient } from "@/lib/competitors/ai";
+
+describe("long model calls", () => {
+  it("knows the model hosts of Vertex AI and nothing else", () => {
+    expect(isModelHost("https://aiplatform.googleapis.com")).toBe(true); // the global endpoint
+    expect(isModelHost("https://us-east5-aiplatform.googleapis.com")).toBe(true); // a regional endpoint
+    expect(isModelHost("https://aiplatform.eu.rep.googleapis.com")).toBe(true); // a multi-region endpoint
+    expect(isModelHost("https://storage.googleapis.com")).toBe(false);
+    expect(isModelHost("https://aiplatform.googleapis.com.example.com")).toBe(false);
+    expect(isModelHost("https://example.com")).toBe(false);
+    expect(isModelHost("not an address")).toBe(false);
+  });
+
+  it("a silent request to a long host lives up to the limit given; any other host keeps the runtime's own limit", async () => {
+    // A real server that says nothing for 2.5 s, then answers. No mock: the runtime's own fetch and timers do the work.
+    const server = http.createServer((_req, res) => void setTimeout(() => res.end("answered"), 2500));
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const before = getGlobalDispatcher();
+    try {
+      // A limit shorter than the silence: the runtime cuts the request, and the error names the cut.
+      allowLongCalls(1000, (o) => o === origin);
+      const cut = await fetch(origin).then(() => null, (e: unknown) => e);
+      expect(cut).toBeInstanceOf(Error);
+      expect(errorText(cut)).toContain("UND_ERR_HEADERS_TIMEOUT");
+      expect(errorText(cut)).toContain("our own runtime cut a silent request");
+      const asError = asCapacity(cut);
+      expect(asError).toBeInstanceOf(Transient);
+      expect((asError as Error).message).toContain("the provider did not refuse it");
+      // A limit longer than the silence: the same request is answered.
+      restoreDispatcher(before);
+      allowLongCalls(60_000, (o) => o === origin);
+      expect(await (await fetch(origin)).text()).toBe("answered");
+      // Asked again with ours in place: nothing is stacked on top.
+      const ours = getGlobalDispatcher();
+      allowLongCalls(60_000, (o) => o === origin);
+      expect(getGlobalDispatcher()).toBe(ours);
+    } finally {
+      restoreDispatcher(before);
+      await new Promise((ok) => server.close(ok));
+    }
+  }, 20_000);
+
+  it("an error says its cause, not only 'fetch failed'", () => {
+    const reset = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+    expect(errorText(reset)).toBe("fetch failed (ECONNRESET: read ECONNRESET)");
+    expect(errorText(new Error("plain"))).toBe("plain");
+    expect(errorText("text")).toBe("text");
+  });
+});
