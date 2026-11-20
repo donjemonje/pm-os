@@ -3,6 +3,7 @@ import { getVertexProjectId } from "../vertex-config";
 import { modelFor, providerOf, type ModelProvider, type ThinkingLevelName } from "./models";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
 import { allowLongCalls } from "./long-calls";
+import { openCallLog } from "./call-log";
 
 /**
  * PMOS AI for competitors: structured calls, never free text. The model is
@@ -250,14 +251,15 @@ export interface CollectedStream {
   textPieces: number;
 }
 
-/** A streamed answer put together: the text of all pieces in order, the last finish reason, the last usage report. Pure. */
-export async function collectStream(stream: AsyncIterable<StreamPiece>): Promise<CollectedStream> {
+/** A streamed answer put together: the text of all pieces in order, the last finish reason, the last usage report. Pure; `onPiece` sees every piece as it comes (the call log). */
+export async function collectStream(stream: AsyncIterable<StreamPiece>, onPiece?: (piece: StreamPiece) => void): Promise<CollectedStream> {
   let text = "";
   let finish = "unknown";
   let usage: StreamPiece["usageMetadata"] | undefined;
   let pieces = 0;
   let textPieces = 0;
   for await (const piece of stream) {
+    onPiece?.(piece);
     pieces++;
     const candidate = piece.candidates?.[0];
     const before = text.length;
@@ -298,25 +300,32 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
     // are raised here for model hosts (long-calls.ts), to the one explicit ceiling, CALL_TIMEOUT_MS.
     allowLongCalls(CALL_TIMEOUT_MS);
     const started = Date.now();
+    const instruction = `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`;
+    const level = thinkingLevel(opts.thinking);
+    const maxOutputTokens = opts.maxTokens + 16000;
+    const responseSchema = toGeminiSchema(tool.input_schema as Record<string, unknown>);
+    // The full record of the call, when a developer asked for it (call-log.ts); null otherwise.
+    const log = openCallLog({ tool: String(tool.name ?? "call"), model, location: getCompetitorsGeminiLocation(), settings: { temperature: 0, thinkingLevel: String(level), maxOutputTokens, responseMimeType: "application/json", streamed: true }, instruction, contents, schema: responseSchema });
     let collected: CollectedStream;
     try {
       const stream = await getGemini().models.generateContentStream({
         model,
         contents,
         config: {
-          systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
+          systemInstruction: instruction,
           temperature: 0,
           // Gemini 4 takes a thinking *level*, not a token budget (a budget is rejected). The level is the call's
           // role's (models.ts thinkingFor); thinking is billed against maxOutputTokens, hence the headroom.
-          thinkingConfig: { thinkingLevel: thinkingLevel(opts.thinking) },
-          maxOutputTokens: opts.maxTokens + 16000,
+          thinkingConfig: { thinkingLevel: level, ...(log?.thoughts ? { includeThoughts: true } : {}) },
+          maxOutputTokens,
           responseMimeType: "application/json",
-          responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
+          responseSchema,
           httpOptions: { timeout: CALL_TIMEOUT_MS },
         },
       });
-      collected = await collectStream(stream);
+      collected = await collectStream(stream, log ? (piece) => log.piece(piece) : undefined);
     } catch (e) {
+      log?.end({ judged: "the call failed", error: e });
       // Our own ceiling passed: the call is not asked again by itself — a call this long is a bug to look at, not a blip.
       if (Date.now() - started >= CALL_TIMEOUT_MS - 1000) throw new AnswerError(`PMOS AI (${model}) did not finish its answer within ${Math.round(CALL_TIMEOUT_MS / 60_000)} minutes — the call was stopped`);
       throw asCapacityError(e);
@@ -324,11 +333,14 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
     const { text, finish, usage } = collected;
     // An unusable answer keeps its text (AnswerError.raw) and says how the stream delivered it.
     const came = `${text.length} chars in ${collected.textPieces} of ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"}`;
-    if (!text.trim()) throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish}, ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"})`, usage, text);
-    if (finish !== "STOP") throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${came})`, usage, text);
+    if (!text.trim()) { log?.end({ judged: "empty answer" }); throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish}, ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"})`, usage, text); }
+    if (finish !== "STOP") { log?.end({ judged: `not finished (finish: ${finish})` }); throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${came})`, usage, text); }
     try {
-      return { value: JSON.parse(text) as T, usage };
+      const value = JSON.parse(text) as T;
+      log?.end({ judged: "accepted: finished (STOP) and valid JSON" });
+      return { value, usage };
     } catch (e) {
+      log?.end({ judged: "invalid JSON" });
       throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${came}): ${e instanceof Error ? e.message.slice(0, 120) : "not parseable"}`, usage, text);
     }
   }

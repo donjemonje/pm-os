@@ -175,3 +175,36 @@ describe("long model calls", () => {
     expect(errorText("text")).toBe("text");
   });
 });
+
+describe("the call log (call-log.ts)", () => {
+  it("is off unless a folder is named", async () => {
+    const { openCallLog } = await import("@/lib/competitors/call-log");
+    expect(openCallLog({ tool: "t", model: "m", location: "global", settings: {}, instruction: "i", contents: "c", schema: {} }, "")).toBeNull();
+  });
+
+  it("writes what was sent, every piece, why the call stopped and what it used", async () => {
+    const { openCallLog } = await import("@/lib/competitors/call-log");
+    const { mkdtempSync, readdirSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "call-log-"));
+    const log = openCallLog({ tool: "list things", model: "m-1", location: "global", settings: { temperature: 0 }, instruction: "the rules", contents: "the pages", schema: { type: "OBJECT" } }, dir)!;
+    log.piece({ candidates: [{ content: { parts: [{ text: "a private thought", thought: true }] } }] });
+    log.piece({ candidates: [{ content: { parts: [{ text: '{"a":' }] } }] });
+    log.piece({ candidates: [{ content: { parts: [{ text: "1}" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, thoughtsTokenCount: 7 }, modelVersion: "m-1-001" });
+    log.end({ judged: "accepted" });
+    const files = readdirSync(dir).sort();
+    expect(files.map((f) => f.replace(/^.*-list_things/, "list_things"))).toEqual(["list_things.json", "list_things.request.txt"]);
+    expect(readFileSync(join(dir, files[1]), "utf8")).toBe("the rules\n\n===== CONTENT =====\n\nthe pages");
+    const record = JSON.parse(readFileSync(join(dir, files[0]), "utf8"));
+    expect(record).toMatchObject({ tool: "list things", model: "m-1", judged: "accepted", finishReason: "STOP", answer: '{"a":1}', thoughts: "a private thought", modelVersion: "m-1-001", usageMetadata: { thoughtsTokenCount: 7 }, answerChars: 7 });
+    expect(record.pieces).toHaveLength(3);
+    expect(record.pieces[0]).toMatchObject({ answerChars: 0, thoughtChars: 17 });
+  });
+
+  it("keeps a failed call's error with its cause", async () => {
+    const { describeError } = await import("@/lib/competitors/call-log");
+    const e = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("Headers Timeout Error"), { code: "UND_ERR_HEADERS_TIMEOUT" }) });
+    expect(describeError(e)).toMatchObject({ name: "TypeError", message: "fetch failed", cause: { message: "Headers Timeout Error", code: "UND_ERR_HEADERS_TIMEOUT" } });
+  });
+});
