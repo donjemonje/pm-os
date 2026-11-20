@@ -629,8 +629,6 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                       {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
                                     </span>
-                                    {/* What the capability is, in one sentence, right under its name — not only behind the (i). */}
-                                    {k.description && <RowDescription text={k.description} testId="cmp-capability-description" />}
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
@@ -962,7 +960,6 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
     <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
         {feature.name}
-        {feature.description && <RowDescription text={feature.description} testId="cmp-feature-description" />}
       </td>
       <td className="bg-[rgba(36,87,245,.06)] text-center">
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
@@ -1104,11 +1101,6 @@ function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: s
 /** The start of a text for one line: its first line, whole (the line is cut by its width, and the hover shows all of it). */
 function firstSentences(text: string): string {
   return text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-}
-
-/** One sentence of what a row is, under its name: one line, cut by the column's width; the hover shows all of it. */
-function RowDescription({ text, testId }: { text: string; testId: string }) {
-  return <div className="max-w-[560px] truncate pb-1 text-[11.5px] font-normal leading-snug text-fg-muted" title={text} data-testid={testId}>{firstSentences(text)}</div>;
 }
 
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
