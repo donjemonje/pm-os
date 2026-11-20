@@ -925,8 +925,6 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
                 <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
               )}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
-              {/* What the domain covers, in one sentence, next to its name: the short text for people when the team wrote one, else its definition. */}
-              {(domain.summary || domain.description) && <span className="min-w-0 flex-1 truncate text-[12px] font-normal text-fg-3" title={domain.summary || domain.description} data-testid="cmp-domain-definition">{firstSentences(domain.summary || domain.description)}</span>}
               <span className="ml-auto flex shrink-0 items-center gap-[18px] text-[12px] text-fg-3">
                 {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
@@ -1096,11 +1094,6 @@ function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: s
       <button type="button" onClick={() => onDecide("dismissed")} title={declineHint} aria-label={decline} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
     </span>
   );
-}
-
-/** The start of a text for one line: its first line, whole (the line is cut by its width, and the hover shows all of it). */
-function firstSentences(text: string): string {
-  return text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
 }
 
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
