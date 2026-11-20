@@ -147,6 +147,16 @@ export class AnswerError extends Error {
 }
 
 export type ThinkingName = ThinkingLevelName;
+
+/**
+ * The temperature of every Gemini call: 1, the provider's default (Daniel 2026-11-20: "follow Google's best practice;
+ * first get good results, then think how to handle randomness"). It was 0 until then. Google's prompting guide for
+ * the Gemini 3 family says to keep the default and that lower values "may lead to unexpected behavior, looping, or
+ * degraded performance" on complex reasoning; three answers of 2026-11-20 at temperature 0 were planned in full in
+ * the model's thinking and then broke off after one row (finish STOP, valid JSON). With 1 the same request can give
+ * different answers: what the analysis does about that is an open point.
+ */
+export const GEMINI_TEMPERATURE = 1;
 export interface CallOptions {
   /** The model that makes the call (models.ts modelFor(role)): the caller decides, nothing here reads an environment variable for it. */
   model: string;
@@ -154,6 +164,8 @@ export interface CallOptions {
   maxTokens: number;
   /** The thinking level of the call — the level of its role (models.ts thinkingFor(role)): the caller decides, as for the model. Not given = high. */
   thinking?: ThinkingName;
+  /** The sampling temperature of a Gemini call. Not given = GEMINI_TEMPERATURE. A hand run gives it to compare settings. */
+  temperature?: number;
   /** TEST KNOB: the raw JSON text the model would have answered. With it no model is ever called. */
   injected?: string;
 }
@@ -303,9 +315,10 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
     const instruction = `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`;
     const level = thinkingLevel(opts.thinking);
     const maxOutputTokens = opts.maxTokens + 16000;
+    const temperature = opts.temperature ?? GEMINI_TEMPERATURE;
     const responseSchema = toGeminiSchema(tool.input_schema as Record<string, unknown>);
     // The full record of the call, when a developer asked for it (call-log.ts); null otherwise.
-    const log = openCallLog({ tool: String(tool.name ?? "call"), model, location: getCompetitorsGeminiLocation(), settings: { temperature: 0, thinkingLevel: String(level), maxOutputTokens, responseMimeType: "application/json", streamed: true }, instruction, contents, schema: responseSchema });
+    const log = openCallLog({ tool: String(tool.name ?? "call"), model, location: getCompetitorsGeminiLocation(), settings: { temperature, thinkingLevel: String(level), maxOutputTokens, responseMimeType: "application/json", streamed: true }, instruction, contents, schema: responseSchema });
     let collected: CollectedStream;
     try {
       const stream = await getGemini().models.generateContentStream({
@@ -313,7 +326,7 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
         contents,
         config: {
           systemInstruction: instruction,
-          temperature: 0,
+          temperature,
           // Gemini 4 takes a thinking *level*, not a token budget (a budget is rejected). The level is the call's
           // role's (models.ts thinkingFor); thinking is billed against maxOutputTokens, hence the headroom.
           thinkingConfig: { thinkingLevel: level, ...(log?.thoughts ? { includeThoughts: true } : {}) },

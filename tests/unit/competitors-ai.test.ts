@@ -208,3 +208,10 @@ describe("the call log (call-log.ts)", () => {
     expect(describeError(e)).toMatchObject({ name: "TypeError", message: "fetch failed", cause: { message: "Headers Timeout Error", code: "UND_ERR_HEADERS_TIMEOUT" } });
   });
 });
+
+describe("the temperature of a Gemini call", () => {
+  it("is the provider's default, 1 (Daniel 2026-11-20)", async () => {
+    const { GEMINI_TEMPERATURE } = await import("@/lib/competitors/ai");
+    expect(GEMINI_TEMPERATURE).toBe(1);
+  });
+});
