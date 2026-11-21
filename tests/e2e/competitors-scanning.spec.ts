@@ -1534,6 +1534,7 @@ test.describe("Website Scanning rows", () => {
 
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
     // Knobs: run-once, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
+    // Since 2026-11-21 the station waits and reads the page again before it gives up (pace.mjs): knob slow-down waits 0,0,0 — the same three tries with no waiting. The site keeps saying slow down, so the scan still stops.
     // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".
     test.setTimeout(200_000);
     const site = await newSite();
