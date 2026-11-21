@@ -17,6 +17,7 @@ import { rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
+import { NO_PARTS, type CompetitorsParts } from "@/lib/competitors/parts";
 import { cn } from "@/lib/utils";
 
 type Tab = "parity" | "feed" | "profiles" | "cards" | "roadmap";
@@ -69,7 +70,7 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 }
 
 /** The strip's last card (C2 "Risk" slot): competitors ranked by how much of the org's capability list they cover. */
-function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; onOpen: (competitorId: string) => void }) {
+function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; /** Opens the company's profile; null where Profiles is off (the rows are then plain). */ onOpen: ((competitorId: string) => void) | null }) {
   const tone = (score: number | null) => (score == null ? ["#9aa8be", "#5b6c85"] : score >= 70 ? ["#c23767", "#c23767"] : score >= 50 ? ["#f0b43c", "#8a5a00"] : ["#17b26a", "#0f7a47"]);
   return (
     <div className="flex flex-[1_1_300px] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3" data-testid="cmp-closest-card">
@@ -82,6 +83,7 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
             const [bar, fg] = tone(closeness.score);
             return (
               <li key={c.id}>
+                {onOpen ? (
                 <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.strip.closestScore(closeness.found, closeness.low, closeness.total)}`}>
                   <Logo c={c} size={16} />
                   <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
@@ -90,6 +92,16 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
                   </span>
                   <span className="w-[22px] shrink-0 text-right text-[10.5px] font-semibold" style={{ color: fg }}>{closeness.score ?? "—"}</span>
                 </button>
+                ) : (
+                <span className="flex w-full items-center gap-2 text-left" title={`${c.name} · ${C.strip.closestScore(closeness.found, closeness.low, closeness.total)}`}>
+                  <Logo c={c} size={16} />
+                  <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
+                  <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+                    <span className="block h-full" style={{ width: `${closeness.score ?? 0}%`, background: bar }} />
+                  </span>
+                  <span className="w-[22px] shrink-0 text-right text-[10.5px] font-semibold" style={{ color: fg }}>{closeness.score ?? "—"}</span>
+                </span>
+                )}
               </li>
             );
           })}
@@ -157,7 +169,11 @@ function CellValue({ cell, size = 22 }: { cell: CellRow | undefined; size?: numb
  * a summary strip, filters, cell evidence with a correction, lean profiles.
  * Feed and battle cards stay empty until their stories.
  */
-export function CompetitorsView({ initialState, canEdit = false }: { initialState: CompetitorsState; canEdit?: boolean }) {
+export function CompetitorsView({ initialState, canEdit = false, parts = NO_PARTS }: { initialState: CompetitorsState; canEdit?: boolean; /** Which switched parts of the page are on for this organization (lib/competitors/parts.ts): all off unless given. */ parts?: CompetitorsParts }) {
+  // The tabs this organization sees: the matrix and the feed always, the three switched ones only when on.
+  // A company's column header opens its profile; where Profiles is off it is plain.
+  const HeadTag = parts.profiles ? "button" : "div";
+  const tabs = TABS.filter(({ key }) => key === "parity" || key === "feed" || (key === "profiles" && parts.profiles) || (key === "cards" && parts.cards) || (key === "roadmap" && parts.roadmap));
   const [state, setState] = useState(initialState);
   const own = state.orgName.trim() || "Your organization";
   const [tab, setTab] = useState<Tab>("parity");
@@ -427,6 +443,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   }
 
   function openProfile(competitorId: string, from: "tab" | "cell") {
+    if (!parts.profiles) return;
     setSelectedCompetitor(competitorId);
     setTab("profiles");
     setOpenCell(null);
@@ -470,7 +487,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
             </span>
           </div>
           <div role="tablist" aria-label="Competitor views" className="flex flex-wrap gap-1.5 border-b border-border pb-3">
-            {TABS.map(({ key, label }) => {
+            {tabs.map(({ key, label }) => {
               const on = tab === key;
               const badge = key === "roadmap" && summary.measured ? summary.gaps : 0;
               return (
@@ -520,7 +537,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
               </div>
               <StatCard label={C.strip.gaps} tone="#f0b43c" toneFg="#8a5a00" value={summary.measured ? summary.gaps : null} sub={summary.measured ? C.strip.gapsSub(summary.gaps) : C.strip.gapsNone} />
               <StatCard label={C.strip.only(own)} tone="#17b26a" toneFg="#0f7a47" value={summary.measured ? summary.only : null} sub={summary.measured ? C.strip.onlySub(summary.only) : C.strip.onlyNone} />
-              <ClosestCard org={own} ranked={closest} measured={summary.measured} onOpen={(id) => openProfile(id, "cell")} />
+              <ClosestCard org={own} ranked={closest} measured={summary.measured} onOpen={parts.profiles ? (id) => openProfile(id, "cell") : null} />
             </div>
 
             {/* Filters */}
@@ -553,7 +570,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                       </th>
                       {shownCompetitors.map((c) => (
                         <th key={c.id} scope="col" className="w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
-                          <button onClick={() => openProfile(c.id, "cell")} className="flex w-full flex-col items-center gap-1.5 pt-[13px] hover:opacity-80" title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
+                          <HeadTag {...(parts.profiles ? { onClick: () => openProfile(c.id, "cell") } : {})} className={cn("flex w-full flex-col items-center gap-1.5 pt-[13px]", parts.profiles && "hover:opacity-80")} title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
                             {(c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable") && (
@@ -569,7 +586,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                 {c.analysis.status === "waiting" ? C.matrix.analysisWaiting : C.matrix.analyzing}
                               </span>
                             )}
-                          </button>
+                          </HeadTag>
                         </th>
                       ))}
                       <th scope="col" className="w-[150px] border-b border-border px-4 py-2.5"><span className="sr-only">{C.matrix.coverage}</span></th>
@@ -639,7 +656,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     const cell = cellOf(c.id, k.id);
                                     return (
                                       <td key={c.id} className="text-center">
-                                        <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+                                        <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
                                       </td>
                                     );
                                   })}
@@ -653,7 +670,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                   </td>
                                 </tr>
                                 {featuresOpen && features.map((f) => (
-                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={(competitorId) => openProfile(competitorId, "cell")} />
+                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
                                 ))}
                                 </Fragment>
                               );
@@ -746,7 +763,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           </section>
         )}
 
-        {tab === "profiles" && (
+        {tab === "profiles" && parts.profiles && (
           <ProfilePanel
             org={own}
             competitors={competitors}
@@ -769,7 +786,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           />
         )}
 
-        {tab === "cards" && (
+        {tab === "cards" && parts.cards && (
           <section aria-label={C.tabs.cards} className="flex flex-col">
             <div className="mb-3.5 flex items-center gap-2">
               <span className="text-[12.5px] text-fg-3">{C.cards.count(0)}</span>
@@ -783,7 +800,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           </section>
         )}
 
-        {tab === "roadmap" && (() => {
+        {tab === "roadmap" && parts.roadmap && (() => {
           const gapRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "gap") : [];
           const total = gapRows.length;
           const sections = [
@@ -951,7 +968,7 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
   open: OpenCell | null;
   setOpen: (v: OpenCell | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
-  onProfile: (competitorId: string) => void;
+  onProfile: ((competitorId: string) => void) | null;
 }) {
   const haveN = competitors.filter((c) => cellOf(c.id)?.value === "found").length;
   return (
@@ -966,7 +983,7 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
       </td>
       {competitors.map((c) => (
         <td key={c.id} className="text-center">
-          <Cell cell={cellOf(c.id)} competitorId={c.id} row={feature} kind="feature" open={open} setOpen={setOpen} onPatch={onPatch} onProfile={() => onProfile(c.id)} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+          <Cell cell={cellOf(c.id)} competitorId={c.id} row={feature} kind="feature" open={open} setOpen={setOpen} onPatch={onPatch} onProfile={onProfile ? () => onProfile(c.id) : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
         </td>
       ))}
       <td className="px-4">

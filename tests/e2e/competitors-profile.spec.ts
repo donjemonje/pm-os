@@ -137,7 +137,7 @@ function scannedSource(type: string, url: string, lastScanAt: Date, pagesFetched
 }
 
 async function seedFixtures(db: PrismaClient): Promise<void> {
-  const seeded = await seedQaOrgWithUser(db, { ...ORG, features: { competitors: true }, user: USER });
+  const seeded = await seedQaOrgWithUser(db, { ...ORG, features: { competitors: true, competitorsProfiles: true }, user: USER });
   orgId = seeded.orgId;
   workspaceId = seeded.workspaceId;
   userId = seeded.userId;
@@ -628,7 +628,7 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
       expect(off.status()).toBe(404);
       expect(await off.json()).toEqual({ error: "Not found" });
     } finally {
-      await withTestDb((db) => db.organization.update({ where: { id: orgId }, data: { features: { competitors: true } } }));
+      await withTestDb((db) => db.organization.update({ where: { id: orgId }, data: { features: { competitors: true, competitorsProfiles: true } } }));
     }
     expect((await page.request.get(url(`${MEDIA_SUBDIR}/alerts.png`))).status()).toBe(200);
   });

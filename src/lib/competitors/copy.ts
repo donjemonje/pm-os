@@ -509,7 +509,7 @@ export const COMPETITORS_COPY = {
       newDomain: "new domain",
       review: "Review",
       source: "Source",
-      openProfile: "Open profile →",
+      openProfile: "Open competitors →",
       openMatrix: "Open the competitor matrix",
       ownStatus: (org: string, value: string) => `${org} ${value}`,
       chipGap: (n: number) => `${n} gap${n === 1 ? "" : "s"} opened`,

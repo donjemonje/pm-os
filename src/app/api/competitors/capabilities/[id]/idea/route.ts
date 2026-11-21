@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, competitorsGuard, stateResponse } from "@/lib/competitors/api";
+import { competitorsPartOff } from "@/lib/competitors/parts-server";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { ideasEnabledForCurrentUser } from "@/lib/org-features";
@@ -18,6 +19,8 @@ type Params = { params: Promise<{ id: string }> };
 export async function POST(_req: Request, { params }: Params) {
   const ctx = await competitorsGuard();
   if (ctx instanceof NextResponse) return ctx;
+  const off = await competitorsPartOff("roadmap");
+  if (off) return off;
   if (!(await ideasEnabledForCurrentUser())) return bad(C.roadmap.ideasOff, 403);
   const { id } = await params;
   const capability = await db.capability.findFirst({

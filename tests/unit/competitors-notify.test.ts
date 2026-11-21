@@ -93,7 +93,7 @@ describe("renderRunEmail", () => {
     expect(mail.html).not.toContain("Delta");
     expect(mail.html).toContain("Takedowns");
     expect(mail.html).toContain("· Gamma");
-    expect(mail.html.match(/Open profile →/g)?.length).toBe(3);
+    expect(mail.html.match(/Open competitors →/g)?.length).toBe(3);
     expect(mail.text).toContain("== Beta Corp");
   });
   it("escapes HTML in scanned text", () => {

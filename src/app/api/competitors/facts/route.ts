@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
+import { competitorsPartOff } from "@/lib/competitors/parts-server";
 import { isFactKind } from "@/lib/competitors/config";
 import { checkPii } from "@/lib/competitors/pii";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
@@ -13,6 +14,8 @@ import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 export async function POST(req: Request) {
   const ctx = await competitorsGuard();
   if (ctx instanceof NextResponse) return ctx;
+  const off = await competitorsPartOff("profiles");
+  if (off) return off;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
   const competitorId = typeof body.competitorId === "string" ? body.competitorId : "";

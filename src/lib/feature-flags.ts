@@ -95,6 +95,27 @@ export function isCompetitorsEnabled(): boolean {
   return value === "true" || value === "1";
 }
 
+/**
+ * Parts of the Competitors page with a switch of their own (Daniel 2026-11-21: off by default for production):
+ * the Profiles tab, the Battle cards tab and the Roadmap tab. Each is off when its variable is unset, is opted in
+ * per organization in Admin → Enablements, and shows only where the Competitors page itself is on.
+ */
+function envOn(name: string): boolean {
+  const raw = process.env[name];
+  if (!raw?.trim()) return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "1";
+}
+export function isCompetitorsProfilesEnabled(): boolean {
+  return envOn("COMPETITORS_PROFILES_ENABLED");
+}
+export function isCompetitorsBattleCardsEnabled(): boolean {
+  return envOn("COMPETITORS_BATTLE_CARDS_ENABLED");
+}
+export function isCompetitorsRoadmapEnabled(): boolean {
+  return envOn("COMPETITORS_ROADMAP_ENABLED");
+}
+
 // ————— Per-organization feature overrides —————
 //
 // Organization.features is a JSON object like {"ideas": true}. Resolution
@@ -108,6 +129,9 @@ export const ORG_FEATURE_KEYS = [
   "chat",
   "dashboard",
   "competitors",
+  "competitorsProfiles",
+  "competitorsBattleCards",
+  "competitorsRoadmap",
   "ideasUndo",
   "myProductLines",
   "jira",
@@ -128,6 +152,12 @@ export function envFeatureDefault(key: OrgFeatureKey): boolean {
       return isDashboardEnabled();
     case "competitors":
       return isCompetitorsEnabled();
+    case "competitorsProfiles":
+      return isCompetitorsProfilesEnabled();
+    case "competitorsBattleCards":
+      return isCompetitorsBattleCardsEnabled();
+    case "competitorsRoadmap":
+      return isCompetitorsRoadmapEnabled();
     case "ideasUndo":
       return isIdeasUndoEnabled();
     case "myProductLines":
