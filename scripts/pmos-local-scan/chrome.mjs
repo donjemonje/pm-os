@@ -89,17 +89,21 @@ export async function openChrome({ chrome, profile, userAgent }) {
   if (!chromeReaderSupported()) return { error: "this Node has no built-in WebSocket (Node 22 or newer is needed)" };
   const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--mute-audio", `--user-data-dir=${profile}`, `--user-agent=${userAgent}`, "--remote-debugging-port=0", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
   live.add(child);
+  // Two different things: the PROCESS is gone (the profile folder is free), or only its DevTools connection closed
+  // (a page crashed it) — then the process is still there and holds the folder until it is ended.
+  let exited = false;
   let gone = false;
   child.once("exit", () => {
+    exited = true;
     gone = true;
     live.delete(child);
   });
   const shut = async () => {
-    if (gone) return;
+    if (exited) return;
     child.kill("SIGTERM");
     // The profile folder is free again only when Chrome is gone: whoever opens it next waits for that.
     await new Promise((resolve) => {
-      if (gone) return resolve(undefined);
+      if (exited) return resolve(undefined);
       const hard = setTimeout(() => child.kill("SIGKILL"), 5_000);
       child.once("exit", () => {
         clearTimeout(hard);

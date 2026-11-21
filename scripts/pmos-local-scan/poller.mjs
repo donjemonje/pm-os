@@ -632,6 +632,8 @@ async function runFetch(job, limits, post, saved, scan) {
   let usedUpInARow = 0;
   /** Pages in a row the site refused — on the plain request and, where it can be used, in Chrome too. */
   let refused = 0;
+  /** Pages in a row where Chrome could not be used at all (it did not start, its connection closed). */
+  let chromeBroken = 0;
   let renders = saved?.renders ?? 0;
   // A page that takes the station down (a crash or an error, twice, on the same page) is handed in as not read and the
   // scan moves on — otherwise every check-in would start with that page again, for ever, ahead of every other scan.
@@ -677,7 +679,7 @@ async function runFetch(job, limits, post, saved, scan) {
         const note = body.chromeNote;
         body = await readOnce(url, started, host);
         body.attempts = 1;
-        if (body.status === "blocked") Object.assign(body, { viaChrome: true, chromeNote: note });
+        if (body.status === "blocked") Object.assign(body, { viaChrome: true, chromeFailed: true, chromeNote: note });
       }
     }
     // PRD: a page is pending until done — up to 3 attempts on a timeout or a server error.
@@ -732,9 +734,20 @@ async function runFetch(job, limits, post, saved, scan) {
       body = again;
     }
     if (body.status === "blocked") {
-      if (body.chromeNote) log(`  refused in Chrome too (${body.chromeNote}) ${url}`);
-      refused++;
-    } else refused = 0;
+      // Refused by the site (403 on the plain request, and in Chrome when it could be used) — or Chrome itself could
+      // not be used on this Mac: that is the station's trouble, never counted as the site refusing the scan.
+      if (body.chromeFailed) {
+        chromeBroken++;
+        log(`  refused on the plain request, and Chrome could not be used (${body.chromeNote}) ${url}`);
+      } else {
+        if (body.chromeNote) log(`  refused in Chrome too (${body.chromeNote}) ${url}`);
+        refused++;
+        chromeBroken = 0;
+      }
+    } else {
+      refused = 0;
+      chromeBroken = 0;
+    }
     const readWith = body.viaChrome && body.status === "ok" ? " (read with Chrome)" : "";
     const viaChrome = Boolean(body.viaChrome);
     delete body.viaChrome;
@@ -836,6 +849,13 @@ async function runFetch(job, limits, post, saved, scan) {
       continue;
     }
     log(`  ${body.status === "ok" ? r.outcome : body.status}${readWith} ${url}`);
+    if (chromeBroken >= 5) {
+      // The station's Chrome does not work right now: the scan is parked with its place, not ended — it continues at the next check-in.
+      scan.save(place());
+      scan.stopped("error");
+      log(`  Chrome could not be used for ${chromeBroken} pages in a row — scan parked, ${queue.length} pages left; it continues at the next check-in`);
+      return { paused: "error", notAttempted: queue.length };
+    }
     if (refusedStop(refused).stop) {
       // The site refuses the station: its other pages are not asked one by one. They are "not attempted"; the next scan continues.
       log(`  the site refused ${refused} pages in a row — stopping this scan, ${queue.length} pages left for the next one`);
