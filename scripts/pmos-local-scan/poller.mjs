@@ -86,7 +86,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runAddressStep } from "./addresses.mjs";
-import { chromeReaderSupported, judgeChromeRead, readWithChrome, refusedStop } from "./chrome.mjs";
+import { chromeReaderSupported, judgeChromeRead, killAllChrome, openChrome, refusedStop } from "./chrome.mjs";
 import { afterSlowDown, makeQueue, retryAfterMs, SLOWDOWN_WAITS_MS } from "./pace.mjs";
 import { adoptLegacyPlace, clearPlace, loadPlace, loadPlaces, markStopped, savePlace } from "./places.mjs";
 import { NO_SCAN, orderWaiting, parallelLimit, pickNext, siteKey, statusOf } from "./schedule.mjs";
@@ -235,6 +235,7 @@ process.on("exit", () => {
  * Returns how many running scans have a saved place.
  */
 function stopAll(reason, detail) {
+  killAllChrome();
   const saved = [...LIVE.keys()].filter((id) => markStopped(STATE_DIR, id, reason, detail)).length;
   LIVE.clear();
   if (saved) status({ ...NO_SCAN, state: "idle", message: saved === 1 ? "Station stopped — the scan continues at the next check-in" : `Station stopped — ${saved} scans continue at the next check-in` });
@@ -422,11 +423,37 @@ async function chromeReaderAvailable(slog) {
  */
 /** One Chrome profile folder per site, and one read at a time per site: different sites are read side by side. The folder keeps the site's cookies between reads and between scans, as a person's browser does. */
 const siteTurns = new Map();
-function readRefusedWithChrome(url, started, host) {
-  const profile = join(STATE_DIR, "chrome-profiles", host.replace(/[^a-z0-9.-]/gi, "_"));
-  const mine = (siteTurns.get(host) ?? Promise.resolve()).then(async () => {
+/** The Chrome kept open for each site while its scan runs: host → { browser, reads }. Started again after CHROME_READS_PER_BROWSER pages (a browser that never restarts grows without end). */
+const siteBrowsers = new Map();
+const CHROME_READS_PER_BROWSER = 150;
+async function closeSiteBrowser(host) {
+  const open = siteBrowsers.get(host);
+  siteBrowsers.delete(host);
+  if (open) await open.browser.close().catch(() => undefined);
+}
+async function readWithSiteBrowser(host, url) {
+  let open = siteBrowsers.get(host);
+  if (open && (!open.browser.alive() || open.reads >= CHROME_READS_PER_BROWSER)) {
+    await closeSiteBrowser(host);
+    open = undefined;
+  }
+  if (!open) {
+    const profile = join(STATE_DIR, "chrome-profiles", host.replace(/[^a-z0-9.-]/gi, "_"));
     mkdirSync(profile, { recursive: true });
-    const r = await readWithChrome({ chrome: CHROME, profile, userAgent: BROWSER_UA, url });
+    const browser = await openChrome({ chrome: CHROME, profile, userAgent: BROWSER_UA });
+    if (browser.error) return { error: browser.error };
+    open = { browser, reads: 0 };
+    siteBrowsers.set(host, open);
+  }
+  open.reads++;
+  const r = await open.browser.read(url);
+  // A browser that stopped answering is closed: the next page starts a new one.
+  if (r.error && (!open.browser.alive() || /did not answer|not running|DevTools/.test(r.error))) await closeSiteBrowser(host);
+  return r;
+}
+function readRefusedWithChrome(url, started, host) {
+  const mine = (siteTurns.get(host) ?? Promise.resolve()).then(async () => {
+    const r = await readWithSiteBrowser(host, url);
     const ms = Date.now() - started;
     if (r.error) return { url, status: "blocked", ms, viaChrome: true, chromeFailed: true, chromeNote: r.error };
     const status = judgeChromeRead(r);
@@ -959,7 +986,13 @@ async function runJob(job, runner, live, log) {
     }
   };
   // A scan that stopped after its last page (only the hand-in call was missing) goes straight to the hand-in.
-  const result = saved?.finished ? saved.finished : runner === "claude" ? await runClaude(job, limits, job.token, log) : await runFetch(job, limits, post, saved, scan);
+  let result;
+  try {
+    result = saved?.finished ? saved.finished : runner === "claude" ? await runClaude(job, limits, job.token, log) : await runFetch(job, limits, post, saved, scan);
+  } finally {
+    // The Chrome kept open for this site while it was read (reader chrome, or a site that refuses the plain request).
+    await closeSiteBrowser(siteOf(new URL(job.siteUrl)));
+  }
   job.pagesRead = pagesRead;
   if (result.paused) {
     // Parked with its place saved: PM-OS puts the scan back to waiting and the next check-in continues it.

@@ -64,20 +64,49 @@ export function refusedStop(inARow, limit = REFUSED_IN_A_ROW) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** Every Chrome this process started and has not closed: killed when the station stops (killAllChrome). */
+const live = new Set();
+export function killAllChrome() {
+  for (const child of live) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+  live.clear();
+}
+
 /**
- * Read one page with Chrome. Returns { status, html, finalUrl } — status null when the page gave no document answer —
- * or { error } when Chrome could not be used (not started, no DevTools address, the page never loaded).
+ * Start Chrome on a profile folder and keep it open: one browser for the many pages of one site (a fresh Chrome per
+ * page, ten sites side by side, brought the Mac to a crawl on 2026-11-22). Returns { read(url), close(), alive() } or
+ * { error } when Chrome could not be started.
  *   chrome        the Chrome binary
- *   profile       the station's own profile folder
+ *   profile       the profile folder (one per site; never the PM's)
  *   userAgent     the browser identity the station uses everywhere
- *   timeoutMs     the whole read, Chrome's start included
- *   settleMs      after the page's load event, the time its scripts get
- *   challengeMs   when the first answer is a bot check, how long Chrome may take to pass it
  */
-export async function readWithChrome({ chrome, profile, userAgent, url, timeoutMs = 60_000, settleMs = 2_500, challengeMs = 20_000 }) {
+export async function openChrome({ chrome, profile, userAgent }) {
   if (!chromeReaderSupported()) return { error: "this Node has no built-in WebSocket (Node 22 or newer is needed)" };
-  const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", `--user-data-dir=${profile}`, `--user-agent=${userAgent}`, "--remote-debugging-port=0", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
-  const deadline = Date.now() + timeoutMs;
+  const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", "--disable-extensions", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--mute-audio", `--user-data-dir=${profile}`, `--user-agent=${userAgent}`, "--remote-debugging-port=0", "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
+  live.add(child);
+  let gone = false;
+  child.once("exit", () => {
+    gone = true;
+    live.delete(child);
+  });
+  const shut = async () => {
+    if (gone) return;
+    child.kill("SIGTERM");
+    // The profile folder is free again only when Chrome is gone: whoever opens it next waits for that.
+    await new Promise((resolve) => {
+      if (gone) return resolve(undefined);
+      const hard = setTimeout(() => child.kill("SIGKILL"), 5_000);
+      child.once("exit", () => {
+        clearTimeout(hard);
+        resolve(undefined);
+      });
+    });
+  };
   let ws = null;
   try {
     const endpoint = await new Promise((resolve, reject) => {
@@ -90,6 +119,7 @@ export async function readWithChrome({ chrome, profile, userAgent, url, timeoutM
           clearTimeout(timer);
           resolve(m[1]);
         }
+        if (err.length > 20_000) err = err.slice(-2_000);
       });
       child.once("error", (e) => {
         clearTimeout(timer);
@@ -97,7 +127,7 @@ export async function readWithChrome({ chrome, profile, userAgent, url, timeoutM
       });
       child.once("exit", (code) => {
         clearTimeout(timer);
-        reject(new Error(`Chrome ended at once (code ${code}) — is another Chrome using the station's profile folder?`));
+        reject(new Error(`Chrome ended at once (code ${code}) — is another Chrome using the profile folder?`));
       });
     });
     ws = new WebSocket(endpoint);
@@ -105,77 +135,116 @@ export async function readWithChrome({ chrome, profile, userAgent, url, timeoutM
       ws.addEventListener("open", () => resolve(undefined), { once: true });
       ws.addEventListener("error", () => reject(new Error("could not connect to Chrome's DevTools address")), { once: true });
     });
-    let nextId = 0;
-    const pending = new Map();
-    const listeners = [];
-    ws.addEventListener("message", (ev) => {
-      const msg = JSON.parse(String(ev.data));
-      if (msg.id !== undefined && pending.has(msg.id)) {
-        const { resolve, reject } = pending.get(msg.id);
-        pending.delete(msg.id);
-        if (msg.error) reject(new Error(msg.error.message ?? "DevTools error"));
-        else resolve(msg.result ?? {});
-      } else if (msg.method) {
-        for (const l of listeners) l(msg);
-      }
-    });
-    const send = (method, params = {}, sessionId) =>
-      new Promise((resolve, reject) => {
-        const id = ++nextId;
-        pending.set(id, { resolve, reject });
-        ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-      });
-    const { targetId } = await send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
-    await send("Page.enable", {}, sessionId);
-    await send("Network.enable", {}, sessionId);
-    const { frameTree } = await send("Page.getFrameTree", {}, sessionId);
-    const mainFrame = frameTree.frame.id;
-    /** The page's document answers, in order: a bot check that passes shows as 403 and then 200. */
-    const answers = [];
-    let loaded = 0;
-    listeners.push((msg) => {
-      if (msg.sessionId !== sessionId) return;
-      if (msg.method === "Network.responseReceived" && msg.params.type === "Document" && msg.params.frameId === mainFrame) answers.push({ status: msg.params.response.status, url: msg.params.response.url });
-      if (msg.method === "Page.loadEventFired") loaded++;
-    });
-    const nav = await send("Page.navigate", { url }, sessionId);
-    if (nav.errorText && !answers.length) return { error: `Chrome could not open the page (${nav.errorText})` };
-    while (!loaded && Date.now() < deadline) await sleep(200);
-    if (!loaded && !answers.length) return { error: "the page did not load in Chrome in time" };
-    await sleep(settleMs);
-    const dom = async () => (await send("Runtime.evaluate", { expression: "document.documentElement ? document.documentElement.outerHTML : ''", returnByValue: true }, sessionId)).result?.value ?? "";
-    let html = await dom();
-    // A bot check that Chrome can pass reloads the page by itself: give it its time, then read again.
-    const refusedNow = () => judgeChromeRead({ status: answers.at(-1)?.status ?? null, html }) === "blocked";
-    const waitUntil = Math.min(deadline, Date.now() + challengeMs);
-    if (refusedNow() && looksLikeBotWallPage(html)) {
-      const seen = answers.length;
-      while (Date.now() < waitUntil && answers.length === seen) await sleep(500);
-      if (answers.length > seen) {
-        await sleep(settleMs);
-        html = await dom();
-      }
-    }
-    const finalUrl = (await send("Runtime.evaluate", { expression: "location.href", returnByValue: true }, sessionId)).result?.value ?? url;
-    return { status: answers.at(-1)?.status ?? null, html, finalUrl };
   } catch (e) {
+    await shut();
     return { error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    try {
-      ws?.close();
-    } catch {
-      // already closed
+  }
+  let nextId = 0;
+  const pending = new Map();
+  const listeners = new Set();
+  ws.addEventListener("message", (ev) => {
+    const msg = JSON.parse(String(ev.data));
+    if (msg.id !== undefined && pending.has(msg.id)) {
+      const { resolve, reject } = pending.get(msg.id);
+      pending.delete(msg.id);
+      if (msg.error) reject(new Error(msg.error.message ?? "DevTools error"));
+      else resolve(msg.result ?? {});
+    } else if (msg.method) {
+      for (const l of listeners) l(msg);
     }
-    child.kill("SIGTERM");
-    // The profile folder is free again only when Chrome is gone: the next read waits for that.
-    await new Promise((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) return resolve(undefined);
-      const hard = setTimeout(() => child.kill("SIGKILL"), 5_000);
-      child.once("exit", () => {
-        clearTimeout(hard);
-        resolve(undefined);
-      });
+  });
+  ws.addEventListener("close", () => {
+    gone = true;
+    for (const { reject } of pending.values()) reject(new Error("Chrome closed its DevTools connection"));
+    pending.clear();
+  });
+  const send = (method, params = {}, sessionId) =>
+    new Promise((resolve, reject) => {
+      if (gone) return reject(new Error("Chrome is not running"));
+      const id = ++nextId;
+      pending.set(id, { resolve, reject });
+      // A command Chrome never answers must not hold a scan for ever.
+      setTimeout(() => {
+        if (pending.delete(id)) reject(new Error(`Chrome did not answer ${method} in time`));
+      }, 60_000);
+      ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
+
+  /** One page, in its own tab, closed afterwards. Returns { status, html, finalUrl } or { error }. */
+  async function read(url, { timeoutMs = 60_000, settleMs = 2_500, challengeMs = 20_000 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    let targetId = null;
+    let onEvent = null;
+    try {
+      ({ targetId } = await send("Target.createTarget", { url: "about:blank" }));
+      const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
+      await send("Page.enable", {}, sessionId);
+      await send("Network.enable", {}, sessionId);
+      const { frameTree } = await send("Page.getFrameTree", {}, sessionId);
+      const mainFrame = frameTree.frame.id;
+      /** The page's document answers, in order: a bot check that passes shows as 403 and then 200. */
+      const answers = [];
+      let loaded = 0;
+      onEvent = (msg) => {
+        if (msg.sessionId !== sessionId) return;
+        if (msg.method === "Network.responseReceived" && msg.params.type === "Document" && msg.params.frameId === mainFrame) answers.push({ status: msg.params.response.status, url: msg.params.response.url });
+        if (msg.method === "Page.loadEventFired") loaded++;
+      };
+      listeners.add(onEvent);
+      const nav = await send("Page.navigate", { url }, sessionId);
+      // The navigation was given up: a download (not a page), a refused connection, a bad address. The caller asks plainly.
+      if (nav.errorText) return { error: `Chrome could not open the page (${nav.errorText})` };
+      while (!loaded && Date.now() < deadline) await sleep(200);
+      if (!loaded && !answers.length) return { error: "the page did not load in Chrome in time" };
+      await sleep(settleMs);
+      const dom = async () => (await send("Runtime.evaluate", { expression: "document.documentElement ? document.documentElement.outerHTML : ''", returnByValue: true }, sessionId)).result?.value ?? "";
+      let html = await dom();
+      // A bot check that Chrome can pass reloads the page by itself: give it its time, then read again.
+      const refusedNow = () => judgeChromeRead({ status: answers.at(-1)?.status ?? null, html }) === "blocked";
+      const waitUntil = Math.min(deadline, Date.now() + challengeMs);
+      if (refusedNow() && looksLikeBotWallPage(html)) {
+        const seen = answers.length;
+        while (Date.now() < waitUntil && answers.length === seen) await sleep(500);
+        if (answers.length > seen) {
+          await sleep(settleMs);
+          html = await dom();
+        }
+      }
+      const finalUrl = (await send("Runtime.evaluate", { expression: "location.href", returnByValue: true }, sessionId)).result?.value ?? url;
+      return { status: answers.at(-1)?.status ?? null, html, finalUrl };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    } finally {
+      if (onEvent) listeners.delete(onEvent);
+      if (targetId && !gone) await send("Target.closeTarget", { targetId }).catch(() => undefined);
+    }
+  }
+
+  return {
+    read,
+    alive: () => !gone,
+    close: async () => {
+      try {
+        ws.close();
+      } catch {
+        // already closed
+      }
+      await shut();
+    },
+  };
+}
+
+/**
+ * Read one page with a Chrome started for it and closed after it. Returns { status, html, finalUrl } — status null
+ * when the page gave no document answer — or { error } when Chrome could not be used. For many pages of one site use
+ * openChrome and read them with the same browser.
+ */
+export async function readWithChrome({ chrome, profile, userAgent, url, timeoutMs = 60_000, settleMs = 2_500, challengeMs = 20_000 }) {
+  const browser = await openChrome({ chrome, profile, userAgent });
+  if (browser.error) return { error: browser.error };
+  try {
+    return await browser.read(url, { timeoutMs, settleMs, challengeMs });
+  } finally {
+    await browser.close();
   }
 }
