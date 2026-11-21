@@ -67,6 +67,9 @@
  *   --runner fetch|claude (default fetch)
  *   --max-parallel N     scans read at the same time (default 10 — a safety net, not a working limit; the claude runner is always 1)
  *   --render auto|off    headless Chrome for empty pages and JS-built navigation (default auto; off = plain fetch only)
+ *   --reader auto|chrome how pages are read (default auto: plain HTTP, Chrome for a page the site refuses; chrome: every
+ *                        page with the installed Chrome from the first one). <state-dir>/station.json {"reader":"chrome"}
+ *                        sets it for a station started by its LaunchAgent; the flag wins.
  *   --chrome PATH        the Chrome binary (default: PMOS_CHROME, else the Mac's /Applications path)
  *   --pause-ms N         pause between pages of one site in the fetch runner (default 2000)
  *   --slowdown-waits-ms A,B,C  TESTS ONLY: the waits after a "slow down" answer (default 60000,120000,300000; "" = stop at the first)
@@ -110,6 +113,16 @@ const PAUSE_MS = Number(flag("pause-ms", "2000"));
 /** The waits after a "slow down" answer (pace.mjs). The flag is a test knob: real stations use the default. */
 const SLOWDOWN_WAITS = has("slowdown-waits-ms") ? String(flag("slowdown-waits-ms", "")).split(",").map((v) => v.trim()).filter(Boolean).map(Number).filter((n) => n >= 0) : SLOWDOWN_WAITS_MS;
 const RENDER = flag("render", "auto");
+/** How pages are read: "auto" (plain HTTP first) or "chrome" (every page with Chrome). The flag, else <state-dir>/station.json, else auto. */
+const READER = (() => {
+  const asked = flag("reader", "");
+  if (asked === "chrome" || asked === "auto") return asked;
+  try {
+    return JSON.parse(readFileSync(join(STATE_DIR, "station.json"), "utf8")).reader === "chrome" ? "chrome" : "auto";
+  } catch {
+    return "auto";
+  }
+})();
 const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 /** Headless renders per scan are bounded: home, hubs and empty pages only. */
 const MAX_RENDERS = 40;
@@ -407,11 +420,15 @@ async function chromeReaderAvailable(slog) {
  * A page the site refused on the plain request, read with the installed Chrome (chrome.mjs) — in the same one-at-a-time
  * turn as the renders: one profile folder. Returns a page as readOnce does; "blocked" when Chrome was refused too.
  */
+/** One Chrome profile folder per site, and one read at a time per site: different sites are read side by side. The folder keeps the site's cookies between reads and between scans, as a person's browser does. */
+const siteTurns = new Map();
 function readRefusedWithChrome(url, started, host) {
-  const mine = renderTurn.then(async () => {
-    const r = await readWithChrome({ chrome: CHROME, profile: CHROME_PROFILE, userAgent: BROWSER_UA, url });
+  const profile = join(STATE_DIR, "chrome-profiles", host.replace(/[^a-z0-9.-]/gi, "_"));
+  const mine = (siteTurns.get(host) ?? Promise.resolve()).then(async () => {
+    mkdirSync(profile, { recursive: true });
+    const r = await readWithChrome({ chrome: CHROME, profile, userAgent: BROWSER_UA, url });
     const ms = Date.now() - started;
-    if (r.error) return { url, status: "blocked", ms, viaChrome: true, chromeNote: r.error };
+    if (r.error) return { url, status: "blocked", ms, viaChrome: true, chromeFailed: true, chromeNote: r.error };
     const status = judgeChromeRead(r);
     if (status !== "ok") return { url, status, ms, viaChrome: true, chromeNote: `Chrome got HTTP ${r.status ?? "no answer"}` };
     let finalUrl;
@@ -423,7 +440,7 @@ function readRefusedWithChrome(url, started, host) {
     if (siteOf(finalUrl) !== host) return { url, status: "notfound", ms, viaChrome: true, error: `redirected outside the site (${finalUrl.hostname})` };
     return { url, status: "ok", html: r.html, ms, finalUrl: finalUrl.href, viaChrome: true };
   });
-  renderTurn = mine.then(() => undefined, () => undefined);
+  siteTurns.set(host, mine.then(() => undefined, () => undefined));
   return mine;
 }
 
@@ -581,7 +598,11 @@ async function runFetch(job, limits, post, saved, scan) {
   /** "Slow down" answers in a row on the page being read. */
   let slowDowns = 0;
   /** The site refuses the plain request and answers Chrome: the rest of the scan is read with Chrome (kept across a continuation). */
-  let chromeOnly = saved?.chromeOnly ?? false;
+  let chromeOnly = (READER === "chrome" && (await chromeReaderAvailable(log))) || (saved?.chromeOnly ?? false);
+  if (READER === "chrome" && chromeOnly) log("  reader: Chrome for every page of this scan (station setting)");
+  /** Pages that used up their slow-down waits once and went to the end of the line; and how many pages in a row did. */
+  const sentToEnd = new Set();
+  let usedUpInARow = 0;
   /** Pages in a row the site refused — on the plain request and, where it can be used, in Chrome too. */
   let refused = 0;
   let renders = saved?.renders ?? 0;
@@ -624,6 +645,13 @@ async function runFetch(job, limits, post, saved, scan) {
       // The site refuses the plain request: asking it again for every page would only be refused again.
       body = await readRefusedWithChrome(url, started, host);
       body.attempts = 1;
+      if (body.chromeFailed) {
+        // Chrome could not open it at all (a download, not a page; Chrome did not start): the plain request says what it is.
+        const note = body.chromeNote;
+        body = await readOnce(url, started, host);
+        body.attempts = 1;
+        if (body.status === "blocked") Object.assign(body, { viaChrome: true, chromeNote: note });
+      }
     }
     // PRD: a page is pending until done — up to 3 attempts on a timeout or a server error.
     else for (let attempt = 1; attempt <= 3; attempt++) {
@@ -684,6 +712,7 @@ async function runFetch(job, limits, post, saved, scan) {
     const viaChrome = Boolean(body.viaChrome);
     delete body.viaChrome;
     delete body.chromeNote;
+    delete body.chromeFailed;
     if (body.status === "binary") {
       // A download, not a page: skipped, counted for nothing (the same rule as the remote lane).
       log(`  not a web page (${body.contentType}) — skipped ${url}`);
@@ -695,6 +724,15 @@ async function runFetch(job, limits, post, saved, scan) {
       const plan = afterSlowDown({ inARow: ++slowDowns, retryAfter: body.retryAfter ?? null, pauseMs: pause, waits: SLOWDOWN_WAITS });
       delete body.retryAfter;
       if (plan.stop) {
+        usedUpInARow++;
+        if (plan.waited && usedUpInARow < 2 && !sentToEnd.has(url) && queue.length > 0) {
+          // One page that keeps answering "slow down" must not cost the rest of the site: it goes to the end, once.
+          sentToEnd.add(url);
+          queue.toEnd(url);
+          slowDowns = 0;
+          log(`  slow down (429) ${url} — still refused after the waits: put at the end of the line, going on with the other ${queue.length - 1} pages`);
+          continue;
+        }
         if ((await post(body)) === null) return { notAttempted: queue.length, ended: true };
         log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one (${plan.why})`);
         return { notAttempted: queue.length };
@@ -708,6 +746,7 @@ async function runFetch(job, limits, post, saved, scan) {
       continue;
     }
     slowDowns = 0;
+    usedUpInARow = 0;
     if (body.status === "ok" && body.html) {
       // Headless Chrome for what plain HTTP cannot show: a page with no text, or a home/hub page whose menus are built by JavaScript.
       const u = new URL(url);

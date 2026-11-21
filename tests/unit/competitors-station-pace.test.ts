@@ -43,8 +43,12 @@ describe("afterSlowDown — wait and go on, or stop", () => {
     expect(afterSlowDown({ inARow: 2, pauseMs: 5_000 })).toEqual({ stop: false, waitMs: 120_000, pauseMs: 10_000 });
     expect(afterSlowDown({ inARow: 3, pauseMs: 10_000 })).toEqual({ stop: false, waitMs: 300_000, pauseMs: 20_000 });
   });
-  it("stops the scan at the fourth slow down in a row", () => {
-    expect(afterSlowDown({ inARow: 4, pauseMs: 20_000 }).stop).toBe(true);
+  it("gives the page up at the fourth slow down in a row, and says the page had its waits", () => {
+    expect(afterSlowDown({ inARow: 4, pauseMs: 20_000 })).toMatchObject({ stop: true, waited: true });
+  });
+  it("a site that asks for too long, or a station with no waits, gives up without having waited", () => {
+    expect(afterSlowDown({ inARow: 1, retryAfter: MAX_SLOWDOWN_WAIT_MS + 1, pauseMs: 2_000 })).toMatchObject({ stop: true, waited: false });
+    expect(afterSlowDown({ inARow: 1, pauseMs: 0, waits: [] })).toMatchObject({ stop: true, waited: false });
   });
   it("waits what the site asks when that is longer than the planned wait", () => {
     expect(afterSlowDown({ inARow: 1, retryAfter: 90_000, pauseMs: 2_000 })).toMatchObject({ stop: false, waitMs: 90_000 });
@@ -110,6 +114,14 @@ describe("makeQueue — pages PM-OS has never read come first", () => {
     expect(q.next()).toBe("a");
     expect(q.next()).toBeUndefined();
     expect(q.length).toBe(0);
+  });
+  it("a page that used up its waits goes to the very end, behind the known pages", () => {
+    const q = start(["home", "a"], ["n1", "n2"]);
+    expect(q.next()).toBe("home");
+    const stuck = q.next();
+    q.toEnd(stuck);
+    expect(q.list()).toEqual(["n2", "a", "n1"]);
+    expect(q.fresh).toBe(1);
   });
   it("a saved place keeps the front part: a scan that continues still reads new pages before known ones", () => {
     const q = start(["home", "a", "b"], ["n1", "n2"]);

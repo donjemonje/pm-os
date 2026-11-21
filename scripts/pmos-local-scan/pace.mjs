@@ -7,9 +7,11 @@
  *
  *   - a site that says "slow down" is waited for, not left: the station waits (what the site asks in Retry-After, at
  *     least 1 minute; then 2, then 5 when it says it again on the same page), reads the same page again, and goes on
- *     with a longer pause between pages for the rest of the scan. After the third wait in a row without a page, the
- *     scan stops as before: the page is "not read — the site asked us to slow down", the rest is "not attempted" and
- *     the next scan continues from them;
+ *     with a longer pause between pages for the rest of the scan. After the third wait in a row without the page, that
+ *     page goes to the end of the line, once, and the scan goes on with the next page: one page that always answers
+ *     "slow down" must not cost the rest of the site (KELA's /es, 2026-11-21: 600 pages left behind it). When the very
+ *     next page ends the same way, the site is throttling everything and the scan stops as before: the page is "not
+ *     read — the site asked us to slow down", the rest is "not attempted" and the next scan continues from them;
  *   - no wait is longer than 5 minutes: PM-OS takes a scan that is silent for 10 minutes for a dead one. A site that
  *     asks for more than that ends the scan now;
  *   - pages PM-OS has never read come first, pages it already has come after them. The home page is always the very
@@ -51,11 +53,12 @@ export function slowedPause(pauseMs) {
  * Returns { stop: true } — hand the answer in and end the scan — or { stop: false, waitMs, pauseMs }: wait, read the
  * same page again, and use the new pause from here on.
  * @param {{ inARow: number, retryAfter?: number | null, pauseMs: number, waits?: number[] }} o
- * @returns {{ stop: true, why: string } | { stop: false, waitMs: number, pauseMs: number }}
+ * @returns {{ stop: true, waited: boolean, why: string } | { stop: false, waitMs: number, pauseMs: number }}
  */
 export function afterSlowDown({ inARow, retryAfter = null, pauseMs, waits = SLOWDOWN_WAITS_MS }) {
-  if (inARow > waits.length) return { stop: true, why: `the site said it ${inARow} times in a row` };
-  if (retryAfter !== null && retryAfter > MAX_SLOWDOWN_WAIT_MS) return { stop: true, why: `the site asked for ${Math.round(retryAfter / 60_000)} minutes` };
+  // `waited`: the page had its waits — the caller may move on to other pages before it gives the site up.
+  if (inARow > waits.length) return { stop: true, waited: waits.length > 0, why: `the site said it ${inARow} times in a row` };
+  if (retryAfter !== null && retryAfter > MAX_SLOWDOWN_WAIT_MS) return { stop: true, waited: false, why: `the site asked for ${Math.round(retryAfter / 60_000)} minutes` };
   const planned = waits[inARow - 1];
   return { stop: false, waitMs: Math.min(Math.max(planned, retryAfter ?? 0), MAX_SLOWDOWN_WAIT_MS), pauseMs: slowedPause(pauseMs) };
 }
@@ -87,6 +90,10 @@ export function makeQueue({ queue = [], fresh = 0, known = [] } = {}) {
     next() {
       if (front > 0) front--;
       return items.shift();
+    },
+    /** The page goes to the very end: the site kept asking to slow down on it, so the other pages are read first. */
+    toEnd(k) {
+      items.push(k);
     },
     /** The page goes back to be read first (it was not read: the site asked to slow down, or the network dropped). */
     putBack(k) {
