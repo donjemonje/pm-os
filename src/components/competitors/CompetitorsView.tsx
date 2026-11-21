@@ -933,9 +933,11 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
       <tr data-testid={isSuggested ? "cmp-suggested-domain" : undefined}>
         <td colSpan={colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
-            <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : domain.summary || undefined}>
+            {/* The whole header opens and closes the group. A div with the button role, not a button: the info button sits inside it. */}
+            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen((v) => !v); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
               <span className="text-[14px] font-bold">{domain.name}</span>
+              {!isSuggested && <DomainInfo name={domain.name} covers={domain.summary || domain.description} doneBy={domain.doneBy} />}
               {isSuggested ? (
                 <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-2 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedDomain} · {C.settings.suggestedBy(suggestedBy)}</span>
               ) : (
@@ -947,7 +949,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
-            </button>
+            </div>
             {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
@@ -1109,6 +1111,59 @@ function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: s
     <span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
       <button type="button" onClick={() => onDecide("active")} title={approve} aria-label={approve} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
       <button type="button" onClick={() => onDecide("dismissed")} title={declineHint} aria-label={decline} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
+    </span>
+  );
+}
+
+/**
+ * Small (i) after a domain name: click opens a card with what the domain covers; "Show more" adds who does the work.
+ * Esc or a click outside closes it. Nothing here reaches the group's open/close toggle it sits in.
+ */
+function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; doneBy: string }) {
+  const [open, setOpen] = useState(false);
+  const [more, setMore] = useState(false);
+  const close = () => { setOpen(false); setMore(false); };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setMore(false); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  const text = covers.split("\n").map((l) => l.trim()).filter(Boolean);
+  return (
+    <span className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => (open ? close() : setOpen(true))}
+        aria-label={C.matrix.domainInfoToggle(name)}
+        aria-expanded={open}
+        className={cn("inline-flex h-5 w-5 items-center justify-center rounded-full text-fg-faint hover:bg-white hover:text-fg-2", open && "bg-white text-primary shadow-[0_0_0_2px_var(--app-accent-soft)]")}
+        data-testid="cmp-domain-info"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24] cursor-default" onClick={close} />
+          <div className="absolute left-0 top-[calc(100%+6px)] z-[25] w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
+            <div className="mb-1 flex items-start gap-2">
+              <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
+              <button type="button" onClick={close} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
+            </div>
+            <div className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.matrix.domainCovers}</div>
+            {text.length ? text.map((l, i) => <p key={i} className="m-0">{l}</p>) : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
+            {doneBy && more && (
+              <div className="mt-2" data-testid="cmp-domain-done-by">
+                <div className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.matrix.domainDoneBy}</div>
+                <p className="m-0">{doneBy}</p>
+              </div>
+            )}
+            {doneBy && (
+              <button type="button" onClick={() => setMore((v) => !v)} aria-expanded={more} className="mt-1.5 text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-domain-more">{more ? C.matrix.showLess : C.matrix.showMore}</button>
+            )}
+          </div>
+        </>
+      )}
     </span>
   );
 }

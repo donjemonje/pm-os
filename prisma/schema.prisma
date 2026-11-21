@@ -673,6 +673,8 @@ model CompetitorDomain {
   description String    @default("")
   /// Two or three plain sentences for people: the matrix tooltip and the profile deep dive.
   summary     String    @default("")
+  /// Who does this domain's work (roles and teams), for people: shown under "show more" in the domain's info card.
+  doneBy      String    @default("")
   /// Chip color — a palette id from lib/ideas/colors.ts, never a hex.
   color       String?
   position    Int       @default(0)
