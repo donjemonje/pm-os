@@ -71,6 +71,11 @@ describe("which sources are scanned addresses", () => {
   });
   it("a source is bounded by its own site: the company's host for the website, the address's host for the others", () => {
     expect(sourceSiteHost({ type: "website", url: "https://www.acme.com" }, MAIN)).toBe("acme.com");
+    // The main website stays bounded by the company's host; a second website source on another site, by its own.
+    expect(sourceSiteHost({ type: "website", url: "https://acme.com/products" }, MAIN)).toBe("acme.com");
+    expect(sourceSiteHost({ type: "website", url: "https://shop.acme.com" }, MAIN)).toBe("acme.com");
+    expect(sourceSiteHost({ type: "website", url: "https://acme-labs.io" }, MAIN)).toBe("acme-labs.io");
+    expect(sourceSiteHost({ type: "website", url: "not a url" }, MAIN)).toBe("acme.com");
     expect(sourceSiteHost({ type: "helpcenter", url: "https://support.acme.com" }, MAIN)).toBe("support.acme.com");
     expect(sourceSiteHost({ type: "helpcenter", url: "https://acme.zendesk.com" }, MAIN)).toBe("acme.zendesk.com");
     expect(sourceSiteHost({ type: "apidocs", url: "not a url" }, MAIN)).toBe("acme.com");
