@@ -6,9 +6,29 @@
  * customer). Every 15 minutes it asks PM-OS which competitor scans are
  * waiting for a station and runs them, without asking (Daniel 2026-11-12:
  * the scan reads the site in the background, not in the PM's browser, so
- * there is nothing to approve). Scans run one at a time. What the station is
- * doing is written to <state-dir>/status.json, which the menu bar indicator
- * (menubar.swift) shows. The station is a server:
+ * there is nothing to approve).
+ *
+ * Several scans run at the same time (Daniel 2026-11-16): up to 10, each of a
+ * different site; two scans of one site never run together, the second waits
+ * for the first; more than 10 wait their turn and start as running ones end.
+ * The rule is schedule.mjs. Everything else is per scan, as before: the pause
+ * between the pages of one site, the scan's saved place (places.mjs — one
+ * file per scan), the time limit, the hand-in and the done call. While scans
+ * run the station checks in again every 15 minutes, so a scan requested in the
+ * meantime starts without waiting for the running ones to end.
+ *
+ * With every scan of a company's MAIN website the station also brings what the
+ * search for the company's other addresses needs (help center, developer docs,
+ * release notes) — Daniel 2026-11-16: the search follows the scan lanes, so
+ * while remote scanning is off PM-OS itself requests nothing from a company's
+ * site. Right after the home page is handed in: the site's /llms.txt, then the
+ * short list of addresses PM-OS gives (what the company named, the guessed
+ * names in front of its domain, one made-up name), one request per pause, stop
+ * on 429; PM-OS applies every rule (addresses.mjs). PM-OS says which scans
+ * want it (`addresses: true` in the waiting list); an older PM-OS never does.
+ *
+ * What the station is doing is written to <state-dir>/status.json, which the
+ * menu bar indicator (menubar.swift) shows. The station is a server:
  * it holds a machine key with no expiry (~/.pmos/station-key), which PM-OS
  * rotates on its own every 30 days through the check-in call.
  *
@@ -22,9 +42,14 @@
  *           the home / hub pages when their navigation is built by JavaScript,
  *           are rendered with the installed Chrome in headless mode. PDFs are
  *           downloaded and handed in as documents.
+ *           PARALLEL: yes — every scan is its own loop of plain HTTP reads.
+ *           The headless Chrome is the one shared thing (one profile folder):
+ *           renders go one at a time across all running scans.
  *   claude  Claude Code with Claude in Chrome — kept for later (judgment on odd
  *           sites); it cannot export a real page's HTML unattended, so it is
  *           not the default. --runner claude selects it.
+ *           PARALLEL: no — one Chrome, one browser session, and no saved
+ *           place: one scan at a time, whatever --max-parallel says.
  *           Same hand-in route either way; the server extracts, normalizes and hashes.
  *
  * No dependencies. Node 20+.
@@ -34,18 +59,25 @@
  *   --app-url URL        PM-OS origin (default: PMOS_APP_URL or https://app.pm-os.io)
  *   --key-file PATH      machine key file (default: ~/.pmos/station-key)
  *   --runner fetch|claude (default fetch)
+ *   --max-parallel N     scans read at the same time (default 10 — a safety net, not a working limit; the claude runner is always 1)
  *   --render auto|off    headless Chrome for empty pages and JS-built navigation (default auto; off = plain fetch only)
  *   --chrome PATH        the Chrome binary (default: PMOS_CHROME, else the Mac's /Applications path)
- *   --pause-ms N         pause between pages in the fetch runner (default 2000)
- *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit)
- *   --state-dir PATH     where the status file and the log live (default ~/.pmos)
+ *   --pause-ms N         pause between pages of one site in the fetch runner (default 2000)
+ *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit) — per scan
+ *   --state-dir PATH     where the status file, the saved places and the log live (default ~/.pmos)
+ *   --recheck-ms N       while scans run, ask PM-OS for new waiting scans this often (default 15 min)
+ *   --allow-private      TESTS ONLY: the search for other addresses may ask addresses on this machine (a fixture site)
  */
 import { execFile, spawn } from "node:child_process";
+import { lookup } from "node:dns/promises";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runAddressStep } from "./addresses.mjs";
+import { adoptLegacyPlace, clearPlace, loadPlace, loadPlaces, markStopped, savePlace } from "./places.mjs";
+import { NO_SCAN, orderWaiting, parallelLimit, pickNext, siteKey, statusOf } from "./schedule.mjs";
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
@@ -61,14 +93,20 @@ const APP_URL = (flag("app-url", process.env.PMOS_APP_URL || "https://app.pm-os.
 const STATUS_FILE = join(STATE_DIR, "status.json");
 const LOG_FILE = join(STATE_DIR, "local-scan.log");
 const POLL_MS = 15 * 60_000;
+/** While scans run: how often the station asks PM-OS for scans that started waiting in the meantime. */
+const RECHECK_MS = Number(flag("recheck-ms", String(POLL_MS))) || POLL_MS;
+/** Scans read at the same time, as asked (schedule.mjs parallelLimit decides: default 10, the claude runner 1). */
+const MAX_PARALLEL_FLAG = flag("max-parallel", "");
 const PAUSE_MS = Number(flag("pause-ms", "2000"));
 const RENDER = flag("render", "auto");
 const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 /** Headless renders per scan are bounded: home, hubs and empty pages only. */
 const MAX_RENDERS = 40;
-/** The render's own Chrome profile (never the PM's). */
+/** The render's own Chrome profile (never the PM's). One folder, so one render at a time — see renderWithChrome. */
 const CHROME_PROFILE = join(STATE_DIR, "chrome-profile");
 const MAX_MINUTES_FLAG = Number(flag("max-minutes", "0")) || 0;
+/** TESTS ONLY: the search for other addresses may ask addresses on this machine (a fixture site). Never set on a real station. */
+const ALLOW_PRIVATE = has("allow-private");
 /** A browser's own identity — this is a person's machine, not the PM-OS crawler. */
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
@@ -76,6 +114,7 @@ mkdirSync(STATE_DIR, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** The station log. Lines of one scan carry its site in front ("[acme.com] …"): several scans write at the same time. */
 function log(msg) {
   const line = `${new Date().toISOString()} ${msg}`;
   console.log(line);
@@ -88,8 +127,13 @@ function log(msg) {
 
 /**
  * What the station is doing, for the menu bar indicator: one small JSON file, replaced whole on every change.
- *   state      "idle" | "scanning" | "unreachable"
- *   lastCheckIn, message, and while scanning: competitor, site, pagesRead, scanStartedAt, waiting (scans after this one)
+ *   state      "idle" | "scanning" | "offline" | "unreachable"
+ *   lastCheckIn, message, station
+ *   while scanning (schedule.mjs statusOf):
+ *     competitor, site, pagesRead, scanStartedAt   the OLDEST running scan — what these fields always meant
+ *     waiting    scans this station has not started yet
+ *     running    how many scans are being read now                          (new 2026-11-16)
+ *     scans      one entry per running scan: scanId, competitor, site, pagesRead, startedAt, state   (new 2026-11-16)
  *   lastScan   { competitor, pagesRead, finishedAt, result } of the scan that ended last
  */
 let station = { appUrl: APP_URL, state: "idle" };
@@ -99,8 +143,12 @@ try {
 } catch {
   // first run, or an unreadable file: start clean
 }
-function status(patch) {
-  station = { ...station, ...patch, appUrl: APP_URL, updatedAt: new Date().toISOString() };
+/** The scans this process is reading now, oldest first (a Map keeps the order they started in): scanId → { scanId, competitor, siteUrl, pagesRead, startedAt, offline }. */
+const LIVE = new Map();
+/** Scans this station holds and has not started yet (held by the limit or by their site). */
+let notStarted = 0;
+function status(patch = {}) {
+  station = { ...station, ...patch, ...(LIVE.size ? statusOf([...LIVE.values()], notStarted) : {}), appUrl: APP_URL, updatedAt: new Date().toISOString() };
   try {
     writeFileSync(`${STATUS_FILE}.tmp`, JSON.stringify(station, null, 1));
     renameSync(`${STATUS_FILE}.tmp`, STATUS_FILE);
@@ -109,51 +157,18 @@ function status(patch) {
   }
 }
 
-// ————— The scan's saved place (Daniel 2026-11-12) —————
+// ————— The scans' saved places (Daniel 2026-11-12; one per scan since 2026-11-16) —————
 //
-// One file, written before every page: what is left to read, what was already seen, the counters. Whatever stops the
-// station — the network, a shutdown, a crash, a power cut — the next check-in finds this file, tells PM-OS why the scan
-// stopped, and continues with the page it was on. The file is removed only when the scan is over on the server.
+// One file per scan (places.mjs), written before every page: what is left to read, what was already seen, the counters.
+// Whatever stops the station — the network, a shutdown, a crash, a power cut — the next check-in finds these files,
+// tells PM-OS why each scan stopped, and continues each with the page it was on. A file is removed only when its scan
+// is over on the server. The single file of the one-scan-at-a-time station is picked up at the first check-in.
 
-const SCAN_STATE_FILE = join(STATE_DIR, "scan-state.json");
 /** Offline: wait this long for the network before the scan is parked for the next check-in. */
 const OFFLINE_WAIT_MS = Number(flag("offline-wait-ms", String(5 * 60_000)));
 const OFFLINE_PROBE_EVERY_MS = Number(flag("offline-probe-ms", "15000"));
 /** Two neutral "is the internet there" addresses (the ones macOS and Android use). Nothing of PM-OS or the scan is sent. */
 const PROBES = flag("probe-urls", "http://captive.apple.com/hotspot-detect.html,https://www.gstatic.com/generate_204").split(",").filter(Boolean);
-
-function loadScanState() {
-  try {
-    const s = JSON.parse(readFileSync(SCAN_STATE_FILE, "utf8"));
-    return s && typeof s.scanId === "string" && Array.isArray(s.queue) && Array.isArray(s.seen) ? s : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveScanState(state) {
-  try {
-    writeFileSync(`${SCAN_STATE_FILE}.tmp`, JSON.stringify({ ...state, savedAt: new Date().toISOString() }));
-    renameSync(`${SCAN_STATE_FILE}.tmp`, SCAN_STATE_FILE);
-  } catch (e) {
-    log(`  could not save the scan's place: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-function clearScanState() {
-  try {
-    unlinkSync(SCAN_STATE_FILE);
-  } catch {
-    // nothing saved
-  }
-}
-
-/** Marks why the scan stopped, on the place already saved. Synchronous: it runs in signal and crash handlers. */
-function markStopped(reason, detail) {
-  const s = loadScanState();
-  if (!s || s.stopped) return;
-  saveScanState({ ...s, stopped: { reason, at: new Date().toISOString(), ...(detail ? { detail: String(detail).slice(0, 200) } : {}) } });
-}
 
 /** True when this Mac reaches the internet at all — tells "the site did not answer" from "we are offline". */
 async function online() {
@@ -169,7 +184,7 @@ async function online() {
 }
 
 // One station per state folder (Tomer's review 2026-11-15): a second poller on the same folder would report the live
-// scan's saved place as a dead one, PM-OS would hand the scan out again and both would read the same site.
+// scans' saved places as dead ones, PM-OS would hand the scans out again and both would read the same sites.
 const PID_FILE = join(STATE_DIR, "station.pid");
 try {
   const other = Number(readFileSync(PID_FILE, "utf8"));
@@ -190,18 +205,26 @@ process.on("exit", () => {
   }
 });
 
-const STOPPED = { state: "idle", message: "Station stopped — the scan continues at the next check-in", competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 };
+/**
+ * The station is going down: every scan it is reading gets the reason on its saved place (only those — a scan that is
+ * waiting its turn with an older place keeps the reason it has). Synchronous: it runs in signal and crash handlers.
+ * Returns how many running scans have a saved place.
+ */
+function stopAll(reason, detail) {
+  const saved = [...LIVE.keys()].filter((id) => markStopped(STATE_DIR, id, reason, detail)).length;
+  LIVE.clear();
+  if (saved) status({ ...NO_SCAN, state: "idle", message: saved === 1 ? "Station stopped — the scan continues at the next check-in" : `Station stopped — ${saved} scans continue at the next check-in` });
+  return saved;
+}
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.on(sig, () => {
-    markStopped("shutdown");
-    if (loadScanState()) status(STOPPED);
-    log(`station stopped (${sig})${loadScanState() ? " — the scan's place is saved" : ""}`);
+    const saved = stopAll("shutdown");
+    log(`station stopped (${sig})${saved === 1 ? " — the scan's place is saved" : saved ? ` — the places of ${saved} scans are saved` : ""}`);
     process.exit(0);
   });
 }
 process.on("uncaughtException", (e) => {
-  markStopped("error", e instanceof Error ? e.message : e);
-  if (loadScanState()) status(STOPPED);
+  stopAll("error", e instanceof Error ? e.message : e);
   log(`station error: ${e instanceof Error ? e.stack || e.message : String(e)}`);
   process.exit(1);
 });
@@ -242,15 +265,33 @@ async function api(path, init = {}, timeoutMs = 120_000) {
   return json;
 }
 
-async function checkIn(key, saved) {
-  // A saved place means the last scan did not finish on this station: PM-OS hears which scan, why and when, and hands it back.
-  const resume = saved
-    ? `?${new URLSearchParams({ resume: saved.scanId, reason: saved.stopped?.reason ?? "crash", stoppedAt: saved.stopped?.at ?? saved.savedAt ?? "", pages: String(saved.pagesRead ?? 0), left: String(saved.queue.length) })}`
-    : "";
-  const json = await api(`/api/competitors/local/waiting${resume}`, { headers: { authorization: `Bearer ${key}` } });
-  if (json.rotatedKey) {
-    writeFileSync(KEY_FILE, json.rotatedKey, { mode: 0o600 });
-    log("machine key rotated by PM-OS (30 days) — new key stored");
+/**
+ * One check-in. `places` are the saved places of scans that did not finish on this station: PM-OS hears which scans,
+ * why and when, and hands them back (the five values of a place are repeated once per scan, in the same order).
+ * A PM-OS that does not name the scans it heard (`resumed`) heard only the first: the others are told one by one, the
+ * way the one-scan-at-a-time station did, so no saved place is ever dropped unheard.
+ */
+async function checkIn(places = []) {
+  const call = async (list) => {
+    const q = new URLSearchParams();
+    for (const p of list) {
+      q.append("resume", p.scanId);
+      q.append("reason", p.stopped?.reason ?? "crash");
+      q.append("stoppedAt", p.stopped?.at ?? p.savedAt ?? "");
+      q.append("pages", String(p.pagesRead ?? 0));
+      q.append("left", String(p.queue.length));
+    }
+    const json = await api(`/api/competitors/local/waiting${list.length ? `?${q}` : ""}`, { headers: { authorization: `Bearer ${readKey()}` } });
+    if (json.rotatedKey) {
+      writeFileSync(KEY_FILE, json.rotatedKey, { mode: 0o600 });
+      log("machine key rotated by PM-OS (30 days) — new key stored");
+    }
+    return json;
+  };
+  let json = await call(places);
+  if (places.length > 1) {
+    const heard = new Set(Array.isArray(json.resumed) ? json.resumed : [places[0].scanId]);
+    for (const p of places) if (!heard.has(p.scanId)) json = await call([p]);
   }
   return json;
 }
@@ -318,16 +359,27 @@ async function chromeAvailable() {
   return chromeChecked;
 }
 
+/**
+ * One headless Chrome at a time, whatever the number of running scans: every render uses the same profile folder, and a
+ * second Chrome started on a profile that is in use hands its URL to the first one and prints nothing. A scan that
+ * needs a render waits for the one before it (45 s at most each; a scan renders 40 pages at most).
+ */
+let renderTurn = Promise.resolve();
+
 /** Render a page with the installed Chrome, headless, and return the DOM after the page ran. null on failure. */
-async function renderWithChrome(url) {
-  try {
-    // Its own profile folder: without one Chrome hands the URL to the PM's running Chrome and prints nothing.
-    const { stdout } = await run(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", `--user-data-dir=${CHROME_PROFILE}`, `--user-agent=${BROWSER_UA}`, "--virtual-time-budget=6000", "--timeout=30000", "--dump-dom", url], { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 });
-    return stdout && stdout.length > 100 ? stdout : null;
-  } catch (e) {
-    log(`  render failed ${url}: ${String(e).split("\n")[0].slice(0, 120)}`);
-    return null;
-  }
+function renderWithChrome(url, slog) {
+  const mine = renderTurn.then(async () => {
+    try {
+      // Its own profile folder: without one Chrome hands the URL to the PM's running Chrome and prints nothing.
+      const { stdout } = await run(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--hide-scrollbars", `--user-data-dir=${CHROME_PROFILE}`, `--user-agent=${BROWSER_UA}`, "--virtual-time-budget=6000", "--timeout=30000", "--dump-dom", url], { timeout: 45_000, maxBuffer: 20 * 1024 * 1024 });
+      return stdout && stdout.length > 100 ? stdout : null;
+    } catch (e) {
+      slog(`  render failed ${url}: ${String(e).split("\n")[0].slice(0, 120)}`);
+      return null;
+    }
+  });
+  renderTurn = mine.then(() => undefined, () => undefined);
+  return mine;
 }
 
 /**
@@ -419,8 +471,13 @@ async function discoverSitemaps(siteUrl, host) {
   return { pages, summary: `${files} sitemap file${files === 1 ? "" : "s"}, ${pages.length} URLs${robots ? ", robots.txt read for Sitemap lines only" : ""}` };
 }
 
-/** The fetch runner: this machine's own HTTP; robots.txt rules are not obeyed (a person's browser acting on a person's intent). */
-async function runFetch(job, limits, post, saved) {
+/**
+ * The fetch runner: this machine's own HTTP; robots.txt rules are not obeyed (a person's browser acting on a person's intent).
+ * `scan` is this scan's own corner of the station — its log (lines carry the site), its saved place, its line in the
+ * status file — so several of these loops run side by side without touching each other.
+ */
+async function runFetch(job, limits, post, saved, scan) {
+  const log = scan.log;
   const host = siteOf(new URL(job.siteUrl));
   const seen = new Set(saved?.seen ?? []);
   const queue = saved ? [...saved.queue] : [];
@@ -473,12 +530,21 @@ async function runFetch(job, limits, post, saved) {
   }
   /** Pages read but lost on the way in: PM-OS refused the page AND the not-read note for it. Reported with done as not attempted. */
   let lost = saved?.lost ?? 0;
+  // The search for the company's other addresses (help center, developer docs, release notes) follows the scan lanes:
+  // with a scan of a company's main website (job.addresses) the station brings what the search needs, once, right
+  // after it handed the home page in (addresses.mjs). A scan that continues after a stop does not bring it again.
+  const homeKey = pageKey(new URL(job.siteUrl), job.siteUrl);
+  let addressesDone = !job.addresses || saved?.addresses === "done";
   /** The scan's place, with the page being read still first in the queue — a stop in the middle of a page reads it again. */
-  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0 });
+  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0, ...(addressesDone && job.addresses ? { addresses: "done" } : {}) });
   while (queue.length) {
     if (elapsedBefore + Date.now() - t0 > limits.ms) break;
     const url = queue.shift();
-    saveScanState(place(url));
+    /** The home page as it is handed in, when the search for the company's other addresses is still to be fed. */
+    let homePage = null;
+    scan.save(place(url));
+    // The pause between two pages of THIS site. Other sites are read by other scans in the meantime; no other scan of
+    // this site runs (schedule.mjs), so the site sees one request per pause, as it always did.
     if (n > 0 && PAUSE_MS > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
     n++;
     const started = Date.now();
@@ -496,7 +562,7 @@ async function runFetch(job, limits, post, saved) {
       if (!(await online())) {
         const since = Date.now();
         log(`  network lost at ${url} — waiting up to ${Math.round(OFFLINE_WAIT_MS / 60_000)} min`);
-        status({ state: "offline", message: "Network lost — the scan waits" });
+        scan.offline(true);
         let back = false;
         while (Date.now() - since < OFFLINE_WAIT_MS) {
           await sleep(OFFLINE_PROBE_EVERY_MS);
@@ -506,12 +572,12 @@ async function runFetch(job, limits, post, saved) {
           }
         }
         if (!back) {
-          markStopped("network");
+          scan.stopped("network");
           log(`  network still down after ${Math.round((Date.now() - since) / 60_000)} min — scan parked, ${queue.length + 1} pages left; it continues from this page at the next check-in`);
           return { paused: "network", notAttempted: queue.length + 1 };
         }
         log(`  network back after ${Math.round((Date.now() - since) / 1000)} s — continuing`);
-        status({ state: "scanning", message: `Scanning ${job.competitorName}` });
+        scan.offline(false);
         if (free++ < 20) attempt--;
         continue;
       }
@@ -540,11 +606,12 @@ async function runFetch(job, limits, post, saved) {
     if (body.status === "ok" && body.html) {
       // Headless Chrome for what plain HTTP cannot show: a page with no text, or a home/hub page whose menus are built by JavaScript.
       const u = new URL(url);
+      const plainHtml = body.html;
       const links = inSiteLinks(body.html, body.finalUrl || url, host);
       const empty = roughText(body.html).length < 200;
       if (renders < MAX_RENDERS && (empty || (isHub(u) && links < 8)) && (await chromeAvailable())) {
         renders++;
-        const rendered = await renderWithChrome(url);
+        const rendered = await renderWithChrome(url, log);
         if (rendered && (roughText(rendered).length > roughText(body.html).length || inSiteLinks(rendered, body.finalUrl || url, host) > links)) {
           body.html = rendered;
           body.rendered = true;
@@ -560,6 +627,7 @@ async function runFetch(job, limits, post, saved) {
           // skip
         }
       }
+      if (!addressesDone && url === homeKey) homePage = { url, finalUrl: body.finalUrl || url, html: body.html, ...(body.rendered ? { plainHtml } : {}) };
       delete body.finalUrl;
       delete body.rendered;
     }
@@ -579,8 +647,8 @@ async function runFetch(job, limits, post, saved) {
     if (r && r.refused && /^network/.test(r.refused) && !(await online())) {
       // The network dropped during the hand-in: the page is not lost — it goes back to the front and the scan is parked.
       queue.unshift(url);
-      saveScanState(place());
-      markStopped("network");
+      scan.save(place());
+      scan.stopped("network");
       log(`  network lost while handing in ${url} — scan parked, ${queue.length} pages left; it continues from this page at the next check-in`);
       return { paused: "network", notAttempted: queue.length };
     }
@@ -597,6 +665,20 @@ async function runFetch(job, limits, post, saved) {
       continue;
     }
     log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);
+    if (homePage) {
+      // PM-OS has the home page: bring the rest of what the search for the company's other addresses needs — the site's
+      // /llms.txt and what the addresses PM-OS lists answer. One request per pause, like the pages; it never fails the scan.
+      await runAddressStep({
+        siteUrl: job.siteUrl,
+        home: homePage,
+        call: (payload) => api(`/api/competitors/local/scans/${job.scanId}/addresses`, { method: "POST", headers: { authorization: `Bearer ${job.token}` }, body: JSON.stringify(payload) }),
+        pause: () => (PAUSE_MS > 0 ? sleep(PAUSE_MS) : Promise.resolve()),
+        online,
+        deps: { fetch: (u, init) => fetch(u, init), lookup: (h) => lookup(h, { all: true }), allowPrivate: ALLOW_PRIVATE, userAgent: BROWSER_UA, timeoutMs: 20_000 },
+        log,
+      });
+      addressesDone = true;
+    }
   }
   return { notAttempted: queue.length + lost };
 }
@@ -606,9 +688,10 @@ async function runFetch(job, limits, post, saved) {
  * PM's browser and hand each page in through a small script (the scan token
  * stays in the script, out of Claude's own commands). Claude is allowed the
  * browser tools, file writes under the scan's temp folder and that script —
- * nothing else.
+ * nothing else. One scan at a time (schedule.mjs parallelLimit): it drives the
+ * one Chrome on this Mac.
  */
-async function runClaude(job, limits, token) {
+async function runClaude(job, limits, token, log) {
   const dir = join(tmpdir(), `pmos-local-scan-${job.scanId}`);
   mkdirSync(dir, { recursive: true });
   // The scan token and route live in the scan folder; handin.sh (what Claude is allowed to run) calls handin.mjs with them.
@@ -665,46 +748,69 @@ When you are done, or the limits are reached, print exactly one final line: DONE
 
 // ————— One scan —————
 
-async function runJob(job, runner, key) {
+/**
+ * Reads one site and hands it in. `live` is this scan's entry in LIVE (its line in the status file); `log` writes to the
+ * station log with the site in front. Nothing here is shared with another running scan but the headless Chrome
+ * (renderWithChrome) and the status file, which is rebuilt from every running scan on each change.
+ */
+async function runJob(job, runner, live, log) {
   // No page limit (Daniel 2026-11-09): time is the station's only stop; the PM-OS store limit is the server's (it answers stop: "storage").
   const limits = { ms: MAX_MINUTES_FLAG ? MAX_MINUTES_FLAG * 60_000 : job.ceiling?.ms || 8 * 3600_000 };
   const auth = { authorization: `Bearer ${job.token}` };
   log(`scan ${job.scanId} — ${job.competitorName} (${job.siteUrl}) via ${runner}, up to ${Math.round(limits.ms / 60000)} minutes`);
   // The machine key names the station that took the scan (Administration); the scan token does the work.
-  await api(`/api/competitors/local/scans/${job.scanId}/start`, { method: "POST", headers: { ...auth, "x-pmos-station": `Bearer ${key}` } });
+  await api(`/api/competitors/local/scans/${job.scanId}/start`, { method: "POST", headers: { ...auth, "x-pmos-station": `Bearer ${readKey()}` } });
+  // This scan's own saved place: written before every page, removed when the scan is over on the server.
+  const scan = {
+    log,
+    save: (state) => {
+      try {
+        savePlace(STATE_DIR, state);
+      } catch (e) {
+        log(`  could not save the scan's place: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    stopped: (reason) => void markStopped(STATE_DIR, job.scanId, reason),
+    offline: (off) => {
+      live.offline = off;
+      status();
+    },
+  };
+  // The place saved by a scan that did not finish on this station (same scan only; the fetch runner only).
+  const state = loadPlace(STATE_DIR, job.scanId);
+  const saved = runner === "fetch" && state ? state : null;
+  if (!saved) clearPlace(STATE_DIR, job.scanId);
+  let pagesRead = saved?.pagesRead ?? 0;
+  job.pagesRead = pagesRead;
+  live.pagesRead = pagesRead;
+  if (saved) status();
   /**
    * One page in. null = the scan is over on the server (409 ended, 410 cancelled): stop reading. A page PM-OS refuses
    * (400/413/422: a bad URL, a body too large) is skipped and the scan goes on — one odd page must never cost the
    * site (Tomer's review). Anything else (network, 5xx) is retried a few times, then skipped too.
    */
-  // The place saved by a scan that did not finish on this station (same scan only; the fetch runner only).
-  const state = loadScanState();
-  const saved = runner === "fetch" && state?.scanId === job.scanId ? state : null;
-  if (!saved) clearScanState();
-  let pagesRead = saved?.pagesRead ?? 0;
-  job.pagesRead = pagesRead;
-  if (saved) status({ pagesRead });
   const post = async (body) => {
     for (let attempt = 1; ; attempt++) {
       try {
         const answer = await api(`/api/competitors/local/scans/${job.scanId}/pages`, { method: "POST", headers: auth, body: JSON.stringify(body) });
         if (body.status === "ok") {
           job.pagesRead = ++pagesRead;
-          status({ pagesRead });
+          live.pagesRead = pagesRead;
+          status();
         }
         return answer;
       } catch (e) {
         const m = /→ (\d{3}) (.*)$/.exec(e instanceof Error ? e.message : String(e));
-        const status = m ? Number(m[1]) : 0;
-        if (status === 409 || status === 410) return null;
-        if (status >= 400 && status < 500) return { refused: `${status} ${m[2].slice(0, 100)}` };
-        if (attempt >= 3) return { refused: `${status || "network"} after ${attempt} attempts` };
+        const code = m ? Number(m[1]) : 0;
+        if (code === 409 || code === 410) return null;
+        if (code >= 400 && code < 500) return { refused: `${code} ${m[2].slice(0, 100)}` };
+        if (attempt >= 3) return { refused: `${code || "network"} after ${attempt} attempts` };
         await sleep(5_000 * attempt);
       }
     }
   };
   // A scan that stopped after its last page (only the hand-in call was missing) goes straight to the hand-in.
-  const result = saved?.finished ? saved.finished : runner === "claude" ? await runClaude(job, limits, job.token) : await runFetch(job, limits, post, saved);
+  const result = saved?.finished ? saved.finished : runner === "claude" ? await runClaude(job, limits, job.token, log) : await runFetch(job, limits, post, saved, scan);
   job.pagesRead = pagesRead;
   if (result.paused) {
     // Parked with its place saved: PM-OS puts the scan back to waiting and the next check-in continues it.
@@ -712,10 +818,10 @@ async function runJob(job, runner, key) {
     return;
   }
   if (result.ended) {
-    clearScanState();
+    clearPlace(STATE_DIR, job.scanId);
     return;
   }
-  if (runner === "fetch") saveScanState({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: [], seen: [], pagesRead, finished: { notAttempted: result.notAttempted } });
+  if (runner === "fetch") scan.save({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: [], seen: [], pagesRead, finished: { notAttempted: result.notAttempted } });
   // PM-OS answers "received" at once, in every environment, and processes the pages (hash compare, page states, badge) in its
   // own runner — a Cloud Run job in production, a background task in local dev. A network blip or a 5xx is retried three
   // times (the pages are in; only this call is missing); no answer within 5 minutes each time is a real failure.
@@ -726,58 +832,166 @@ async function runJob(job, runner, key) {
       break;
     } catch (e) {
       const m = /→ (\d{3}) /.exec(e instanceof Error ? e.message : String(e));
-      const status = m ? Number(m[1]) : 0;
-      if (status === 409 || status === 410) {
-        log(`scan ${job.scanId} ended on the server before the hand-in call (${status})`);
-        clearScanState();
+      const code = m ? Number(m[1]) : 0;
+      if (code === 409 || code === 410) {
+        log(`scan ${job.scanId} ended on the server before the hand-in call (${code})`);
+        clearPlace(STATE_DIR, job.scanId);
         return;
       }
-      if ((status >= 400 && status < 500) || attempt >= 3) throw e;
-      log(`  done call failed (${status || "network"}) — retry ${attempt} in ${5 * 2 ** (attempt - 1)} s`);
+      if ((code >= 400 && code < 500) || attempt >= 3) throw e;
+      log(`  done call failed (${code || "network"}) — retry ${attempt} in ${5 * 2 ** (attempt - 1)} s`);
       await sleep(5_000 * 2 ** (attempt - 1));
     }
   }
-  clearScanState();
+  clearPlace(STATE_DIR, job.scanId);
   if (done.processing) log(`scan ${job.scanId} handed in · ${result.notAttempted} not attempted · PM-OS is processing the pages`);
   else log(`scan ${job.scanId} ${done.scan?.status} (${done.scan?.badge}) · ${done.scan?.pagesFetched} pages, ${done.scan?.pagesChanged} changed, ${done.scan?.pagesNotAttempted ?? 0} not attempted`);
 }
 
-async function once() {
-  const key = readKey();
-  const runner = await whichRunner();
-  const saved = loadScanState();
-  const data = await checkIn(key, saved);
-  // The saved scan first; a saved place PM-OS no longer wants (cancelled, finished, deleted) is dropped.
-  const waiting = [...(data.waiting ?? [])].sort((a, b) => Number(b.scanId === saved?.scanId) - Number(a.scanId === saved?.scanId));
-  if (saved && !waiting.some((w) => w.scanId === saved.scanId)) {
-    log(`the saved place of scan ${saved.scanId} (${saved.competitor ?? "?"}) is no longer wanted by PM-OS — dropped`);
-    clearScanState();
+// ————— Several scans at the same time —————
+
+/**
+ * Runs the waiting scans: as many at the same time as the limit allows, never two of one site (schedule.mjs pickNext),
+ * the rest as running ones end. Returns when nothing is running any more.
+ *   waiting   the station's list, in start order
+ *   runner    "fetch" | "claude"
+ *   limit     parallelLimit(runner, --max-parallel)
+ */
+async function runAll(waiting, runner, limit) {
+  let pending = waiting;
+  /** Scans parked because the network is gone (their place is saved; the next check-in continues them). */
+  const parked = [];
+  /** Scans over on this station: a check-in answer already on its way must not start them again. */
+  const over = new Set();
+  /** Why a waiting scan was last said to wait — each reason is logged once per scan. */
+  const told = new Map();
+  const flights = new Set();
+  let wake = () => undefined;
+
+  const launch = (job) => {
+    const site = siteKey(job.siteUrl);
+    const slog = (msg) => log(`[${site}] ${msg}`);
+    const live = { scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, pagesRead: 0, startedAt: new Date().toISOString(), offline: false };
+    LIVE.set(job.scanId, live);
+    const flight = (async () => {
+      let result = "handed in";
+      try {
+        await runJob(job, runner, live, slog);
+        if (job.paused) result = `paused: ${job.paused} lost — continues at the next check-in`;
+      } catch (e) {
+        result = `failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200);
+        slog(`scan ${job.scanId} failed on the station: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      LIVE.delete(job.scanId);
+      if (job.paused) parked.push(job.competitorName);
+      else if (!result.startsWith("failed")) over.add(job.scanId);
+      status({ lastScan: { competitor: job.competitorName, pagesRead: job.pagesRead ?? live.pagesRead ?? 0, finishedAt: new Date().toISOString(), result }, ...(LIVE.size ? {} : { ...NO_SCAN, state: "idle", message: "Nothing waiting" }) });
+    })();
+    flights.add(flight);
+    void flight.finally(() => {
+      flights.delete(flight);
+      wake();
+    });
+  };
+
+  /** Start what may start now; say once why the others wait. */
+  const fill = () => {
+    // Offline: a scan that has not started would only fail the same way. It stays waiting on PM-OS for the next check-in.
+    if (parked.length) return;
+    const { start, held } = pickNext(pending, [...LIVE.values()], limit);
+    pending = held.map((h) => h.job);
+    notStarted = pending.length;
+    for (const job of start) launch(job);
+    const byLimit = [];
+    for (const h of held) {
+      if (told.get(h.job.scanId) === h.why) continue;
+      told.set(h.job.scanId, h.why);
+      if (h.why === "site") log(`[${siteKey(h.job.siteUrl)}] ${h.job.competitorName} waits: another scan of this site is running — two scans never read one site together; it starts when that one ends`);
+      else byLimit.push(h.job.competitorName);
+    }
+    if (byLimit.length) {
+      log(runner === "claude"
+        ? `${byLimit.length} scan${byLimit.length === 1 ? " waits" : "s wait"}: the Claude runner reads one site at a time (one Chrome, one browser session) — each starts when the running one ends (${byLimit.join(", ")})`
+        : `${byLimit.length} scan${byLimit.length === 1 ? " waits" : "s wait"}: ${limit} scans are running, the most this station reads at the same time (--max-parallel ${limit}) — each starts when a running one ends (${byLimit.join(", ")})`);
+    }
+    if (LIVE.size) status();
+  };
+
+  /** While scans run: scans that started waiting in the meantime join the list; ones PM-OS no longer lists leave it. */
+  const recheck = async () => {
+    try {
+      const data = await checkIn();
+      const before = new Set(pending.map((p) => p.scanId));
+      const fresh = orderWaiting(data.waiting, [...before], [...LIVE.keys(), ...over]);
+      const listed = new Set(fresh.map((j) => j.scanId));
+      for (const p of pending) {
+        if (listed.has(p.scanId)) continue;
+        log(`[${siteKey(p.siteUrl)}] ${p.competitorName} is no longer waiting on PM-OS — dropped from this station's list`);
+        clearPlace(STATE_DIR, p.scanId);
+      }
+      const added = fresh.filter((j) => !before.has(j.scanId));
+      pending = fresh;
+      notStarted = pending.length;
+      status({ station: data.station, lastCheckIn: new Date().toISOString() });
+      if (added.length) log(`check-in as ${data.station} while ${LIVE.size} scan${LIVE.size === 1 ? " runs" : "s run"}: ${added.length} more waiting (${added.map((w) => w.competitorName).join(", ")})`);
+    } catch (e) {
+      log(`check-in while scanning failed: ${e instanceof Error ? e.message : String(e)} — the running scans go on`);
+    }
+  };
+
+  fill();
+  let nextCheck = Date.now() + RECHECK_MS;
+  while (flights.size) {
+    let timer;
+    await Promise.race([new Promise((r) => (wake = r)), new Promise((r) => (timer = setTimeout(r, Math.max(0, nextCheck - Date.now()))))]);
+    clearTimeout(timer);
+    if (Date.now() >= nextCheck) {
+      nextCheck = Date.now() + RECHECK_MS;
+      if (!parked.length && flights.size) await recheck();
+    }
+    fill();
   }
-  status({ state: "idle", station: data.station, lastCheckIn: new Date().toISOString(), message: waiting.length ? `${waiting.length} waiting` : "Nothing waiting", competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 });
+  notStarted = 0;
+  return { parked };
+}
+
+async function once() {
+  readKey();
+  const runner = await whichRunner();
+  const limit = parallelLimit(runner, MAX_PARALLEL_FLAG);
+  // The saved places of the scans this station was reading when it last stopped — the single file of the
+  // one-scan-at-a-time station included, which becomes that scan's own file here.
+  let places = [];
+  try {
+    const old = adoptLegacyPlace(STATE_DIR);
+    if (old) log(`the saved place of scan ${old.scanId} (${old.competitor ?? "?"}) was in the single file of the one-scan-at-a-time station — it now has its own file and continues`);
+    places = loadPlaces(STATE_DIR);
+  } catch (e) {
+    log(`could not read the saved places: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const data = await checkIn(places);
+  // The saved scans first; a saved place PM-OS no longer wants (cancelled, finished, deleted) is dropped.
+  const waiting = orderWaiting(data.waiting, places.map((p) => p.scanId));
+  for (const p of places) {
+    if (waiting.some((w) => w.scanId === p.scanId)) continue;
+    log(`the saved place of scan ${p.scanId} (${p.competitor ?? "?"}) is no longer wanted by PM-OS — dropped`);
+    clearPlace(STATE_DIR, p.scanId);
+  }
+  status({ ...NO_SCAN, state: "idle", station: data.station, lastCheckIn: new Date().toISOString(), message: waiting.length ? `${waiting.length} waiting` : "Nothing waiting" });
   if (!waiting.length) {
     log(`check-in as ${data.station}: nothing waiting`);
     return;
   }
-  // No dialog, no snooze (Daniel 2026-11-12): the scan runs in the background, so the station starts it at once.
+  // No dialog, no snooze (Daniel 2026-11-12): the scans run in the background, so the station starts them at once.
   log(`check-in as ${data.station}: ${waiting.length} waiting (${waiting.map((w) => w.competitorName).join(", ")})`);
-  for (const [i, job] of waiting.entries()) {
-    status({ state: "scanning", competitor: job.competitorName, site: job.siteUrl, pagesRead: 0, scanStartedAt: new Date().toISOString(), waiting: waiting.length - i - 1, message: `Scanning ${job.competitorName}` });
-    let result = "handed in";
-    try {
-      await runJob(job, runner, key);
-      if (job.paused) result = `paused: ${job.paused} lost — continues at the next check-in`;
-    } catch (e) {
-      result = `failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200);
-      log(`scan ${job.scanId} failed on the station: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    status({ lastScan: { competitor: job.competitorName, pagesRead: job.pagesRead ?? station.pagesRead ?? 0, finishedAt: new Date().toISOString(), result } });
-    // Offline: the other waiting scans would only fail the same way.
-    if (job.paused) {
-      status({ state: "idle", message: `${job.competitorName}: paused, ${job.paused} lost — continues at the next check-in`, competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 });
-      return;
-    }
+  if (waiting.length > 1) {
+    log(runner === "claude"
+      ? "the Claude runner reads one site at a time (one Chrome, one browser session) — --max-parallel does not apply"
+      : `reading up to ${limit} sites at the same time, never two scans of one site (fetch runner; pages that need Chrome are rendered one at a time)`);
   }
-  status({ state: "idle", message: "Nothing waiting", competitor: null, site: null, pagesRead: null, scanStartedAt: null, waiting: 0 });
+  const { parked } = await runAll(waiting, runner, limit);
+  if (parked.length) status({ ...NO_SCAN, state: "idle", message: `${parked.join(", ")}: paused, network lost — continues at the next check-in` });
+  else status({ ...NO_SCAN, state: "idle", message: "Nothing waiting" });
 }
 
 async function main() {

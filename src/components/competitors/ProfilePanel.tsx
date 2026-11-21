@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, ExternalLink, Flag, Lightbulb, Minus, Pencil, Plus, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { initialsOf } from "@/components/ui/Avatar";
+import { EvidenceCard } from "./EvidenceCard";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { FACT_KINDS, STATUS_VALUES, type StatusValue } from "@/lib/competitors/config";
+import { FACT_KINDS, OWN_STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import { track } from "@/lib/analytics/track";
 import { Lightbox } from "@/components/ui/Lightbox";
 import type { CapabilityRow, CellRow, CompetitorRow, DomainRow, FactRow } from "@/lib/competitors/store";
@@ -17,7 +18,7 @@ import { cn } from "@/lib/utils";
  * Competitor profile — the C2 design on the pipeline's rows only: competitor
  * chips, header (identity facts, the parity-based risk ring, fact grid),
  * timeline from dated facts, capabilities by domain and product with a deep
- * dive per capability (quote, source, confidence, history), and the side
+ * dive per capability (quote, source, history), and the side
  * column (what changed, UI gallery from the media store, sources). A section
  * whose rows are empty shows its empty state; nothing is shown that no scan
  * or PM produced.
@@ -83,26 +84,21 @@ function OkMark({ size = 22 }: { size?: number }) {
 }
 
 function CellMark({ value }: { value: StatusValue | undefined }) {
-  if (value === "has") return <OkMark />;
-  if (value === "partial") return <span className="inline-block rounded-full bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0]">Partial</span>;
-  if (value === "missing") return <span className="font-semibold text-[#5b6c85]">—</span>;
-  return <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" />;
+  if (value === "found") return <OkMark />;
+  if (value === "low") return <span className="inline-flex rounded-full border border-dashed border-[#f0b43c] p-px" title={C.matrix.lowConfidence}><OkMark size={18} /></span>;
+  if (value === "not_found") return <span className="text-[11px] text-fg-faint">{C.values.not_found}</span>;
+  return <span className="text-[12px] text-fg-faint">—</span>;
 }
 
-type Stance = "missing" | "partial" | "level" | "ahead" | "none";
-function stanceOf(theirs: StatusValue | undefined, ours: StatusValue): Stance {
-  const t = theirs ?? "unknown";
-  if (t === "has" || t === "partial") {
-    if (ours === "missing") return "missing";
-    if (ours === "partial" && t === "has") return "partial";
-    return "level";
-  }
-  if (t === "missing" && ours !== "missing") return "ahead";
-  return "none";
+type Stance = "missing" | "level" | "ahead" | "none";
+function stanceOf(theirs: StatusValue | undefined, ours: OwnStatus): Stance {
+  // No cell yet (not scanned, not analyzed): no signal either way.
+  if (theirs === undefined) return "none";
+  if (theirs === "found" || theirs === "low") return ours === "not_found" ? "missing" : "level";
+  return ours === "found" ? "ahead" : "none";
 }
 const STANCE_LABEL: Record<Stance, { text: (org: string) => string; cls: string }> = {
   missing: { text: (o) => `${o} missing`, cls: "font-semibold text-[#c23767]" },
-  partial: { text: (o) => `${o} partial`, cls: "font-semibold text-[#2a5fd0]" },
   level: { text: () => "Level", cls: "text-[#4a5b74]" },
   ahead: { text: (o) => `${o} ahead`, cls: "font-semibold text-[#0f7a47]" },
   none: { text: () => "No signal", cls: "text-fg-faint" },
@@ -110,8 +106,8 @@ const STANCE_LABEL: Record<Stance, { text: (org: string) => string; cls: string 
 
 /**
  * Risk vs the org, from the matrix alone: the share of capabilities with a
- * signal where the competitor is ahead (has/partial while the org is missing,
- * or has while the org is partial). Deterministic; no opinion involved.
+ * signal where the competitor is ahead (found there while not found at the
+ * org). Deterministic; no opinion involved.
  */
 export function riskOf(capabilities: CapabilityRow[], cellOf: (capabilityId: string) => CellRow | undefined): { score: number; level: "high" | "medium" | "low"; behind: number; total: number } | null {
   let behind = 0;
@@ -120,7 +116,7 @@ export function riskOf(capabilities: CapabilityRow[], cellOf: (capabilityId: str
     const s = stanceOf(cellOf(k.id)?.value, k.ourStatus);
     if (s === "none") continue;
     total++;
-    if (s === "missing" || s === "partial") behind++;
+    if (s === "missing") behind++;
   }
   if (total === 0) return null;
   const score = Math.round((behind / total) * 100);
@@ -516,7 +512,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
   const counts = { ahead: 0, level: 0, behind: 0 };
   for (const k of capabilities) {
     const s = stance(k);
-    if (s === "missing" || s === "partial") counts.ahead++;
+    if (s === "missing") counts.ahead++;
     else if (s === "level") counts.level++;
     else if (s === "ahead") counts.behind++;
   }
@@ -530,7 +526,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
     const isOpen = open === k.id;
     return (
       <div key={k.id} className={cn(isOpen && "bg-[rgba(36,87,245,.05)] shadow-[inset_3px_0_0_#2457f5]")}>
-        <button onClick={() => { setOpen(isOpen ? null : k.id); if (!isOpen) track("cmp_capability_dive_opened", { competitorId: c.id, capabilityId: k.id, value: cell?.value ?? "unknown", hasHistory: (cell?.history.length ?? 0) > 0 }); }} className="flex h-11 w-full items-center gap-3 border-b border-border pr-4 text-left hover:bg-white/70" style={{ paddingLeft: indent }}>
+        <button onClick={() => { setOpen(isOpen ? null : k.id); if (!isOpen) track("cmp_capability_dive_opened", { competitorId: c.id, capabilityId: k.id, value: cell?.value ?? "not_found", hasHistory: (cell?.history.length ?? 0) > 0 }); }} className="flex h-11 w-full items-center gap-3 border-b border-border pr-4 text-left hover:bg-white/70" style={{ paddingLeft: indent }}>
           <span className={cn("min-w-0 flex-1 text-[13px]", isOpen ? "font-semibold" : "font-medium text-[#1f2f47]")}>{k.name}</span>
           <CellMark value={cell?.value} />
           <span className={cn("w-[120px] text-[11.5px]", STANCE_LABEL[s].cls)}>{STANCE_LABEL[s].text(org)}</span>
@@ -555,8 +551,7 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
         const rows = capabilities.filter((k) => k.domainId === d.id);
         if (rows.length === 0) return null;
         const color = swatchColor(d.color, PRODUCT_CHIP_DEFAULT);
-        const behind = rows.filter((k) => ["missing", "partial"].includes(stance(k))).length;
-        const partial = rows.filter((k) => stance(k) === "partial").length;
+        const behind = rows.filter((k) => stance(k) === "missing").length;
         const ahead = rows.filter((k) => stance(k) === "ahead").length;
         const level = rows.filter((k) => stance(k) === "level").length;
         const prods = products.filter((p) => rows.some((k) => productOf(k) === p));
@@ -570,7 +565,6 @@ function Capabilities({ c, org, domains, capabilities, cellOf, onPatchStatus }: 
               <span className="text-[11px] text-fg-muted">domain · {prods.length} product{prods.length === 1 ? "" : "s"} · {rows.length} capabilit{rows.length === 1 ? "y" : "ies"}{prods.length ? ` · ${prods.join(", ")}` : ""}</span>
               <span className="ml-auto flex items-center gap-[18px] text-[12px]">
                 {behind > 0 && <span className="font-semibold text-[#c23767]">{org} behind on {behind}</span>}
-                {partial > 0 && <span className="font-semibold text-[#2a5fd0]">partial on {partial}</span>}
                 {level > 0 && <span className="font-semibold text-fg-3">level on {level}</span>}
                 {ahead > 0 && <span className="font-semibold text-[#0f7a47]">ahead on {ahead}</span>}
                 {isCollapsed ? <ChevronRight size={14} className="text-fg-muted" /> : <ChevronDown size={14} className="text-fg-muted" />}
@@ -622,26 +616,16 @@ function DeepDive({ org, k, cell, onPatchStatus, indent }: {
     setBusy(false);
     setFlagging(false);
   }
-  const standing = k.ourStatus === "has" ? "has" : k.ourStatus === "partial" ? "partial" : "missing";
-  const host = (u: string) => u.replace(/^https?:\/\//, "").slice(0, 70);
   return (
     <div className="flex flex-col gap-3.5 border-b border-border pb-4 pr-4 pt-0.5" style={{ paddingLeft: indent }}>
       {/* Evidence: the quote the scan kept, and where it is */}
       <div className="flex flex-col gap-1.5">
         <span className="flex items-baseline gap-2"><span className={EB}>Evidence</span><span className="text-[10.5px] text-fg-faint">{cell?.sourceUrl ? "quoted from the competitor's pages" : ""}</span></span>
-        {cell?.quote ? (
-          <>
-            <blockquote className="m-0 border-l-2 border-border pl-2.5 text-[13px] italic leading-[1.55] text-[#1f2f47]">“{cell.quote}”</blockquote>
-            {cell.sourceUrl && <a href={cell.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] text-primary hover:underline"><ExternalLink size={11} /> {host(cell.sourceUrl)}</a>}
-          </>
-        ) : (
-          <span className="text-[12.5px] text-fg-faint">{C.cell.noEvidence}</span>
-        )}
+        <EvidenceCard quote={cell?.quote ?? null} url={cell?.sourceUrl ?? null} reasoning={cell?.reasoning ?? null} wording={cell?.wording ?? null} count={cell?.evidenceCount ?? 0} empty={cell?.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
       </div>
-      {cell && (cell.confidence != null || cell.product || cell.override) && (
+      {cell && (cell.product || cell.override) && (
         <div className="flex flex-wrap gap-2.5">
           {cell.product && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Product</span><span className="text-[12.5px] font-semibold">{cell.product}</span></span>}
-          {cell.confidence != null && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Confidence</span><span className="text-[12.5px] font-semibold">{Math.round(cell.confidence * 100)}%</span></span>}
           {cell.override && <span className={cn(CARD, "min-w-[150px] flex-1")}><span className={EB}>Corrected</span><span className="text-[12.5px] font-semibold text-[#8a5a00]">{C.matrix.editedBy(cell.override.userName ?? "a PM", shortDate(cell.override.at))} · scan said {C.values[cell.scannedValue]}</span></span>}
         </div>
       )}
@@ -660,7 +644,7 @@ function DeepDive({ org, k, cell, onPatchStatus, indent }: {
       )}
       <div className="flex flex-wrap items-center gap-2 rounded-[10px] border border-border bg-[rgba(255,255,255,.72)] px-3.5 py-2.5">
         <span className="text-[12px] text-fg-3">
-          Where {org} stands: <b className={cn("font-semibold", standing === "missing" ? "text-[#8a5a00]" : standing === "partial" ? "text-[#2a5fd0]" : "text-[#0f7a47]")}>{standing}</b>
+          Where {org} stands: <b className={cn("font-semibold", k.ourStatus === "not_found" ? "text-[#8a5a00]" : "text-[#0f7a47]")}>{C.values[k.ourStatus].toLowerCase()}</b>
         </span>
         <span className="ml-auto flex items-center gap-2">
           <span title="Roadmap integration arrives with its own story"><Button size="sm" disabled><Lightbulb size={12} /> Attach to idea</Button></span>
@@ -668,7 +652,7 @@ function DeepDive({ org, k, cell, onPatchStatus, indent }: {
           {cell && flagging && (
             <span className="inline-flex items-center gap-1">
               <span className="text-[11.5px] text-fg-muted">Set to</span>
-              {STATUS_VALUES.map((v) => <button key={v} disabled={busy} onClick={() => void setValue(v)} className={cn("rounded-full border px-2 py-0.5 text-[11.5px] font-semibold", cell.value === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>)}
+              {OWN_STATUS_VALUES.map((v) => <button key={v} disabled={busy} onClick={() => void setValue(v)} className={cn("rounded-full border px-2 py-0.5 text-[11.5px] font-semibold", cell.value === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>)}
               <button onClick={() => setFlagging(false)} className="rounded p-1 text-fg-muted hover:text-foreground" aria-label="Cancel"><X size={12} /></button>
             </span>
           )}
@@ -685,7 +669,7 @@ function WhatChanged({ c, capabilities, cellOf, facts }: { c: CompetitorRow; cap
   const items: { title: string; source: string; date: string; impact: "high" | "medium" | "low"; at: number }[] = [];
   for (const k of capabilities) {
     const cell = cellOf(c.id, k.id);
-    if (cell?.changedAt && new Date(cell.changedAt).getTime() > since) items.push({ title: `${k.name}: now ${C.values[cell.value].toLowerCase()}`, source: C.profile.website, date: shortDate(cell.changedAt), impact: cell.value === "has" && k.ourStatus !== "has" ? "high" : "medium", at: new Date(cell.changedAt).getTime() });
+    if (cell?.changedAt && new Date(cell.changedAt).getTime() > since) items.push({ title: `${k.name}: now ${C.values[cell.value].toLowerCase()}`, source: C.profile.website, date: shortDate(cell.changedAt), impact: cell.value === "found" && k.ourStatus !== "found" ? "high" : "medium", at: new Date(cell.changedAt).getTime() });
   }
   for (const f of facts) {
     if (f.changedAt && new Date(f.changedAt).getTime() > since && !f.manual) items.push({ title: `${C.profile.kinds[f.kind] ?? f.kind}: ${f.value}`, source: f.sourceLabel ?? C.profile.website, date: shortDate(f.changedAt), impact: "low", at: new Date(f.changedAt).getTime() });

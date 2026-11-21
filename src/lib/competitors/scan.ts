@@ -1,13 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
-import {
-  classifyCapabilities,
-  extractFacts,
-  factDateOf,
-  type CatalogForAi,
-  type PageText,
-  type PreviousStatus,
-} from "./ai";
+import { queueAnalysis } from "./analysis/engine";
 import { recordCompetitorEvent } from "./analytics";
 import {
   ACTIVE_SCAN_STATUSES,
@@ -16,24 +9,25 @@ import {
   PAGE_RETRIES,
   scanPauseMs,
   type OutcomeCategory,
+  type PageKind,
   type ScanBadge,
   type ScanLane,
   type SourceType,
-  type StatusValue,
 } from "./config";
 import { COMPETITORS_COPY as C } from "./copy";
 import { Frontier, readRobots, readSitemap } from "./crawl";
-import { acquireBrowser, browserAvailable, fetchPage, fetchPlain, isRetryable, outcomeCategoryOf, releaseBrowser, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
-import { ogImageOf } from "./html";
+import { acquireBrowser, browserAvailable, fetchPage, isRetryable, outcomeCategoryOf, releaseBrowser, sleep, type FetchErrorKind, type FetchMode, type FetchedPage } from "./fetcher";
 import { createLocalRequest, finishLocalRequest, hasActiveScannerKey } from "./local";
-import { currentPageTexts, finalizePageStates, knownPages, markLinked, recordPage, releasePreviousTexts, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
-import { checkPii } from "./pii";
-import { aiStepEnabled, getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
-import { isPdfUrl, isInsideSite, pageKey } from "./url";
+import { finalizePageStates, knownPages, markLinked, recordPage, type PageOutcome as StoreOutcome, type PageReadStatus, type RecordPageResult } from "./pages";
+import { getGlobalScanSettings, now, scanTimeLimitMs, storageFull, storageLimitChars } from "./settings";
+import { isPdfUrl, pageKey, sourceSiteHost } from "./url";
 
 /**
- * One scan of one source, end to end, in two halves (Website Scanning PRD
- * 2026-11-04):
+ * One scan of one source, in two halves (Website Scanning PRD 2026-11-04).
+ * A scan ENDS when the pages are stored. What the pages say — capabilities,
+ * features, the table's cells — is read by the analysis:
+ * its own queued run after the scan (analysis/engine.ts), queued here at the
+ * end of every scan that read at least one page.
  *
  *   collect — where the pages come from.
  *     remote  the crawler reads the whole site: known pages of earlier scans
@@ -47,8 +41,8 @@ import { isPdfUrl, isInsideSite, pageKey } from "./url";
  *     bundle  a collector handed pages in before the scan (import.ts).
  *
  *   process — the same for every lane: page states (missing / removed /
- *             unlinked) → PMOS AI on new and changed pages → statuses,
- *             suggestions, facts → fact liveness → badge and log.
+ *             unlinked) → fact liveness (which facts' pages were seen) →
+ *             queue the analysis run → badge and log. No PMOS AI call here.
  *
  * Runs inside the scanner job (Cloud Run) or in-process in local dev; both
  * call runScan(scanId). The local lane's "done" call runs it too.
@@ -161,6 +155,11 @@ export type CreateScanResult =
  * lane when it is ON (started at once when a slot is free, else queued), the
  * local lane when OFF. A scan of a site that is already scanning is queued
  * behind the running one — never two scans on one site.
+ *
+ * `sourceId` names one source of the company — one of its other addresses
+ * (a company may have several of one type; lib/competitors/addresses.ts).
+ * Without it the scan is of the company's source of `sourceType`, its
+ * oldest one. An address a PM removed is never scanned.
  */
 export async function createAndRouteScan(
   workspaceId: string,
@@ -168,9 +167,14 @@ export async function createAndRouteScan(
   trigger: "manual" | "scheduled" | "onboarding",
   startedById: string | null,
   sourceType: SourceType = "website",
+  sourceId: string | null = null,
 ): Promise<CreateScanResult> {
-  const source = await db.competitorSource.findFirst({ where: { workspaceId, competitorId, type: sourceType }, select: { id: true, competitor: { select: { deletedAt: true } } } });
-  if (!source) return { error: "no_source" };
+  const source = await db.competitorSource.findFirst({
+    where: sourceId ? { id: sourceId, workspaceId, competitorId } : { workspaceId, competitorId, type: sourceType },
+    orderBy: { createdAt: "asc" },
+    include: { competitor: { select: { deletedAt: true } } },
+  });
+  if (!source || source.removedAt) return { error: "no_source" };
   if (source.competitor.deletedAt) return { error: "removed" };
   const t = await now();
   const active = await db.competitorScan.findFirst({ where: { sourceId: source.id, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true } });
@@ -181,7 +185,7 @@ export async function createAndRouteScan(
     data: { workspaceId, sourceId: source.id, trigger, startedById, status: "queued", startedAt: t, heartbeatAt: t },
     select: { id: true },
   });
-  await recordCompetitorEvent(workspaceId, startedById, "cmp_scan_started", { scanId: scan.id, competitorId, trigger });
+  await recordCompetitorEvent(workspaceId, startedById, "cmp_scan_started", { scanId: scan.id, competitorId, trigger, sourceType: source.type });
   if (active) {
     // Behind the running scan of the same site; the finishing scan (or the tick) picks it up.
     return { scanId: scan.id, state: "queued" };
@@ -228,7 +232,6 @@ interface CollectContext {
   workspaceId: string;
   source: { id: string; type: string; url: string };
   competitor: { id: string; name: string; host: string };
-  sourceLabel: string;
   log: ScanLog;
   t0: number;
   /** The stale scan this one resumes, if any: its unattempted pages go first. */
@@ -238,7 +241,8 @@ interface CollectContext {
 interface Collected {
   /** Pages read this scan (new, changed or unchanged). */
   count: number;
-  changedPages: PageText[];
+  /** Of those, the pages that are new or whose text changed. */
+  changed: number;
   seenUrls: Set<string>;
   /** Home page could not be read; the kind says Blocked vs Unreachable. */
   homeFailed: FetchErrorKind | null;
@@ -254,7 +258,7 @@ interface Collected {
 }
 
 function emptyCollected(mode: Collected["mode"]): Collected {
-  return { count: 0, changedPages: [], seenUrls: new Set(), homeFailed: null, stoppedBy: null, mode, errorKind: null, error: null, robotsDisallowed: [], denied: 0, attempted: 0 };
+  return { count: 0, changed: 0, seenUrls: new Set(), homeFailed: null, stoppedBy: null, mode, errorKind: null, error: null, robotsDisallowed: [], denied: 0, attempted: 0 };
 }
 
 function statusOf(error: FetchErrorKind | undefined): PageReadStatus {
@@ -294,12 +298,15 @@ function noteResult(log: ScanLog, out: Collected, r: RecordPageResult, page: Fet
   out.count++;
   out.seenUrls.add(r.url);
   log.pages.push({ url: r.url, status: page.status, outcome: r.outcome, chars: r.chars, ms: page.ms, via });
-  if (r.outcome !== "unchanged" && r.pageText) out.changedPages.push(r.pageText);
+  if (r.outcome !== "unchanged") out.changed++;
 }
 
 /** The website: the remote lane crawls under the scanner rules. */
 async function collectWebsite(ctx: CollectContext): Promise<Collected> {
-  const { scanId, workspaceId, source, competitor, log, t0 } = ctx;
+  const { scanId, workspaceId, source, log, t0 } = ctx;
+  // The site that bounds the crawl is the source's own: the company's host for its website, the source's address for
+  // a help center, developer docs or release notes on another host (url.ts sourceSiteHost).
+  const competitor = { ...ctx.competitor, host: sourceSiteHost(source, ctx.competitor.host) };
   const out = emptyCollected("plain");
   let mode: FetchMode = "plain";
   const limits = { ms: await scanTimeLimitMs() };
@@ -372,13 +379,12 @@ async function collectWebsite(ctx: CollectContext): Promise<Collected> {
       log.count("slowdown");
       log.pages.push({ url: cand.url, status: page.status, outcome: "failed", category: "slowdown", chars: 0, ms: page.ms, via: cand.via, error: page.errorDetail });
       log.add("warn", "The site answered 429 Too Many Requests — stopping this scan; the next one continues from here", cand.url);
-      await recordPage({ scanId, sourceId: source.id, workspaceId, url: cand.url, status: "slowdown", via: cand.via, httpStatus: page.status, ms: page.ms }, ctx.sourceLabel);
+      await recordPage({ scanId, sourceId: source.id, workspaceId, url: cand.url, status: "slowdown", via: cand.via, httpStatus: page.status, ms: page.ms });
       out.stoppedBy = "slowdown";
       break;
     }
     const r = await recordPage(
       { scanId, sourceId: source.id, workspaceId, url: cand.url, status: statusOf(page.error), html: page.html || null, text: page.kind === "document" ? page.text : null, kind: page.kind, via: cand.via, httpStatus: page.status, ms: page.ms, errorDetail: page.errorDetail ?? null },
-      ctx.sourceLabel,
     );
     noteResult(log, out, r, page, cand.via);
     if (cand.via === "home" && page.error && page.error !== "notfound") {
@@ -429,7 +435,7 @@ async function collectBundle(ctx: CollectContext): Promise<Collected> {
   const rows = await db.scanPage.findMany({
     where: { scanId },
     orderBy: { fetchedAt: "asc" },
-    select: { url: true, title: true, kind: true, text: true, chars: true, observedAt: true },
+    select: { url: true, title: true, kind: true, text: true, chars: true },
   });
   log.add("info", `${rows.length} page${rows.length === 1 ? "" : "s"} handed in by the collector`);
   for (const r of rows) {
@@ -438,8 +444,7 @@ async function collectBundle(ctx: CollectContext): Promise<Collected> {
       continue;
     }
     out.attempted++;
-    const rec = await recordPage({ scanId, sourceId: source.id, workspaceId, url: r.url, status: "ok", text: r.text, title: r.title, kind: (r.kind as PageText["kind"]) as never, via: "handin" }, ctx.sourceLabel);
-    if (rec.pageText) rec.pageText.observedAt = r.observedAt?.toISOString() ?? null;
+    const rec = await recordPage({ scanId, sourceId: source.id, workspaceId, url: r.url, status: "ok", text: r.text, title: r.title, kind: r.kind as PageKind, via: "handin" });
     noteResult(log, out, rec, { url: r.url, finalUrl: r.url, status: 200, html: "", text: r.text, kind: "page", mode: "plain", ms: 0, needsBrowser: false }, "bundle");
   }
   if (out.count === 0) {
@@ -451,8 +456,7 @@ async function collectBundle(ctx: CollectContext): Promise<Collected> {
 
 /**
  * The local lane: the hand-in route already stored every page with
- * recordPage() and logged it on the scan; read the log back and load the
- * texts of new/changed pages for PMOS AI.
+ * recordPage() and logged it on the scan; read the log back.
  */
 async function collectLocal(ctx: CollectContext): Promise<Collected> {
   const { scanId, source, log } = ctx;
@@ -467,11 +471,7 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
     out.count++;
     out.seenUrls.add(p.url);
   }
-  const changedUrls = log.pages.filter((p) => p.outcome === "new" || p.outcome === "changed").map((p) => p.url);
-  if (changedUrls.length) {
-    const rows = await db.sourcePage.findMany({ where: { sourceId: source.id, url: { in: changedUrls } }, select: { url: true, title: true, text: true, kind: true } });
-    out.changedPages = rows.filter((r) => r.text).map((r) => ({ url: r.url, title: r.title ?? "", text: r.text ?? "", kind: r.kind, sourceLabel: ctx.sourceLabel }));
-  }
+  out.changed = log.pages.filter((p) => p.outcome === "new" || p.outcome === "changed").length;
   const row = await db.competitorScan.findUnique({ where: { id: scanId }, select: { pagesNotAttempted: true, linkedUrls: true, errorKind: true } });
   // Now that every handed-in page has its row, apply the inbound links the station's pages carried (feeds "unlinked").
   const linked = Array.isArray(row?.linkedUrls) ? (row!.linkedUrls as string[]) : [];
@@ -559,25 +559,20 @@ export async function runScan(scanId: string): Promise<void> {
   let errorKind: string | null = null;
   let error: string | null = null;
   let mode: Collected["mode"] = lane;
-  let aiCalls = 0;
-  let statusesChanged = 0;
-  let statusesSet = 0;
-  let factsChanged = 0;
-  let suggestions = 0;
-  let piiHits = 0;
   let robotsDisallowed: string[] = [];
   let removedPages: string[] = [];
   let handToLocal = false;
+  /** The analysis run this scan queued (null: none — the scan read nothing, or the test knob switched PMOS AI off). */
+  let analysisId: string | null = null;
 
   try {
-    const firstScan = (await db.sourcePage.count({ where: { sourceId: source.id, lastReadScanId: { not: scanId }, state: { not: "removed" } } })) === 0;
-    const ctx: CollectContext = { scanId, workspaceId, source, competitor, sourceLabel, log, t0, resumedFromId: staleBefore?.id ?? null };
+    const ctx: CollectContext = { scanId, workspaceId, source, competitor, log, t0, resumedFromId: staleBefore?.id ?? null };
     const col = lane === "bundle" ? await collectBundle(ctx) : lane === "local" ? await collectLocal(ctx) : await collectWebsite(ctx);
     mode = col.mode;
     errorKind = col.errorKind;
     error = col.error;
     robotsDisallowed = col.robotsDisallowed;
-    const { count, changedPages, seenUrls, homeFailed, stoppedBy } = col;
+    const { count, changed, seenUrls, homeFailed, stoppedBy } = col;
     const notRead = log.pages.filter((p) => p.outcome === "failed" && p.category !== "notfound").length;
     const full = !homeFailed && !stoppedBy && notRead === 0 && robotsDisallowed.length === 0 && count > 0;
 
@@ -587,7 +582,7 @@ export async function runScan(scanId: string): Promise<void> {
     if (states.removedUrls.length) log.add("info", `Removed (not found twice in a row): ${states.removedUrls.length} page${states.removedUrls.length === 1 ? "" : "s"} (${states.removedUrls.slice(0, 3).map((u) => u.replace(/^https?:\/\/[^/]+/, "")).join(", ")}${states.removedUrls.length > 3 ? ", …" : ""})`);
     if (states.missing) log.add("info", `${states.missing} page${states.missing === 1 ? "" : "s"} missing (not found once — nothing happens until the next scan)`);
     if (states.unlinked) log.add("info", `${states.unlinked} page${states.unlinked === 1 ? "" : "s"} unlinked (still answer, nothing points at them)`);
-    log.add("info", `${lane === "remote" ? "Fetched" : "Read"} ${count} pages${lane === "remote" ? ` via ${mode}` : ""}: ${changedPages.length} new or changed, ${count - changedPages.length} unchanged, ${log.pages.filter((p) => p.outcome === "failed").length} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
+    log.add("info", `${lane === "remote" ? "Fetched" : "Read"} ${count} pages${lane === "remote" ? ` via ${mode}` : ""}: ${changed} new or changed, ${count - changed} unchanged, ${log.pages.filter((p) => p.outcome === "failed").length} not read${log.notAttempted ? `, ${log.notAttempted} not attempted` : ""}`);
     await log.flush({ fetchMode: mode === "local" || mode === "bundle" ? mode : mode, robotsDisallowed: robotsDisallowed as unknown as Prisma.InputJsonValue, removedPages: removedPages as unknown as Prisma.InputJsonValue });
 
     if (homeFailed) {
@@ -603,44 +598,23 @@ export async function runScan(scanId: string): Promise<void> {
       finalStatus = "failed";
       errorKind = errorKind ?? "other";
       error = error ?? "no page could be read";
-    } else if (changedPages.length === 0 && (await unclassifiedCapabilities(workspaceId, competitor.id)) === 0) {
-      log.add("info", "Nothing changed since the last scan — PMOS AI not called");
-      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
     } else if ((await getGlobalScanSettings()).analysisDisabled) {
       // Administration → Competitors → "Disable analysis" (Daniel 2026-11-11): the scan ends here, with its pages saved.
-      // The previous texts of changed pages are kept, so an analysis run later can still see what changed.
+      // No analysis is queued; the pages stay unread until a later analysis (page hash) picks them up.
       log.add("info", "Analysis is disabled in Administration — the scan ends after saving the pages; PMOS AI not called");
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
-    } else if (!aiStepEnabled()) {
-      // Test knob: the scanning story is tested without the analysis step (deterministic, free). Counts as analyzed.
-      log.add("warn", "PMOS AI skipped (COMPETITORS_AI=off, test knob)");
-      await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
-      const released = await releasePreviousTexts(source.id, scanId);
-      if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped (change handed to analysis)`);
     } else {
-      // ——— PMOS AI ———
-      // Nothing changed but the catalog grew: classify the new capabilities from the stored current texts.
-      const catalogGrew = changedPages.length === 0;
-      const pagesForAi = catalogGrew ? await currentPageTexts(source.id, sourceLabel) : changedPages;
-      if (catalogGrew) log.add("info", `No page changed, but ${await unclassifiedCapabilities(workspaceId, competitor.id)} capabilities have no status yet — classifying from the ${pagesForAi.length} stored pages`);
-      const r = await aiStep(workspaceId, competitor.id, competitor.name, scanId, sourceLabel, pagesForAi, firstScan, log, { facts: !catalogGrew, host: competitor.host });
-      aiCalls = r.aiCalls;
-      statusesChanged = r.statusesChanged;
-      statusesSet = r.statusesSet;
-      factsChanged = r.factsChanged;
-      suggestions = r.suggestions;
-      piiHits = r.piiHits;
-      if (r.failed) {
-        finalStatus = "partial";
-        errorKind = "ai";
-        error = r.failed;
-        log.add("warn", "Previous page texts kept until a later analysis succeeds");
-      } else {
-        // No retention: the analysis has read old and new, the previous texts are dropped.
-        const released = await releasePreviousTexts(source.id, scanId);
-        if (released) log.add("info", `${released} previous page text${released === 1 ? "" : "s"} dropped (change analyzed)`);
-      }
+      // The scan ends at the pages. What they say is read by the analysis: its own queued run, after the scan.
+      // Queued after every scan that read a page, also when no page changed — such a run makes no research call and
+      // is how a new row of ours gets looked for at this competitor.
       await markFactsSeen(competitor.id, scanId, seenUrls, removedPages, log, source.url);
+      const q = await queueAnalysis(workspaceId, competitor.id, "scan", { scanId, startedById: scan.startedById });
+      if ("skipped" in q) {
+        log.add("warn", "PMOS AI analysis skipped (COMPETITORS_AI=off, test knob)");
+      } else {
+        analysisId = q.id;
+        log.add("info", q.created ? `Analysis queued (${q.id})` : `Analysis already queued (${q.id})`);
+      }
     }
 
     // ——— Badge (PRD): Blocked = the site refused us on most pages or at the door; Unreachable = no answer at all ———
@@ -655,8 +629,7 @@ export async function runScan(scanId: string): Promise<void> {
     } else if (!full) {
       badge = "incomplete";
     } else {
-      // The badge is about pages (PRD: Incomplete = pages not read, with reasons). A failed analysis step
-      // leaves the scan "partial" with its error in the log; it does not make the site read look incomplete.
+      // The badge is about pages (PRD: Incomplete = pages not read, with reasons).
       badge = "full";
     }
     // Blocked in the remote lane hands the site to the local lane (a PM's browser), when a station is enrolled.
@@ -673,18 +646,13 @@ export async function runScan(scanId: string): Promise<void> {
   }
 
   const durationMs = Date.now() - t0;
-  log.add("info", `Scan ${finalStatus} (${badge}) in ${Math.round(durationMs / 1000)} s · ${aiCalls} AI call${aiCalls === 1 ? "" : "s"} · ${statusesChanged} status change${statusesChanged === 1 ? "" : "s"}${statusesSet ? ` · ${statusesSet} cell${statusesSet === 1 ? "" : "s"} with first evidence` : ""} · ${factsChanged} fact change${factsChanged === 1 ? "" : "s"} · ${suggestions} suggestion${suggestions === 1 ? "" : "s"}${piiHits ? ` · ${piiHits} PII hit${piiHits === 1 ? "" : "s"} dropped` : ""}`);
+  log.add("info", `Scan ${finalStatus} (${badge}) in ${Math.round(durationMs / 1000)} s · ${log.read} page${log.read === 1 ? "" : "s"} read, ${log.changed} new or changed`);
   const finishedAt = new Date();
   await log.flush({
     status: finalStatus,
     badge,
     finishedAt,
     fetchMode: mode,
-    aiCalls,
-    statusesChanged,
-    factsChanged,
-    suggestions,
-    piiHits,
     errorKind: errorKind ?? "none",
     error,
     robotsDisallowed: robotsDisallowed as unknown as Prisma.InputJsonValue,
@@ -705,10 +673,7 @@ export async function runScan(scanId: string): Promise<void> {
     pagesFetched: log.read,
     pagesChanged: log.changed,
     pagesNotAttempted: log.notAttempted,
-    statusesChanged,
-    factsChanged,
-    suggestions,
-    piiHits,
+    analysisId,
     durationMs,
     errorKind: errorKind ?? "none",
   });
@@ -721,6 +686,12 @@ export async function runScan(scanId: string): Promise<void> {
     await db.competitorScan.update({ where: { id: scanId }, data: { log: log.lines as unknown as Prisma.InputJsonValue } });
   }
 
+  // A scan of a Scan run that ended: the run's one email may be due now (a parked local scan ends long after its run).
+  if (scan.runId) {
+    const { notifyRunsOfScans } = await import("./runs");
+    await notifyRunsOfScans([scanId]);
+  }
+
   // A freed slot is used at once: a scan queued behind this one gets its lane, and the next queued remote scan starts now, not at the next tick.
   try {
     const { promoteQueued, startQueuedScans } = await import("./tick");
@@ -729,6 +700,24 @@ export async function runScan(scanId: string): Promise<void> {
     await startQueuedScans(launchScan);
   } catch (e) {
     console.error("[competitors] could not start the next queued scan", e);
+  }
+
+  // The company's other addresses — help center, developer docs, release notes — are looked for again with every
+  // scan of its main website that read a page: companies add these later. The scan has ended; whatever the search
+  // does, it changes nothing about it (address-search.ts never throws, and an address it adds gets a scan of its own).
+  // The search follows the lanes (addresses.ts searchLane). A scan the station read brought what the search needs
+  // while it was reading (the route local/scans/<id>/addresses) and the search ran then: nothing is left to do here.
+  // Otherwise — a remote scan, or a station that brought no report — the server requests the site itself only while
+  // remote scanning is ON; while it is OFF nothing is requested and the search waits for the station's next scan.
+  if (source.type === "website" && log.read > 0) {
+    try {
+      const { searchAddresses } = await import("./address-search");
+      const { readAddressSearch } = await import("./addresses");
+      const company = await db.competitor.findUnique({ where: { id: competitor.id }, select: { addressSearch: true } });
+      if (readAddressSearch(company?.addressSearch)?.scanId !== scanId) await searchAddresses(competitor.id, { trigger: "scan", userId: scan.startedById });
+    } catch (e) {
+      console.error("[competitors] the search for other addresses after the scan failed", scanId, e);
+    }
   }
 }
 
@@ -763,239 +752,4 @@ async function markFactsSeen(competitorId: string, scanId: string, seenUrls: Set
     }
   }
   if (gone) log.add("info", `${gone} fact${gone === 1 ? "" : "s"} marked "source no longer reachable"`);
-}
-
-// ————— AI step —————
-
-interface AiStepResult {
-  aiCalls: number;
-  /** Cells that got their first value this scan (no previous value to compare with). */
-  statusesSet: number;
-  statusesChanged: number;
-  factsChanged: number;
-  suggestions: number;
-  piiHits: number;
-  failed: string | null;
-}
-
-async function loadCatalog(workspaceId: string): Promise<{ forAi: CatalogForAi; byName: Map<string, { id: string; domainId: string }>; domainIdByName: Map<string, string> }> {
-  // Only the catalog the team accepted: suggested or dismissed domains are not classified against.
-  const domains = await db.competitorDomain.findMany({
-    where: { workspaceId, state: "active" },
-    orderBy: [{ position: "asc" }, { name: "asc" }],
-    include: { capabilities: { where: { state: "active" }, orderBy: [{ position: "asc" }, { name: "asc" }] } },
-  });
-  const byName = new Map<string, { id: string; domainId: string }>();
-  const domainIdByName = new Map<string, string>();
-  for (const d of domains) {
-    domainIdByName.set(d.name, d.id);
-    for (const k of d.capabilities) byName.set(k.name, { id: k.id, domainId: d.id });
-  }
-  return {
-    forAi: {
-      domains: domains
-        .filter((d) => d.capabilities.length > 0)
-        .map((d) => ({ name: d.name, description: d.description, capabilities: d.capabilities.map((k) => ({ name: k.name, description: k.description })) })),
-    },
-    byName,
-    domainIdByName,
-  };
-}
-
-/** Active capabilities with no status row yet for this competitor (added since its last classification). */
-async function unclassifiedCapabilities(workspaceId: string, competitorId: string): Promise<number> {
-  return db.capability.count({ where: { workspaceId, state: "active", statuses: { none: { competitorId } } } });
-}
-
-async function aiStep(
-  workspaceId: string,
-  competitorId: string,
-  competitorName: string,
-  scanId: string,
-  sourceLabel: string,
-  pages: PageText[],
-  firstScan: boolean,
-  log: ScanLog,
-  opts: { facts: boolean; host: string },
-): Promise<AiStepResult> {
-  const res: AiStepResult = { aiCalls: 0, statusesSet: 0, statusesChanged: 0, factsChanged: 0, suggestions: 0, piiHits: 0, failed: null };
-  /** Rule 6: a snippet that names a person is dropped, never stored. */
-  const clean = (text: string | null | undefined, what: string, url?: string): string | null => {
-    const r = checkPii(text);
-    if (!r.hit) return text || null;
-    res.piiHits++;
-    log.add("warn", `PII check dropped a ${what} (${r.kind})`, url);
-    return null;
-  };
-  const progress = (what: string) => async (done: number, total: number) => {
-    if (total > 1) {
-      log.add("info", `${what}: part ${done} of ${total} done`);
-      await log.flush();
-    }
-  };
-  // The page's preview image for a finding — one fetch per page, only for what changed.
-  const images = new Map<string, Promise<string | null>>();
-  const previewImage = (url: string | null | undefined): Promise<string | null> => {
-    if (!url) return Promise.resolve(null);
-    // The model names the page: only a page of this competitor's own site is fetched (no SSRF through a model answer).
-    try {
-      if (!isInsideSite(new URL(url), opts.host)) return Promise.resolve(null);
-    } catch {
-      return Promise.resolve(null);
-    }
-    let p = images.get(url);
-    if (!p) {
-      p = fetchPlain(url, { host: opts.host }).then((r) => (r.html ? ogImageOf(r.html, r.finalUrl || url) || null : null)).catch(() => null);
-      images.set(url, p);
-    }
-    return p;
-  };
-  try {
-    const catalog = await loadCatalog(workspaceId);
-    // Facts and statuses are independent reads of the same pages: start the facts call now so both run at once.
-    const extPromise = opts.facts
-      ? (async () => {
-          const knownFacts = await db.profileFact.findMany({ where: { competitorId, dismissedAt: null }, select: { kind: true, value: true }, orderBy: { createdAt: "asc" } });
-          return extractFacts(competitorName, knownFacts, pages, (d, t) => void progress("Facts")(d, t));
-        })()
-      : null;
-    // A rejection must not surface before it is awaited below.
-    extPromise?.catch(() => undefined);
-
-    if (catalog.byName.size === 0) {
-      log.add("warn", "The capability catalog is empty — add domains and capabilities in Settings → Competitors; this scan only collects profile facts");
-    } else {
-      // Statuses
-      const prevRows = await db.capabilityStatus.findMany({ where: { competitorId }, include: { capability: { select: { name: true } } } });
-      const previous: PreviousStatus[] = prevRows.map((p) => ({ capability: p.capability.name, value: p.value as StatusValue, confidence: p.confidence }));
-      // Which source set each previous value: a source may lower only what it
-      // set itself. Absence in a datasheet is not evidence that the website
-      // stopped offering a capability — but the website's next scan may say so.
-      const prevScanIds = [...new Set(prevRows.map((p) => p.scanId).filter((id): id is string => Boolean(id)))];
-      const sourceOfScan = new Map((await db.competitorScan.findMany({ where: { id: { in: prevScanIds } }, select: { id: true, sourceId: true } })).map((s) => [s.id, s.sourceId]));
-      const thisSourceId = (await db.competitorScan.findUnique({ where: { id: scanId }, select: { sourceId: true } }))?.sourceId ?? null;
-      const RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
-      log.add("info", `Classifying ${catalog.byName.size} capabilities from ${pages.length} ${firstScan ? "" : "changed "}pages`);
-      const pendingSuggestions = (await db.capability.findMany({ where: { workspaceId, origin: "ai", state: "suggested" }, select: { name: true } })).map((c) => c.name);
-      const cls = await classifyCapabilities(competitorName, catalog.forAi, previous, pendingSuggestions, pages, (d, t) => void progress("Classification")(d, t));
-      res.aiCalls += cls.calls;
-      const now = new Date();
-      const prevByCap = new Map(prevRows.map((p) => [p.capabilityId, p]));
-      const answered = new Map(cls.value.statuses.map((s) => [s.capability, s]));
-      for (const [name, cap] of catalog.byName) {
-        const prev = prevByCap.get(cap.id);
-        const ans = answered.get(name);
-        // No evidence in the changed pages: keep what earlier pages established.
-        let value: StatusValue = ans?.value ?? "unknown";
-        let confidence = ans?.confidence ?? null;
-        let quote = clean(ans?.quote, "status quote", ans?.url);
-        let sourceUrl = ans?.url || null;
-        let product = ans?.product || null;
-        const prevSource = prev?.scanId ? sourceOfScan.get(prev.scanId) ?? null : null;
-        const otherSourceLowers = Boolean(prev && prev.value !== "unknown" && RANK[value] < RANK[prev.value as StatusValue] && prevSource && prevSource !== thisSourceId);
-        if ((value === "unknown" || otherSourceLowers) && prev && prev.value !== "unknown") {
-          value = prev.value as StatusValue;
-          confidence = prev.confidence;
-          quote = prev.quote;
-          sourceUrl = prev.sourceUrl;
-          product = prev.product;
-        }
-        if (!prev) {
-          // First status for this cell: nothing to compare with, so it is not a "change".
-          await db.capabilityStatus.create({
-            data: { workspaceId, competitorId, capabilityId: cap.id, value, confidence, quote, sourceUrl, product, scanId, changedAt: null },
-          });
-          res.statusesSet++;
-        } else if (prev.value === "unknown" && value !== "unknown") {
-          // First evidence for a cell that had none: discovery, not a change.
-          await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product, scanId } });
-          res.statusesSet++;
-          log.add("info", `${name}: first evidence — ${value}`, sourceUrl ?? undefined);
-        } else if (prev.value !== value) {
-          // A source's FIRST scan that differs from what another source set is discovery, not news:
-          // the site did not change, two sources described it differently. Only a rescan of the same
-          // source marks a change (the "New Changes" dot, the notification).
-          await db.statusHistory.create({ data: { statusId: prev.id, value: prev.value, quote: prev.quote, sourceUrl: prev.sourceUrl, scanId: prev.scanId } });
-          const summary = clean(ans?.summary, "status summary", sourceUrl ?? undefined);
-          const imageUrl = !firstScan ? await previewImage(sourceUrl) : null;
-          await db.capabilityStatus.update({ where: { id: prev.id }, data: { value, confidence, quote, sourceUrl, product: product ?? prev.product, scanId, changedAt: firstScan ? null : now, summary, imageUrl } });
-          if (firstScan) res.statusesSet++;
-          else res.statusesChanged++;
-          log.add("info", `${name}: ${prev.value} → ${value}${firstScan ? " (first evidence from this source — not a change)" : ""}`, sourceUrl ?? undefined);
-        } else if (quote && quote !== prev.quote && (!prev.quote || (confidence ?? 0) > (prev.confidence ?? 0))) {
-          // Same value: the evidence moves to a later source only when it is more confident.
-          await db.capabilityStatus.update({ where: { id: prev.id }, data: { confidence, quote, sourceUrl, product: product ?? prev.product, scanId } });
-        } else if (product && !prev.product) {
-          await db.capabilityStatus.update({ where: { id: prev.id }, data: { product } });
-        }
-      }
-      // Suggestions
-      for (const s of cls.value.suggestions) {
-        let domainId = catalog.domainIdByName.get(s.domain);
-        let newDomain = false;
-        if (!domainId) {
-          // No catalog domain fits: the domain itself is suggested (a dashed group in the matrix).
-          // A domain the team dismissed is never proposed again; one awaiting review is reused.
-          const sameName = await db.competitorDomain.findFirst({ where: { workspaceId, name: { equals: s.domain, mode: "insensitive" } }, select: { id: true, state: true } });
-          if (sameName?.state === "dismissed") {
-            log.add("info", `Suggestion skipped: ${s.name} — its domain "${s.domain}" was dismissed earlier`, s.url || undefined);
-            continue;
-          }
-          if (sameName) {
-            domainId = sameName.id;
-          } else if (s.domain) {
-            const created = await db.competitorDomain.create({
-              data: { workspaceId, name: s.domain, description: clean(s.newDomain?.description, "domain definition", s.url) ?? "", position: 9999, origin: "ai", state: "suggested", suggestedById: competitorId },
-              select: { id: true },
-            });
-            domainId = created.id;
-            newDomain = true;
-            catalog.domainIdByName.set(s.domain, created.id);
-            log.add("info", `Suggested new domain: ${s.domain}`, s.url || undefined);
-          } else {
-            continue;
-          }
-        }
-        const exists = await db.capability.findFirst({ where: { workspaceId, name: { equals: s.name, mode: "insensitive" } }, select: { id: true } });
-        if (exists) continue;
-        const quote = clean(s.quote, "suggestion quote", s.url);
-        // A capability a competitor has and the catalog lacks: if accepted it is a gap by default.
-        await db.capability.create({
-          data: { workspaceId, domainId, name: s.name, position: 9999, origin: "ai", state: "suggested", ourStatus: "missing", suggestedById: competitorId, suggestedQuote: quote ? `${quote} — ${s.url}` : null },
-        });
-        res.suggestions++;
-        log.add("info", `Suggested new capability: ${s.name} (${s.domain}${newDomain ? ", new domain" : ""})`, s.url || undefined);
-      }
-    }
-
-    // Facts (only from changed pages — a catalog-only re-run reads nothing new about the company)
-    if (extPromise) {
-      const ext = await extPromise;
-      res.aiCalls += ext.calls;
-      const now = new Date();
-      for (const f of ext.value) {
-        if (!clean(f.value, `${f.kind} fact`, f.url)) continue;
-        const factDate = factDateOf(f.date);
-        const existing = await db.profileFact.findUnique({ where: { competitorId_kind_value: { competitorId, kind: f.kind, value: f.value } } });
-        if (existing) {
-          await db.profileFact.update({
-            where: { id: existing.id },
-            data: { lastSeenScanId: scanId, unreachableAt: null, ...(existing.sourceUrl ? {} : { sourceUrl: f.url || null, sourceLabel }), ...(existing.factDate || !factDate ? {} : { factDate }) },
-          });
-          continue;
-        }
-        // A source's first scan sets the baseline; only later finds are "changes".
-        const headline = clean(f.headline, "fact headline", f.url);
-        const summary = clean(f.summary, "fact summary", f.url);
-        const imageUrl = !firstScan && headline ? await previewImage(f.url) : null;
-        await db.profileFact.create({ data: { workspaceId, competitorId, kind: f.kind, value: f.value, sourceUrl: f.url || null, sourceLabel, factDate, scanId, lastSeenScanId: scanId, changedAt: firstScan ? null : now, headline, summary, imageUrl } });
-        res.factsChanged++;
-      }
-      log.add("info", `Facts: ${ext.value.length} found, ${res.factsChanged} new`);
-    }
-  } catch (e) {
-    res.failed = e instanceof Error ? e.message.slice(0, 300) : String(e);
-    log.add("error", `PMOS AI step failed: ${res.failed}`);
-  }
-  return res;
 }

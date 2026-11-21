@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
+import { competitorsPartOff } from "@/lib/competitors/parts-server";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -13,6 +14,8 @@ type Params = { params: Promise<{ id: string }> };
 export async function PATCH(req: Request, { params }: Params) {
   const ctx = await competitorsGuard();
   if (ctx instanceof NextResponse) return ctx;
+  const off = await competitorsPartOff("profiles");
+  if (off) return off;
   const { id } = await params;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;

@@ -18,7 +18,7 @@ export async function POST(req: Request) {
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
   const competitorId = typeof body.competitorId === "string" ? body.competitorId : "";
-  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null }, select: { id: true, sources: { where: { type: "website" }, select: { id: true } } } });
+  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false }, select: { id: true, sources: { where: { type: "website" }, select: { id: true } } } });
   if (!competitor) return bad("Not found", 404);
   await failStaleScans();
   try {

@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { claimAddressSearch, searchAddresses } from "@/lib/competitors/address-search";
 import { isPublicWebsite } from "@/lib/competitors/netguard";
 import { rewriteSourceOrigin } from "@/lib/competitors/pages";
 import { db } from "@/lib/db";
@@ -35,7 +36,9 @@ export async function POST(req: Request) {
   } catch (e) {
     return bad(e instanceof InvalidUrlError && e.reason === "private" ? C.settings.privateHost : C.settings.invalidUrl);
   }
-  const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true, deletedAt: true } });
+  const dupHost = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, host: site.host }, select: { id: true, deletedAt: true, isOwn: true } });
+  // The organization's own site (own.ts) is stored like a competitor's, and is never one.
+  if (dupHost?.isOwn) return bad(C.settings.ownSiteHost, 409);
   if (dupHost && !dupHost.deletedAt) return bad(C.settings.duplicateHost, 409);
   // Name AND addresses must be public before the app server fetches anything from it (story checklist §12).
   if (!(await isPublicWebsite(site.url))) return bad(C.settings.privateHost);
@@ -53,6 +56,7 @@ export async function POST(req: Request) {
     if (!source) await db.competitorSource.create({ data: { workspaceId: ctx.workspaceId, competitorId: dupHost.id, type: "website", url: site.url } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_added", { competitorId: dupHost.id, source: "settings", restored: true });
     await createAndRouteScan(ctx.workspaceId, dupHost.id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
+    await findOtherAddresses(dupHost.id, ctx.user.id, probe);
     return stateResponse(ctx, 201);
   }
 
@@ -61,7 +65,7 @@ export async function POST(req: Request) {
   if (!name) name = siteNameOf(probe.html, site.host).slice(0, 80);
   // Two sites may share a brand word; keep both by suffixing the host.
   const dupName = await db.competitor.findFirst({
-    where: { workspaceId: ctx.workspaceId, name: { equals: name, mode: "insensitive" } },
+    where: { workspaceId: ctx.workspaceId, isOwn: false, name: { equals: name, mode: "insensitive" } },
     select: { id: true },
   });
   if (dupName) {
@@ -85,5 +89,21 @@ export async function POST(req: Request) {
   // Onboarding (PRD): adding a competitor starts its first scan — the whole site. Routed before the answer, so the
   // new row already says "Scan pending"; the onboarding scan is not one of the PM's daily manual rescans.
   await createAndRouteScan(ctx.workspaceId, competitor.id, "onboarding", ctx.user.id).catch((e) => console.error("[competitors] first scan failed to start", e));
+  await findOtherAddresses(competitor.id, ctx.user.id, probe);
   return stateResponse(ctx, 201);
+}
+
+/**
+ * The company's other addresses — help center, developer docs, release notes — are looked for as soon as it is
+ * added (address-search.ts), after the answer is sent: the add never waits for the search and never fails with
+ * it. The home page the add just fetched is handed over, so it is not fetched twice.
+ */
+async function findOtherAddresses(competitorId: string, userId: string, probe: { html: string; finalUrl: string; error?: string }): Promise<void> {
+  // Taken before the answer, so the row already says "Looking for help center and docs…".
+  const claimedAt = await claimAddressSearch(competitorId).catch(() => null);
+  if (!claimedAt) return;
+  const home = probe.html && !probe.error ? { html: probe.html, finalUrl: probe.finalUrl } : null;
+  after(async () => {
+    await searchAddresses(competitorId, { trigger: "added", userId, home, claimedAt });
+  });
 }

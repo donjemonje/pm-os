@@ -1,34 +1,33 @@
 import { GoogleGenAI, ThinkingLevel, Type, type Schema } from "@google/genai";
 import { getVertexProjectId } from "../vertex-config";
-import { FACT_KINDS, STATUS_VALUES, type FactKind, type StatusValue } from "./config";
+import { modelFor, providerOf, type ModelProvider, type ThinkingLevelName } from "./models";
 import { getCompetitorsClient, prefixedUserMessage } from "./vertex";
+import { allowLongCalls } from "./long-calls";
+import { openCallLog } from "./call-log";
 
 /**
  * PMOS AI for competitors: structured calls, never free text. The model is
- * COMPETITORS_MODEL: a `gemini-*` id runs on Gemini (Vertex, structured
+ * chosen per call by its role (models.ts: read / match / judge — the old single
+ * COMPETITORS_MODEL decides nothing any more): a `gemini-*` id runs on Gemini (Vertex, structured
  * output through a response schema — Daniel 2026-10-26: Gemini is covered by
  * the GCP credits, so competitors is where it is tried first); anything else
  * runs on Claude through the Vertex Anthropic client (forced tool use). Both
  * paths validate the answer field by field.
  *
- * 1. classifyCapabilities — a competitor's changed pages × the catalog → status per capability
- *    with a quote + URL, plus capabilities the catalog lacks (suggestions).
- * 2. extractFacts — a competitor's pages → lean-profile facts (closed kinds), each with a URL.
- * The organization itself is never scanned: its catalog and own statuses are entered by its PMs.
+ * This module is the model boundary: callTool (one structured call, with the tokens it used and typed errors) and
+ * the string cleaners. It holds no prompt: the prompts of the capability analysis live next to their rules
+ * (analysis/prompts.ts, reading.ts, unify.ts, domains.ts), the pick of a company's other addresses in addresses.ts.
+ * The profile-facts prompt that used to live here is gone with its step (Daniel 2026-11-16: "we don't care about
+ * profile now, only the table"); the facts a profile already holds stay and are shown — nothing writes new ones.
  *
- * Pages are sent as text only. The shared prefix (instructions + catalog) is
- * cache-marked; the per-call tail is the page text.
+ * Pages are sent as text only. A shared prefix (when a prompt has one) goes first so that provider-side
+ * caching can apply; the per-call tail follows.
  */
 
-export const COMPETITORS_PROMPT_VERSION = "competitors-v2";
-
-export function getCompetitorsModel(): string {
-  return process.env.COMPETITORS_MODEL?.trim() || "gemini-4-argon";
-}
-
-export type CompetitorsProvider = "gemini" | "claude";
-export function getCompetitorsProvider(model = getCompetitorsModel()): CompetitorsProvider {
-  return /^gemini/i.test(model) ? "gemini" : "claude";
+export type CompetitorsProvider = ModelProvider;
+/** The provider of a model; with no model given, of the "read" model. */
+export function getCompetitorsProvider(model = modelFor("read")): CompetitorsProvider {
+  return providerOf(model);
 }
 
 /**
@@ -72,106 +71,317 @@ function toGeminiSchema(node: Record<string, unknown>): Schema {
   return out;
 }
 
-/** Keep each call well inside the context window; marketing pages are wordy. */
-const MAX_PAGE_CHARS = 6000;
-/** Page text per call. Gemini's window is large; Claude's calls stay smaller. */
-export function maxTotalChars(provider = getCompetitorsProvider()): number {
-  return provider === "gemini" ? 300_000 : 90_000;
+/**
+ * Tokens one call used. `output` is everything billed as output — the visible answer and the model's own thinking;
+ * `thinking` is the part of it that was thinking, as the provider reports it (0 when it reports none); `cached` is
+ * the part of `input` served from a cache.
+ */
+export interface Usage {
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
 }
+export const NO_USAGE: Usage = { input: 0, output: 0, cached: 0, thinking: 0 };
 
-export interface PageText {
-  url: string;
-  title: string;
-  text: string;
-  /** What the text is (page | document | article | transcript | capture | quotes) — shown to the model. */
-  kind?: string;
-  /** Source type label ("Help center", "Datasheets & documents") — shown to the model. */
-  sourceLabel?: string;
-  /** Publish/capture date the source states, ISO — shown to the model. */
-  observedAt?: string | null;
-}
-
-function pageBody(p: PageText): string {
-  return p.text.length > MAX_PAGE_CHARS ? p.text.slice(0, MAX_PAGE_CHARS) + "\n[…]" : p.text;
+/** PMOS AI has no capacity right now (HTTP 429, 503, 529 or RESOURCE_EXHAUSTED): the caller waits and continues. */
+export class CapacityError extends Error {
+  retryAfterMs: number | null;
+  constructor(message: string, retryAfterMs: number | null = null) {
+    super(message);
+    this.name = "CapacityError";
+    this.retryAfterMs = retryAfterMs;
+  }
 }
 
 /**
- * Split pages into calls: each chunk fits maxTotalChars after per-page
- * truncation. A website scan of 50 pages is one chunk; an import of a
- * thousand documents is many, run in order.
+ * PMOS AI did not answer for a reason that usually passes by itself: HTTP 500, 502, 504 or a network error (no
+ * connection, a reset, a timeout). The caller waits and continues exactly as after a capacity answer. Unlike a capacity
+ * answer it has a ceiling: an endpoint that fails many times in a row ends the run (analysis/pacing.ts → EndpointError).
  */
-export function chunkPages(pages: PageText[], limit = maxTotalChars()): PageText[][] {
-  const chunks: PageText[][] = [];
-  let cur: PageText[] = [];
-  let total = 0;
-  for (const p of pages) {
-    const len = pageBody(p).length + p.url.length + 40;
-    if (cur.length && total + len > limit) {
-      chunks.push(cur);
-      cur = [];
-      total = 0;
-    }
-    cur.push(p);
-    total += len;
+export class TransientError extends CapacityError {
+  constructor(message: string, retryAfterMs: number | null = null) {
+    super(message, retryAfterMs);
+    this.name = "TransientError";
   }
-  if (cur.length) chunks.push(cur);
-  return chunks;
 }
 
-export function packPages(pages: PageText[]): string {
-  return pages
-    .map((p) => {
-      const meta = [p.kind && p.kind !== "page" ? p.kind : null, p.sourceLabel ?? null, p.observedAt ? `dated ${p.observedAt.slice(0, 10)}` : null].filter(Boolean).join(" · ");
-      return `### PAGE ${p.url}\nTitle: ${p.title}${meta ? `\nSource: ${meta}` : ""}\n${pageBody(p)}`;
-    })
-    .join("\n\n");
+/** The endpoint kept failing (transient errors in a row, past the ceiling): the run ends as failed, with what the endpoint said. */
+export class EndpointError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EndpointError";
+  }
 }
 
-export interface AiResult<T> {
-  value: T;
-  usage: unknown;
-  /** Model calls made (one per chunk of pages). */
-  calls: number;
+/** The most of an unusable answer's text that is kept as evidence. */
+export const RAW_ANSWER_KEPT = 2_000;
+
+/**
+ * The text of an unusable answer as it is kept: whole up to RAW_ANSWER_KEPT characters; of a longer one the start
+ * and the end (where a cut-off or a second object shows), with how much was left out in between.
+ */
+export function rawForRecord(text: string, max: number = RAW_ANSWER_KEPT): string {
+  if (text.length <= max) return text;
+  const tail = Math.floor(max / 4);
+  const head = max - tail;
+  return `${text.slice(0, head)} …[${(text.length - max).toLocaleString("en-US")} characters left out]… ${text.slice(-tail)}`;
 }
 
-async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, maxTokens: number): Promise<AiResult<T>> {
-  const model = getCompetitorsModel();
-  if (getCompetitorsProvider(model) === "gemini") {
-    const response = await getGemini().models.generateContent({
-      model,
-      contents: `${shared}\n\n${tail}`,
-      config: {
-        systemInstruction: `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`,
-        temperature: 0,
-        // Gemini 4 takes a thinking *level*, not a token budget (a budget is
-        // rejected). HIGH (Daniel, 2026-10-26): the status call weighs 26
-        // capabilities against 50 pages and runs once a week per competitor,
-        // so accuracy beats speed. Thinking is billed against maxOutputTokens.
-        thinkingConfig: { thinkingLevel: thinkingLevel() },
-        maxOutputTokens: maxTokens + 16000,
-        responseMimeType: "application/json",
-        responseSchema: toGeminiSchema(tool.input_schema as Record<string, unknown>),
-      },
-    });
-    const text = response.text ?? "";
+/**
+ * The model answered (HTTP 200) but the answer is unusable: invalid JSON, no structured answer, empty, or cut off.
+ * The call was made and is billed: `usage` carries its tokens so the run counts them. `raw` is the answer's text as
+ * it came (rawForRecord) — the evidence: the run keeps it in its log and as an incident, so the next occurrence can
+ * be read instead of guessed (the first real run lost a 75-character "invalid JSON" answer with nothing kept).
+ * Null when the provider gave no text at all.
+ */
+export class AnswerError extends Error {
+  usage: Usage;
+  raw: string | null;
+  constructor(message: string, usage: Usage = NO_USAGE, raw: string | null = null) {
+    super(message);
+    this.name = "AnswerError";
+    this.usage = usage;
+    this.raw = raw === null ? null : rawForRecord(raw);
+  }
+}
+
+export type ThinkingName = ThinkingLevelName;
+
+/**
+ * The temperature of every Gemini call: 1, the provider's default (Daniel 2026-11-20: "follow Google's best practice;
+ * first get good results, then think how to handle randomness"). It was 0 until then. Google's prompting guide for
+ * the Gemini 3 family says to keep the default and that lower values "may lead to unexpected behavior, looping, or
+ * degraded performance" on complex reasoning; three answers of 2026-11-20 at temperature 0 were planned in full in
+ * the model's thinking and then broke off after one row (finish STOP, valid JSON). With 1 the same request can give
+ * different answers: what the analysis does about that is an open point.
+ */
+export const GEMINI_TEMPERATURE = 1;
+export interface CallOptions {
+  /** The model that makes the call (models.ts modelFor(role)): the caller decides, nothing here reads an environment variable for it. */
+  model: string;
+  /** Visible output tokens the answer may take (thinking is on top). */
+  maxTokens: number;
+  /** The thinking level of the call — the level of its role (models.ts thinkingFor(role)): the caller decides, as for the model. Not given = high. */
+  thinking?: ThinkingName;
+  /** The sampling temperature of a Gemini call. Not given = GEMINI_TEMPERATURE. A hand run gives it to compare settings. */
+  temperature?: number;
+  /** TEST KNOB: the raw JSON text the model would have answered. With it no model is ever called. */
+  injected?: string;
+}
+
+function retryAfterOf(e: unknown): number | null {
+  const headers = (e as { headers?: unknown } | null)?.headers;
+  let raw: unknown = null;
+  if (headers && typeof (headers as { get?: unknown }).get === "function") raw = (headers as { get: (k: string) => unknown }).get("retry-after");
+  else if (headers && typeof headers === "object") raw = (headers as Record<string, unknown>)["retry-after"];
+  const seconds = typeof raw === "string" || typeof raw === "number" ? Number(raw) : NaN;
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds * 1000) : null;
+}
+
+const NETWORK_CODES = /\b(ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EAI_AGAIN|EPIPE|UND_ERR_[A-Z_]+)\b/;
+const NETWORK_WORDS = /fetch failed|socket hang up|network error|connection (error|reset|closed|refused|timed out)|request timed out|timeout/i;
+
+/** The request never got an HTTP answer: no connection, a reset, a timeout. An error that carries an HTTP status is not one. */
+export function isNetworkError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (typeof (e as { status?: unknown }).status === "number") return false;
+  const cause = (e as { cause?: unknown }).cause;
+  const code = (e as { code?: unknown }).code ?? (cause as { code?: unknown } | null | undefined)?.code;
+  const text = `${e.name} ${e.message} ${cause instanceof Error ? `${cause.name} ${cause.message}` : ""} ${typeof code === "string" ? code : ""}`;
+  return NETWORK_CODES.test(text) || NETWORK_WORDS.test(text);
+}
+
+/**
+ * A provider error the run waits out: "no capacity" (429, 503, 529, RESOURCE_EXHAUSTED) → CapacityError; a passing
+ * failure (500, 502, 504, a network error) → TransientError. Anything else — a refused request, a bad schema, no
+ * permission — is returned untouched and stops the run.
+ */
+/** The most of a provider error's text that a capacity or transient error keeps (300 used to cut the reason off mid-sentence). */
+export const ERROR_TEXT_KEPT = 600;
+
+/** Our own runtime gave up on a silent request (Node's fetch: no response headers, or no new piece of the body, within its limit). */
+const RUNTIME_CUT = /\bUND_ERR_(HEADERS|BODY)_TIMEOUT\b/;
+
+/**
+ * What an error says, with its cause: "fetch failed" alone hides why (a reset, a DNS failure, our own timeout).
+ * A request cut by our own runtime is named as such — the provider did not refuse it, and asking again the same way
+ * ends the same way.
+ */
+export function errorText(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  const cause = (e as { cause?: unknown } | null)?.cause;
+  if (!cause || typeof cause !== "object") return message;
+  const c = cause as { name?: unknown; code?: unknown; message?: unknown };
+  const code = typeof c.code === "string" ? c.code : typeof c.name === "string" ? c.name : "";
+  const said = typeof c.message === "string" ? c.message : "";
+  const detail = [code, said].filter(Boolean).join(": ");
+  if (!detail) return message;
+  return RUNTIME_CUT.test(code) ? `${message} (${detail}) — our own runtime cut a silent request; the provider did not refuse it` : `${message} (${detail})`;
+}
+
+export function asCapacityError(e: unknown): unknown {
+  if (e instanceof CapacityError) return e;
+  const status = (e as { status?: unknown } | null)?.status;
+  const message = errorText(e);
+  if (status === 429 || status === 503 || status === 529 || /RESOURCE_EXHAUSTED/.test(message)) return new CapacityError(message.slice(0, ERROR_TEXT_KEPT), retryAfterOf(e));
+  if (status === 500 || status === 502 || status === 504 || isNetworkError(e)) return new TransientError(message.slice(0, ERROR_TEXT_KEPT), retryAfterOf(e));
+  return e;
+}
+
+/**
+ * What a Gemini answer says it used. Gemini reports the visible answer (candidatesTokenCount) and the model's own
+ * thinking (thoughtsTokenCount) apart; both are billed as output.
+ */
+export function geminiUsage(u: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number } | null | undefined): Usage {
+  const thinking = u?.thoughtsTokenCount ?? 0;
+  return { input: u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + thinking, cached: u?.cachedContentTokenCount ?? 0, thinking };
+}
+
+/**
+ * The one explicit ceiling of a model call: 60 minutes. No call is cut by a default any more (the first chunked
+ * reading test, 2026-11-16, lost a 5-minute answer to Node's 300-second fetch timeout); a call that passes this
+ * ceiling is stopped and fails as an unusable answer. Long on purpose: the first request of a big company writes its
+ * whole list (tens of thousands of output tokens at ~40 tokens a second).
+ */
+export const CALL_TIMEOUT_MS = 60 * 60_000;
+
+/** One piece of a streamed answer, as the provider sends it: some text parts (the model's own thoughts are marked), and on the last pieces why it stopped and what it used. */
+export interface StreamPiece {
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: unknown }>;
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number };
+}
+
+export interface CollectedStream {
+  /** The answer's text: every text part of every piece, in order — never a thought part. */
+  text: string;
+  /** Why the model stopped: the last finish reason a piece carried ("unknown" when none did). */
+  finish: string;
+  usage: Usage;
+  /** How many pieces the stream had, and how many of them carried answer text — said when an answer is unusable, to tell a bad answer from a bad join. */
+  pieces: number;
+  textPieces: number;
+}
+
+/** A streamed answer put together: the text of all pieces in order, the last finish reason, the last usage report. Pure; `onPiece` sees every piece as it comes (the call log). */
+export async function collectStream(stream: AsyncIterable<StreamPiece>, onPiece?: (piece: StreamPiece) => void): Promise<CollectedStream> {
+  let text = "";
+  let finish = "unknown";
+  let usage: StreamPiece["usageMetadata"] | undefined;
+  let pieces = 0;
+  let textPieces = 0;
+  for await (const piece of stream) {
+    onPiece?.(piece);
+    pieces++;
+    const candidate = piece.candidates?.[0];
+    const before = text.length;
+    for (const part of candidate?.content?.parts ?? []) if (typeof part.text === "string" && !part.thought) text += part.text;
+    if (text.length > before) textPieces++;
+    if (candidate?.finishReason != null) finish = String(candidate.finishReason);
+    if (piece.usageMetadata) usage = piece.usageMetadata;
+  }
+  return { text, finish, usage: geminiUsage(usage), pieces, textPieces };
+}
+
+/**
+ * One structured call. `shared` goes first (the part that repeats across calls of a run, "" when there is none),
+ * `tail` after it.
+ *
+ * `opts.injected` is the TEST KNOB at the model boundary (settings.ts testAiAnswers, COMPETITORS_TEST_KNOBS=on only):
+ * the raw JSON text the model would have answered. It replaces the model call and nothing else — parsing, the quote
+ * check and everything the analysis does with the answer run unchanged. With an injected answer no model is ever called.
+ *
+ * Throws CapacityError (wait and continue; TransientError is the kind with a ceiling), AnswerError (the answer is
+ * unusable), or the provider's own error.
+ */
+export async function callTool<T>(system: string, shared: string, tail: string, tool: Record<string, unknown>, opts: CallOptions): Promise<{ value: T; usage: Usage }> {
+  if (opts.injected !== undefined) {
     try {
-      return { value: JSON.parse(text) as T, usage: response.usageMetadata, calls: 1 };
+      return { value: JSON.parse(opts.injected) as T, usage: { ...NO_USAGE } };
     } catch {
-      const finish = response.candidates?.[0]?.finishReason ?? "unknown";
-      throw new Error(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${text.length} chars)`);
+      throw new Error(`PMOS AI test answer is not valid JSON (${opts.injected.length} chars)`);
     }
   }
-  const message = await getCompetitorsClient().messages.create({
-    model: getCompetitorsModel(),
-    max_tokens: maxTokens,
-    system,
-    tools: [tool as never],
-    tool_choice: { type: "tool", name: tool.name as string },
-    messages: prefixedUserMessage(shared, tail),
-  });
+  const model = opts.model;
+  const contents = shared ? `${shared}\n\n${tail}` : tail;
+  if (getCompetitorsProvider(model) === "gemini") {
+    // The answer is STREAMED (Daniel 2026-11-16): a long answer arrives piece by piece. Streaming alone does not
+    // protect the call: the model thinks before its first piece, and Node's fetch gives up on a request that is
+    // silent for 300 s (no first byte, or 300 s between two pieces). The SDK's httpOptions.timeout only aborts the
+    // call when it passes; it does NOT raise the runtime's two limits on Node 24 (found 2026-11-19). So the limits
+    // are raised here for model hosts (long-calls.ts), to the one explicit ceiling, CALL_TIMEOUT_MS.
+    allowLongCalls(CALL_TIMEOUT_MS);
+    const started = Date.now();
+    const instruction = `${system}\n\nAnswer with the JSON object described by the response schema and nothing else.`;
+    const level = thinkingLevel(opts.thinking);
+    const maxOutputTokens = opts.maxTokens + 16000;
+    const temperature = opts.temperature ?? GEMINI_TEMPERATURE;
+    const responseSchema = toGeminiSchema(tool.input_schema as Record<string, unknown>);
+    // The full record of the call, when a developer asked for it (call-log.ts); null otherwise.
+    const log = openCallLog({ tool: String(tool.name ?? "call"), model, location: getCompetitorsGeminiLocation(), settings: { temperature, thinkingLevel: String(level), maxOutputTokens, responseMimeType: "application/json", streamed: true }, instruction, contents, schema: responseSchema });
+    let collected: CollectedStream;
+    try {
+      const stream = await getGemini().models.generateContentStream({
+        model,
+        contents,
+        config: {
+          systemInstruction: instruction,
+          temperature,
+          // Gemini 4 takes a thinking *level*, not a token budget (a budget is rejected). The level is the call's
+          // role's (models.ts thinkingFor); thinking is billed against maxOutputTokens, hence the headroom.
+          thinkingConfig: { thinkingLevel: level, ...(log?.thoughts ? { includeThoughts: true } : {}) },
+          maxOutputTokens,
+          responseMimeType: "application/json",
+          responseSchema,
+          httpOptions: { timeout: CALL_TIMEOUT_MS },
+        },
+      });
+      collected = await collectStream(stream, log ? (piece) => log.piece(piece) : undefined);
+    } catch (e) {
+      log?.end({ judged: "the call failed", error: e });
+      // Our own ceiling passed: the call is not asked again by itself — a call this long is a bug to look at, not a blip.
+      if (Date.now() - started >= CALL_TIMEOUT_MS - 1000) throw new AnswerError(`PMOS AI (${model}) did not finish its answer within ${Math.round(CALL_TIMEOUT_MS / 60_000)} minutes — the call was stopped`);
+      throw asCapacityError(e);
+    }
+    const { text, finish, usage } = collected;
+    // An unusable answer keeps its text (AnswerError.raw) and says how the stream delivered it.
+    const came = `${text.length} chars in ${collected.textPieces} of ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"}`;
+    if (!text.trim()) { log?.end({ judged: "empty answer" }); throw new AnswerError(`PMOS AI (${model}) returned an empty answer (finish: ${finish}, ${collected.pieces} piece${collected.pieces === 1 ? "" : "s"})`, usage, text); }
+    if (finish !== "STOP") { log?.end({ judged: `not finished (finish: ${finish})` }); throw new AnswerError(`PMOS AI (${model}) did not finish its answer (finish: ${finish}, ${came})`, usage, text); }
+    try {
+      const value = JSON.parse(text) as T;
+      log?.end({ judged: "accepted: finished (STOP) and valid JSON" });
+      return { value, usage };
+    } catch (e) {
+      log?.end({ judged: "invalid JSON" });
+      throw new AnswerError(`PMOS AI (${model}) returned invalid JSON (finish: ${finish}, ${came}): ${e instanceof Error ? e.message.slice(0, 120) : "not parseable"}`, usage, text);
+    }
+  }
+  let message;
+  try {
+    message = await getCompetitorsClient().messages.create({
+      model,
+      max_tokens: opts.maxTokens,
+      system,
+      tools: [tool as never],
+      tool_choice: { type: "tool", name: tool.name as string },
+      messages: prefixedUserMessage(shared, tail),
+    });
+  } catch (e) {
+    throw asCapacityError(e);
+  }
+  const mu = message.usage;
+  const usage: Usage = {
+    input: (mu?.input_tokens ?? 0) + (mu?.cache_creation_input_tokens ?? 0) + (mu?.cache_read_input_tokens ?? 0),
+    output: mu?.output_tokens ?? 0,
+    cached: mu?.cache_read_input_tokens ?? 0,
+    // This path asks for no extended thinking, and the provider reports none apart.
+    thinking: 0,
+  };
   const toolUse = message.content.find((b) => b.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") throw new Error("PMOS AI returned no structured answer");
-  return { value: toolUse.input as T, usage: message.usage, calls: 1 };
+  if (!toolUse || toolUse.type !== "tool_use") throw new AnswerError("PMOS AI returned no structured answer", usage);
+  if (message.stop_reason === "max_tokens") throw new AnswerError("PMOS AI did not finish its answer (max tokens)", usage);
+  return { value: toolUse.input as T, usage };
 }
 
 /**
@@ -192,276 +402,14 @@ export function cut(s: string, max: number): string {
   const space = head.lastIndexOf(" ");
   return (space > max * 0.6 ? head.slice(0, space) : head).replace(/[\s,;:\-–—(]+$/, "");
 }
-const str = (v: unknown, max = 500): string => (typeof v === "string" ? cut(tidy(v), max) : "");
-const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-const strs = (v: unknown, max = 120): string[] =>
-  arr(v).map((x) => str(x, max)).filter(Boolean);
+/** A model's string as stored: tidied, cut at a word boundary; "" for anything that is not a string. */
+export const str = (v: unknown, max = 500): string => (typeof v === "string" ? cut(tidy(v), max) : "");
+export const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-// ————— 1. Status per capability for a competitor —————
-
-export const CLASSIFY_SYSTEM_PROMPT = `You compare a competitor's public sources (its website, datasheets, help center, videos, docs, press — each page says which) against a fixed capability catalog for a product team.
-
-The catalog is grouped by domain; each domain comes with the product team's own definition of it (what belongs there, what does not, typical phrases). Read those definitions first — they are the ground truth for what each capability means.
-
-For EVERY capability in the catalog, decide from the page text whether the competitor:
-- "has" it — the site clearly describes offering this capability;
-- "partial" — the site describes a limited, beta, add-on, services-only or narrower version of it;
-- "missing" — the site describes the surrounding area but this capability is absent, or the site contradicts it; when the pages cover the competitor's whole product catalog or pricing matrix and the capability appears nowhere in it, answer missing, not unknown;
-- "unknown" — the pages give no evidence either way.
-Give a confidence from 0 to 1, and for has/partial/missing the single strongest quote (≤ 200 characters, verbatim from the pages) and the URL of the page it is on. For unknown, quote and url are empty. When the pages name the competitor's product, module or plan that provides the capability, give it in "product" (their exact name; empty when not stated). When your answer differs from the previous status (or there is none and the value is has/partial), write "summary": one plain sentence for a product manager saying what the competitor now offers for this capability and since when if the page says (≤ 200 characters, no marketing words); otherwise leave summary empty.
-
-Also list capabilities the competitor clearly advertises that are NOT in the catalog but belong to the same industry (suggestions): name, the catalog domain it fits best, a quote and URL. The gate for a suggestion: it would appear as its own line in an RFP, a vendor sells it as a module or named product, and removing it would be noticed. Anything smaller is a FEATURE of an existing catalog capability — do not suggest it (it belongs in that capability's evidence instead). Names are vendor-neutral: never a product, brand or marketing name, always the generic capability (e.g. "MCP server for external AI agents", not "Agent471"). When no catalog domain fits, name a NEW domain instead (short, title case, the kind of name the catalog uses) and give its one-sentence definition in newDomainDescription; otherwise leave newDomainDescription empty. At most 8, one per distinct capability — never several wordings of the same thing; skip marketing claims and product names; skip anything that is a synonym of a catalog capability or of an already-suggested one (listed when there are any).
-
-Judge only from the pages provided. The previous statuses are given for context: keep them when the new pages say nothing new about a capability (answer the previous value with its previous confidence), change them only on evidence.`;
-
-export const CLASSIFY_TOOL = {
-  name: "classify_capabilities",
-  description: "Record the competitor's status on every catalog capability, plus suggested new capabilities.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      statuses: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            capability: { type: "string", description: "Exact catalog capability name." },
-            value: { type: "string", enum: [...STATUS_VALUES] },
-            confidence: { type: "number", minimum: 0, maximum: 1 },
-            quote: { type: "string" },
-            url: { type: "string" },
-            product: { type: "string", description: "The competitor's product/module that provides it, or empty." },
-            summary: { type: "string", description: "One sentence on what they now offer for it, only when the status changed; else empty." },
-          },
-          required: ["capability", "value", "confidence", "quote", "url", "product", "summary"],
-        },
-      },
-      suggestions: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            name: { type: "string" },
-            domain: { type: "string", description: "A catalog domain name, or a new domain name when none fits." },
-            newDomainDescription: { type: "string", description: "One sentence defining the new domain; empty when domain is a catalog domain." },
-            quote: { type: "string" },
-            url: { type: "string" },
-          },
-          required: ["name", "domain", "newDomainDescription", "quote", "url"],
-        },
-      },
-    },
-    required: ["statuses", "suggestions"],
-  },
-};
-
-export interface CatalogForAi {
-  domains: { name: string; description: string; capabilities: { name: string; description: string }[] }[];
-}
-export interface PreviousStatus { capability: string; value: StatusValue; confidence: number | null }
-export interface ClassifiedStatus { capability: string; value: StatusValue; confidence: number; quote: string; url: string; product: string; /** One-sentence digest of the change, when the status moved; "" otherwise. */ summary: string }
-/** `newDomain` is set when the domain is not in the catalog: the AI proposes it with a one-sentence definition. */
-export interface Suggestion { name: string; domain: string; quote: string; url: string; newDomain: { description: string } | null }
-export interface Classification { statuses: ClassifiedStatus[]; suggestions: Suggestion[] }
-
-export function renderCatalog(c: CatalogForAi): string {
-  return c.domains
-    .map((d) => `DOMAIN: ${d.name}${d.description ? `\n${d.description.trim()}` : ""}\nCAPABILITIES:\n${d.capabilities.map((k) => `- ${k.name}${k.description ? ` — ${k.description}` : ""}`).join("\n")}`)
-    .join("\n\n");
-}
-
-/** Presence evidence outranks absence evidence; "unknown" never wins over a value. */
-const STATUS_RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
-
-/**
- * Merge two answers about one capability from different chunks of pages:
- * the higher-ranked value wins; on a tie the more confident one. A page that
- * does not mention a capability says nothing about it, so a "missing" from
- * one chunk does not undo a "has" quoted from another.
- */
-export function mergeStatus(a: ClassifiedStatus, b: ClassifiedStatus): ClassifiedStatus {
-  const ra = STATUS_RANK[a.value];
-  const rb = STATUS_RANK[b.value];
-  const win = rb > ra || (rb === ra && b.confidence > a.confidence) ? b : a;
-  const other = win === a ? b : a;
-  return { ...win, product: win.product || other.product };
-}
-
-export const MAX_SUGGESTIONS = 20;
-
-export async function classifyCapabilities(
-  competitorName: string,
-  catalog: CatalogForAi,
-  previous: PreviousStatus[],
-  /** Suggestions already waiting for the team's review: not to be suggested again, in any wording. */
-  alreadySuggested: string[],
-  pages: PageText[],
-  onChunk?: (done: number, total: number) => void,
-): Promise<AiResult<Classification>> {
-  const shared = `CAPABILITY CATALOG:\n\n${renderCatalog(catalog)}`;
-  const names = new Map<string, string>();
-  for (const d of catalog.domains) for (const k of d.capabilities) names.set(k.name.toLowerCase(), k.name);
-  const domainNames = new Map(catalog.domains.map((d) => [d.name.toLowerCase(), d.name]));
-  const merged = new Map<string, ClassifiedStatus>();
-  const suggestions = new Map<string, Suggestion>();
-  const chunks = chunkPages(pages);
-  let calls = 0;
-  let usage: unknown = null;
-  for (const [i, chunk] of chunks.entries()) {
-    // Later chunks see what earlier chunks (and the last scan) established.
-    const known: PreviousStatus[] = previous.map((p) => merged.get(p.capability) ?? p);
-    for (const s of merged.values()) if (!known.some((k) => k.capability === s.capability)) known.push(s);
-    const prev = known.length
-      ? `PREVIOUS STATUSES (from the last scan and earlier pages of this one):\n${known.map((p) => `- ${p.capability}: ${p.value}${p.confidence != null ? ` (${p.confidence.toFixed(2)})` : ""}`).join("\n")}\n\n`
-      : "";
-    const pending = [...alreadySuggested, ...[...suggestions.values()].map((s) => s.name)];
-    const pendingKeys = new Set(pending.map((n) => n.toLowerCase()));
-    const sug = pending.length
-      ? `ALREADY SUGGESTED (awaiting the team's review — do not suggest these again, nor rewordings, narrower or broader versions of them):\n${pending.map((n) => `- ${n}`).join("\n")}\n\n`
-      : "";
-    const tail = `COMPETITOR: ${competitorName}\n\n${prev}${sug}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
-    const r = await callTool<Record<string, unknown>>(CLASSIFY_SYSTEM_PROMPT, shared, tail, CLASSIFY_TOOL, 8000);
-    calls += r.calls;
-    usage = r.usage;
-    const seen = new Set<string>();
-    for (const s of arr(r.value.statuses)) {
-      const o = (s ?? {}) as Record<string, unknown>;
-      const name = names.get(str(o.capability, 120).toLowerCase());
-      const value = str(o.value, 20) as StatusValue;
-      if (!name || seen.has(name) || !(STATUS_VALUES as readonly string[]).includes(value)) continue;
-      seen.add(name);
-      const conf = typeof o.confidence === "number" && Number.isFinite(o.confidence) ? Math.max(0, Math.min(1, o.confidence)) : 0.5;
-      const cur: ClassifiedStatus = { capability: name, value, confidence: conf, quote: value === "unknown" ? "" : str(o.quote, 240), url: value === "unknown" ? "" : str(o.url, 500), product: value === "unknown" ? "" : str(o.product, 80), summary: value === "unknown" ? "" : str(o.summary, 300) };
-      const before = merged.get(name);
-      merged.set(name, before ? mergeStatus(before, cur) : cur);
-    }
-    for (const s of arr(r.value.suggestions)) {
-      const o = (s ?? {}) as Record<string, unknown>;
-      const rawDomain = str(o.domain, 60);
-      const known = domainNames.get(rawDomain.toLowerCase());
-      const sug: Suggestion = { name: str(o.name, 80), domain: known ?? rawDomain, quote: str(o.quote, 240), url: str(o.url, 500), newDomain: known || !rawDomain ? null : { description: str(o.newDomainDescription, 300) } };
-      const key = sug.name.toLowerCase();
-      if (!sug.name || !sug.domain || names.has(key) || pendingKeys.has(key)) continue;
-      if (!suggestions.has(key) && suggestions.size < MAX_SUGGESTIONS) suggestions.set(key, sug);
-    }
-    onChunk?.(i + 1, chunks.length);
-  }
-  return { value: { statuses: [...merged.values()], suggestions: [...suggestions.values()] }, usage, calls };
-}
-
-// ————— 2. Lean-profile facts —————
-
-export const FACTS_SYSTEM_PROMPT = `You extract company facts from a competitor's public sources (website, documents, help center, press, jobs — each page says which) for a product team's competitor profile.
-
-Return facts of these kinds only:
-- tagline: the one-line positioning statement (at most one).
-- product: each named product, module or plan family the company sells.
-- pricingTier: each named pricing tier or plan (names only, no prices).
-- integration: each named third-party product it integrates with.
-- certification: each named certification or compliance standard (SOC 2, ISO 27001, FedRAMP…).
-- customer: each named customer company shown as a customer, logo or case study.
-- vertical: each industry it says it serves.
-- funding: a funding round or acquisition amount as stated ("Series C $40M", "acquired by Mastercard for $2.65B").
-- headcount: the company size as stated ("1,000+ employees").
-- hiring: an open-roles statement as stated ("49 open positions").
-- ownership: public / private / subsidiary of X, as stated.
-- hq: the headquarters city and country, as stated.
-- founded: the founding year, as stated.
-- milestone: a dated company event the pages state — founding, acquisition, launch, rename, new office (one short line each).
-Each fact is a short value (≤ 80 characters), the URL of the page it came from, and the date the page states for it when it states one ("YYYY-MM-DD", "YYYY-MM" or "YYYY"; empty otherwise — never the page's own date). For a product, customer, funding, milestone, hiring or ownership fact also write the news for a product manager who will not open the page: "headline" — one line saying what happened (≤ 90 characters, e.g. "Recorded Future released an MCP server for external AI agents"), and "summary" — two plain sentences on what it is and why it matters, from the page only (≤ 300 characters, no marketing words). For the other kinds leave headline and summary empty. Only what the pages state; nothing inferred, no counts you computed, no adjectives. Deduplicate: one fact per thing. When the profile already holds a fact (KNOWN FACTS) and a page restates it, return it with exactly the known wording so it is recognised — never a reworded copy; add its date when the page states one.`;
-
-export const FACTS_TOOL = {
-  name: "extract_facts",
-  description: "Record the company facts found on the pages.",
-  input_schema: {
-    type: "object" as const,
-    properties: {
-      facts: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            kind: { type: "string", enum: [...FACT_KINDS] },
-            value: { type: "string" },
-            url: { type: "string" },
-            date: { type: "string", description: "Date the page states for the fact: YYYY-MM-DD, YYYY-MM or YYYY; empty when none." },
-            headline: { type: "string", description: "One line saying what happened; empty for tagline/pricing/integration/certification/vertical/headcount/hq/founded." },
-            summary: { type: "string", description: "Two plain sentences: what it is and why it matters, from the page; empty when headline is empty." },
-          },
-          required: ["kind", "value", "url", "date", "headline", "summary"],
-        },
-      },
-    },
-    required: ["facts"],
-  },
-};
-
-export interface ExtractedFact {
-  kind: FactKind;
-  value: string;
-  url: string;
-  /** "YYYY", "YYYY-MM" or "YYYY-MM-DD"; null when the page states none. */
-  date: string | null;
-  /** The news in one line and two sentences, for the feed and the email; null for facts that are not news. */
-  headline: string | null;
-  summary: string | null;
-}
-
-/** A stated date → a Date at the start of its period, or null. */
-export function factDateOf(v: string | null | undefined): Date | null {
-  const m = /^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/.exec((v ?? "").trim());
-  if (!m) return null;
-  const y = Number(m[1]);
-  const month = m[2] ? Number(m[2]) : 1;
-  const day = m[3] ? Number(m[3]) : 1;
-  if (y < 1900 || y > new Date().getUTCFullYear() + 1 || month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const d = new Date(Date.UTC(y, month - 1, day));
-  // A day past the month's end rolls over — refuse it rather than invent a date.
-  return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? d : null;
-}
-
-export interface KnownFact { kind: string; value: string }
-/** Known facts shown to the model so restatements keep their wording (and merge on upsert). */
-export const MAX_KNOWN_FACTS = 1500;
-
-export async function extractFacts(competitorName: string, known: KnownFact[], pages: PageText[], onChunk?: (done: number, total: number) => void): Promise<AiResult<ExtractedFact[]>> {
-  const shared = `Extract facts for the competitor profile.`;
-  const knownBlock = known.length ? `KNOWN FACTS (already on the profile):\n${known.slice(0, MAX_KNOWN_FACTS).map((f) => `- ${f.kind}: ${f.value}`).join("\n")}\n\n` : "";
-  const seen = new Set<string>();
-  const facts: ExtractedFact[] = [];
-  const chunks = chunkPages(pages);
-  let calls = 0;
-  let usage: unknown = null;
-  for (const [i, chunk] of chunks.entries()) {
-    const tail = `COMPETITOR: ${competitorName}\n\n${knownBlock}PAGES${chunks.length > 1 ? ` (part ${i + 1} of ${chunks.length})` : ""}:\n\n${packPages(chunk)}`;
-    const r = await callTool<Record<string, unknown>>(FACTS_SYSTEM_PROMPT, shared, tail, FACTS_TOOL, 6000);
-    calls += r.calls;
-    usage = r.usage;
-    for (const f of arr(r.value.facts)) {
-      const o = (f ?? {}) as Record<string, unknown>;
-      const kind = str(o.kind, 20);
-      const value = str(o.value, 80);
-      if (!(FACT_KINDS as readonly string[]).includes(kind) || !value) continue;
-      const key = `${kind}|${value.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const date = str(o.date, 10);
-      facts.push({ kind: kind as FactKind, value, url: str(o.url, 500), date: factDateOf(date) ? date : null, headline: str(o.headline, 120) || null, summary: str(o.summary, 400) || null });
-    }
-    onChunk?.(i + 1, chunks.length);
-  }
-  return { value: facts, usage, calls };
-}
-
-/**
- * Gemini thinking level: HIGH by default (accuracy over speed for a weekly
- * scan); COMPETITORS_THINKING=medium|low|minimal trades accuracy for a faster
- * answer (a live demo, a small hand-in).
- */
-function thinkingLevel(): ThinkingLevel {
-  const v = process.env.COMPETITORS_THINKING?.trim().toLowerCase();
-  if (v === "low") return ThinkingLevel.LOW;
-  if (v === "medium") return ThinkingLevel.MEDIUM;
-  if (v === "minimal") return ThinkingLevel.MINIMAL;
+/** The level as Gemini takes it. Which level a call gets is decided by its role (models.ts thinkingFor), environment overrides included; not given = HIGH. */
+function thinkingLevel(asked?: ThinkingName): ThinkingLevel {
+  if (asked === "low") return ThinkingLevel.LOW;
+  if (asked === "medium") return ThinkingLevel.MEDIUM;
+  if (asked === "minimal") return ThinkingLevel.MINIMAL;
   return ThinkingLevel.HIGH;
 }

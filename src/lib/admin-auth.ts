@@ -22,12 +22,15 @@ export function isPmosAdmin(user: Pick<AuthUser, "role"> | null): boolean {
 
 /**
  * May change the settings of their own organization (Settings → Ideas →
- * Product Lines). CUSTOMER_ADMIN is a customer-side role: everything a USER
- * has plus these settings, and nothing in /admin — isPmosAdmin() stays the
- * only gate there.
+ * Product Lines, Settings → Competitors, the competitors catalog).
+ *
+ * Daniel 2026-11-11: the roles stay, but USER and CUSTOMER_ADMIN have the same
+ * permissions by default — a difference between them exists only where he asks
+ * for one. So every signed-in member of the organization may change its
+ * settings. Nothing in /admin: isPmosAdmin() stays the only gate there.
  */
 export function canManageOrgSettings(user: Pick<AuthUser, "role"> | null): boolean {
-  return user?.role === "PMOS_ADMIN" || user?.role === "CUSTOMER_ADMIN";
+  return user?.role === "PMOS_ADMIN" || user?.role === "CUSTOMER_ADMIN" || user?.role === "USER";
 }
 
 /** Current user when they are a pmos-admin, else null. */

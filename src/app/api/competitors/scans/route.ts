@@ -5,7 +5,7 @@ import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 
 /**
  * GET ?competitorId=: the customer-facing scan log — every scan of the
- * competitor's website source, newest first. Customers see what was read and
+ * competitor's website and of its other addresses, newest first. Customers see what was read and
  * what was not, never HOW a scan ran: no lane, no fetch mode, no runner log
  * lines (those live in Administration → Competitors).
  */
@@ -13,12 +13,13 @@ export async function GET(req: Request) {
   const ctx = await competitorsGuard();
   if (ctx instanceof NextResponse) return ctx;
   const competitorId = new URL(req.url).searchParams.get("competitorId") ?? "";
-  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null }, select: { id: true, name: true } });
+  const competitor = await db.competitor.findFirst({ where: { id: competitorId, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false }, select: { id: true, name: true } });
   if (!competitor) return bad("Not found", 404);
   const scans = await db.competitorScan.findMany({
     where: { workspaceId: ctx.workspaceId, source: { competitorId }, status: { not: "cancelled" } },
     orderBy: { startedAt: "desc" },
     take: 20,
+    include: { source: { select: { type: true, url: true } } },
   });
   const latest = scans[0];
   if (latest) {
@@ -28,6 +29,9 @@ export async function GET(req: Request) {
     competitor,
     scans: scans.map((s) => ({
       id: s.id,
+      // Which of the company's addresses the scan read: its website, or its help center, developer docs or release notes.
+      sourceType: s.source.type,
+      sourceUrl: s.source.url,
       trigger: s.trigger,
       status: s.status,
       startedAt: s.startedAt.toISOString(),

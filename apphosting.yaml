@@ -5,7 +5,8 @@
 # Compare: npm run env:diff
 
 runConfig:
-  minInstances: 0
+  # One instance stays on: no cold start after idle (Daniel 2026-11-12). Costs one always-on instance.
+  minInstances: 1
 
 env:
   # --- Auth gates ---
@@ -57,12 +58,39 @@ env:
     value: "projects/pm-os-9d992/locations/us-east4/jobs/pmos-competitors-scanner"
     availability:
       - RUNTIME
-  # PMOS AI model for competitors (Gemini — covered by the GCP credits). A
-  # gemini-* id runs on Gemini with a response schema; anything else on Claude.
-  - variable: COMPETITORS_MODEL
-    value: "gemini-4-argon"
-    availability:
-      - RUNTIME
+  # PMOS AI models for competitors (Gemini — covered by the GCP credits): a model
+  # per role, with the defaults in code (src/lib/competitors/models.ts):
+  #   read  = gemini-4-argon  (map, the reading of a company in chunks, second look, facts, other addresses)
+  #   match = gemini-4-argon  (match: a company's new items against the rows that exist)
+  #   judge = gemini-4-carbon (unify, domains)
+  # Set one of these only to override a default. A gemini-* id runs on Gemini
+  # with a response schema; anything else on Claude. The old single
+  # COMPETITORS_MODEL is read by nothing any more.
+  # - variable: COMPETITORS_MODEL_READ
+  #   value: "gemini-4-argon"
+  #   availability:
+  #     - RUNTIME
+  # - variable: COMPETITORS_MODEL_MATCH
+  # - variable: COMPETITORS_MODEL_JUDGE
+  # How much each role thinks before it answers (thinking is billed as output
+  # and recorded apart on every run), with the defaults in code (models.ts):
+  #   read = medium, match = high, judge = medium
+  # Set COMPETITORS_THINKING_READ / _MATCH / _JUDGE (minimal | low | medium | high)
+  # only to override one role. The old COMPETITORS_THINKING (one value for all
+  # roles) is NOT honoured any more: a value set there decides nothing.
+  # - variable: COMPETITORS_THINKING_READ
+  # - variable: COMPETITORS_THINKING_MATCH
+  # - variable: COMPETITORS_THINKING_JUDGE
+  # The speed of an analysis run (src/lib/competitors/analysis/pacing.ts): a run
+  # paces itself from the provider's answers — it starts at 8 calls at once,
+  # speeds up while calls succeed and halves when the provider pushes back.
+  # Nothing to set. Two ceilings exist as safety nets only, with generous
+  # defaults in code; a run that is ever held back by one records a cap hit:
+  #   COMPETITORS_ANALYSIS_MAX_SPEED = most calls at once (default 64, at most 128)
+  #   COMPETITORS_ANALYSIS_TPM       = most tokens per minute (default 4,000,000)
+  # The old COMPETITORS_ANALYSIS_CONCURRENCY is read by nothing any more.
+  # - variable: COMPETITORS_ANALYSIS_MAX_SPEED
+  # - variable: COMPETITORS_ANALYSIS_TPM
   # Competitor profile media (UI captures, deep-dive images) referenced by path
   # from CompetitorMedia / CapabilityInsight.media and served by
   # /api/competitors/media. Unset = every capture shows its labelled placeholder.

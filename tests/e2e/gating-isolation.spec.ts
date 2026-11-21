@@ -213,9 +213,11 @@ test.describe("Gating and isolation (GATE-02, GATE-06, XC-02)", () => {
       "A's sources untouched"
     ).toBe(1);
 
-    // Lists: a plain USER may write customers and pick any chip color (product
-    // line writes are admin-only, 403 before any lookup — SET-01), so the
-    // isolation probe uses A's customer id and a color pick on A's line.
+    // Lists: a plain USER may write customers and product lines (since
+    // 2026-11-11 a USER has the customer admin's permissions — SET-01; until
+    // then a product-line write was a 403 before any lookup and only the
+    // color pick reached it), so the isolation probe uses A's customer id and
+    // a color pick, a rename, a delete and a reorder with A's line id.
     const del = await page.request.delete("/api/ideas/lists/customers", { data: { id: aIds.customer } });
     expect(del.status(), await del.text()).toBe(404);
     const rename = await page.request.patch("/api/ideas/lists/customers", { data: { id: aIds.customer, name: "QA-ISO HACKED" } });
@@ -228,8 +230,20 @@ test.describe("Gating and isolation (GATE-02, GATE-06, XC-02)", () => {
     const probeColor = lineBefore.color === "teal" ? "lime" : "teal";
     const color = await page.request.patch("/api/ideas/lists/product-lines", { data: { id: aIds.line, color: probeColor } });
     expect(color.status(), await color.text()).toBe(404);
+    const lineRename = await page.request.patch("/api/ideas/lists/product-lines", { data: { id: aIds.line, name: "QA-ISO HACKED" } });
+    expect(lineRename.status(), await lineRename.text()).toBe(404);
+    const lineDelete = await page.request.delete("/api/ideas/lists/product-lines", { data: { id: aIds.line } });
+    expect(lineDelete.status(), await lineDelete.text()).toBe(404);
+    const lineOrder = await page.request.put("/api/ideas/lists/product-lines", { data: { order: [aIds.line] } });
+    expect(lineOrder.status(), await lineOrder.text()).toBe(400);
+    // Control: the same write on B's own line goes through — the 404s above are the workspace lookup, not a role gate.
+    const ownEdit = await page.request.patch("/api/ideas/lists/product-lines", { data: { id: lines.items[0].id, name: B.line, description: "QA-ISO edited by B" } });
+    expect(ownEdit.status(), await ownEdit.text()).toBe(200);
     expect((await withTestDb((db) => db.customer.findUniqueOrThrow({ where: { id: aIds.customer } }))).name).toBe(A.customer);
-    expect((await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: aIds.line } }))).color).toBe(lineBefore.color);
+    const lineAfter = await withTestDb((db) => db.productLine.findUniqueOrThrow({ where: { id: aIds.line } }));
+    expect(lineAfter.color).toBe(lineBefore.color);
+    expect([lineAfter.name, lineAfter.description, lineAfter.position], "A's line: name, description and position untouched").toEqual([lineBefore.name, lineBefore.description, lineBefore.position]);
+    expect(lineAfter.name).toBe(A.line);
 
     // Admin-only history of another org: hidden, not forbidden.
     const runs = await page.request.get(`/api/admin/organizations/${roomlensOrgId}/ideas-runs`);

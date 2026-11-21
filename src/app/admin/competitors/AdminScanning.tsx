@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
-import type { AdminSourceRow } from "@/app/api/admin/competitors/settings/route";
+import type { AdminReads, AdminSourceRow } from "@/app/api/admin/competitors/settings/route";
+import { COMPETITORS_COPY } from "@/lib/competitors/copy";
 import type { ScannerKeyRow } from "@/lib/competitors/local";
 
 /**
@@ -11,10 +12,26 @@ import type { ScannerKeyRow } from "@/lib/competitors/local";
  * (default OFF for now), the local stations' machine keys (created once,
  * rotated by the poller, revoked here), and every source's scan frequency in
  * days. No retention setting: a change replaces a page's text (PRD).
+ * Also the two settings of the analysis that are the installation's: the token
+ * budget per company per run, and "What the analysis reads" — one switch per
+ * kind of content (analysis/reads.ts).
  */
 
+/** Every string of the "What the analysis reads" section (the labels and help lines of the kinds come with the data). */
+const READS_COPY = {
+  title: "What the analysis reads",
+  intro: "One switch per kind of content, for every organization. A run reads the kinds that are on, and records which they were. Turning a kind off deletes nothing; turning it on makes its pages due — the next run of each company reads them.",
+  on: "ON",
+  off: "OFF",
+  default: (on: boolean) => `default ${on ? "on" : "off"}`,
+  now: "Now",
+  releaseNotes: "Release notes win over where they sit: with the help center or the blog off, a release-notes page inside it is still read while Release notes is on.",
+};
+
 interface Payload {
-  settings: { remoteScanEnabled: boolean; analysisDisabled: boolean };
+  settings: { remoteScanEnabled: boolean; analysisDisabled: boolean; analysisTokenBudget: number };
+  budgetLimits: { min: number; max: number; default: number };
+  reads: AdminReads;
   keys: ScannerKeyRow[];
   sources: AdminSourceRow[];
   testKnobs: boolean;
@@ -25,6 +42,49 @@ const BTN = "inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
+}
+
+/**
+ * "Analysis token budget per competitor, per run": one number for the installation. Enter saves, Esc puts the
+ * saved number back; the field refuses anything that is not a whole number between the limits before it is sent.
+ */
+function BudgetField({ value, limits, busy, onSave }: { value: number; limits: Payload["budgetLimits"]; busy: boolean; onSave: (n: number) => Promise<void> }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  const n = Number(draft);
+  const valid = draft.trim() !== "" && Number.isInteger(n) && n >= limits.min && n <= limits.max;
+  const changed = valid && n !== value;
+  return (
+    <div className="text-sm" data-testid="admin-analysis-budget">
+      <label htmlFor="admin-analysis-budget-input" className="block font-medium">Analysis token budget per competitor, per run</label>
+      <div className="mt-1 flex items-center gap-2">
+        <input
+          id="admin-analysis-budget-input"
+          type="number"
+          inputMode="numeric"
+          min={limits.min}
+          max={limits.max}
+          step={1000}
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && changed) void onSave(n);
+            if (e.key === "Escape") setDraft(String(value));
+          }}
+          className={`${INPUT} w-36`}
+          aria-invalid={!valid}
+          aria-describedby="admin-analysis-budget-hint"
+        />
+        <button onClick={() => void onSave(n)} disabled={busy || !changed} className={BTN} data-testid="admin-analysis-budget-save">Save</button>
+      </div>
+      <span id="admin-analysis-budget-hint" className={`mt-1 block text-xs ${valid ? "text-slate-500" : "text-red-600"}`}>
+        {valid
+          ? `Now ${value.toLocaleString("en-US")} tokens (default ${limits.default.toLocaleString("en-US")}). Every token of a run counts. When the next page read or second look would pass it, the run reads nothing more, fills the table from what it read, and the next run continues.`
+          : `Enter a whole number between ${limits.min.toLocaleString("en-US")} and ${limits.max.toLocaleString("en-US")}.`}
+      </span>
+    </div>
+  );
 }
 
 export function AdminScanning() {
@@ -120,8 +180,30 @@ export function AdminScanning() {
               <span className="block text-xs text-slate-500">Default OFF. When on, a scan ends after its pages are saved: PMOS AI is not called and nothing changes in the matrix or the feed.</span>
             </span>
           </label>
+          <BudgetField value={data.settings.analysisTokenBudget} limits={data.budgetLimits} busy={busy} onSave={(n) => patch({ analysisTokenBudget: n })} />
           {data.testKnobs && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[11px] font-semibold text-amber-800" title="COMPETITORS_TEST_KNOBS=on — the clock and the scheduler tick can be set from the tests. Never in production.">Test knobs on</span>}
         </div>
+      </section>
+
+      {/* What the analysis reads */}
+      <section className="rounded-xl border border-slate-200 bg-white p-5" data-testid="admin-analysis-reads">
+        <h2 className="text-sm font-bold">{READS_COPY.title}</h2>
+        <p className="mb-3 mt-0.5 text-xs text-slate-500">{READS_COPY.intro}</p>
+        <div className="grid grid-cols-1 gap-x-8 gap-y-3 md:grid-cols-2">
+          {data.reads.kinds.map((k) => (
+            <label key={k.kind} className="flex items-start gap-3 text-sm" data-testid={`admin-reads-${k.kind}`}>
+              <input type="checkbox" checked={k.on} disabled={busy} onChange={(e) => void patch({ analysisReads: { [k.kind]: e.target.checked } })} className="mt-0.5 h-4 w-4" />
+              <span>
+                <span className="font-medium">{k.label}</span>
+                <span className={`ml-2 rounded-full px-2 py-px text-[11px] font-semibold ${k.on ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{k.on ? READS_COPY.on : READS_COPY.off}</span>
+                <span className="ml-2 text-[11px] text-slate-400">{READS_COPY.default(k.default)}</span>
+                <span className="block text-xs text-slate-500">{k.help}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <p className="mt-3 text-xs text-slate-600" data-testid="admin-reads-line"><span className="font-semibold">{READS_COPY.now}:</span> {data.reads.line}</p>
+        <p className="mt-1 text-xs text-slate-500">{READS_COPY.releaseNotes}</p>
       </section>
 
       {/* Stations */}
@@ -177,7 +259,7 @@ export function AdminScanning() {
         <div className="mb-3 flex items-start justify-between gap-4">
           <div>
             <h2 className="text-sm font-bold">Scan frequency per source</h2>
-            <p className="mt-0.5 text-xs text-slate-500">Every website source, all organizations. Default every 2 days; the hourly tick starts a scan when the last one is older than this.</p>
+            <p className="mt-0.5 text-xs text-slate-500">Every source the scanner reads, all organizations: each website, and under it the company&apos;s other addresses (help center, developer docs, release notes) that PM-OS found or a PM added. Default every 2 days; the hourly tick starts a scan when the last one is older than this.</p>
           </div>
           <button onClick={() => void load()} disabled={busy} className={BTN}><RefreshCw size={13} /> Refresh</button>
         </div>
@@ -186,13 +268,14 @@ export function AdminScanning() {
         ) : (
           <div className="overflow-hidden rounded-lg border border-slate-200">
             <table className="w-full text-xs">
-              <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Organization</th><th className="px-3 py-2">Competitor</th><th className="px-3 py-2">Site</th><th className="px-3 py-2">Every (days)</th><th className="px-3 py-2">Last scan</th><th className="px-3 py-2">State</th></tr></thead>
+              <thead className="bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Organization</th><th className="px-3 py-2">Competitor</th><th className="px-3 py-2">Site</th><th className="px-3 py-2">Kind</th><th className="px-3 py-2">Every (days)</th><th className="px-3 py-2">Last scan</th><th className="px-3 py-2">State</th></tr></thead>
               <tbody>
                 {data.sources.map((s) => (
                   <tr key={s.id} className="border-t border-slate-200" data-testid="admin-source-row">
                     <td className="px-3 py-2">{s.orgName}</td>
                     <td className="px-3 py-2 font-medium">{s.competitorName}</td>
                     <td className="px-3 py-2 text-slate-500">{s.url.replace(/^https?:\/\//, "")}</td>
+                    <td className="px-3 py-2 text-slate-500" data-testid="admin-source-kind">{COMPETITORS_COPY.profile.sourceTypes[s.type] ?? s.type}</td>
                     <td className="px-3 py-2">
                       <select value={s.scanEveryDays} disabled={busy} onChange={(e) => void patch({ sourceId: s.id, scanEveryDays: Number(e.target.value) })} className={`${INPUT} w-20`} aria-label={`Scan ${s.competitorName} every N days`}>
                         {[1, 2, 3, 5, 7, 14, 30].map((n) => <option key={n} value={n}>{n}</option>)}

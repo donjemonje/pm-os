@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { apiAdmin } from "@/lib/admin-auth";
 import { adminOrgDeleteError, ORG_DELETE_CONFIRMATION } from "@/lib/admin-guard";
 import { toFeatureOverrides } from "@/lib/auth";
+import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { db } from "@/lib/db";
 import { isOrgFeatureKey } from "@/lib/feature-flags";
 
@@ -67,6 +68,16 @@ export async function PATCH(
     where: { id },
     data: { features },
   });
+  // Turning Competitors on puts the organization in its setup state — "required" for a new one; an organization
+  // that is already set up stays "done" (lib/competitors/analysis/setup-rules.ts). Never changed by turning it off.
+  if (patch.competitors === true) {
+    const workspace = await db.workspace.findUnique({ where: { organizationId: id }, select: { id: true } });
+    if (workspace) {
+      const { moveSetupState } = await import("@/lib/competitors/analysis/setup");
+      const state = await moveSetupState(workspace.id, "enabled");
+      if (state) await recordCompetitorEvent(workspace.id, admin.id, "cmp_setup_state_set", { to: state, by: "enablements" });
+    }
+  }
 
   return NextResponse.json({
     organization: {

@@ -5,17 +5,21 @@
  * rescan limit, the recipients and the news baseline; old keys are ignored.
  */
 import { describe, expect, it } from "vitest";
-import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, splitSuggestedQuote, STALE_MS } from "@/lib/competitors/config";
+import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, STALE_MS } from "@/lib/competitors/config";
 import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    expect(mergeCompetitorsConfig(null)).toEqual({ notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual({ notifyUserIds: [], baselineUntil: null });
-    expect(mergeCompetitorsConfig("junk")).toEqual({ notifyUserIds: [], baselineUntil: null });
+    const defaults = { notifyUserIds: [], baselineUntil: null };
+    expect(mergeCompetitorsConfig(null)).toEqual(defaults);
+    expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual(defaults);
+    expect(mergeCompetitorsConfig("junk")).toEqual(defaults);
     expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] }).notifyUserIds).toEqual(["u1", "u2"]);
     expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
     expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
+  });
+  it("the old analysis settings are gone and a stored value of them is ignored: whether blog and news are read is the installation's setting now", () => {
+    expect(mergeCompetitorsConfig({ readWeakPages: true, minPagesForNewRow: 3, secondLooksPerRun: 30 })).toEqual({ notifyUserIds: [], baselineUntil: null });
   });
   it("carries the PRD's numbers: every 2 days, no page limit, 8 h per scan, 10 GB of page text, stale after 10 min (Daniel 2026-11-09)", () => {
     expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);
@@ -61,15 +65,5 @@ describe("domain name mentions (rename cascade)", () => {
       "Not here: exposed credentials belong to Exposure & response; see also Threat Intelligence and CTI feeds.",
     );
     expect(renameMentions("", "a", "b")).toBe("");
-  });
-});
-
-describe("splitSuggestedQuote", () => {
-  it("splits the quote from a trailing source URL", () => {
-    expect(splitSuggestedQuote("Detects weapons in images — https://example.com/p")).toEqual({ quote: "Detects weapons in images", url: "https://example.com/p" });
-  });
-  it("keeps a quote without a URL and tolerates null", () => {
-    expect(splitSuggestedQuote("Plain quote")).toEqual({ quote: "Plain quote", url: null });
-    expect(splitSuggestedQuote(null)).toEqual({ quote: "", url: null });
   });
 });

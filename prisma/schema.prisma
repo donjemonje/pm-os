@@ -15,6 +15,12 @@ model Organization {
   /// present wins; a missing key falls back to the env default (IDEAS_ENABLED
   /// etc.). Managed in PM-OS Admin → Configurations.
   features  Json     @default("{}")
+  /// The setup state of Competitors for this organization (lib/competitors/analysis/setup-rules.ts): "required" →
+  /// "in_setup" → "done". Set only by PM-OS — turning Competitors on in Admin → Enablements, the setup run, a PM-OS
+  /// admin by hand — never by the customer. Until it is "done" an analysis creates no row and the Competitors pages
+  /// say "being set up". Null = it was never set (an organization from before the state existed): the state is then
+  /// read from its data — a catalog means "done", a setup run that did not finish "in_setup", else "required".
+  competitorsSetup String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -602,8 +608,11 @@ model PasswordResetToken {
 // ————— Competitors (story 2: website data → parity matrix + profile) —————
 //
 // Every row belongs to a workspace. The org's own column of the matrix is
-// Capability.ourStatus — the organization is never scanned (Daniel,
-// 2026-10-26): its catalog and statuses are entered by its PMs. Design of
+// Capability.ourStatus. Until 2026-11-15 the organization was never scanned
+// (Daniel, 2026-10-26: its catalog and statuses are entered by its PMs); since
+// then an organization may have its OWN website stored as a Competitor row
+// flagged isOwn ("the own source"): what it says fills ourStatus where no PM
+// set it by hand. Organizations without one are unchanged. Design of
 // record: the C2 "full-screen matrix" board; spec: "PM-OS Competitor
 // Analysis — Spec", tab "Story 2 — Website data".
 
@@ -622,6 +631,16 @@ model Competitor {
   position    Int       @default(0)
   /// Soft delete (Website Scanning PRD 2026-11-04): pages, hashes and scan history stay for the retention period; re-adding the same host restores the row.
   deletedAt   DateTime?
+  /// The organization's OWN website — "the own source" (Capability Analysis, the setup run; lib/competitors/own.ts).
+  /// Stored, scanned, mapped and read exactly like a competitor's site, but NEVER shown or counted as a competitor:
+  /// every listing of competitors leaves it out. At most one per workspace (enforced where it is created). What its
+  /// pages say is OURS: it fills Capability.ourStatus / Feature.ourStatus, never a CapabilityStatus cell.
+  isOwn       Boolean   @default(false)
+  /// The search for the company's other addresses — help center, developer docs, release notes (lib/competitors/discovery.ts).
+  /// Set while a search is working (one at a time per company; a search that stopped reporting is taken over after 10 minutes).
+  addressSearchStartedAt DateTime?
+  /// What the last search that finished says: { status: "done" | "undecided", at, trigger, candidates, added, note }.
+  addressSearch          Json?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -629,6 +648,12 @@ model Competitor {
   facts    ProfileFact[]
   sources  CompetitorSource[]
   media    CompetitorMedia[]
+  analyses        CompetitorAnalysis[]
+  items           CompetitorItem[]
+  findings        PageFinding[]
+  featureStatuses FeatureStatus[]
+  sections        CompetitorSection[]
+  chunks          CompetitorChunk[]
 
   @@unique([workspaceId, host])
   @@index([workspaceId])
@@ -654,9 +679,15 @@ model CompetitorDomain {
   /// "manual" | "ai" (a competitor scan proposed it when no catalog domain fit)
   origin      String    @default("manual")
   /// "active" | "suggested" (dashed group in the matrix, waits for a PM) | "dismissed" (never suggested again)
+  /// | "removed" (a PM removed it: kept as a record so scans never bring it back; restorable from Settings)
   state       String    @default("active")
   /// Which competitor's scan suggested it (null for manual domains).
   suggestedById String?
+  /// Names a PM replaced by renaming — a scan that meets one of them recognises this domain instead of proposing a new one.
+  aliases     Json      @default("[]")
+  removedAt   DateTime?
+  /// The PM who removed it (plain id, no relation: the record outlives the user).
+  removedById String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -667,10 +698,9 @@ model CompetitorDomain {
 }
 
 /// A matrix row: one domain, many of the org's product lines (names, matched
-/// against ProductLine.name). `ourStatus` is the org's own cell — "has" |
-/// "partial" | "missing" — set by PMs (default has; a competitor suggestion
-/// accepted into the catalog starts as missing = a gap). origin "ai" = a
-/// competitor scan suggested it; state "suggested" rows wait for a PM.
+/// against ProductLine.name). `ourStatus` is the org's own cell — "found" |
+/// "not_found" — set by PMs (default found; a capability an analysis found only
+/// at a competitor starts as not_found = a gap). origin "ai" = an analysis added it.
 model Capability {
   id             String           @id @default(uuid())
   workspaceId    String
@@ -685,22 +715,42 @@ model Capability {
   /// Product-line names of the org that serve this capability (story 2 decision:
   /// product lines are the org's only; competitor products live in ProfileFact).
   productLines   Json             @default("[]")
-  /// "has" | "partial" | "missing"
-  ourStatus      String           @default("has")
+  /// "found" | "not_found"
+  ourStatus      String           @default("found")
+  /// Set when a PM set ourStatus by hand (and for every row that existed when the organization's own site was added):
+  /// the PM's value is the truth — no run changes ourStatus again. Null = a run may set it from the own source.
+  ourStatusSetAt   DateTime?
+  /// The PM who set it (plain id, no relation); null when it was frozen by adding the own site.
+  ourStatusSetById String?
+  /// The top-ranked evidence from the organization's own source behind the own cell, written by the own source's
+  /// analysis: { quote, sourceUrl, reasoning, wording, description, count }. Null = no evidence of ours.
+  ourEvidence    Json?
   position       Int              @default(0)
   /// "manual" | "ai"
   origin         String           @default("manual")
-  /// "active" | "suggested" | "dismissed"
+  /// "active" | "suggested" | "dismissed" | "removed" (a PM removed it: the row, its statuses and idea links are kept
+  /// so scans never add it back and a restore brings the evidence with it)
   state          String           @default("active")
   /// Which competitor's scan suggested it (null for manual rows).
   suggestedById  String?
   suggestedQuote String?
+  /// Names a PM replaced by renaming — a scan that meets one of them recognises this row instead of proposing a new one.
+  aliases        Json             @default("[]")
+  removedAt      DateTime?
+  /// The PM who removed it (plain id, no relation: the record outlives the user).
+  removedById    String?
+  /// Set when an analysis created the row inside a suggested domain: the existing domain PMOS AI named as closest
+  /// (plain id, no relation). A declined domain moves the row there.
+  closestDomainId String?
   /// Ideas this roadmap row is linked to: created from the row, or matched to an existing idea.
   ideas          CapabilityIdea[]
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
 
   statuses CapabilityStatus[]
+  features Feature[]
+  items    CompetitorItem[]
+  findings PageFinding[]
 
   @@unique([workspaceId, name])
   @@index([workspaceId, domainId])
@@ -729,12 +779,23 @@ model CapabilityStatus {
   competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
   capabilityId String
   capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
-  /// "has" | "partial" | "missing" | "unknown"
-  value        String     @default("unknown")
-  /// 0–1 from PMOS AI; low confidence is shown as "partial?" to confirm.
+  /// "found" | "low" | "not_found" — set by the analysis run's apply step from the evidence, by fixed rules.
+  value        String     @default("not_found")
+  /// No longer written or read (the confidence is a value now); left in place for a later cleanup push.
   confidence   Float?
+  /// The top-ranked evidence behind the cell (the rest is the PageFinding rows): quote, page, why, their name for it.
   quote        String?
   sourceUrl    String?
+  reasoning    String?
+  wording      String?
+  /// One plain sentence of what it does at this competitor: the description of the best-ranked evidence that has one.
+  description  String?
+  /// Distinct pages that carry evidence for the cell.
+  evidenceCount Int       @default(0)
+  /// The analysis run that last wrote the cell.
+  analysisId   String?
+  /// What the row was last looked for with, when every chunk of the company found nothing (analysis/secondlook.ts lookKey); same key = not asked again.
+  lookKey      String?
   scanId       String?
   /// When `value` last changed (drives "New changes" and "Changed <date>").
   changedAt    DateTime?
@@ -772,8 +833,342 @@ model StatusHistory {
   @@index([statusId, at])
 }
 
+/// One analysis of one competitor's stored pages (Capability Analysis, "How the analysis runs").
+/// Queued by a finished scan, by a catalog change, or by a PM-OS admin. One run executes at a time, oldest first.
+model CompetitorAnalysis {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// "analysis" = one competitor's stored pages (the default). "setup" = THE SETUP RUN of a workspace (analysis/setup.ts):
+  /// the first run of an organization, attached to its own source (competitorId), working on the own source and every
+  /// competitor. It lives in this table so it takes its turn in the same queue: one run at a time in the installation.
+  kind         String     @default("analysis")
+  /// kind "setup" only — per-company progress and totals, written with every heartbeat:
+  /// { companies: [{ competitorId, name, own, stage, pagesTotal, pagesDone, appliedAt, counters, usage }], shared: counters,
+  ///   sharedUsage, rows, domains, features }.
+  setup        Json?
+  /// The record a setup run leaves on each company it filled (trigger "setup", status "done"): the setup run's id.
+  /// It makes the company's later runs ordinary ones (not a first picture) — plain id, no relation.
+  parentId     String?
+  /// "scan" | "catalog" (our catalog got a row this competitor was never checked for) | "manual" (PM-OS admin / CLI)
+  /// | "sources" (one of the company's other addresses was removed: what its pages said leaves the picture)
+  /// | "setup" (the record of one company's part of a setup run)
+  trigger      String
+  /// The scan whose end queued it (the newest one when several were folded into one queued run); null for catalog / manual.
+  scanId       String?
+  startedById  String?
+  /// "queued" | "running" | "waiting" (PMOS AI has no capacity; sleeping until resumeAt) | "done" | "failed" | "cancelled"
+  status       String     @default("queued")
+  /// Display only — where the run is: "map" | "reading" | "match" | "second_look" | "apply" | "done"
+  /// (a setup run also: "unify" | "domains"; a run from before 2026-11-16 also "research" | "merge" | "go_back" | "facts").
+  /// A resumed run never trusts it: every step recomputes its own to-do from the tables.
+  step         String     @default("research")
+  /// What cannot be derived: { look: { fingerprint, rows, done } } — how far a second look got (the chunks it asked),
+  /// so a run that stopped goes on after them. (An old run may also hold factsBaselineSources, of the facts step that is gone.)
+  /// A setup run keeps one such object per company under { companies: { <competitorId>: {…} } }, and { unify: { reviewed } }.
+  cursor       Json       @default("{}")
+  /// Set while status = "waiting".
+  resumeAt     DateTime?
+  /// Times the run was put back in the queue because its runner stopped reporting (3 → failed).
+  staleCount   Int        @default(0)
+  /// Set by the claim, cleared when the run is put back in the queue or ends: the one worker that executes the run.
+  /// Every write of that worker names it, so a worker whose run was swept as stale (its process slept, the database
+  /// was away) and claimed again finds zero rows and stops.
+  ownerToken   String?
+  /// When a runner was last asked to execute the queued run (a Cloud Run job execution, an in-process start). A kick
+  /// does not ask again while this is younger than 10 minutes; cleared when the run goes back to the queue.
+  launchedAt   DateTime?
+  /// TEST KNOB: the run takes injected answers and may never call a model.
+  injected     Boolean    @default(false)
+  model        String?
+  createdAt    DateTime   @default(now())
+  startedAt    DateTime?
+  /// When the apply step last finished (cells are current as of this moment).
+  appliedAt    DateTime?
+  finishedAt   DateTime?
+  heartbeatAt  DateTime   @default(now())
+  /// Research progress for the UI.
+  pagesTotal   Int        @default(0)
+  pagesDone    Int        @default(0)
+  /// Everything else that is counted (analysis/engine.ts Counters).
+  counters     Json       @default("{}")
+  /// The run's tokens and time split by step and model (analysis/usage.ts): [{ step, model, calls, input, output, cached, thinking, ms }].
+  /// A setup run's list is the roll-up of its companies' lists (kept in `setup`) and of its shared calls.
+  usage        Json       @default("[]")
+  /// How the run paced itself (analysis/pacing.ts): { start, max, peak, speed, pushbacks: [{ at, step, company, reason,
+  /// speed, next, waitMs, retryAfterMs }], total } — the calls at once it started with, its ceiling, the fastest it got,
+  /// and every time the provider pushed back: when, at what speed, how long the run waited. Null = a run from before
+  /// pacing was recorded.
+  pacing       Json?
+  /// The caps this run hit (analysis/caps.ts) — limits are safety nets, so a hit is recorded and surfaced:
+  /// [{ cap, limit, competitorId, company, undone, also, times }]. [] = no cap was hit.
+  caps         Json       @default("[]")
+  /// "What the analysis reads" when the run ran (analysis/reads.ts): { kinds: { product, pricing, compare, release_notes,
+  /// api_docs, help, news → true | false }, notRead: { <kind>: { pages, tokens } } } — the kinds that were on, and for
+  /// a run of one company how many pages of each kind that was off it left out (a setup run keeps that per company in
+  /// `setup`). A configuration, not a cap. Null = a run from before the setting existed.
+  reads        Json?
+  /// Answers of PMOS AI that should never happen (analysis/incidents.ts): a finding whose quote is not on the page it
+  /// names, a page or an item outside the closed set an answer was given. The finding does not reach the table; the
+  /// case is kept here: { list: [{ kind, at, step, competitorId, company, request, itemKind, item, parent, quote,
+  /// pageCode, pageUrl, pageId, pageHash, foundOn }], total }. Null = none (or a run from before they were kept).
+  incidents    Json?
+  /// "none" | "capacity" | "answer" | "ai" | "stale" | "other"
+  errorKind    String?
+  error        String?
+  /// [{at, level, msg, url?}] — same shape as CompetitorScan.log.
+  log          Json       @default("[]")
+
+  @@index([status, createdAt])
+  @@index([competitorId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([parentId])
+}
+
+/// One request of a company's READING (analysis/read-step.ts): a chunk of related pages sent to PMOS AI in one call
+/// (analysis/chunks.ts). The first request of a company returns its list; a later one, what its pages change in the
+/// list so far. A record only — the reading never reads it back: what is due is decided from the pages
+/// (SourcePage.analyzedKey). It is what Administration → Competitors shows per company: the chunks, their pages and
+/// tokens, what each answer did, and the labels that were seen but not explained.
+model CompetitorChunk {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// The run that made the request (plain id, no relation).
+  analysisId   String
+  /// READ_VERSION of the prompt that read it.
+  version      String
+  /// 1 … — its place among the requests of that run for this company.
+  position     Int
+  /// "list" (the company's whole list) | "changes" (what these pages change in the list so far)
+  kind         String
+  /// What identifies its content: the pages and the text each had (analysis/chunks.ts chunkKey).
+  key          String
+  pages        Int
+  /// Tokens of its text as estimated before the call (characters / 4).
+  tokens       Int
+  /// Pages per kind: { release_notes: 40, help: 210, … }.
+  kinds        Json       @default("{}")
+  firstUrl     String     @default("")
+  lastUrl      String     @default("")
+  model        String     @default("")
+  /// What the provider billed: input, output (thinking included) and the thinking part of the output.
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  thinkingTokens Int      @default(0)
+  /// How long the call took.
+  ms           Int        @default(0)
+  /// What the answer did: { capabilities, features (the list after it), newCapabilities, newFeatures, corrections,
+  /// removed, incidents, pii, repeated, unnamed, renameRefused }.
+  result       Json       @default("{}")
+  /// "Seen but not explained": bare labels no page explains — [{ label, url }].
+  unexplained  Json       @default("[]")
+  createdAt    DateTime   @default(now())
+
+  @@index([competitorId, createdAt])
+  @@index([workspaceId])
+  @@index([analysisId])
+}
+
+/// One section of a competitor's READING PLAN (analysis/sections.ts): the stored pages under one address prefix of
+/// one source. Code builds the sections; PMOS AI labels each one once (the analysis run's map step), the home page
+/// is labeled in code. A saved label is kept like a decision: a later run asks only about sections with no row yet.
+model CompetitorSection {
+  id           String           @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  sourceId     String
+  source       CompetitorSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  /// Address prefix without the scheme: "acme.com/" (the home page), "acme.com/products", "acme.com/docs/api".
+  prefix       String
+  /// product | pricing | compare | help | release_notes | api_docs | news | noise
+  label        String
+  /// Pages and characters of text under the prefix when the plan was last computed (0 = no page there any more).
+  pages        Int              @default(0)
+  chars        Int              @default(0)
+  /// "ai" (the map call) | "code" (the home page)
+  labeledBy    String           @default("ai")
+  labeledAt    DateTime         @default(now())
+  /// MAP_VERSION of the prompt that labeled it; null when code did.
+  mapVersion   String?
+  /// The run that labeled it (plain id, no relation).
+  analysisId   String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([competitorId, sourceId, prefix])
+  @@index([workspaceId])
+}
+
+/// The proof of one thing a company offers: the quote and the page it is on. Written by the reading (one per item of
+/// the company's list — origin "reading") and by the second look. A finding exists only while its quote is on its
+/// page: when the page changes, the quote is checked again in code; when it is gone (or the page is), the finding is
+/// deleted. Origin "research" = a finding of the old per-page reading: kept until its company is first read by chunks.
+model PageFinding {
+  id            String          @id @default(uuid())
+  workspaceId   String
+  competitorId  String
+  competitor    Competitor      @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  pageId        String
+  page          SourcePage      @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  /// SourcePage.hash of the text the quote was verified against.
+  pageHash      String
+  /// The run that wrote it (plain id, no relation).
+  analysisId    String?
+  /// "reading" | "second_look" | "research" (the old per-page reading)
+  origin        String          @default("research")
+  /// "capability" | "feature"
+  kind          String
+  /// Their name for it, as the page says it.
+  wording       String
+  /// For a feature: the wording of the capability it sits under on this page.
+  parentWording String?
+  /// Verbatim from the page (verified in code), at most 400 characters.
+  quote         String
+  /// No longer written (Daniel 2026-11-16: the description covers it) — "" for every finding of the chunked reading.
+  reasoning     String          @default("")
+  /// One plain sentence of what it does, taken only from this page; null when the page does not say.
+  description   String?
+  /// The company's item this finding proves (null for second-look findings).
+  itemId        String?
+  item          CompetitorItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  /// Second look only: the capability of ours it answers.
+  capabilityId  String?
+  capability    Capability?     @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  createdAt     DateTime        @default(now())
+
+  @@index([pageId])
+  @@index([itemId])
+  @@index([competitorId, capabilityId])
+}
+
+/// One capability or feature of a company, in its own words — an entry of the list the reading makes (each once).
+/// Carries the saved match to our catalog: decided once, reused on every later run.
+model CompetitorItem {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  competitorId    String
+  competitor      Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// "capability" | "feature"
+  kind            String
+  /// Stable key: "c:<wordingKey>" for a capability, "f:<capability item id>><wordingKey>" for a feature (analysis/items.ts itemKey).
+  key             String
+  /// The company's own name for it, shown behind the evidence.
+  name            String
+  /// One plain sentence of what it does, from the company's pages (the reading). Null for an item of the old per-page reading.
+  description     String?
+  /// Its place in the company's list: capabilities in the order the reading listed them, features in their order under their capability.
+  position        Int              @default(0)
+  /// No longer written or read (it held the wordings the merge step joined); left in place for a later cleanup push.
+  wordings        Json             @default("[]")
+  parentItemId    String?
+  parent          CompetitorItem?  @relation("ItemParent", fields: [parentItemId], references: [id], onDelete: Cascade)
+  children        CompetitorItem[] @relation("ItemParent")
+  /// No longer written or read (the merge step is gone: the reading lists each thing once); left in place for a later cleanup push.
+  mergeChecked    Boolean          @default(false)
+  /// The saved match: exactly one of the two is set once the item is settled.
+  capabilityId    String?
+  capability      Capability?      @relation(fields: [capabilityId], references: [id], onDelete: SetNull)
+  featureId       String?
+  feature         Feature?         @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  /// "name" | "alias" (resolved in code through decisions.ts) | "ai" (the match call, or the setup run's unify step)
+  /// | "created" (the apply step made the row from this item) | "silent" (it is a row a PM removed or declined:
+  /// remembered, never shown)
+  matchedBy       String?
+  matchedAt       DateTime?
+  matchAnalysisId String?
+  /// The match call's answer for an item that is none of ours, kept until the apply step turns it into a row:
+  /// { domainId, marketName, description }.
+  /// During a setup run, an item's place as the unify step decided it, kept until the domains step creates the
+  /// catalog — a capability's row { setupRow: true, marketName, description }, a feature's feature row
+  /// { setupFeature: true, row, marketName, description }, or the row a feature was moved to { setupMove: true, row }
+  /// (rows are identified by their names).
+  placement       Json?
+  /// No longer written or read (the go-back rounds are gone); left in place for a later cleanup push.
+  gapCheckedAt    DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  findings PageFinding[]
+
+  @@unique([competitorId, key])
+  @@index([competitorId, kind])
+  @@index([capabilityId])
+  @@index([featureId])
+}
+
+/// A detail of how a capability works — the level under a capability in the table. Same PM-decision fields as Capability.
+model Feature {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  capabilityId String
+  capability   Capability @relation(fields: [capabilityId], references: [id], onDelete: Cascade)
+  name         String
+  description  String     @default("")
+  /// The org's own mark: "found" | "not_found". A feature found only at competitors starts as not_found.
+  ourStatus    String     @default("not_found")
+  /// Same rule as Capability: set = a PM's value, never changed by a run.
+  ourStatusSetAt   DateTime?
+  ourStatusSetById String?
+  /// Same shape as Capability.ourEvidence.
+  ourEvidence  Json?
+  position     Int        @default(0)
+  /// "manual" | "ai"
+  origin       String     @default("manual")
+  /// "active" | "removed" (kept so an analysis never adds it back)
+  state        String     @default("active")
+  /// Names a PM replaced by renaming.
+  aliases      Json       @default("[]")
+  removedAt    DateTime?
+  removedById  String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  statuses FeatureStatus[]
+  items    CompetitorItem[]
+
+  @@unique([capabilityId, name])
+  @@index([workspaceId, capabilityId])
+}
+
+/// One cell of a feature row. Same rules as CapabilityStatus; no history (the feed does not carry features in this build).
+model FeatureStatus {
+  id             String     @id @default(uuid())
+  workspaceId    String
+  competitorId   String
+  competitor     Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  featureId      String
+  feature        Feature    @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  /// "found" | "low" | "not_found"
+  value          String     @default("not_found")
+  quote          String?
+  sourceUrl      String?
+  reasoning      String?
+  wording        String?
+  /// The description of the best-ranked evidence that has one.
+  description    String?
+  evidenceCount  Int        @default(0)
+  analysisId     String?
+  changedAt      DateTime?
+  overrideValue  String?
+  overrideNote   String?
+  overrideUserId String?
+  overrideAt     DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([competitorId, featureId])
+  @@index([workspaceId])
+}
+
 /// A lean-profile fact read off the website. `kind` is a closed list:
 /// tagline | product | pricingTier | integration | certification | customer | vertical.
+/// Since 2026-11-16 no run writes these: the profile-facts step of the analysis is gone (the run is about the
+/// table). The rows that exist stay and are shown (Profile tab, feed, timeline); a PM can still add and edit facts
+/// by hand; a scan still marks a fact whose source page is gone as unreachable.
 model ProfileFact {
   id           String     @id @default(uuid())
   workspaceId  String
@@ -828,11 +1223,27 @@ model CompetitorSource {
   /// One of SOURCE_TYPES (lib/competitors/config.ts): website | documents |
   /// helpcenter | video | archive | apidocs | changelog | code | social |
   /// reviews | marketplaces | press | jobs | events | other. The website is
-  /// crawled by the scanner; every other type receives its pages from a
-  /// collector (an upload, an import, a later connector) and runs the same
-  /// pipeline from there.
+  /// crawled by the scanner, and so is every OTHER ADDRESS of the company —
+  /// a helpcenter, apidocs or changelog source whose url is a plain site
+  /// address (lib/competitors/addresses.ts): found by PM-OS or added by a PM,
+  /// scanned whole on the website's schedule. A company may have several of
+  /// one type (docs.acme.com and support.acme.com are both a help center), so
+  /// (competitorId, type) is not unique; two sources of one company never
+  /// share a site (checked where a source is created). Every other type
+  /// receives its pages from a collector (an upload, an import, a later
+  /// connector) and runs the same pipeline from there.
   type         String     @default("website")
   url          String
+  /// An other address only — how it came to be: "link" (a link on the company's own site) | "llms" (its llms.txt) |
+  /// "guess" (a common name in front of its domain, verified) | "manual" (a PM added it). Null for the website, for a
+  /// source fed by a collector and for an address added before this was recorded.
+  foundVia     String?
+  /// The text of the link it was found under, when a link named it.
+  foundText    String?
+  /// A PM removed the address: it is never scanned, never shown, and never added back by a later search. The row
+  /// stays as that memory; its pages are marked removed. Adding the same address by hand brings it back.
+  removedAt    DateTime?
+  removedById  String?
   /// Scan frequency in days, set per source in Administration (PRD: once every 2 days).
   scanEveryDays Int       @default(2)
   lastScanAt   DateTime?
@@ -845,8 +1256,9 @@ model CompetitorSource {
   scans         CompetitorScan[]
   pages         SourcePage[]
   localRequests LocalScanRequest[]
+  sections      CompetitorSection[]
 
-  @@unique([competitorId, type])
+  @@index([competitorId, type])
   @@index([workspaceId])
 }
 
@@ -936,8 +1348,6 @@ model CompetitorScanRun {
   /// "manual" | "scheduled"
   trigger     String
   startedById String?
-  /// "live" (the scanner crawls each website) | "bundle" (pages handed in by a collector)
-  mode        String    @default("live")
   /// "running" | "ok" | "failed"
   status      String    @default("running")
   total       Int       @default(0)
@@ -949,6 +1359,8 @@ model CompetitorScanRun {
   /// {competitors, gaps, raised, lowered, facts, suggestions, recipients, skipped?}
   summary     Json      @default("{}")
   notifiedAt  DateTime?
+  /// The claim that makes the run's notification happen once, after the analyses its scans queued.
+  summarizedAt DateTime?
 
   scans CompetitorScan[]
 
@@ -1007,7 +1419,7 @@ model SourcePage {
   state       String           @default("present")
   /// Consecutive scans that answered not-found (404/410 or a not-found page in the local lane).
   notFoundStreak Int           @default(0)
-  /// "home" | "sitemap" | "link" | "handin"
+  /// "home" | "sitemap" | "link" | "handin" | "discovery" (the site's /llms.txt, stored by the address search — never crawled)
   discoveredVia String         @default("link")
   firstSeenAt DateTime         @default(now())
   /// Last scan that read the page successfully.
@@ -1024,7 +1436,20 @@ model SourcePage {
   /// then dropped. Set on the first change since the last successful analysis, kept across further changes until then.
   previousText String?
   previousHash String?
+  /// The map's word on a page that sits in a help-center or a blog section (analysis/plan.ts): "release_notes" = it is
+  /// a release-notes page and is read as one, whatever the section's own kind says; "none" = the map looked at it and
+  /// it is not one; null = not looked at yet (or it sits in a section the map does not look into page by page).
+  readAs      String?
+  /// "<READ_VERSION>:<hash>" of the text the reading last read (analysis/reading.ts); a different value = the page is due.
+  analyzedKey String?
+  analyzedAt  DateTime?
+  /// No longer written (it marked a page whose per-page research answer was unusable); the reading clears it.
+  analysisError String?
+  /// No longer written or read: the profile-facts step is gone (2026-11-16). Left in place for a later cleanup push.
+  factsKey    String?
   updatedAt   DateTime         @updatedAt
+
+  findings PageFinding[]
 
   @@unique([sourceId, url])
   @@index([workspaceId])

@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { db } from "../db";
 import { sendEmail } from "../mailer";
+import { stationSearchesWith } from "./addresses";
 import { ACTIVE_SCAN_STATUSES, KEY_ROTATE_DAYS, KEY_ROTATION_GRACE_MS, LOCAL_ALERT_MS, SCAN_TOKEN_GRACE_MS, STALE_MS, STATION_OFF_ALERT_EVERY_MS, STATION_ONLINE_MS } from "./config";
 import { lastStationOffAlert, noteStationOffAlert, now } from "./settings";
 
@@ -162,8 +163,9 @@ export function appUrl(): string {
 /**
  * Is a station on? Yes when a machine key checked in within STATION_ONLINE_MS
  * (the poller checks in every 15 minutes), or when a station is reading a scan
- * right now — it does not check in while it reads, its scan's heartbeat is the
- * sign of life.
+ * right now — the one-scan-at-a-time poller does not check in while it reads,
+ * so the heartbeat of any scan it is reading is the sign of life (the parallel
+ * poller, 2026-11-16, also checks in every 15 minutes while it reads).
  */
 export async function stationStatus(t: Date): Promise<{ online: boolean; lastContact: Date | null }> {
   const key = await db.scannerKey.findFirst({ where: { revokedAt: null, lastUsedAt: { not: null } }, orderBy: { lastUsedAt: "desc" }, select: { lastUsedAt: true } });
@@ -229,18 +231,32 @@ export interface WaitingScan {
   /** The time limit the runner must respect (no page limit, Daniel 2026-11-09). */
   ceiling: { ms: number };
   waitingSince: string;
+  /**
+   * True for a scan of a company's MAIN website: with it the station also brings what the search for the company's
+   * other addresses needs — the home page's links, /llms.txt and what the addresses it is given answer — through
+   * POST /api/competitors/local/scans/<id>/addresses (addresses.ts searchLane). A station that does not know the
+   * field reads the site as before.
+   */
+  addresses: boolean;
 }
 
 /**
  * What a station should scan now: every waiting request, oldest first, each
- * with a fresh scan token. Requests are not claimed here (the poller runs
- * them one at a time and may show a dialog first); `startLocalScan` claims.
+ * with its scan token. Requests are not claimed here; `startLocalScan` claims,
+ * one request at a time, when the station really starts reading that site.
+ *
+ * How many of them run at the same time is the station's decision (Daniel
+ * 2026-11-16: up to 10 scans at once, each of a different site, never two of
+ * one site — scripts/pmos-local-scan/schedule.mjs). Nothing here assumes one
+ * running scan: every scan has its own request row, its own token, its own
+ * heartbeat and its own claim, so the list is simply "everything still
+ * waiting" — a station that already reads some of them is asking for the rest.
  */
 export async function listWaiting(ceilingValue: { ms: number }): Promise<WaitingScan[]> {
   const reqs = await db.localScanRequest.findMany({
     where: { state: "waiting", scan: { status: "pending_local" } },
     orderBy: { createdAt: "asc" },
-    include: { scan: { select: { id: true, workspaceId: true } }, source: { select: { url: true, competitor: { select: { name: true, host: true, deletedAt: true } } } } },
+    include: { scan: { select: { id: true, workspaceId: true } }, source: { select: { url: true, type: true, competitor: { select: { name: true, host: true, deletedAt: true } } } } },
   });
   const out: WaitingScan[] = [];
   for (const r of reqs) {
@@ -256,6 +272,7 @@ export async function listWaiting(ceilingValue: { ms: number }): Promise<Waiting
       knownUrls: known.map((k) => k.url),
       ceiling: ceilingValue,
       waitingSince: r.createdAt.toISOString(),
+      addresses: stationSearchesWith({ sourceType: r.source.type }),
     });
   }
   return out;

@@ -7,6 +7,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { InvalidUrlError, normalizeWebsite } from "@/lib/competitors/url";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { cancelLocalRequests } from "@/lib/competitors/local";
+import { notifyRunsOfScans } from "@/lib/competitors/runs";
 import { createAndRouteScan } from "@/lib/competitors/scan";
 
 type Params = { params: Promise<{ id: string }> };
@@ -25,7 +26,8 @@ export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const body = await readJson(req);
   if (body instanceof NextResponse) return body;
-  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId, deletedAt: null } });
+  // Never the organization's own site (own.ts): it is not a competitor, and no customer route renames, moves or removes it.
+  const existing = await db.competitor.findFirst({ where: { id, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false } });
   if (!existing) return bad("Not found", 404);
 
   const data: { name?: string; websiteUrl?: string; host?: string; logoUrl?: string | null } = {};
@@ -33,7 +35,7 @@ export async function PATCH(req: Request, { params }: Params) {
     const name = cleanName(body.name);
     if (!name) return bad(C.settings.nameRequired);
     const dup = await db.competitor.findFirst({
-      where: { workspaceId: ctx.workspaceId, id: { not: id }, deletedAt: null, name: { equals: name, mode: "insensitive" } },
+      where: { workspaceId: ctx.workspaceId, id: { not: id }, deletedAt: null, isOwn: false, name: { equals: name, mode: "insensitive" } },
       select: { id: true },
     });
     if (dup) return bad(C.settings.duplicateName, 409);
@@ -42,7 +44,8 @@ export async function PATCH(req: Request, { params }: Params) {
   if (body.website !== undefined) {
     try {
       const site = normalizeWebsite(typeof body.website === "string" ? body.website : "");
-      const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true } });
+      const dup = await db.competitor.findFirst({ where: { workspaceId: ctx.workspaceId, id: { not: id }, host: site.host }, select: { id: true, isOwn: true } });
+      if (dup?.isOwn) return bad(C.settings.ownSiteHost, 409);
       // A removed competitor still holds the host (its history stays); say so rather than fail on the unique index.
       if (dup) return bad(C.settings.duplicateHost, 409);
       // Name AND addresses must be public: a public-looking name that resolves into our network is refused (story checklist §12).
@@ -84,7 +87,7 @@ export async function DELETE(_req: Request, { params }: Params) {
   if (ctx instanceof NextResponse) return ctx;
   const { id } = await params;
   const existing = await db.competitor.findFirst({
-    where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
+    where: { id, workspaceId: ctx.workspaceId, deletedAt: null, isOwn: false },
     select: { id: true, sources: { select: { id: true, lastScanAt: true } } },
   });
   if (!existing) return bad("Not found", 404);
@@ -94,9 +97,12 @@ export async function DELETE(_req: Request, { params }: Params) {
   });
   if (running) return bad(C.settings.scanRunning, 409);
   // Soft delete (PRD): pages, hashes and scan history stay for the retention period; a waiting local-scan request is cancelled.
+  // The scans this ends, read before they are ended: the email of their Scan run may be due once they are cancelled.
+  const waitingScans = await db.competitorScan.findMany({ where: { source: { competitorId: id }, status: { in: ["queued", "pending_local"] }, runId: { not: null } }, select: { id: true } });
   const cancelled = await cancelLocalRequests(existing.sources.map((s) => s.id));
   await db.competitorScan.updateMany({ where: { source: { competitorId: id }, status: "queued" }, data: { status: "cancelled", finishedAt: new Date(), error: "the competitor was removed" } });
   await db.competitor.update({ where: { id }, data: { deletedAt: new Date() } });
+  await notifyRunsOfScans(waitingScans.map((s) => s.id));
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_competitor_removed", {
     competitorId: id,
     hadScans: existing.sources.some((s) => s.lastScanAt != null),

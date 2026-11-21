@@ -7,8 +7,9 @@
  * Per-workspace settings (Workspace.competitorsConfig). Since the Website
  * Scanning PRD (2026-11-04) the scan frequency lives per source
  * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
- * what remains here is the notification recipients and the news baseline
- * (the daily manual-scan limit was removed, Daniel 2026-11-12).
+ * what remains here is the notification recipients, the news baseline and
+ * the three analysis settings (the daily manual-scan limit was removed,
+ * Daniel 2026-11-12).
  */
 /** Scan frequency per source, in days (PRD: once every 2 days). */
 export const DEFAULT_SCAN_EVERY_DAYS = 2;
@@ -20,6 +21,10 @@ export interface CompetitorsConfig {
   notifyUserIds: string[];
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
   baselineUntil: string | null;
+  // Three older analysis settings are gone and a stored value of them is ignored: readWeakPages (whether blog and
+  // news are read is the installation's setting "What the analysis reads" now — analysis/reads.ts, one source of
+  // truth), minPagesForNewRow (an item of a company's list has one proof) and secondLooksPerRun (the second look asks
+  // about all rows at once, per chunk).
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
@@ -98,6 +103,10 @@ export const ACTIVE_SCAN_STATUSES: readonly ScanStatus[] = ["queued", "pending_l
 /** States of one page of a source. */
 export const PAGE_STATES = ["present", "missing", "removed", "unlinked"] as const;
 export type PageState = (typeof PAGE_STATES)[number];
+/** An analysis run that is still to come or in progress (analysis/engine.ts). */
+export function isAnalysisActive(status: string | null | undefined): boolean {
+  return status === "queued" || status === "running" || status === "waiting";
+}
 /** Where pages came from. */
 export const SCAN_LANES = ["remote", "local", "bundle"] as const;
 export type ScanLane = (typeof SCAN_LANES)[number];
@@ -120,14 +129,17 @@ export const MAX_CAPABILITY_DESCRIPTION = 500;
 export const MAX_OWN_PRODUCT = 160;
 
 /** The org's own cell on a capability — set by PMs, never scanned. */
-export const OWN_STATUS_VALUES = ["has", "partial", "missing"] as const;
+export const OWN_STATUS_VALUES = ["found", "not_found"] as const;
 export type OwnStatus = (typeof OWN_STATUS_VALUES)[number];
 export function isOwnStatus(v: unknown): v is OwnStatus {
   return typeof v === "string" && (OWN_STATUS_VALUES as readonly string[]).includes(v);
 }
 
-/** Matrix cell values. */
-export const STATUS_VALUES = ["has", "partial", "missing", "unknown"] as const;
+/**
+ * Matrix cell values. Decided by fixed rules from the evidence (analysis/cells.ts), never by a model:
+ * found = evidence on a strong page; low = evidence on weak pages only (blog, news, press); not_found = none.
+ */
+export const STATUS_VALUES = ["found", "low", "not_found"] as const;
 export type StatusValue = (typeof STATUS_VALUES)[number];
 export function isStatusValue(v: unknown): v is StatusValue {
   return typeof v === "string" && (STATUS_VALUES as readonly string[]).includes(v);
@@ -159,14 +171,12 @@ export function isFactKind(v: unknown): v is FactKind {
   return typeof v === "string" && (FACT_KINDS as readonly string[]).includes(v);
 }
 
-/** Below this confidence a scanned "has"/"partial" is shown as "partial?" to confirm. */
-export const LOW_CONFIDENCE = 0.6;
-
 /**
  * Where a competitor's pages come from. The website is crawled by the
- * scanner; every other type gets its pages from a collector (an import, an
- * upload, a later connector) and runs the same pipeline. One source row per
- * type per competitor.
+ * scanner, and so are the company's other addresses (ADDRESS_KINDS below: a
+ * help center, developer docs, release notes — several of one type are
+ * possible). Every other type gets its pages from a collector (an import, an
+ * upload, a later connector) and runs the same pipeline.
  */
 export const SOURCE_TYPES = [
   "website",
@@ -191,6 +201,17 @@ export function isSourceType(v: unknown): v is SourceType {
   return typeof v === "string" && (SOURCE_TYPES as readonly string[]).includes(v);
 }
 
+/**
+ * The kinds of OTHER ADDRESS of a company: the source types that — like the website — are an address the scanner
+ * crawls (lib/competitors/addresses.ts). A company's help center, developer docs and release notes usually sit on
+ * another address than its main site; each such address is a source of one of these types.
+ */
+export const ADDRESS_KINDS = ["helpcenter", "apidocs", "changelog"] as const;
+export type AddressKind = (typeof ADDRESS_KINDS)[number];
+export function isAddressKind(v: unknown): v is AddressKind {
+  return typeof v === "string" && (ADDRESS_KINDS as readonly string[]).includes(v);
+}
+
 /** What a stored page text is. */
 export const PAGE_KINDS = ["page", "document", "article", "transcript", "capture", "quotes"] as const;
 export type PageKind = (typeof PAGE_KINDS)[number];
@@ -199,12 +220,26 @@ export function isPageKind(v: unknown): v is PageKind {
 }
 
 /**
- * A suggestion's evidence is stored as one string, `"<quote> — <url>"` (the URL
- * is optional). Split it for display and for the status row written on accept.
+ * Limits of a collector bundle uploaded as one zip (Admin → Competitors →
+ * Import pages; read by lib/competitors/bundle-zip.ts, checked on the screen
+ * before the upload starts).
+ *
+ * The largest zip accepted: production serves the app from Cloud Run, which
+ * refuses a request over 32 MB before it reaches the app; this leaves room
+ * for the form around the file. next.config.ts (proxyClientMaxBodySize) lets
+ * a body of this size through the proxy whole.
  */
-export function splitSuggestedQuote(raw: string | null | undefined): { quote: string; url: string | null } {
-  const text = raw ?? "";
-  const url = text.match(/\s—\s(https?:\/\/\S+)$/)?.[1] ?? null;
-  const quote = text.replace(/\s+—\s+https?:\/\/\S+$/, "").trim();
-  return { quote, url };
-}
+export const MAX_ZIP_BYTES = 30 * 1024 * 1024;
+/** The largest total size of a zip's files once unpacked, as the zip states it. */
+export const MAX_UNPACKED_BYTES = 200 * 1024 * 1024;
+/** The most entries (files and folders) a zip may hold. */
+export const MAX_ZIP_ENTRIES = 5_000;
+
+/**
+ * Manual import of pages (Admin → Competitors → Import pages, its route, and
+ * the command line `--import`). OFF: it requires testing (Daniel 2026-11-12).
+ * A constant on purpose — no setting, environment variable or admin switch
+ * turns it on; it is switched on in code once it has been tested.
+ */
+export const MANUAL_IMPORT_ENABLED: boolean = false;
+export const MANUAL_IMPORT_OFF_NOTE = "Manual import is off. It requires testing.";

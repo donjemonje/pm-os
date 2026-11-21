@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { isPageKind } from "@/lib/competitors/config";
 import { pdfToText } from "@/lib/competitors/fetcher";
 import { startLocalScan, verifyScanToken } from "@/lib/competitors/local";
@@ -8,7 +7,7 @@ import { storageFull } from "@/lib/competitors/settings";
 import { extractLinks } from "@/lib/competitors/html";
 import { categoryOf, recordPage, type PageReadStatus } from "@/lib/competitors/pages";
 import { appendHandedInPage } from "@/lib/competitors/scan";
-import { isInsideSite, pageKey } from "@/lib/competitors/url";
+import { isInsideSite, pageKey, sourceSiteHost } from "@/lib/competitors/url";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -62,7 +61,10 @@ export async function POST(req: Request, { params }: Params) {
   } catch {
     return NextResponse.json({ error: "url must be an absolute http(s) URL" }, { status: 400 });
   }
-  if (!isInsideSite(url, scan.source.competitor.host)) return NextResponse.json({ error: `url is outside the competitor's site (${scan.source.competitor.host})` }, { status: 422 });
+  // The site a page must be inside is the source's own: the company's host for its website, the source's address for a
+  // help center, developer docs or release notes on another host (url.ts sourceSiteHost).
+  const site = sourceSiteHost(scan.source, scan.source.competitor.host);
+  if (!isInsideSite(url, site)) return NextResponse.json({ error: `url is outside the competitor's site (${site})` }, { status: 422 });
   const statusIn = typeof body.status === "string" && (STATUSES as string[]).includes(body.status) ? (body.status as PageReadStatus) : null;
   if (!statusIn) return NextResponse.json({ error: `status must be one of ${STATUSES.join(", ")}` }, { status: 400 });
 
@@ -110,26 +112,24 @@ export async function POST(req: Request, { params }: Params) {
     await db.competitorScan.update({ where: { id }, data: { errorKind: "storage", heartbeatAt: new Date() } });
     return NextResponse.json({ url: url.href, outcome: "skipped", stop: "storage", error: "PM-OS storage limit reached — the scan stops here; contact support@pm-os.io" });
   }
-  const sourceLabel = C.profile.sourceTypes[scan.source.type] ?? scan.source.type;
   const ms = typeof body.ms === "number" && Number.isFinite(body.ms) ? Math.max(0, Math.round(body.ms)) : 0;
   const attempts = typeof body.attempts === "number" && Number.isFinite(body.attempts) ? Math.max(1, Math.round(body.attempts)) : 1;
   // The home page is "home" whichever lane read it: nothing has to link to it for it to stay linked.
   const via = pageKey(url, scan.source.url) === pageKey(new URL(scan.source.url), scan.source.url) ? "home" : "handin";
   const r = await recordPage(
     { scanId: id, sourceId: scan.sourceId, workspaceId: scan.workspaceId, url: url.href, siteUrl: scan.source.url, status, html, text, title: typeof body.title === "string" ? body.title : null, kind, via, ms, errorDetail: readError },
-    sourceLabel,
   );
   // The links on the page say what still points where (the "unlinked" state) — collected on the scan and applied when it is
   // processed, after every page row exists (the same bookkeeping as the remote lane).
   const linked = new Set<string>();
-  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l, scan.source.url));
+  if (html) for (const l of extractLinks(html, url.href)) if (isInsideSite(l, site)) linked.add(pageKey(l, scan.source.url));
   // The station's own discoveries (its sitemap entries) point at pages too — handed in with a page, usually the first one.
   if (Array.isArray(body.linked)) {
     for (const raw of body.linked as unknown[]) {
       if (typeof raw !== "string") continue;
       try {
         const l = new URL(raw);
-        if (isInsideSite(l, scan.source.competitor.host)) linked.add(pageKey(l, scan.source.url));
+        if (isInsideSite(l, site)) linked.add(pageKey(l, scan.source.url));
       } catch {
         // not a URL — ignored
       }

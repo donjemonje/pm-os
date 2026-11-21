@@ -16,7 +16,7 @@ export default async function CompetitorsSettingsPage() {
   const user = await requireUserPage("/settings/competitors");
   if (!(await featureEnabledForCurrentUser("competitors"))) notFound();
   const workspace = await getOrCreateWorkspace();
-  const state = await getCompetitorsState(workspace.id, user.organizationName ?? "", user.id);
+  const state = await getCompetitorsState(workspace.id, user.organizationName ?? "", user.id, { withRemoved: canManageOrgSettings(user) });
   return (
     <>
       <PageView name="settings_competitors" />

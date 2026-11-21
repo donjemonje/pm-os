@@ -2,7 +2,7 @@ import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { getVertexProjectId } from "../vertex-config";
 
 /**
- * The Vertex client for the competitors AI step — the same shape the Ideas
+ * The Vertex client for the competitors' PMOS AI calls — the same shape the Ideas
  * stages use (multi-region endpoint, cached shared prefix), kept separate so
  * the scanner job can load this module outside Next with Node's native type
  * stripping. Region: COMPETITORS_VERTEX_LOCATION, else the Ideas one, else "eu".
