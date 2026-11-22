@@ -1,54 +1,30 @@
-/** Story 3 (competitors) — the news feed's pure parts: how a status move reads, and its impact. */
+/** The news feed's pure parts: the date an item is about, and the order of the items. (The feed holds new abilities only since 2026-11-22: the status-move, fact and suggestion items and their helpers are gone.) */
 import { describe, expect, it } from "vitest";
-import { compareFeed, impactOf, sourceTypeForUrl, statusKind } from "@/lib/competitors/feed";
+import { compareFeed, newsDate } from "@/lib/competitors/feed";
 
-describe("statusKind", () => {
-  it("gap when the org lacks it, raised when it has it too, lowered on a drop, nothing on a tie", () => {
-    expect(statusKind("not_found", "found", "not_found")).toBe("gap");
-    expect(statusKind("low", "found", "found")).toBe("raised");
-    expect(statusKind("found", "low", "found")).toBe("lowered");
-    expect(statusKind("found", "not_found", "not_found")).toBe("lowered");
-    expect(statusKind("found", "found", "not_found")).toBeNull();
-  });
-});
-
-describe("impactOf", () => {
-  it("gap is High, status moves Medium, facts and suggestions Low", () => {
-    expect(impactOf("gap")).toBe("High");
-    expect(impactOf("raised")).toBe("Medium");
-    expect(impactOf("lowered")).toBe("Medium");
-    expect(impactOf("fact")).toBe("Low");
-    expect(impactOf("suggestion")).toBe("Low");
+describe("newsDate", () => {
+  it("is the date the page states when it states one, else the time the item was found", () => {
+    expect(newsDate({ at: "2026-11-22T10:00:00Z", publishedAt: "2026-11-18T00:00:00Z" })).toBe("2026-11-18T00:00:00Z");
+    expect(newsDate({ at: "2026-11-22T10:00:00Z", publishedAt: null })).toBe("2026-11-22T10:00:00Z");
   });
 });
 
 describe("compareFeed", () => {
-  it("orders high impact first, then newest by the item's own date, then by scan time", () => {
+  it("orders high impact first, then newest by the item's own date, then by the time it was found", () => {
     const rows = [
-      { key: "lowOld", impact: "Low" as const, at: "2026-10-29T11:36:00Z", factDate: "2026-07-28T00:00:00Z" },
-      { key: "high", impact: "High" as const, at: "2026-10-29T11:36:00Z", factDate: null },
-      { key: "lowNew", impact: "Low" as const, at: "2026-10-29T11:36:00Z", factDate: "2026-10-20T00:00:00Z" },
-      { key: "medium", impact: "Medium" as const, at: "2026-10-28T09:00:00Z", factDate: null },
-      { key: "lowScanLater", impact: "Low" as const, at: "2026-10-29T12:00:00Z", factDate: null },
+      { key: "lowOld", impact: "Low" as const, at: "2026-10-29T11:36:00Z", publishedAt: "2026-07-28T00:00:00Z" },
+      { key: "high", impact: "High" as const, at: "2026-10-29T11:36:00Z", publishedAt: null },
+      { key: "lowNew", impact: "Low" as const, at: "2026-10-29T11:36:00Z", publishedAt: "2026-10-20T00:00:00Z" },
+      { key: "medium", impact: "Medium" as const, at: "2026-10-28T09:00:00Z", publishedAt: null },
+      { key: "lowFoundLater", impact: "Low" as const, at: "2026-10-29T12:00:00Z", publishedAt: null },
     ];
-    expect([...rows].sort(compareFeed).map((r) => r.key)).toEqual(["high", "medium", "lowScanLater", "lowNew", "lowOld"]);
+    expect([...rows].sort(compareFeed).map((r) => r.key)).toEqual(["high", "medium", "lowFoundLater", "lowNew", "lowOld"]);
   });
-});
-
-describe("sourceTypeForUrl", () => {
-  const sources = [
-    { type: "website", url: "https://www.zerofox.com/" },
-    { type: "blog", url: "https://www.zerofox.com/blog/" },
-    { type: "press", url: "https://www.zerofox.com/news-and-press-releases/" },
-  ];
-  it("picks the source whose URL is the longest prefix, ignoring the website root", () => {
-    expect(sourceTypeForUrl("https://www.zerofox.com/blog/some-post", sources)).toBe("blog");
-    expect(sourceTypeForUrl("https://zerofox.com/news-and-press-releases/x", sources)).toBe("press");
-  });
-  it("falls back to a path hint, else null", () => {
-    expect(sourceTypeForUrl("https://www.zerofox.com/press-release/zerofox-launches-hntr", sources)).toBe("press");
-    expect(sourceTypeForUrl("https://docs.example.com/changelog/2026", [])).toBe("changelog");
-    expect(sourceTypeForUrl("https://www.zerofox.com/platform/", sources)).toBeNull();
-    expect(sourceTypeForUrl(null, sources)).toBeNull();
+  it("new abilities, all of one impact, read newest first by the page's date", () => {
+    const rows = [
+      { key: "foundTodayDatedOld", impact: "High" as const, at: "2026-11-22T10:00:00Z", publishedAt: "2026-11-17T00:00:00Z" },
+      { key: "datedNew", impact: "High" as const, at: "2026-11-22T09:00:00Z", publishedAt: "2026-11-21T00:00:00Z" },
+    ];
+    expect([...rows].sort(compareFeed).map((r) => r.key)).toEqual(["datedNew", "foundTodayDatedOld"]);
   });
 });

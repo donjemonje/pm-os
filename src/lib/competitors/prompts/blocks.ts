@@ -12,10 +12,13 @@ import { createHash } from "node:crypto";
  * A prompt's version comes from its text (promptVersion): a block change shows which prompts changed and are due a
  * re-run. A test fails when a prompt holds a block's sentence in its own text (strayBlockText).
  *
- * The blocks below are the text of the prompt that builds a company's feature list (the knowledge base),
- * pmos-office/office/competitors/aha/prompts/1-read-the-pages.txt, character for character; READ_PAGES_PROMPT is that
- * prompt built from them. `npm run competitors:prompts -- --check=<that folder>` says when the file and this text differ.
- * OPEN (2026-11-22): the Capability Analysis session edits that file as text; which of the two is the one home is not agreed yet.
+ * THE ONE HOME (Daniel 2026-11-22): the app code is the one home of every prompt. A prompt is edited here and nowhere
+ * else; a readable copy is printed from here (`npm run competitors:prompts`), never kept as a second source.
+ * Three prompts were written as text files before that decision — pmos-office/office/competitors/aha/prompts/
+ * 1-read-the-pages.txt (a company's feature list, the knowledge base), 2-sort-the-features-into-domains.txt and
+ * 3-build-the-domain.txt (the table). READ_PAGES_PROMPT, SORT_FEATURES_PROMPT and BUILD_DOMAIN_PROMPT are those prompts
+ * built from blocks, character for character. While the scripts outside the app still read the files,
+ * `npm run competitors:prompts -- --check=<that folder>` says when a file and this text differ.
  *
  * Pure: no database, no network.
  */
@@ -123,6 +126,7 @@ export const INTEGRATIONS_BY_NAME: PromptBlock = { name: "integrations-by-name",
 /** Only what the pages explain counts; a name with no explanation goes under not_understood. */
 export const FOUND_MEANS_UNDERSTOOD: PromptBlock = { name: "found-means-understood", text: `Found means understood. Use only the pages given, never what you know about this company or about others. If the pages name something but do not say what it does, do not list it: put it under not_understood and say what is missing. A name on the pricing page that no page explains is not understood.` };
 
+/** The blocks of the feature list. Every block of the app: ALL_BLOCKS, at the end of this file. */
 export const SHARED_BLOCKS: PromptBlock[] = [PAGE_KINDS, FEATURE_IS, FEATURE_FIELDS, NOT_A_FEATURE, INTEGRATIONS_BY_NAME, FOUND_MEANS_UNDERSTOOD];
 
 /** The prompt that builds a company's feature list — the knowledge base. Run today by scripts outside the app. */
@@ -143,3 +147,107 @@ export const READ_PAGES_PROMPT: PromptDef = {
     [`Use only the page codes given.`],
   ],
 };
+
+// ————— The blocks of the table (2-sort-the-features-into-domains.txt and 3-build-the-domain.txt) —————
+// Cut at whole lines, character for character. A block is named for the rule it holds, so the prompt that places a
+// newly found feature in the table (news/table-prompt-new-intake.ts) is built from the same text and never rewords it.
+/** Given to every table prompt: the market. */
+export const GIVEN_MARKET: PromptBlock = { name: "given-market", text: `- the market, in one line;` };
+/** Given: the domains, each with what it covers and who does its work. */
+export const GIVEN_DOMAINS: PromptBlock = { name: "given-domains", text: `- the domains: for each one its name, what it covers and who does its work;` };
+/** Given: the features of one company, in the form of its feature list. */
+export const GIVEN_COMPANY_FEATURES: PromptBlock = { name: "given-company-features", text: `- the features of one company's solution. Each feature has a code, a name, the problem it solves, how it works, its users (a person by job title or an agent by type) and the workflows it is part of, the closest one first, each with the step of work.` };
+/** Every feature gets one domain. */
+export const ONE_DOMAIN_EACH: PromptBlock = { name: "one-domain-each", text: `Give every feature exactly one domain.` };
+/** HOW A FEATURE'S DOMAIN IS DECIDED — by the work it helps; "none" for what surrounds the work or belongs to an area no domain covers. */
+export const DOMAIN_HOW_TO_DECIDE: PromptBlock = { name: "domain-how-to-decide", text: `How to decide
+- A feature belongs to the domain whose work it helps. Decide that from the feature's first workflow, the step of work and the users. Not from its name, and not from the product or page it came from.
+- When the first workflow fits no domain, try the next one.
+- A feature used in several domains belongs to the domain where it is used most. One domain only, never two.
+- A feature that does two different jobs still gets one domain: the job that is the larger part of it.
+- A tool for expressing or recording something (a report, a diagram, a document) belongs to the domain where what it produces is used.
+- Things every solution has around its work (sign-in, roles, single sign-on, usage limits, API access on its own, notifications on their own, a mobile app on its own) belong to no domain: answer "none".
+- When a feature is real work of this market but of an area none of the domains covers, answer "none" and say in the reason which area it is. Do not push it into the closest domain.` };
+/** How a feature's domain is answered: the name as given or "none", and the reason. */
+export const DOMAIN_ANSWER_FIELDS: PromptBlock = { name: "domain-answer-fields", text: `- domain: the name of the domain exactly as given, or "none".
+- reason: up to about 12 words: the workflow or the users that decided it.` };
+/** What the table is, what a domain is, and who reads it. */
+export const TABLE_AIM: PromptBlock = { name: "table-aim", text: `We are building a table that compares the solutions of different companies in one market, one domain at a time. A domain is one area of the work of the people who use these solutions. The readers are professionals of this market: do not explain what they already know. A product manager who reads the finished table should see the state of the market at a glance: how strong every company is in each part of the domain, and where the companies differ.` };
+/** A capability is a sub-domain. */
+export const CAPABILITY_IS: PromptBlock = { name: "capability-is", text: `A capability is a sub-domain: a smaller area inside the domain's area. It is not one thing a product does.` };
+/** How many capabilities a domain has. */
+export const CAPABILITY_COUNT: PromptBlock = { name: "capability-count", text: `- 3 to 6 capabilities. Together they should cover as much of what the domain covers as they can. Never add one to reach a number.` };
+/** WHERE THE BORDERS BETWEEN CAPABILITIES RUN — little overlap, by the work, for the whole market, able to hold features, never an API or an assistant. */
+export const CAPABILITY_BORDERS: PromptBlock = { name: "capability-borders", text: `- They overlap as little as possible: a professional who reads the list sees at once which capability a feature belongs to. Two capabilities that overlap are one capability, or the border between them is drawn wrongly.
+- Draw the borders by the work: the workflows, the steps and the users. A different part of the domain's work is a different capability. Not by how any company packages or names its products.
+- Draw them for the whole market, from the features of all the companies, not from one company's list.
+- A capability must be able to hold features: an area for which no company shows a feature is not a capability.
+- An API, an integration, a connector or an AI assistant is not a capability. It is at most a feature of the capability it serves.` };
+/** What is written for a capability: its name and what it covers. */
+export const CAPABILITY_FIELDS: PromptBlock = { name: "capability-fields", text: `- name: one phrase of 2 to 4 words that the whole market would use, in sentence case. No brand or product name, no "&", no "/".
+- covers: what this capability covers, as a part of what the domain covers. One or two plain sentences, in the same language as the domain's "what it covers". It says which work is inside; where the border with a neighbouring capability is not obvious, it says what is outside.` };
+/** How many feature rows a capability has, and which ones. */
+export const MAIN_FEATURES_COUNT: PromptBlock = { name: "main-features-count", text: `- 3 to 5 features per capability: the strongest ones, those built to solve the biggest problems of this area. Fewer is normal: never fill up to the number.` };
+/** WHAT A FEATURE ROW IS — written for the whole market; the same thing is one row; rows are separate. */
+export const FEATURE_ROW_IS: PromptBlock = { name: "feature-row-is", text: `- A feature is a row of the table: it gets a mark for each company. Write it for the whole market, not as one company's sentence.
+- One thing a user can do is one feature, even when companies name it differently or offer it in several places. Features of different companies that solve the same problem in the same way are the same row.
+- The features of a capability are separate from one another: no two that say the same thing in different words.` };
+/** What is not a row of the table. */
+export const NOT_A_ROW: PromptBlock = { name: "not-a-row", text: `- Not a row: what every solution in this market is assumed to have (fields, statuses, history, tags, comments, search); what could be built in about an hour; a claim that does not say what goes in and what comes out; a situation to use the product in, with nothing distinct built for it.` };
+/** What is written for a feature row: its name and the problem it solves. */
+export const FEATURE_ROW_FIELDS: PromptBlock = { name: "feature-row-fields", text: `- name: one line of up to about 8 words that says what it does, in plain words, in sentence case. No brand or product name.
+- problem: the problem of the user it solves, one sentence that starts with "Without it,".` };
+/** The coverage score of a company for a capability, 0 to 5. */
+export const COVERAGE_SCORE: PromptBlock = { name: "coverage-score", text: `- score: 0 to 5. 0: none of this company's features belongs here. 1 to 5 compares the companies with one another: 5 is the company that covers this capability's area most fully among the companies given, 1 the one that covers the least of those that cover anything. Companies that cover it about equally get the same score. With one company only, judge it against what the area asks for.` };
+/** The reasoning of a coverage score. */
+export const COVERAGE_REASONING: PromptBlock = { name: "coverage-reasoning", text: `- reasoning: why this score, in plain words, in the same language as "what it covers": which parts of the capability's area the company covers and which it does not. At most 350 characters. No brand names of products, no feature codes.` };
+/** The main features support the score. */
+export const SCORE_SUPPORT: PromptBlock = { name: "score-support", text: `The main features should support the score. They are most of the judgment, not all of it: a company can have many other features in the area. But a company that has one main feature of five cannot get 5, and a company that has all the main features cannot get 1. When the score leans on features that are not main rows, the reasoning says so.` };
+/** What comes from the features given, and what from knowing the market. */
+export const FACTS_AND_JUDGMENT: PromptBlock = { name: "facts-and-judgment", text: `Facts and judgment
+- What a company has and does: only from its features given, never from what you know about the company.
+- Whether something is standard, small or heavy, and how the domain's work divides: from what you know about this market.` };
+/** The blocks of the table prompts. */
+export const TABLE_BLOCKS: PromptBlock[] = [GIVEN_MARKET, GIVEN_DOMAINS, GIVEN_COMPANY_FEATURES, ONE_DOMAIN_EACH, DOMAIN_HOW_TO_DECIDE, DOMAIN_ANSWER_FIELDS, TABLE_AIM, CAPABILITY_IS, CAPABILITY_COUNT, CAPABILITY_BORDERS, CAPABILITY_FIELDS, MAIN_FEATURES_COUNT, FEATURE_ROW_IS, NOT_A_ROW, FEATURE_ROW_FIELDS, COVERAGE_SCORE, COVERAGE_REASONING, SCORE_SUPPORT, FACTS_AND_JUDGMENT];
+
+/** The prompt that gives every feature of a company's list its domain. Run today by scripts outside the app. */
+export const SORT_FEATURES_PROMPT: PromptDef = {
+  name: "sort-features",
+  title: "Sort the features into domains",
+  file: "2-sort-the-features-into-domains.txt",
+  paragraphs: [
+    [`We are building a table that compares the solutions of different companies in one market. The market is divided into domains: a domain is one area of the work of the people who use these solutions.`],
+    [`Below are:`, GIVEN_MARKET, GIVEN_DOMAINS, GIVEN_COMPANY_FEATURES],
+    [ONE_DOMAIN_EACH],
+    [DOMAIN_HOW_TO_DECIDE],
+    [`For every feature write`, `- feature: its code.`, DOMAIN_ANSWER_FIELDS],
+    [`Every code given must come back exactly once. Use only the codes and the domain names given. Use only what the features say, never what you know about this company.`],
+  ],
+};
+
+/** The prompt that builds one domain of the table: its capabilities, their main feature rows and every company's coverage. Run today by scripts outside the app. */
+export const BUILD_DOMAIN_PROMPT: PromptDef = {
+  name: "build-domain",
+  title: "Build the domain (capabilities, feature rows, coverage)",
+  file: "3-build-the-domain.txt",
+  paragraphs: [
+    [TABLE_AIM],
+    [`Below are:`, GIVEN_MARKET, `- the domain we are building now: its name, what it covers and who does its work;`, `- the other domains: their names and what they cover;`, `- the companies. The first one is the company the table is made for;`, `- for each company, its features that belong to this domain. Each feature has a code, a name, the problem it solves, how it works, its users, the workflows it is part of and how strong its evidence is (a page that explains it, one that describes it, or one that only names it).`],
+    [`Do three things.`],
+    [`1. Divide the domain into capabilities`],
+    [CAPABILITY_IS, CAPABILITY_COUNT, CAPABILITY_BORDERS, `- List the capabilities in order, the largest part of the domain's work first.`],
+    [`For each capability write`, CAPABILITY_FIELDS],
+    [`2. Choose the main features of each capability`],
+    [MAIN_FEATURES_COUNT, FEATURE_ROW_IS, NOT_A_ROW, `- List the features in order, the most important first.`],
+    [`For each feature write`, FEATURE_ROW_FIELDS, `- companies: for each company that has it, the codes of its features that show it, the one with the strongest evidence first. A company with no such feature is left out of the list.`],
+    [`3. Say how well each company covers each capability`],
+    [`For every capability and every company write`, `- features: the codes of ALL this company's features that belong to this capability, the main rows' ones and the others.`, COVERAGE_SCORE, COVERAGE_REASONING],
+    [SCORE_SUPPORT],
+    [`Also return`, `- unplaced: codes of features given that fit no capability, each with a reason of a few words (standard, small, claim, use case, another area).`],
+    [FACTS_AND_JUDGMENT, `- Every feature code given comes back at least once: under a capability's features of its company, or under unplaced.`],
+    [`Use only the codes and the company names given.`],
+  ],
+};
+
+/** Every block: a prompt that holds a sentence of one of these in its own text should use the block instead (strayBlockText). */
+export const ALL_BLOCKS: PromptBlock[] = [...SHARED_BLOCKS, ...TABLE_BLOCKS];

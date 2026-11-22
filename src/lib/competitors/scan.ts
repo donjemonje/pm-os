@@ -690,12 +690,6 @@ export async function runScan(scanId: string): Promise<void> {
     await db.competitorScan.update({ where: { id: scanId }, data: { log: log.lines as unknown as Prisma.InputJsonValue } });
   }
 
-  // A scan of a Scan run that ended: the run's one email may be due now (a parked local scan ends long after its run).
-  if (scan.runId) {
-    const { notifyRunsOfScans } = await import("./runs");
-    await notifyRunsOfScans([scanId]);
-  }
-
   // A freed slot is used at once: a scan queued behind this one gets its lane, and the next queued remote scan starts now, not at the next tick.
   try {
     const { promoteQueued, startQueuedScans } = await import("./tick");
@@ -722,6 +716,16 @@ export async function runScan(scanId: string): Promise<void> {
     } catch (e) {
       console.error("[competitors] the search for other addresses after the scan failed", scanId, e);
     }
+  }
+
+  // News (News Feed & Notifications): the pages of this address that are new or changed since the company's
+  // knowledge base was made go to the news intake, and the batch's one email goes out. Last, after the scan is
+  // recorded as ended and the next scan was started: a scan never waits for PMOS AI. Never throws; a company with
+  // no knowledge base, the own site and a failed scan are skipped inside (news/after-scan.ts).
+  if (log.read > 0) {
+    const { newsAfterScan } = await import("./news/after-scan");
+    const news = await newsAfterScan(scanId);
+    console.log(`[competitors] news after scan ${scanId}: ${news.skipped ? `skipped — ${news.skipped}` : `${news.pages} pages read, ${news.new} new, ${news.covered} on the list, ${news.other} not an ability${news.failedPages ? `, ${news.failedPages} pages failed` : ""}${news.emailed ? ", email sent" : ""}`}`);
   }
 }
 

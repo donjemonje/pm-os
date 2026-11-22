@@ -6,8 +6,9 @@ import { startRun } from "@/lib/competitors/runs";
 
 /**
  * POST — the Scan button on the Competitors page: one run over every
- * competitor (in matrix order), then one notification email about what the
- * run changed. Any member may press it, as often as they like (no daily
+ * competitor (in matrix order). A run sends no email of its own; what a
+ * competitor's pages newly show is reported by the news notification, per
+ * scan (news/after-scan.ts). Any member may press it, as often as they like (no daily
  * limit, Daniel 2026-11-12). Answers at once; the page polls the
  * state until the run finishes.
  */

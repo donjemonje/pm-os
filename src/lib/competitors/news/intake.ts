@@ -2,6 +2,7 @@ import { arr, str } from "../ai";
 import { verifyQuote } from "../analysis/quotes";
 import { FEATURE_FIELDS, FEATURE_IS, FOUND_MEANS_UNDERSTOOD, INTEGRATIONS_BY_NAME, NOT_A_FEATURE, PAGE_KINDS, promptText, promptVersion, type PromptDef } from "../prompts/blocks";
 import { changedText } from "./changed";
+import { CHUNK_MAX_TOKENS, packChunks, tokensOf } from "../analysis/chunks";
 
 /**
  * THE NEWS INTAKE — what the pages that appeared or changed after a company's feature list was made add to what we
@@ -35,11 +36,11 @@ import { changedText } from "./changed";
  * (2026-11-22), so the limit is the one the list-building reads use.
  */
 export const NEWS_MAX_TOKENS = 104_000;
-/** A page's text is sent up to this many characters (a release-notes page can be long; the newest entries are on top). */
-export const NEWS_PAGE_MAX_CHARS = 60_000;
-/** One request holds pages up to this many characters of text in all, and at most this many pages. */
-export const NEWS_REQUEST_MAX_CHARS = 160_000;
-export const NEWS_REQUEST_MAX_PAGES = 30;
+/**
+ * How much page text one request holds: the limit of the list-building reading and its packing rules
+ * (analysis/chunks.ts CHUNK_MAX_TOKENS, packChunks) — one limit in one place (Daniel 2026-11-22), never a number of
+ * the news' own. A page is never cut: one that does not fit goes in a request of its own, as the reading does.
+ */
 /** "No value" in a closed set (an enum may not hold an empty string). */
 export const NONE = "none";
 
@@ -65,16 +66,14 @@ export const NEWS_INTAKE_PROMPT: PromptDef = {
     ["Step 1. Find every feature the pages describe."],
     [FEATURE_IS],
     [
-      // Daniel 2026-11-22: an ability is a new item or a significant improvement — never a small fix.
-      "News is a new thing the product does, or a significant improvement of one it has. Small fixes are not news and are written nowhere, not under new_features, not under on_the_list and not under left_out: a bug fix, a small change of an icon or of how something looks, a column whose width was fixed, a note that something loads faster.",
+      // Daniel 2026-11-22: an ability is a new item or a significant improvement — never a small fix or a small detail, whatever the list holds; a big change to something that exists is still news. A feature in beta or early access, or one that was announced, is news like any other (no "not released yet" rule).
+      "News is a new thing the product does, or a significant improvement of one it has. Small changes are not news and are written nowhere, not under new_features, not under on_the_list and not under left_out, whatever the LIST holds: a bug fix, a small change of an icon or of how something looks, a column whose width was fixed, a note that something loads faster, one more option or a higher limit on something the product already does.",
     ],
     [
       "Step 2. For every feature found, search the LIST for the same feature: by what it does, never by its name. Companies rename, repackage and announce again what they already have.",
       "- The LIST holds it, under any name or wording: write it under on_the_list with the code of the item that holds it. Do not describe it.",
-      "- It is only a detail of an item of the LIST, one that would not be a line of its own next to the lines that are there (one more option, a higher limit): it is on the list too, under that item.",
       "- It is a significant improvement of an item of the LIST, one that lets the user do something they could not do with it before: it is new. Write it under new_features, and in its reason name the item of the LIST it improves.",
       "- Nothing on the LIST holds it: it is new. Write it under new_features.",
-      "- It is only announced for the future, with no release stated (no date, no beta, no early access): it is not new yet. Put it under left_out.",
       "Be strict about what is new. A product manager who gets one false \"new\" stops reading; one who misses a real one finds out in a meeting.",
     ],
     ["Step 3. Describe every new feature in full, the way the features of the LIST were described."],
@@ -144,24 +143,33 @@ export interface SentPage {
 
 const KIND_WORDS: Record<string, string> = { product: "product page", pricing: "pricing page", help: "help center", api_docs: "API docs", release_notes: "release note", blog: "blog post", news: "news item" };
 
-/** The batch as requests: what is sent of each page, and which pages go together. A changed page with no new line is not sent. */
-export function planRequests(pages: NewsPage[]): { requests: SentPage[][]; nothingNew: NewsPage[] } {
+/** The address prefix two pages share when they sit together on a site: the host and the first folder. */
+function sectionOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.host}/${u.pathname.split("/").filter(Boolean)[0] ?? ""}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The batch as requests: what is sent of each page, and which pages go together. A changed page with no new line is
+ * not sent. Pages keep the order given and are packed by the reading's rules (chunks.ts): as few requests as its
+ * limit allows, pages of one section kept together, a page larger than the limit alone. No page is cut or dropped.
+ */
+export function planRequests(pages: NewsPage[], maxTokens: number = CHUNK_MAX_TOKENS): { requests: SentPage[][]; nothingNew: NewsPage[] } {
   const sent: SentPage[] = [];
   const nothingNew: NewsPage[] = [];
   for (const page of pages) {
     const changed = page.previousText != null;
     const part = changed ? changedText(page.previousText!, page.text)?.text ?? null : page.text;
     if (!part || !part.trim()) { nothingNew.push(page); continue; }
-    sent.push({ code: `P${sent.length + 1}`, status: changed ? "changed" : "new", page, sent: part.length > NEWS_PAGE_MAX_CHARS ? part.slice(0, NEWS_PAGE_MAX_CHARS) : part });
+    sent.push({ code: `P${sent.length + 1}`, status: changed ? "changed" : "new", page, sent: part });
   }
-  const requests: SentPage[][] = [];
-  let size = 0;
-  for (const p of sent) {
-    const last = requests[requests.length - 1];
-    if (!last || last.length >= NEWS_REQUEST_MAX_PAGES || size + p.sent.length > NEWS_REQUEST_MAX_CHARS) { requests.push([p]); size = p.sent.length; }
-    else { last.push(p); size += p.sent.length; }
-  }
-  return { requests, nothingNew };
+  const byCode = new Map(sent.map((p) => [p.code, p]));
+  const chunks = packChunks(sent.map((p) => ({ id: p.code, sourceId: "news", section: sectionOf(p.page.url), tokens: tokensOf(p.sent.length) })), { maxTokens });
+  return { requests: chunks.map((chunk) => chunk.map((c) => byCode.get(c.id)!)), nothingNew };
 }
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();

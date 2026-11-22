@@ -13,6 +13,7 @@
     "db:push": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- prisma db push",
     "competitors:scan": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- node --no-warnings --import ./scripts/ts-resolve-hooks.mjs scripts/competitors-scanner.mts",
     "competitors:news-sim": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- node --no-warnings --import ./scripts/ts-resolve-hooks.mjs scripts/competitors-news-sim.mts",
+    "competitors:knowledge": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- node --no-warnings --import ./scripts/ts-resolve-hooks.mjs scripts/competitors-knowledge.mts",
     "competitors:prompts": "node --no-warnings --import ./scripts/ts-resolve-hooks.mjs scripts/competitors-prompts.mts",
     "db:studio": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- prisma studio",
     "orgs:migrate": "node scripts/with-apphosting-env.mjs dev-apphosting.yaml -- node scripts/migrate-to-orgs.mjs",

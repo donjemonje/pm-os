@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { blocksOf, printPrompt, promptText, promptVersion, READ_PAGES_PROMPT, SHARED_BLOCKS, strayBlockText, type PromptDef } from "@/lib/competitors/prompts/blocks";
+import { ALL_BLOCKS, blocksOf, BUILD_DOMAIN_PROMPT, printPrompt, promptText, promptVersion, READ_PAGES_PROMPT, SHARED_BLOCKS, SORT_FEATURES_PROMPT, strayBlockText, TABLE_BLOCKS, type PromptDef } from "@/lib/competitors/prompts/blocks";
 import { PROMPTS } from "@/lib/competitors/prompts/registry";
 
 describe("shared prompt blocks", () => {
   it("every prompt of the app is registered once", () => {
     expect(new Set(PROMPTS.map((p) => p.name)).size).toBe(PROMPTS.length);
-    expect(PROMPTS.map((p) => p.name)).toEqual(expect.arrayContaining(["read-pages", "news-intake"]));
+    expect(PROMPTS.map((p) => p.name)).toEqual(["read-pages", "sort-features", "build-domain", "news-intake", "table-new-intake"]);
   });
   it("no prompt holds a block's sentence in its own text: it uses the block", () => {
-    for (const p of PROMPTS) expect({ prompt: p.name, stray: strayBlockText(p, SHARED_BLOCKS) }).toEqual({ prompt: p.name, stray: [] });
+    for (const p of PROMPTS) expect({ prompt: p.name, stray: strayBlockText(p, ALL_BLOCKS) }).toEqual({ prompt: p.name, stray: [] });
   });
   it("catches a block's sentence written a second time", () => {
     const copy: PromptDef = { name: "copy", title: "Copy", paragraphs: [["Found means understood. Use only the pages given, never what you know about this company or about others."]] };
@@ -29,6 +29,30 @@ describe("shared prompt blocks", () => {
     // Without the marks and the two header lines it is the text PMOS AI gets.
     const plain = printed.split("\n").slice(3).filter((l) => !l.startsWith(">>> ") && !l.startsWith("<<< ")).join("\n").trimEnd();
     expect(plain).toBe(promptText(news));
+  });
+  it("every block has its own name, and every block is used by a registered prompt", () => {
+    expect(new Set(ALL_BLOCKS.map((b) => b.name)).size).toBe(ALL_BLOCKS.length);
+    const used = new Set(PROMPTS.flatMap((p) => blocksOf(p).map((b) => b.name)));
+    for (const b of ALL_BLOCKS) expect(used.has(b.name), b.name).toBe(true);
+    // And a prompt uses no block that is outside the list the stray check reads.
+    for (const name of used) expect(ALL_BLOCKS.some((b) => b.name === name), name).toBe(true);
+  });
+  it("the prompts that build the table are in the app, built from blocks", () => {
+    expect(SORT_FEATURES_PROMPT.file).toBe("2-sort-the-features-into-domains.txt");
+    expect(BUILD_DOMAIN_PROMPT.file).toBe("3-build-the-domain.txt");
+    expect(promptText(SORT_FEATURES_PROMPT).startsWith("We are building a table that compares the solutions of different companies in one market. The market is divided into domains")).toBe(true);
+    expect(promptText(BUILD_DOMAIN_PROMPT).endsWith("Use only the codes and the company names given.")).toBe(true);
+    // The market line is one block in both; the rules of the table are blocks of the build prompt.
+    expect(blocksOf(SORT_FEATURES_PROMPT).map((b) => b.name)).toContain("given-market");
+    expect(blocksOf(BUILD_DOMAIN_PROMPT).map((b) => b.name)).toEqual(expect.arrayContaining(["given-market", "table-aim", "capability-is", "capability-borders", "feature-row-is", "not-a-row", "coverage-score", "score-support", "facts-and-judgment"]));
+    expect(TABLE_BLOCKS.length).toBeGreaterThan(10);
+  });
+  it("the table prompt for a new feature is printed with the prompts it shares each block with", () => {
+    const printed = printPrompt(PROMPTS.find((p) => p.name === "table-new-intake")!, PROMPTS);
+    expect(printed).toContain(`>>> SHARED BLOCK "capability-borders" — also in: ${BUILD_DOMAIN_PROMPT.title}`);
+    expect(printed).toContain(`>>> SHARED BLOCK "domain-how-to-decide" — also in: ${SORT_FEATURES_PROMPT.title}`);
+    expect(printed).toContain(`>>> SHARED BLOCK "given-market" — also in: ${SORT_FEATURES_PROMPT.title}; ${BUILD_DOMAIN_PROMPT.title}`);
+    expect(printed).not.toContain("used by this prompt only");
   });
   it("a prompt's version moves when a block it uses changes, and only then", () => {
     const [block] = SHARED_BLOCKS;

@@ -1,7 +1,6 @@
-import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { collectFeed, type FeedItem } from "./feed";
-import { mergeCompetitorsConfig, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
+import { mergeCompetitorsConfig, runSettled, STALE_AFTER_SCANS, STALE_MS, type CompetitorsConfig, type OwnStatus, type ScanBadge, type StatusValue } from "./config";
 import { isScannedAddress, readAddressSearch, searchLooking, searchRunning } from "./addresses";
 import { orgSetupState, type OrgSetupState } from "./analysis/setup-rules";
 import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
@@ -300,12 +299,13 @@ export interface CompetitorsState {
   analyzing: boolean;
   /** A search for a company's other addresses is working: Settings keeps refreshing until it has ended. */
   searching: boolean;
-  /** Active users of the organization — the notification recipients list. */
-  members: { id: string; name: string; email: string }[];
   /** The Scan run in progress (header progress), if any. */
   activeRun: { id: string; total: number; done: number; current: string | null } | null;
-  /** The last finished run and what its notification said. */
-  lastRun: { id: string; finishedAt: string | null; status: string; summary: Record<string, unknown> } | null;
+  /**
+   * The last finished run. `settled` = everything it started is over (config.ts runSettled): its scans were read — a
+   * scan parked for the station ends long after its run — and the analyses they queued are done.
+   */
+  lastRun: { id: string; finishedAt: string | null; status: string; settled: boolean } | null;
   /** News feed items since the baseline, newest first, with the signed-in user's read marks. */
   feed: FeedItem[];
 }
@@ -466,14 +466,14 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     };
   };
   const config = mergeCompetitorsConfig(workspace?.competitorsConfig);
-  const [members, activeRun, lastRun, feed] = await Promise.all([
-    workspace
-      ? db.user.findMany({ where: { organizationId: workspace.organizationId, deactivatedAt: null }, orderBy: [{ name: "asc" }, { email: "asc" }], select: { id: true, name: true, email: true } })
-      : [],
+  const [activeRun, lastRun, feed] = await Promise.all([
     db.competitorScanRun.findFirst({ where: { workspaceId, status: "running" }, orderBy: { startedAt: "desc" }, select: { id: true, total: true, done: true, current: true } }),
-    db.competitorScanRun.findFirst({ where: { workspaceId, status: { in: ["ok", "failed"] } }, orderBy: { startedAt: "desc" }, select: { id: true, finishedAt: true, status: true, summary: true } }),
+    db.competitorScanRun.findFirst({ where: { workspaceId, status: { in: ["ok", "failed"] } }, orderBy: { startedAt: "desc" }, select: { id: true, finishedAt: true, status: true, scans: { select: { id: true, status: true } } } }),
     collectFeed(workspaceId, config.baselineUntil, userId),
   ]);
+  // Is the last run settled (config.ts runSettled)? Read from its scans and their analyses, every time: nothing is remembered about it.
+  const lastRunScanIds = lastRun?.scans.map((s) => s.id) ?? [];
+  const lastRunAnalysesUnfinished = lastRunScanIds.length ? await db.competitorAnalysis.count({ where: { scanId: { in: lastRunScanIds }, status: { in: ["queued", "running", "waiting"] } } }) : 0;
 
   let lastScanAt: Date | null = null;
   for (const c of competitors) {
@@ -674,23 +674,12 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     scanning: activeScans.length > 0 || activeRun != null,
     analyzing: activeAnalyses.length > 0,
     searching: competitors.some((c) => searchRunning(c.addressSearchStartedAt, nowMs)) || searchRunning(ownSite?.addressSearchStartedAt, nowMs),
-    members,
     activeRun,
     feed,
     lastRun: lastRun
-      ? { id: lastRun.id, finishedAt: lastRun.finishedAt?.toISOString() ?? null, status: lastRun.status, summary: lastRun.summary && typeof lastRun.summary === "object" && !Array.isArray(lastRun.summary) ? (lastRun.summary as Record<string, unknown>) : {} }
+      ? { id: lastRun.id, finishedAt: lastRun.finishedAt?.toISOString() ?? null, status: lastRun.status, settled: runSettled({ runStatus: lastRun.status, scanStatuses: lastRun.scans.map((s) => s.status), analysesUnfinished: lastRunAnalysesUnfinished }) }
       : null,
   };
-}
-
-/** Workspace config, merged over defaults. */
-export async function getCompetitorsConfig(workspaceId: string): Promise<CompetitorsConfig> {
-  const w = await db.workspace.findUnique({ where: { id: workspaceId }, select: { competitorsConfig: true } });
-  return mergeCompetitorsConfig(w?.competitorsConfig);
-}
-
-export async function saveCompetitorsConfig(workspaceId: string, config: CompetitorsConfig): Promise<void> {
-  await db.workspace.update({ where: { id: workspaceId }, data: { competitorsConfig: config as unknown as Prisma.InputJsonValue } });
 }
 
 /** Next free position at the end of a list. Domains and capabilities count active rows only: suggestions are parked at 9999 until a PM decides. */

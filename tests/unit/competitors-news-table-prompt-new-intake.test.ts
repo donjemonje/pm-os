@@ -1,213 +1,185 @@
-/** News Feed & Notifications — the prompt that adds a newly found ability to the table: its shared rule text, its answer form and its parser. */
+/** News Feed & Notifications — the prompt that places a newly found feature in the table: its shared rule text, its request, its answer form and its parser. */
 import { describe, expect, it } from "vitest";
-import { DOMAINS_SYSTEM_PROMPT } from "@/lib/competitors/analysis/domains";
-import { MATCH_SYSTEM_PROMPT } from "@/lib/competitors/analysis/prompts";
-import { AREA_SPLIT_RULE, READ_SYSTEM_PROMPT } from "@/lib/competitors/analysis/reading";
 import {
-  BROADER_NARROWER_RULE,
-  FEATURE_NAME_RULE,
-  FEATURE_PLACE_RULE,
+  blocksOf,
+  BUILD_DOMAIN_PROMPT,
+  CAPABILITY_BORDERS,
+  CAPABILITY_FIELDS,
+  COVERAGE_SCORE,
+  DOMAIN_HOW_TO_DECIDE,
   FEATURE_ROW_IS,
-  NO_DUPLICATE_ROW_RULE,
-  NO_WIDE_ROW_RULE,
-  ROW_GROUPING_RULE,
-  ROW_NAME_RULE,
-  ROW_SIZE,
-  SAME_FEATURE_RULE,
-  SAME_ROW_RULE,
-  TABLE_FRAME,
-  UNIFY_CAPABILITIES_PROMPT,
-  UNIFY_FEATURES_PROMPT,
-  UNIFY_REVIEW_PROMPT,
-} from "@/lib/competitors/analysis/unify";
+  NOT_A_ROW,
+  promptText,
+  SORT_FEATURES_PROMPT,
+} from "@/lib/competitors/prompts/blocks";
 import {
-  CONFIDENT_RULE,
-  DOMAIN_AREA_RULE,
-  DOMAIN_DEFINITIONS_RULE,
-  DOMAIN_NAME_RULE,
-  MATCH_BY_WHAT_RULE,
-  NO_OTHER_DOMAIN_RULE,
-  parseTableAdd,
-  renderTableAdd,
-  TABLE_ADD_SYSTEM_PROMPT,
-  tableAddTool,
-  type TableAddAbility,
-  type TableAddTable,
+  parseTableNewIntake,
+  renderTableNewIntake,
+  TABLE_CHANGES,
+  TABLE_NEW_INTAKE_PROMPT,
+  TABLE_NEW_INTAKE_SYSTEM_PROMPT,
+  tableNewIntakeTool,
+  type TableForCompany,
+  type TableNewFeature,
 } from "@/lib/competitors/news/table-prompt-new-intake";
 
-const table: TableAddTable = {
+const table: TableForCompany = {
+  market: "Product management software",
+  company: "Acme",
   domains: [
-    { code: "D1", name: "Feedback Management", definition: "Collecting and making sense of what customers ask for." },
-    { code: "D2", name: "Roadmapping", definition: "Planning and showing what is built when." },
-  ],
-  rows: [
-    { code: "R1", domainCode: "D1", name: "Feedback Repository", description: "One place for customer feedback.", features: [{ code: "R1.1", name: "Feedback forms" }] },
-    { code: "R2", domainCode: "D2", name: "Roadmap Views", description: "Timeline and board views of the plan.", features: [{ code: "R2.1", name: "Timeline layout" }] },
+    {
+      name: "Discovery & Ideation",
+      covers: "Interviews, requests and ideas.",
+      who: "Product managers and researchers.",
+      capabilities: [
+        {
+          code: "C1", name: "Feedback collection", covers: "Bringing requests in from every channel.", score: 3, reasoning: "Covers forms and email, no in-app surveys.",
+          others: [{ company: "Own", score: 4 }, { company: "Beta", score: null }],
+          rows: [
+            { code: "C1.1", name: "Collect requests through a public form", problem: "Without it, requests arrive by email.", has: true },
+            { code: "C1.2", name: "Ask users a question inside the product", problem: "Without it, feedback comes long after use.", has: false },
+          ],
+        },
+        {
+          code: "C2", name: "Interview research", covers: "Running and mining customer interviews.", score: 0, reasoning: "",
+          others: [{ company: "Own", score: 2 }],
+          rows: ["a", "b", "c", "d", "e"].map((x, i) => ({ code: `C2.${i + 1}`, name: `Row ${x}`, problem: "Without it, nothing.", has: false })),
+        },
+      ],
+    },
+    { name: "Strategy & Prioritization", covers: "Deciding what to do next.", who: "Product leaders.", capabilities: [{ code: "C3", name: "Scoring", covers: "Ranking work by value.", score: 5, reasoning: "Full.", others: [], rows: [] }] },
   ],
 };
-const ability = (code: string, size: "capability" | "feature" = "capability"): TableAddAbility => ({
-  code, size, name: `Ability ${code}`, what: "Does a thing.", problem: "A problem.", workflows: "A workflow.", who: "Product managers", quote: "It does a thing.", sourceUrl: "https://example.test/page", parentName: size === "feature" ? "Customer insights" : null,
+const feature = (code: string): TableNewFeature => ({ code, name: `Feature ${code}`, problem: "Without it, a problem.", howItWorks: "It does a thing.", users: "Product manager (person)", workflows: "1. plan the quarter — rank the requests" });
+const features = ["N1", "N2", "N3", "N4", "N5", "N6", "N7"].map(feature);
+const answer = (over: Record<string, unknown>) => ({
+  feature: "N1", domain: "Discovery & Ideation", reason: "Collecting feedback.", capability: "C1", change: "none", change_detail: "none", capability_name: "none", capability_covers: "none",
+  row: "none", row_replaces: "none", row_name: "none", row_problem: "none", score: 3, reasoning: "Still mid.", why: "It is feedback collection, not interviews.", ...over,
 });
-const abilities = [ability("A1"), ability("A2", "feature"), ability("A3"), ability("A4"), ability("A5", "feature")];
-const base = { in_table: true, as: "capability", row: "none", feature: "none", domain: "none", new_name: "", new_description: "", change: "none", change_detail: "", reason: "Because it is the same thing." };
 
-describe("the rule text is the setup run's own", () => {
-  it("every shared sentence is part of the table-add prompt AND of the setup prompt it comes from", () => {
-    const shared: Array<[string, string]> = [
-      [TABLE_FRAME, UNIFY_CAPABILITIES_PROMPT],
-      [ROW_SIZE, UNIFY_CAPABILITIES_PROMPT],
-      [SAME_ROW_RULE, UNIFY_CAPABILITIES_PROMPT],
-      [ROW_GROUPING_RULE, UNIFY_CAPABILITIES_PROMPT],
-      [NO_WIDE_ROW_RULE, UNIFY_CAPABILITIES_PROMPT],
-      [ROW_NAME_RULE, UNIFY_CAPABILITIES_PROMPT],
-      [NO_DUPLICATE_ROW_RULE, UNIFY_CAPABILITIES_PROMPT],
-      [BROADER_NARROWER_RULE, UNIFY_REVIEW_PROMPT],
-      [FEATURE_ROW_IS, UNIFY_FEATURES_PROMPT],
-      [SAME_FEATURE_RULE, UNIFY_FEATURES_PROMPT],
-      [FEATURE_NAME_RULE, UNIFY_FEATURES_PROMPT],
-      [FEATURE_PLACE_RULE, UNIFY_FEATURES_PROMPT],
-      [AREA_SPLIT_RULE, READ_SYSTEM_PROMPT],
-      [DOMAIN_AREA_RULE, DOMAINS_SYSTEM_PROMPT],
-      [DOMAIN_NAME_RULE, DOMAINS_SYSTEM_PROMPT],
-      [NO_OTHER_DOMAIN_RULE, DOMAINS_SYSTEM_PROMPT],
-      [DOMAIN_DEFINITIONS_RULE, MATCH_SYSTEM_PROMPT],
-      [MATCH_BY_WHAT_RULE, MATCH_SYSTEM_PROMPT],
-      [CONFIDENT_RULE, MATCH_SYSTEM_PROMPT],
-    ];
-    for (const [sentence, source] of shared) {
-      expect(TABLE_ADD_SYSTEM_PROMPT).toContain(sentence);
-      expect(source).toContain(sentence);
+describe("the table prompt for a new feature is built from the blocks that build the table", () => {
+  it("uses the build-the-domain and the sort blocks — the same objects, never a copy", () => {
+    const mine = blocksOf(TABLE_NEW_INTAKE_PROMPT).map((b) => b.name);
+    const build = new Set(blocksOf(BUILD_DOMAIN_PROMPT).map((b) => b.name));
+    const sort = new Set(blocksOf(SORT_FEATURES_PROMPT).map((b) => b.name));
+    for (const name of mine) expect(build.has(name) || sort.has(name), name).toBe(true);
+    for (const b of [DOMAIN_HOW_TO_DECIDE, CAPABILITY_BORDERS, CAPABILITY_FIELDS, FEATURE_ROW_IS, NOT_A_ROW, COVERAGE_SCORE]) {
+      expect(mine).toContain(b.name);
+      expect(TABLE_NEW_INTAKE_SYSTEM_PROMPT).toContain(b.text);
     }
   });
-});
-
-describe("tableAddTool", () => {
-  it("every field of a decision is required, and the codes are closed sets", () => {
-    const tool = tableAddTool(["A1", "A2"], table) as { input_schema: { required: string[]; properties: { decisions: { items: { properties: Record<string, { enum?: string[] }>; required: string[] } } } } };
-    const item = tool.input_schema.properties.decisions.items;
-    expect(tool.input_schema.required).toEqual(["decisions"]);
-    expect(item.required.sort()).toEqual(Object.keys(item.properties).sort());
-    expect(item.properties.ability.enum).toEqual(["A1", "A2"]);
-    expect(item.properties.row.enum).toEqual(["none", "new", "R1", "R2"]);
-    expect(item.properties.feature.enum).toEqual(["none", "new", "R1.1", "R2.1"]);
-    expect(item.properties.domain.enum).toEqual(["none", "new", "D1", "D2"]);
+  it("most of its text is shared: its own lines are the smaller part", () => {
+    const shared = blocksOf(TABLE_NEW_INTAKE_PROMPT).reduce((n, b) => n + b.text.length, 0);
+    expect(shared).toBeGreaterThan(promptText(TABLE_NEW_INTAKE_PROMPT).length / 2);
+  });
+  it("names every change the answer may ask for", () => {
+    for (const c of TABLE_CHANGES.filter((x) => x !== "none")) expect(TABLE_NEW_INTAKE_SYSTEM_PROMPT).toContain(`"${c}"`);
   });
 });
 
-describe("renderTableAdd", () => {
-  it("shows the table by domain with every code, then each ability with what is known of it", () => {
-    const text = renderTableAdd("Acme", [ability("A1"), ability("A2", "feature")], table);
-    expect(text).toContain("COMPANY: Acme");
-    expect(text).toContain("D1 | DOMAIN: Feedback Management — Collecting and making sense of what customers ask for.");
-    expect(text).toContain("  R1 | Feedback Repository — One place for customer feedback.");
-    expect(text).toContain("    R1.1 | Feedback forms");
-    expect(text).toContain("A1 | capability | Ability A1 — Does a thing.");
-    expect(text).toContain('A2 | feature, listed by the company under "Customer insights" | Ability A2');
-    expect(text).toContain("  problem it solves: A problem.");
-    expect(text).toContain("  quote: \"It does a thing.\" (https://example.test/page)");
+describe("the request shows the table as this company stands on it", () => {
+  const text = renderTableNewIntake(features.slice(0, 1), table);
+  it("the market, the domains with who does the work, the company", () => {
+    expect(text).toContain("THE MARKET\nProduct management software");
+    expect(text).toContain("Discovery & Ideation — Interviews, requests and ideas.\nWho does the work: Product managers and researchers.");
+    expect(text).toContain("THE COMPANY\nAcme");
+  });
+  it("each capability with this company's score and the others', each row with has it / not found", () => {
+    expect(text).toContain("C1 | Feedback collection");
+    expect(text).toContain("Acme: 3/5 — Covers forms and email, no in-app surveys.");
+    expect(text).toContain("The other companies: Own 4/5 · Beta no score");
+    expect(text).toContain("C1.1 | Collect requests through a public form — Problem: Without it, requests arrive by email. — Acme: has it");
+    expect(text).toContain("C1.2 | Ask users a question inside the product — Problem: Without it, feedback comes long after use. — Acme: not found");
+  });
+  it("a new feature in the form of a feature of a company's list", () => {
+    expect(text).toContain("THE NEW FEATURES OF ACME (1)\nN1 | Feature N1\n   Problem: Without it, a problem.\n   How it works: It does a thing.\n   Users: Product manager (person)\n   Workflows: 1. plan the quarter — rank the requests");
+  });
+  it("says when the market is not recorded", () => {
+    expect(renderTableNewIntake(features.slice(0, 1), { ...table, market: "" })).toContain("THE MARKET\n(not recorded)");
   });
 });
 
-describe("parseTableAdd", () => {
-  it("accepts a valid answer: an existing row, a new feature row, a new row in a new domain, left out, an existing feature row", () => {
-    const { decisions, dropped, unanswered } = parseTableAdd(
-      {
-        decisions: [
-          { ...base, ability: "A1", row: "R1", domain: "D2", new_name: "ignored" },
-          { ...base, ability: "A2", as: "feature", row: "R1", feature: "new", new_name: "Feedback Voting", new_description: "Customers vote on feedback." },
-          { ...base, ability: "A3", row: "new", domain: "new", new_name: "Agent Workspace", new_description: "A place where agents work.", change: "new_domain", change_detail: "AI Agents — Software agents that do product work." },
-          { ...base, ability: "A4", in_table: false, as: "capability", row: "R2", reason: "A new look for the timeline, nothing new to ask for." },
-          { ...base, ability: "A5", as: "feature", row: "R2", feature: "R2.1" },
-        ],
-      },
-      abilities,
-      table,
-    );
-    expect(dropped).toBe(0);
-    expect(unanswered).toEqual([]);
-    expect(decisions.map((d) => d.code)).toEqual(["A1", "A2", "A3", "A4", "A5"]);
-    // An existing row: what does not apply is "none" / "" whatever the answer wrote.
-    expect(decisions[0]).toMatchObject({ inTable: true, as: "capability", row: "R1", feature: "none", domain: "none", newName: "", change: "none", changeDetail: "" });
-    expect(decisions[1]).toMatchObject({ as: "feature", row: "R1", feature: "new", domain: "none", newName: "Feedback Voting", newDescription: "Customers vote on feedback." });
-    expect(decisions[2]).toMatchObject({ as: "capability", row: "new", domain: "new", newName: "Agent Workspace", change: "new_domain" });
-    expect(decisions[2].changeDetail).toContain("AI Agents");
-    expect(decisions[3]).toMatchObject({ inTable: false, as: "none", row: "none", feature: "none", domain: "none", change: "none" });
-    expect(decisions[4]).toMatchObject({ as: "feature", row: "R2", feature: "R2.1", newName: "" });
+describe("the answer form is strict", () => {
+  const item = (tableNewIntakeTool(features.map((f) => f.code), table).input_schema as { properties: { features: { items: { properties: Record<string, { enum?: string[] }>; required: string[] } } } }).properties.features.items;
+  it("every field is required", () => {
+    expect([...item.required].sort()).toEqual(Object.keys(item.properties).sort());
   });
-
-  it("accepts the changes to the table itself: a reworded row, a split row, a reworded domain", () => {
-    const { decisions, dropped } = parseTableAdd(
-      {
-        decisions: [
-          { ...base, ability: "A1", row: "R1", change: "reword_row", change_detail: "Feedback Hub — One place for feedback from customers and from agents." },
-          { ...base, ability: "A3", row: "R2", change: "split_row", change_detail: "Roadmap Views — …; Public Roadmap Sharing — …; the ability goes on the second." },
-          { ...base, ability: "A4", row: "R2", domain: "D2", change: "reword_domain", change_detail: "Planning & Roadmapping — Planning, and showing what is built when." },
-        ],
-      },
-      abilities,
-      table,
-    );
-    expect(dropped).toBe(0);
-    expect(decisions.map((d) => [d.code, d.change, d.domain])).toEqual([["A1", "reword_row", "none"], ["A3", "split_row", "none"], ["A4", "reword_domain", "D2"]]);
+  it("codes and names are closed sets, with none and new", () => {
+    expect(item.properties.feature.enum).toEqual(features.map((f) => f.code));
+    expect(item.properties.domain.enum).toEqual(["Discovery & Ideation", "Strategy & Prioritization", "none"]);
+    expect(item.properties.capability.enum).toEqual(["C1", "C2", "C3", "new", "none"]);
+    expect(item.properties.row.enum).toEqual(["C1.1", "C1.2", "C2.1", "C2.2", "C2.3", "C2.4", "C2.5", "new", "none"]);
+    expect(item.properties.row_replaces.enum).not.toContain("new");
+    expect(item.properties.change.enum).toEqual([...TABLE_CHANGES]);
   });
+});
 
-  it("rejects codes outside the closed sets, and says which abilities are left unanswered", () => {
-    const { decisions, dropped, unanswered } = parseTableAdd(
-      {
-        decisions: [
-          { ...base, ability: "A9", row: "R1" }, // an ability that was not asked
-          { ...base, ability: "A1", row: "R7" }, // a row that is none of ours
-          { ...base, ability: "A2", as: "feature", row: "R1", feature: "R2.1" }, // a feature row of another row
-          { ...base, ability: "A3", row: "new", domain: "D9", new_name: "Agent Workspace" }, // a domain that is none of ours
-          { ...base, ability: "A4", as: "row", row: "R1" }, // a size that does not exist
-          { ...base, ability: "A5", as: "feature", row: "R1", feature: "R1.1", change: "merge_rows", change_detail: "x" }, // a change that does not exist
-        ],
-      },
-      abilities,
-      table,
-    );
-    expect(decisions).toEqual([]);
-    expect(dropped).toBe(6);
-    expect(unanswered).toEqual(["A1", "A2", "A3", "A4", "A5"]);
+describe("the answer is checked against the closed sets and against itself", () => {
+  const parse = (...list: Array<Record<string, unknown>>) => parseTableNewIntake({ features: list }, features, table);
+  it("an existing row the company lacked: it fills the not found", () => {
+    const { decisions } = parse(answer({ row: "C1.2", score: 4, reasoning: "Now also asks inside the product." }));
+    expect(decisions[0]).toMatchObject({ feature: "N1", capability: "C1", row: "C1.2", place: "row", fillsNotFound: true, score: 4, change: "none", changeDetail: "", warnings: [] });
   });
-
-  it("rejects a decision that does not hold together, keeps the first answer of an ability, and survives a broken answer", () => {
-    const { decisions, dropped, unanswered } = parseTableAdd(
-      {
-        decisions: [
-          { ...base, ability: "A1", row: "R1" },
-          { ...base, ability: "A1", row: "R2" }, // a second answer for A1
-          { ...base, ability: "A2", as: "feature", row: "new", feature: "new", new_name: "X" }, // a feature needs a row that exists
-          { ...base, ability: "A3", row: "new", domain: "D1" }, // a new row without a name
-          { ...base, ability: "A4", row: "new", domain: "new", new_name: "X" }, // a new domain that is not declared as the change
-          { ...base, ability: "A5", as: "feature", row: "R1", feature: "R1.1", reason: "" }, // no reason
-        ],
-      },
-      abilities,
-      table,
+  it("an existing row the company already has fills nothing", () => {
+    expect(parse(answer({ row: "C1.1" })).decisions[0]).toMatchObject({ place: "row", fillsNotFound: false });
+  });
+  it("no row: it only counts in the coverage", () => {
+    expect(parse(answer({})).decisions[0]).toMatchObject({ place: "coverage", row: "none", rowName: "" });
+  });
+  it("a new row needs its name and problem; in a full capability it says which row it replaces", () => {
+    const ok = parse(answer({ feature: "N2", capability: "C2", row: "new", row_name: "Record customer calls", row_problem: "Without it, notes are copied by hand.", row_replaces: "C2.5", score: 2, reasoning: "One of five." }));
+    expect(ok.decisions[0]).toMatchObject({ place: "new_row", rowReplaces: "C2.5", rowName: "Record customer calls", warnings: [] });
+    const noReplace = parse(answer({ feature: "N2", capability: "C2", row: "new", row_name: "Record customer calls", row_problem: "Notes are copied by hand.", score: 2, reasoning: "One." }));
+    expect(noReplace.decisions[0].warnings.join(" | ")).toMatch(/already has 5 rows/);
+    expect(noReplace.decisions[0].warnings.join(" | ")).toMatch(/Without it,/);
+    expect(parse(answer({ row: "new" })).decisions).toHaveLength(0);
+  });
+  it("a new capability goes with the change of that name, and brings its name and what it covers", () => {
+    const ok = parse(answer({ capability: "new", change: "new capability", change_detail: "Surveys inside the product are a part of the work no capability covers.", capability_name: "In-product surveys", capability_covers: "Asking users at the moment of use.", score: 5, reasoning: "Alone in it." }));
+    expect(ok.decisions[0]).toMatchObject({ capability: "new", change: "new capability", capabilityName: "In-product surveys", place: "coverage" });
+    expect(parse(answer({ capability: "new" })).dropped).toBe(1);
+    expect(parse(answer({ change: "new capability", change_detail: "x", capability_name: "A", capability_covers: "B" })).dropped).toBe(1);
+  });
+  it("a wording change keeps the capability and brings the new wording; a split brings its detail", () => {
+    const reword = parse(answer({ change: "capability wording", change_detail: "Add surveys to what it covers.", capability_name: "Feedback collection", capability_covers: "Requests and survey answers from every channel." }));
+    expect(reword.decisions[0]).toMatchObject({ capability: "C1", change: "capability wording", capabilityCovers: "Requests and survey answers from every channel." });
+    const split = parse(answer({ change: "split capability", change_detail: "Split into asking users and receiving requests." }));
+    expect(split.decisions[0]).toMatchObject({ change: "split capability", capabilityName: "" });
+    expect(parse(answer({ change: "split capability" })).dropped).toBe(1);
+  });
+  it("not in the table: no domain — or a domain and no capability", () => {
+    const none = parse(answer({ domain: "none", capability: "none", score: 0, reasoning: "none" }));
+    expect(none.decisions[0]).toMatchObject({ place: "out", domain: "none", capability: "none", score: 0 });
+    const newDomain = parse(answer({ domain: "none", capability: "none", change: "new domain", change_detail: "Billing is an area no domain covers.", score: 0 }));
+    expect(newDomain.decisions[0]).toMatchObject({ place: "out", change: "new domain" });
+    const small = parse(answer({ capability: "none", score: 0 }));
+    expect(small.decisions[0]).toMatchObject({ place: "out", domain: "Discovery & Ideation" });
+  });
+  it("drops what contradicts itself or names something that was not given", () => {
+    const { decisions, dropped, unanswered } = parse(
+      answer({ feature: "N9" }), // not a feature given
+      answer({ feature: "N1", domain: "Delivery" }), // not a domain given
+      answer({ feature: "N2", capability: "C3" }), // a capability of another domain
+      answer({ feature: "N3", row: "C2.1" }), // a row of another capability
+      answer({ feature: "N4", domain: "none" }), // no domain, yet a capability
+      answer({ feature: "N5", change: "new domain", change_detail: "x" }), // a new domain, yet a domain
+      answer({ feature: "N6", score: 7 }),
+      answer({ feature: "N7", why: "" }),
     );
-    expect(decisions.map((d) => [d.code, d.row])).toEqual([["A1", "R1"]]);
-    expect(dropped).toBe(5);
-    expect(unanswered).toEqual(["A2", "A3", "A4", "A5"]);
-
-    for (const broken of [null, {}, { decisions: "none" }, { decisions: [null, 3, "A1"] }]) {
-      const r = parseTableAdd(broken, abilities, table);
-      expect(r.decisions).toEqual([]);
-      expect(r.unanswered).toHaveLength(5);
-    }
-    // A reworded domain must be the row's own; a row change cannot be asked of a new row.
-    const wrong = parseTableAdd(
-      {
-        decisions: [
-          { ...base, ability: "A1", row: "R1", domain: "D2", change: "reword_domain", change_detail: "x — y" },
-          { ...base, ability: "A3", row: "new", domain: "D1", new_name: "X", change: "split_row", change_detail: "x" },
-          { ...base, ability: "A4", row: "R1", change: "reword_row", change_detail: "" },
-        ],
-      },
-      abilities,
-      table,
-    );
-    expect(wrong.decisions).toEqual([]);
-    expect(wrong.dropped).toBe(3);
+    expect(decisions).toHaveLength(0);
+    expect(dropped).toBe(8);
+    expect(unanswered).toEqual(features.map((f) => f.code));
+  });
+  it("a feature answered twice counts once; one never answered is listed", () => {
+    const { decisions, dropped, unanswered } = parse(answer({}), answer({ row: "C1.1" }));
+    expect(decisions).toHaveLength(1);
+    expect(dropped).toBe(1);
+    expect(unanswered).toEqual(["N2", "N3", "N4", "N5", "N6", "N7"]);
+  });
+  it("keeps a doubtful score with a warning", () => {
+    const d = parse(answer({ score: 2, reasoning: "x".repeat(400) })).decisions[0];
+    expect(d.warnings.join(" | ")).toMatch(/goes down \(3 → 2\)/);
+    expect(d.warnings.join(" | ")).toMatch(/400 characters/);
+    expect(parse(answer({ score: 0 })).decisions[0].warnings.join(" | ")).toMatch(/score 0/);
   });
 });

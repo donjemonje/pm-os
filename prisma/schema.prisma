@@ -636,6 +636,9 @@ model Competitor {
   /// every listing of competitors leaves it out. At most one per workspace (enforced where it is created). What its
   /// pages say is OURS: it fills Capability.ourStatus / Feature.ourStatus, never a CapabilityStatus cell.
   isOwn       Boolean   @default(false)
+  /// When the company's knowledge base (CompetitorKnowledge) was made. News is what its pages add AFTER this moment;
+  /// null = no knowledge base yet, so no news (the set-up phase and a new company's first scans are never news).
+  knowledgeReadyAt DateTime?
   /// The search for the company's other addresses — help center, developer docs, release notes (lib/competitors/discovery.ts).
   /// Set while a search is working (one at a time per company; a search that stopped reporting is taken over after 10 minutes).
   addressSearchStartedAt DateTime?
@@ -651,6 +654,8 @@ model Competitor {
   analyses        CompetitorAnalysis[]
   items           CompetitorItem[]
   news            CompetitorNews[]
+  knowledge       CompetitorKnowledge[]
+  integrations    CompetitorIntegration[]
   findings        PageFinding[]
   featureStatuses FeatureStatus[]
   sections        CompetitorSection[]
@@ -1374,10 +1379,13 @@ model CompetitorScanRun {
   current     String?
   startedAt   DateTime  @default(now())
   finishedAt  DateTime?
-  /// {competitors, gaps, raised, lowered, facts, suggestions, recipients, skipped?}
+  /// { skipped: [{ name, reason }] } — the competitors the run left out. A run before 2026-11-22 may also hold the counts
+  /// of the Scan-run email that was removed then ({competitors, gaps, raised, lowered, facts, suggestions, recipients}): not read.
   summary     Json      @default("{}")
+  /// No longer written or read (2026-11-22): when the removed Scan-run email went out. Left in place for a later cleanup push.
   notifiedAt  DateTime?
-  /// The claim that makes the run's notification happen once, after the analyses its scans queued.
+  /// No longer written or read (2026-11-22): the claim that made the removed Scan-run email happen once. Whether a run
+  /// has settled is read from its scans and their analyses (config.ts runSettled). Left in place for a later cleanup push.
   summarizedAt DateTime?
 
   scans CompetitorScan[]
@@ -1465,6 +1473,9 @@ model SourcePage {
   analysisError String?
   /// No longer written or read: the profile-facts step is gone (2026-11-16). Left in place for a later cleanup push.
   factsKey    String?
+  /// The hash of the text the news intake (news/after-scan.ts) last read. A page whose hash differs, and that appeared
+  /// or changed after the company's knowledge base was made, is still due for the intake.
+  newsHash    String?
   updatedAt   DateTime         @updatedAt
 
   findings PageFinding[]
@@ -1614,4 +1625,54 @@ model CompetitorNews {
   @@index([workspaceId, verdict, createdAt])
   @@index([competitorId, createdAt])
   @@index([batchId])
+}
+
+/// A company's KNOWLEDGE BASE — the flat list of what its product does for its users, one row per feature
+/// (form "features-v3": the read that builds the list, prompts/blocks.ts READ_PAGES_PROMPT). No capabilities, no
+/// domains here: those are made when the table is built. The news intake compares new and changed pages with this
+/// list, and adds every new ability it finds to it (source "news"), so the same ability is news only once.
+model CompetitorKnowledge {
+  id            String     @id @default(uuid())
+  workspaceId   String
+  competitorId  String
+  competitor    Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// The plain name any company could use for it.
+  name          String
+  /// What this company calls it.
+  companyName   String     @default("")
+  /// The user's problem it solves ("Without it, …"), and whether a page states it: "stated" | "worked out".
+  problem       String     @default("")
+  problemSource String     @default("")
+  howItWorks    String     @default("")
+  /// [{ name, kind: "person" | "agent" }]
+  users         Json       @default("[]")
+  /// [{ workflow, step }], the closest first.
+  workflows     Json       @default("[]")
+  /// [{ quote, url, page_kind | kind, strength: "explains" | "describes" | "names", … }], the strongest first.
+  evidence      Json       @default("[]")
+  /// "read" (the read that builds the list) | "news" (a new ability the news intake found)
+  source        String     @default("read")
+  /// source "read": the read's label ("intel471-f1"). source "news": the CompetitorNews row it came from.
+  label         String     @default("")
+  /// Its place in the list.
+  position      Int        @default(0)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([competitorId, position])
+  @@index([workspaceId])
+}
+
+/// A tool the company's product connects to, by name only (the knowledge base lists integrations by name, never one by one as features).
+model CompetitorIntegration {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  competitorId String
+  competitor   Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  tool         String
+  /// "read" | "news"
+  source       String     @default("read")
+  createdAt    DateTime   @default(now())
+
+  @@unique([competitorId, tool])
 }

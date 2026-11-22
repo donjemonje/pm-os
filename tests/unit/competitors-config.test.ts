@@ -1,25 +1,49 @@
 /**
  * Competitors — workspace config merge and time helpers. Pure modules.
  * Since the Website Scanning PRD (2026-11-04) the scan frequency lives per
- * source and there is no page cap, so the config carries only the manual
- * rescan limit, the recipients and the news baseline; old keys are ignored.
+ * source and there is no page cap, so the config carries only the news
+ * baseline; old keys (the recipients of the removed Scan-run email among them) are ignored.
  */
 import { describe, expect, it } from "vitest";
-import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, STALE_MS } from "@/lib/competitors/config";
+import { CEILING_MS, DEFAULT_SCAN_EVERY_DAYS, STORAGE_LIMIT_CHARS, mergeCompetitorsConfig, runSettled, STALE_MS } from "@/lib/competitors/config";
 import { shortDate, timeAgo, timeUntil } from "@/lib/competitors/time";
+
+describe("runSettled — when the page may say a Scan run has finished", () => {
+  const run = (over: Partial<Parameters<typeof runSettled>[0]> = {}) => ({ runStatus: "ok", scanStatuses: ["ok", "partial"], analysesUnfinished: 0, ...over });
+  it("settled once the run has ended, every scan was read and every analysis is done", () => {
+    expect(runSettled(run())).toBe(true);
+    expect(runSettled(run({ scanStatuses: [] }))).toBe(true);
+    expect(runSettled(run({ runStatus: "failed" }))).toBe(true);
+  });
+  it("not while the run is still starting its scans", () => {
+    expect(runSettled(run({ runStatus: "running" }))).toBe(false);
+  });
+  it("not while a scan of the run is still to be read — a scan parked for the station ends long after its run", () => {
+    expect(runSettled(run({ scanStatuses: ["ok", "pending_local"] }))).toBe(false);
+    expect(runSettled(run({ scanStatuses: ["running"] }))).toBe(false);
+    expect(runSettled(run({ scanStatuses: ["queued"] }))).toBe(false);
+  });
+  it("not while an analysis one of its scans queued is unfinished", () => {
+    expect(runSettled(run({ analysesUnfinished: 1 }))).toBe(false);
+  });
+  it("scans that ended badly do not hold it", () => {
+    expect(runSettled(run({ scanStatuses: ["failed", "stale", "cancelled", "ok"] }))).toBe(true);
+  });
+});
 
 describe("mergeCompetitorsConfig", () => {
   it("fills defaults and ignores the retired per-org frequency and page cap", () => {
-    const defaults = { notifyUserIds: [], baselineUntil: null };
+    const defaults = { baselineUntil: null };
     expect(mergeCompetitorsConfig(null)).toEqual(defaults);
     expect(mergeCompetitorsConfig({ scanFrequency: "daily", maxPagesPerScan: 2 })).toEqual(defaults);
     expect(mergeCompetitorsConfig("junk")).toEqual(defaults);
-    expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] }).notifyUserIds).toEqual(["u1", "u2"]);
+    // The Scan-run email and its recipients list were removed (2026-11-22): a stored list is ignored, never an error.
+    expect(mergeCompetitorsConfig({ notifyUserIds: ["u1", "u1", 7, "u2"] })).toEqual(defaults);
     expect(mergeCompetitorsConfig({ baselineUntil: "2026-11-01T00:00:00Z" }).baselineUntil).toBe("2026-11-01T00:00:00Z");
     expect(mergeCompetitorsConfig({ baselineUntil: "not a date" }).baselineUntil).toBeNull();
   });
   it("the old analysis settings are gone and a stored value of them is ignored: whether blog and news are read is the installation's setting now", () => {
-    expect(mergeCompetitorsConfig({ readWeakPages: true, minPagesForNewRow: 3, secondLooksPerRun: 30 })).toEqual({ notifyUserIds: [], baselineUntil: null });
+    expect(mergeCompetitorsConfig({ readWeakPages: true, minPagesForNewRow: 3, secondLooksPerRun: 30 })).toEqual({ baselineUntil: null });
   });
   it("carries the PRD's numbers: every 2 days, no page limit, 8 h per scan, 10 GB of page text, stale after 10 min (Daniel 2026-11-09)", () => {
     expect(DEFAULT_SCAN_EVERY_DAYS).toBe(2);

@@ -26,6 +26,15 @@ import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
  * Round 4 (2026-11-11, Daniel: news is historic data — eeb646a): CA-19 now asserts that the feed item about a removed
  * capability stays in the feed while it is removed and after the restore; its profile assertions are gone.
  *
+ * Round 5 (2026-11-22, Daniel: the feed is news about competitors, not an audit log of the table — News Feed &
+ * Notifications): the feed no longer holds status moves, suggested capabilities or facts, only new abilities.
+ * CA-19 is removed (it asserted a status-move item in the feed). CA-02 keeps "nothing about dashboards in the feed"
+ * and loses its seeded status-move item (the positive control); CA-27 loses its two feed assertions.
+ *
+ * Round 6 (2026-11-22, Daniel: "remove the old one, only new one stays" — the Scan-run email and its recipients list
+ * are gone): CA-17 no longer saves "a setting" (the recipients were the only setting a member could save; the route
+ * PATCH /api/competitors/settings no longer exists) and no longer expects the two cmp_settings_changed events.
+ *
  * Common setup (every row): one QA org (QA-CA Org) with a PM-OS admin (knobs,
  * Scan now without the daily limit), an org admin PM (every catalog change —
  * "the admin" of the rows) and a member (role USER; the same permissions, CA-17). Two competitors, Alpha and Beta, each
@@ -531,18 +540,6 @@ test.describe("Capability Analysis — PM decisions stick", () => {
   test("CA-02 a scan does not add a removed capability back: no row, no suggestion in the matrix, the feed or the Suggested panel; its status rows unchanged; scan log line; Removed lists it once; event cmp_decision_respected removed [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
     test.setTimeout(180_000);
     await removeCapability(cap.Dashboards);
-    // A signal the feed must show (Alpha's Feedback inbox cell changed a minute ago), so "nothing about dashboards in
-    // the feed" is read off a feed that renders this org's signals. Seeded, not taken from the scan below: on the
-    // local lane a re-scan's status change is logged as "first evidence … not a change" and never reaches the feed
-    // (scan.ts firstScan — reported to engineering on 2026-11-10, outside this row).
-    // Since eeb646a (news is history, CA-19) the feed no longer hides a removed capability's items. The 0 below still
-    // holds and now rests on the scan alone: nothing was reported about Dashboards before the removal (its seeded
-    // cells carry no change date), and this scan must not report anything about it — no status change, no suggestion.
-    const changedAt = new Date(Date.now() - 60_000);
-    await withTestDb((db) => db.capabilityStatus.update({
-      where: { competitorId_capabilityId: { competitorId: alpha.id, capabilityId: cap["Feedback inbox"] } },
-      data: { changedAt, history: { create: { value: "missing", quote: null, sourceUrl: null, at: changedAt } } },
-    }));
     const cellsBefore = await cellsOf(cap.Dashboards);
     const catalogBefore = await catalogOf();
     const scan = await injectedScan(alpha, {
@@ -569,8 +566,8 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     expect(allRows(groups).map((n) => n.toLowerCase())).not.toContain("dashboards");
     await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(0);
     await expect(page.getByTestId("cmp-suggestions-chip")).toHaveCount(0);
+    // The feed holds new abilities only (round 5): nothing a scan does to the table is an item there.
     await openFeed(page);
-    await expect(feedItems(page, `${ALPHA} missing → partial on Feedback inbox`)).toHaveCount(1);
     await expect(feedItems(page, /dashboards/i)).toHaveCount(0);
     await openSettings(page);
     await expect(page.getByText("Suggested by scans", { exact: true })).toHaveCount(0);
@@ -1049,7 +1046,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
 
   // Daniel 2026-11-11: the roles stay, but USER and CUSTOMER_ADMIN have the same permissions by default (d232d00,
   // canManageOrgSettings). Until then this row asserted the opposite: no controls, no Removed panel, 403 on every route.
-  test("CA-17 roles — a member has the same permissions as the org admin: the same controls in Settings (add, edit, remove, move, drag, suggestions, the Removed panel with its items) and no 'Only an admin' line; the state sent to him lists the removed items; as the member restore, remove, accept and decline a suggestion in the UI and rename, move, add, reorder, remove and restore a domain, save a setting, add and remove a competitor through the routes — each succeeds and is recorded under his name; /admin stays closed to him [knobs: fake site]", async ({ browser }) => {
+  test("CA-17 roles — a member has the same permissions as the org admin: the same controls in Settings (add, edit, remove, move, drag, suggestions, the Removed panel with its items) and no 'Only an admin' line; the state sent to him lists the removed items; as the member restore, remove, accept and decline a suggestion in the UI and rename, move, add, reorder, remove and restore a domain, add and remove a competitor through the routes — each succeeds and is recorded under his name; /admin stays closed to him [knobs: fake site]", async ({ browser }) => {
     test.setTimeout(180_000);
     // Something is removed (by the org admin) and two suggestions wait, written the way a scan leaves them.
     await removeCapability(cap.Dashboards);
@@ -1179,21 +1176,8 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     expect((await capabilityRow(cap["Feedback inbox"])).domainId, "its capabilities moved").toBe(dom.Planning);
     await ok(await memberApi.patch(`/api/competitors/domains/${removedDomainId}`, { data: { state: "active" } }));
     expect((await domainRow(removedDomainId)).state, "restore a domain").toBe("active");
-    // A setting of Settings → Competitors, saved and put back.
-    const configOf = async (api: APIRequestContext) => {
-      const res = await api.get("/api/competitors");
-      await ok(res);
-      return ((await res.json()) as { state: { config: { notifyUserIds: string[] } } }).state.config;
-    };
-    const notifyBefore = (await configOf(pmApi)).notifyUserIds;
-    const notifyChanged = notifyBefore.includes(memberId) ? notifyBefore.filter((id) => id !== memberId) : [...notifyBefore, memberId];
-    try {
-      await ok(await memberApi.patch("/api/competitors/settings", { data: { notifyUserIds: notifyChanged } }));
-      expect((await configOf(pmApi)).notifyUserIds, "save a setting").toEqual(notifyChanged);
-    } finally {
-      await ok(await memberApi.patch("/api/competitors/settings", { data: { notifyUserIds: notifyBefore } }));
-    }
-    expect((await configOf(pmApi)).notifyUserIds).toEqual(notifyBefore);
+    // (The one setting of Settings → Competitors a member could save — the recipients of the Scan-run email — was
+    // removed with that email on 2026-11-22; its route PATCH /api/competitors/settings is gone.)
     // Add a competitor (its first scan waits for the station) and remove it again.
     const rival = await addCompetitor(memberApi, await startSite(rowSites), "QA-CA Member Rival");
     await waitForScanWithStatus(rival.sourceId, "pending_local");
@@ -1211,7 +1195,6 @@ test.describe("Capability Analysis — PM decisions stick", () => {
       ["cmp_catalog_edited", { entity: "domain", action: "create", name: "Member domain" }, 1],
       ["cmp_catalog_edited", { entity: "domain", action: "remove", entityId: dom.Feedback, moveTo: dom.Planning }, 1],
       ["cmp_catalog_edited", { entity: "domain", action: "restore", entityId: removedDomainId }, 1],
-      ["cmp_settings_changed", { setting: "notifyUserIds" }, 2],
       ["cmp_competitor_added", { competitorId: rival.id }, 1],
       ["cmp_competitor_removed", { competitorId: rival.id }, 1],
     ];
@@ -1294,36 +1277,8 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     }
   });
 
-  // Daniel, 2026-11-11 (product eeb646a): news is historic data — what was already reported about a capability stays
-  // in the feed after a PM removes the capability from the table. Before that commit this row asserted the opposite
-  // (the item left the feed with the table row and came back with the restore). The profile is not part of the decision.
-  test("CA-19 a removed capability's news stays in the feed: the feed item about Dashboards is there while the capability is removed, and after the restore [knobs: none]", async ({ browser }) => {
-    // Alpha's cell on Dashboards changed in its latest scan (missing → has; the org's own status is missing → a gap signal).
-    const changedAt = new Date(Date.now() - 60_000);
-    await withTestDb((db) => db.capabilityStatus.update({
-      where: { competitorId_capabilityId: { competitorId: alpha.id, capabilityId: cap.Dashboards } },
-      data: { changedAt, history: { create: { value: "missing", quote: null, sourceUrl: null, at: changedAt } } },
-    }));
-    const signal = `${ALPHA} missing → has it on Dashboards`;
-    await removeCapability(cap.Dashboards);
-    expect((await capabilityRow(cap.Dashboards)).state).toBe("removed");
-
-    const page = await open(browser, "member");
-    await openMatrix(page);
-    // The capability is out of the table, so the feed item below is read while the removal is in force.
-    expect(allRows(await matrixGroups(page)), "the table while Dashboards is removed").not.toContain("Dashboards");
-    await openFeed(page);
-    await expect(feedItems(page, signal)).toHaveCount(1);
-    await expect(feedItems(page, /Dashboards/), "one item about Dashboards, not two").toHaveCount(1);
-
-    await ok(await pmApi.patch(`/api/competitors/capabilities/${cap.Dashboards}`, { data: { state: "active" } }));
-    expect((await capabilityRow(cap.Dashboards)).state).toBe("active");
-    await openMatrix(page);
-    expect(groupOf(await matrixGroups(page), "Dashboards"), "Dashboards is back in the table").toBe("Reporting");
-    await openFeed(page);
-    await expect(feedItems(page, signal)).toHaveCount(1);
-    await expect(feedItems(page, /Dashboards/), "one item about Dashboards, not two").toHaveCount(1);
-  });
+  // CA-19 (a removed capability's news stays in the feed) was removed on 2026-11-22: the feed no longer shows table
+  // status moves at all, so there is no such item to keep (see "Round 5" at the top of this file).
 
   // ————————————————————————————— Names added by hand —————————————————————————————
 
@@ -1588,7 +1543,7 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     await expectCell(page, "Scheduled reports", ALPHA, "has");
   });
 
-  test("CA-27 (proposed) a declined suggestion a PM adds by hand is his row: Scheduled reports → the same row, active, origin manual, no suggesting competitor and no suggestion quote, no PMOS AI mark, no longer a suggestion in the feed; Billing → the same domain, active, origin manual, empty; events restore via add from dismissed [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
+  test("CA-27 (proposed) a declined suggestion a PM adds by hand is his row: Scheduled reports → the same row, active, origin manual, no suggesting competitor and no suggestion quote, no PMOS AI mark; Billing → the same domain, active, origin manual, empty; events restore via add from dismissed [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {
     test.setTimeout(180_000);
     const scan = await injectedScan(alpha, { suggestions: [
       { name: "Scheduled reports", domain: "Reporting" },
@@ -1604,11 +1559,6 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     await declineDomain(billing.id);
 
     const page = await open(browser, "pm");
-    // Positive control: the declined suggestion is a feed item before the PM adds the name himself.
-    await openMatrix(page);
-    await openFeed(page);
-    await expect(feedItems(page, "Scheduled reports")).toHaveCount(1);
-
     await openSettings(page);
     await expect(page.getByText("Suggested by scans", { exact: true })).toHaveCount(0);
     const posted = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/competitors/capabilities");
@@ -1645,8 +1595,6 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     expect(groupOf(groups, "Scheduled reports")).toBe("Planning");
     await expect(page.getByTestId("cmp-suggested-row")).toHaveCount(0);
     await expect(page.getByTestId("cmp-suggested-domain")).toHaveCount(0);
-    await openFeed(page);
-    await expect(feedItems(page, "Scheduled reports"), "a row the PM added is not a suggestion in the feed").toHaveCount(0);
   });
 
   test("CA-28 (proposed) renaming a capability to a declined suggestion's name succeeds: Dashboards becomes Scheduled reports with no 'already exists' error; one row has the name, the declined row is gone; the cells stay; event rename [knobs: AI answer injected, fake site, run-once]", async ({ browser }) => {

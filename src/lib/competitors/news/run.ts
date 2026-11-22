@@ -3,6 +3,7 @@ import { db } from "../../db";
 import { callTool } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
 import { newsModel, NEWS_THINKING } from "./model";
+import { loadKnowledgeList } from "./knowledge";
 import { codeList, NEWS_MAX_TOKENS, NEWS_SYSTEM_PROMPT, newsTool, parseNews, planRequests, renderList, renderPages, type NewsList, type NewsPage, type NewsPiece, type SentPage } from "./intake";
 
 /**
@@ -20,11 +21,13 @@ export interface IntakeCompany {
 }
 
 /**
- * The company's list from the database: every item we hold for it, as one flat list — a capability and a feature
- * are each a line (the intake has no sizes). The knowledge base in its new form (a flat list of features with how
- * each works) is not in the database yet; a caller that has it as a file hands it in instead (the simulation does).
+ * The company's list: its knowledge base (CompetitorKnowledge — a flat list of features, news/knowledge.ts).
+ * A company whose knowledge base is not in the database yet falls back to the items of the older analysis, as one
+ * flat list — a capability and a feature are each a line (the intake has no sizes).
  */
 export async function loadNewsList(competitorId: string): Promise<NewsList> {
+  const knowledge = await loadKnowledgeList(competitorId);
+  if (knowledge.features.length) return knowledge;
   const rows = await db.competitorItem.findMany({
     where: { competitorId },
     orderBy: { position: "asc" },

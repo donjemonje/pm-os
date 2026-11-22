@@ -298,7 +298,7 @@ export async function sweepStaleAnalyses(t: Date): Promise<number> {
   const cutoff = new Date(t.getTime() - STALE_MS);
   const stale = await db.competitorAnalysis.findMany({
     where: { status: { in: ["running", "waiting"] }, heartbeatAt: { lt: cutoff } },
-    select: { id: true, kind: true, staleCount: true, workspaceId: true, competitorId: true, trigger: true, step: true, scanId: true, startedById: true },
+    select: { id: true, kind: true, staleCount: true, workspaceId: true, competitorId: true, trigger: true, step: true, startedById: true },
   });
   let swept = 0;
   for (const s of stale) {
@@ -315,23 +315,9 @@ export async function sweepStaleAnalyses(t: Date): Promise<number> {
       await recordCompetitorEvent(s.workspaceId, s.startedById, s.kind === "setup" ? "cmp_setup_finished" : "cmp_analysis_finished", { analysisId: s.id, competitorId: s.competitorId, trigger: s.trigger, outcome: "failed", step: s.step, errorKind: "stale" });
       // A run that was given up failed like any other: support hears about it, once.
       await alertSupport(s.id);
-      await notifyScanRun(s.scanId);
     }
   }
   return swept;
-}
-
-/** The scan run's one email waits for the analyses its scans queued (runs.ts notifyRunWhenAnalyzed). */
-async function notifyScanRun(scanId: string | null): Promise<void> {
-  if (!scanId) return;
-  try {
-    const scan = await db.competitorScan.findUnique({ where: { id: scanId }, select: { runId: true } });
-    if (!scan?.runId) return;
-    const { notifyRunWhenAnalyzed } = await import("../runs");
-    await notifyRunWhenAnalyzed(scan.runId);
-  } catch (e) {
-    console.error("[competitors] run notification after the analysis failed", scanId, e);
-  }
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -837,7 +823,6 @@ export async function runAnalysis(id: string): Promise<void> {
     });
   }
   await alertSupport(id);
-  await notifyScanRun(row.scanId);
   await kickAnalyses();
 }
 

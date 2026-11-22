@@ -13,7 +13,7 @@
  *   3. scores each expected piece and prints a line per page, the totals, the tokens and the time;
  *   4. writes the full result next to the fixture (results-<time>.json);
  *   5. --table: asks the table step what it WOULD do with the new abilities — a dry run, nothing is written;
- *   6. --email: sends the batch's one notification (to PM-OS only): the new abilities and nothing else.
+ *   6. --email: sends the batch's one notification (to PM-OS only): every item found, under its result — new, already exists, not related.
  * --list: the company's list comes from a knowledge-base file (the "items" of a read, features-v3) instead of the database.
  * --check: prints what would be sent (the list size, the requests, the changed text of changed pages) and asks nothing.
  * The new abilities then show in the news feed of that organization.
@@ -164,7 +164,7 @@ async function main() {
 
   if (sendMail) {
     const sent = await notifyNewsBatch(batch.batchId);
-    console.log(sent.abilities === 0 ? "[news-sim] no new ability: no email" : `[news-sim] email ${sent.sent ? "sent" : "NOT sent (no mail server configured)"} to ${sent.to}: ${sent.subject} (${sent.abilities} abilities)`);
+    console.log(sent.items === 0 ? "[news-sim] nothing was found: no email" : `[news-sim] email ${sent.sent ? "sent" : "NOT sent (no mail server configured)"} to ${sent.to}: ${sent.subject} (${sent.abilities} abilities)`);
   }
   if (failedPages) process.exitCode = 1;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { abilityPhrase, codeList, NEWS_INTAKE_PROMPT, NEWS_REQUEST_MAX_PAGES, NEWS_SYSTEM_PROMPT, newsTool, parseNews, planRequests, renderList, renderPages, type NewsPage } from "@/lib/competitors/news/intake";
+import { abilityPhrase, codeList, NEWS_INTAKE_PROMPT, NEWS_SYSTEM_PROMPT, newsTool, parseNews, planRequests, renderList, renderPages, type NewsPage } from "@/lib/competitors/news/intake";
 import { changedText } from "@/lib/competitors/news/changed";
-import { renderNewsEmail, type NewsEmailRow } from "@/lib/competitors/news/email";
+import { emailGroups, renderNewsEmail, type NewsEmailRow } from "@/lib/competitors/news/email";
 import { blocksOf, FEATURE_FIELDS } from "@/lib/competitors/prompts/blocks";
 
 const list = codeList(
@@ -48,9 +48,13 @@ describe("news intake: the list and the request", () => {
     expect(text).toContain("=== P1 | new | release note | Notes | https://example.test/notes | dated 2026-11-20");
     expect(text).toContain("=== P2 | new | help center | Compare snapshots");
   });
-  it("opens another request when one is full", () => {
-    const many = Array.from({ length: NEWS_REQUEST_MAX_PAGES + 1 }, (_, i) => ({ ...help, url: `https://example.test/${i}` }));
-    expect(planRequests(many).requests.map((r) => r.length)).toEqual([NEWS_REQUEST_MAX_PAGES, 1]);
+  it("packs by the reading's limit: another request only when one is full, and a page is never cut", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({ ...help, url: `https://example.test/${i}` }));
+    expect(planRequests(many).requests.map((r) => r.length)).toEqual([40]);
+    const long = { ...help, url: "https://example.test/long", text: "x".repeat(400_000) };
+    const plan = planRequests([help, long, notes], 60_000);
+    expect(plan.requests.map((r) => r.map((p) => p.page.url))).toEqual([[help.url], [long.url], [notes.url]]);
+    expect(plan.requests[1][0].sent.length).toBe(400_000);
   });
   it("sends only the changed text of a changed page, and nothing of one with no new line", () => {
     const before = "Roadmaps\nShare a roadmap\nSend a link to anyone.";
@@ -119,11 +123,39 @@ describe("news intake: the verdict is decided in code", () => {
 
 describe("news notification", () => {
   const row = (over: Partial<NewsEmailRow>): NewsEmailRow => ({ verdict: "new", name: "Call recording", what: "A notetaker joins the call and writes the transcript.", problem: "Without it, notes are copied by hand", quote: "record the conversation", quoteOk: true, sourceUrl: "https://example.test/a", sourceTitle: "A", ...over });
-  it("holds the new abilities and nothing else: title, name, one phrase, evidence and link", () => {
-    const mail = renderNewsEmail({ competitorName: "Acme", simulated: false, rows: [row({}), row({ name: "Unproven", quoteOk: false, quote: null }), row({ verdict: "covered", name: "Copilot" }), row({ verdict: "other", name: "New CRO" })] });
+  it("lists every stored item under its result — new, already exists, not related — and nothing else", () => {
+    const mail = renderNewsEmail({ competitorName: "Acme", simulated: false, rows: [
+      row({ verdict: "other", otherType: "hr", name: "New CRO", sourceUrl: "https://example.test/c" }),
+      row({ verdict: "covered", name: "Copilot", coveredName: "Spark", sourceUrl: "https://example.test/b" }),
+      row({}),
+      row({ name: "Unproven", quoteOk: false, quote: null, sourceUrl: "https://example.test/d" }),
+    ] });
     expect(mail.subject).toBe("Abilities updates for Acme");
-    expect(mail.text).toBe("Abilities updates for Acme\n\nCall recording\nWithout it, notes are copied by hand. A notetaker joins the call and writes the transcript.\n\nEvidence\n“record the conversation”\nhttps://example.test/a\n");
-    for (const absent of ["Unproven", "Copilot", "New CRO", "capability", "feature", "pages read"]) expect(mail.html).not.toContain(absent);
+    expect(mail.text).toBe([
+      "Abilities updates for Acme", "",
+      "NEW ABILITIES", "",
+      "Call recording", "Without it, notes are copied by hand. A notetaker joins the call and writes the transcript.", "", "Evidence", "“record the conversation”", "https://example.test/a", "", "",
+      "ALREADY EXISTS", "",
+      "Copilot — on the list as: Spark", "https://example.test/b", "", "",
+      "NOT RELATED", "",
+      "New CRO — People", "https://example.test/c", "",
+      "Unproven — Evidence not found on the page", "https://example.test/d", "",
+    ].join("\n"));
+    // The three groups come in this order, whatever order the rows came in.
+    expect(mail.html.indexOf("New abilities")).toBeLessThan(mail.html.indexOf("Already exists"));
+    expect(mail.html.indexOf("Already exists")).toBeLessThan(mail.html.indexOf("Not related"));
+    for (const absent of ["capability", "feature", "pages read", "news feed"]) expect(mail.html.toLowerCase()).not.toContain(absent);
+  });
+  it("leaves out a group with nothing in it, and an unproven new ability is never under New abilities", () => {
+    const onlyNew = renderNewsEmail({ competitorName: "Acme", simulated: false, rows: [row({})] });
+    expect(onlyNew.text).toContain("NEW ABILITIES");
+    for (const absent of ["ALREADY EXISTS", "NOT RELATED"]) expect(onlyNew.text).not.toContain(absent);
+    const noneNew = renderNewsEmail({ competitorName: "Acme", simulated: false, rows: [row({ name: "Unproven", quoteOk: false, quote: null }), row({ verdict: "other", otherType: "integration", name: "Jira" }), row({ verdict: "other", otherType: "something else", name: "Odd" })] });
+    expect(noneNew.subject).toBe("Abilities updates for Acme");
+    expect(noneNew.text).not.toContain("NEW ABILITIES");
+    expect(noneNew.text).toContain("Jira — Integration with another tool");
+    expect(noneNew.text).toContain("Odd — Other");
+    expect(emailGroups([{ verdict: "new", quoteOk: false }, { verdict: "new", quoteOk: true }, { verdict: "covered", quoteOk: true }, { verdict: "other", quoteOk: true }])).toMatchObject({ fresh: [{ verdict: "new", quoteOk: true }], exists: [{ verdict: "covered" }], notRelated: [{ verdict: "new", quoteOk: false }, { verdict: "other" }] });
   });
   it("shows the stored evidence, the strongest first, and marks a simulation", () => {
     const mail = renderNewsEmail({ competitorName: "Acme", simulated: true, rows: [row({ evidence: [{ quote: "first quote here", url: "https://example.test/1", title: "One" }, { quote: "second quote here", url: "https://example.test/2", title: "Two" }] })] });
@@ -132,8 +164,8 @@ describe("news notification", () => {
     expect(mail.html).toContain("https://example.test/2");
   });
   it("escapes page text in the HTML", () => {
-    const mail = renderNewsEmail({ competitorName: "Acme", simulated: false, rows: [row({ name: "<script>x</script>" })] });
-    expect(mail.html).not.toContain("<script>x</script>");
+    const mail = renderNewsEmail({ competitorName: "Acme", simulated: false, rows: [row({ name: "<script>x</script>" }), row({ verdict: "covered", name: "<b>y</b>", coveredName: "<i>z</i>" }), row({ verdict: "other", name: "<u>w</u>" })] });
+    for (const raw of ["<script>x</script>", "<b>y</b>", "<i>z</i>", "<u>w</u>"]) expect(mail.html).not.toContain(raw);
   });
   it("one phrase: the problem, then how it works", () => {
     expect(abilityPhrase({ problem: "Without it, X.", what: "It does Y." })).toBe("Without it, X. It does Y.");
