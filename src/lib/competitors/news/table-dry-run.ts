@@ -1,10 +1,10 @@
 import { db } from "../../db";
 import { callTool } from "../ai";
-import { modelFor, thinkingFor } from "../models";
-import { parseTableAdd, renderTableAdd, TABLE_ADD_MAX_TOKENS, TABLE_ADD_SYSTEM_PROMPT, tableAddTool, type TableAddAbility, type TableAddTable } from "./table-prompt";
+import { newsModel, NEWS_THINKING } from "./model";
+import { parseTableAdd, renderTableAdd, TABLE_ADD_MAX_TOKENS, TABLE_ADD_SYSTEM_PROMPT, tableAddTool, type TableAddAbility, type TableAddTable } from "./table-prompt-new-intake";
 
 /**
- * THE TABLE STEP, AS A DRY RUN — what the table prompt (news/table-prompt.ts) WOULD do with the new abilities of
+ * THE TABLE STEP, AS A DRY RUN — what the table prompt (news/table-prompt-new-intake.ts) WOULD do with the new abilities of
  * one intake batch. It asks, prints the decisions in plain lines and writes NOTHING: no row, no cell, no match.
  * It exists so the prompt can be judged on real answers before anything is allowed to change the table.
  */
@@ -57,9 +57,9 @@ export async function tableDryRunFor(company: { id: string; workspaceId: string;
   }));
   const started = Date.now();
   const { value, usage } = await callTool<unknown>(TABLE_ADD_SYSTEM_PROMPT, "", renderTableAdd(company.name, abilities, table), tableAddTool(abilities.map((a) => a.code), table), {
-    model: modelFor("match"),
+    model: newsModel(),
     maxTokens: TABLE_ADD_MAX_TOKENS,
-    thinking: thinkingFor("match"),
+    thinking: NEWS_THINKING,
   });
   const { decisions, dropped, unanswered } = parseTableAdd(value, abilities, table);
   const label = (code: string) => (code === "new" ? "a NEW one" : names.has(code) ? `"${names.get(code)}"` : code);

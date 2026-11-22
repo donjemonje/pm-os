@@ -33,7 +33,7 @@ import {
   tableAddTool,
   type TableAddAbility,
   type TableAddTable,
-} from "@/lib/competitors/news/table-prompt";
+} from "@/lib/competitors/news/table-prompt-new-intake";
 
 const table: TableAddTable = {
   domains: [

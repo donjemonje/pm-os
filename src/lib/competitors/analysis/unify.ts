@@ -56,7 +56,7 @@ const MAX_ENUM = 120;
 export const NEW_ROW = "new";
 
 // ————— The rule text every table prompt shares —————
-// The setup prompts below and the prompt that adds a newly found ability to the table (news/table-prompt.ts) are
+// The setup prompts below and the prompt that adds a newly found ability to the table (news/table-prompt-new-intake.ts) are
 // built from these same sentences (Daniel 2026-11-21: "creating the table and adding a new ability found should
 // have similar prompts, as much as possible"). Editing one changes every prompt that holds it.
 

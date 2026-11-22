@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "../../db";
 import { callTool } from "../ai";
 import { recordCompetitorEvent } from "../analytics";
-import { modelFor, thinkingFor } from "../models";
+import { newsModel, NEWS_THINKING } from "./model";
 import { codeItems, NEWS_MAX_TOKENS, NEWS_SYSTEM_PROMPT, newsTool, parseNews, renderNews, type NewsListItem, type NewsPage, type NewsPiece } from "./intake";
 
 /**
@@ -44,13 +44,13 @@ export interface PageOutcome {
 
 /** One page: ask, check, store. Never throws — a failed page is reported, the batch goes on. */
 export async function intakePage(company: IntakeCompany, items: NewsListItem[], page: NewsPage, opts: { batchId: string; simulated: boolean; injected?: string }): Promise<PageOutcome> {
-  const model = modelFor("read");
+  const model = newsModel();
   const started = Date.now();
   try {
     const { value, usage } = await callTool<unknown>(NEWS_SYSTEM_PROMPT, "", renderNews(company.name, items, page), newsTool(items), {
       model,
       maxTokens: NEWS_MAX_TOKENS,
-      thinking: thinkingFor("read"),
+      thinking: NEWS_THINKING,
       injected: opts.injected,
     });
     const ms = Date.now() - started;

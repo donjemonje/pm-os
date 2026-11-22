@@ -56,7 +56,7 @@ Build the list from the strongest pages. A weaker page may add what no stronger 
 
 /**
  * An area is not a capability: it is split. Shared with the prompt that adds a newly found ability to the table
- * (news/table-prompt.ts), which asks the same of a row that grew too wide.
+ * (news/table-prompt-new-intake.ts), which asks the same of a row that grew too wide.
  */
 export const AREA_SPLIT_RULE = `An item with many unrelated things under it is an area, not a capability: split it into the capabilities it holds. "Car entertainment" with Bluetooth, radio, navigation and rear-seat screens under it is an area; "Bluetooth connection", "Radio", "Navigation" and "Rear-seat screens" are the capabilities, each with its own features.`;
 
