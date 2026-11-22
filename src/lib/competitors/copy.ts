@@ -102,6 +102,8 @@ export const COMPETITORS_COPY = {
     domainCovers: "What it covers",
     domainDoneBy: "Who does the work",
     showMore: "Show more",
+    /** Hover of a company's column head: the column can be dragged. */
+    dragColumn: "Drag to change the order of the companies",
     relevanceTitle: "Relevance to you",
     /** Hover of the circle on a company's icon. */
     relevanceChip: (level: number) => `Level ${level}`,
