@@ -762,10 +762,10 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     expect([cell?.value, cell?.quote], "Beta's cell on the renamed row: what the analysis found under the old name").toEqual(["found", quote]);
 
     // PRD CA-05 + the analytics table (reason renamed): the scan log says the team renamed it, and cmp_decision_respected
-    // records it. The analysis matches the old name to the renamed row (steps.ts matchStep) but writes neither.
-    expect.soft(logOf(analysis).some((l) => /renamed/i.test(l) && /Product roadmap/.test(l)), "PRODUCT GAP: the analysis log says the team renamed this capability").toBe(true);
+    // records it (steps.ts matchStep / applyRows, built 2026-11-22 after this row found the gap).
+    expect.soft(logOf(analysis).some((l) => /renamed/i.test(l) && /Product roadmap/.test(l)), "the analysis log says the team renamed this capability").toBe(true);
     const respected = await events("cmp_decision_respected", { reason: "renamed" });
-    expect.soft(respected.map((e) => propsOf(e)), "PRODUCT GAP: cmp_decision_respected reason renamed").toEqual([expect.objectContaining({ entity: "capability", entityId: cap.Roadmap, name: "Product roadmap", found: "roadmap", competitorId: beta.id })]);
+    expect.soft(respected.map((e) => propsOf(e)), "cmp_decision_respected reason renamed").toEqual([expect.objectContaining({ entity: "capability", entityId: cap.Roadmap, name: "Product roadmap", found: "roadmap", competitorId: beta.id })]);
 
     await openMatrix(page);
     await expectControl(page, beta);

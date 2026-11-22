@@ -148,6 +148,11 @@ export async function matchStep(ctx: RunContext): Promise<void> {
       ctx.log("info", `${item.name}: your team removed "${hit.name}" — remembered, not shown`);
     } else {
       ctx.counters.matchedByName++;
+      // PRD CA-05: a name a PM renamed away from is met again — the row under its new name, said in the log and the event.
+      if (hit.via === "alias") {
+        await recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity: feature ? "feature" : "capability", entityId: hit.id, name: hit.name, found: item.name, reason: "renamed", competitorId, analysisId: ctx.run.id });
+        ctx.log("info", `${item.name}: your team renamed this to "${hit.name}" — matched to "${hit.name}"`);
+      }
     }
   }
 
@@ -388,6 +393,13 @@ export async function applyRows(ctx: RunContext): Promise<void> {
   const ourStatus = ctx.competitor.isOwn ? "found" : "not_found";
   const respected = (entity: "capability" | "feature", row: Resolved, found: string) =>
     recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity, entityId: row.id, name: row.name, found, reason: row.state, competitorId, analysisId: ctx.run.id });
+  /** A name the catalog knows. Met under a name a PM renamed away from (PRD CA-05): said in the log and the event. */
+  const matchedByName = async (entity: "capability" | "feature", row: Resolved, via: "name" | "alias", found: string) => {
+    ctx.counters.matchedByName++;
+    if (via !== "alias") return;
+    await recordCompetitorEvent(workspaceId, null, "cmp_decision_respected", { entity, entityId: row.id, name: row.name, found, reason: "renamed", competitorId, analysisId: ctx.run.id });
+    ctx.log("info", `${found}: your team renamed this to "${row.name}" — matched to "${row.name}"`);
+  };
 
   const [items, proofs] = await Promise.all([loadItems(competitorId), loadItemProofs(ctx)]);
   const byId = new Map(items.map((i) => [i.id, i]));
@@ -426,7 +438,7 @@ export async function applyRows(ctx: RunContext): Promise<void> {
           item.matchedBy = verdict.action === "silent" ? "silent" : verdict.via;
           await db.competitorItem.update({ where: { id: item.id }, data: { capabilityId: verdict.row.id, matchedBy: item.matchedBy } });
           if (verdict.action === "silent") await respected("capability", verdict.row, item.name);
-          else ctx.counters.matchedByName++;
+          else await matchedByName("capability", verdict.row, verdict.via, item.name);
           continue;
         }
         if (!verdict.name) continue;
@@ -463,7 +475,7 @@ export async function applyRows(ctx: RunContext): Promise<void> {
         item.matchedBy = verdict.action === "silent" ? "silent" : verdict.via;
         await db.competitorItem.update({ where: { id: item.id }, data: { featureId: verdict.row.id, matchedBy: item.matchedBy } });
         if (verdict.action === "silent") await respected("feature", verdict.row, item.name);
-        else ctx.counters.matchedByName++;
+        else await matchedByName("feature", verdict.row, verdict.via, item.name);
         continue;
       }
       if (!verdict.name) continue;
