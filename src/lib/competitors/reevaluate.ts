@@ -1,7 +1,7 @@
 /**
  * Re-evaluating one capability's row of the coverage model (prompt: reevaluate-prompt.ts): ONE small call to PMOS AI
  * that scores every company of the row again. Asked by a PM's action — reasoning added to a cell, a fixed score
- * released, a feature row added, removed, restored, renamed or re-marked — never by a run.
+ * released, or "Try again" after one that did not finish — never by a run.
  *
  *   claimReevaluation   marks the row "re-evaluating" (Capability.reevaluatingAt) and returns the stamp; null when the
  *                       capability is not of the coverage model (no score): there is nothing to re-evaluate.

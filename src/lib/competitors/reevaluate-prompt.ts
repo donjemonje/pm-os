@@ -1,7 +1,6 @@
 /**
  * The prompt of ONE small call: re-evaluate one capability's row of the coverage model (Daniel 2026-11-22). It is asked
- * when a PM adds reasoning to a cell, releases a score they had fixed, or adds, removes, renames or re-marks a feature
- * row of the capability — the score must agree with the features, and scores compare companies, so the whole row is
+ * when a PM adds reasoning to a cell or releases a score they had fixed. Scores compare companies, so the whole row is
  * scored again, never one cell and never the whole domain.
  *
  * Found on the first real call (2026-11-22, one row, nothing new in it): the model lowered 4 of 7 scores, because the

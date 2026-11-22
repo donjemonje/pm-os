@@ -116,6 +116,10 @@ export const COMPETITORS_COPY = {
     relevanceClear: (level: number) => `Level ${level} — click to clear`,
     showLess: "Show less",
     capabilitiesCount: (n: number) => `${n} capabilit${n === 1 ? "y" : "ies"}`,
+    closeAllDomains: "Close all domains",
+    openAllDomains: "Open all domains",
+    closeAllFeatures: "Close the features of all capabilities in this domain",
+    openAllFeatures: "Open the features of all capabilities in this domain",
     covered: "covered",
     gapN: (n: number) => `${n} gap${n === 1 ? "" : "s"}`,
   },
@@ -141,22 +145,14 @@ export const COMPETITORS_COPY = {
     /** PRD (Loading, errors…): generic and plain, never the technical reason; "Try again" because a retry can succeed. */
     reevaluateFailed: "The re-evaluation did not finish. Try again.",
     retry: "Try again",
-    /** The hint of the strength meter. */
-    meterHint: (score: number) => `${score} of 5: how fully this company covers the area next to the other companies in the table. 5 is the most, 1 the least.`,
+    /** The hint of a capability cell's score. */
+    scoreHint: (score: number) => `${score} of 5: how fully this company covers the area next to the other companies in the table. 5 is the most, 1 the least.`,
     /** How much a page says about a feature, in plain words (the evidence hint). */
     strength: (s: string) => (s === "explains" ? "explains how it works" : s === "describes" ? "describes it" : s === "names" ? "only names it" : ""),
     howItWorks: "How it works",
     moreEvidence: (n: number) => `Show more evidence · ${n}`,
     lessEvidence: "Show less evidence",
     notChecked: "quote not checked",
-    // Feature rows a PM adds, renames, removes and restores under a capability.
-    addFeature: "Add feature",
-    addFeaturePlaceholder: "Name of the feature",
-    renameFeature: "Rename",
-    removeFeature: "Remove",
-    removedFeatures: (n: number) => `Removed features · ${n}`,
-    restoreFeature: "Restore",
-    featureChangeHint: "PMOS AI re-evaluates this capability's scores after a change to its features.",
   },
   cell: {
     evidence: "Evidence",
@@ -617,8 +613,6 @@ export const COMPETITORS_COPY = {
   errors: {
     pickScore: "Pick a score from 0 to 5.",
     reasoningTooLong: "The reasoning is at most 350 characters.",
-    featureName: "Give the feature a name.",
-    featureExists: "This capability already has a feature with that name.",
     pickOwnStatus: "Pick found or not found.",
     pickStatus: "Pick found or not found.",
     generic: "Something went wrong. Try again.",

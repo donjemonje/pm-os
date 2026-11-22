@@ -325,8 +325,6 @@ export interface CompetitorsState {
   /** Active features of the capabilities above, and their cells. */
   features: FeatureRow[];
   featureCells: CellRow[];
-  /** Feature rows a PM removed, of the capabilities above: kept so an analysis never adds them back, restorable under their capability. */
-  removedFeatures: { id: string; capabilityId: string; name: string }[];
   /** What PMs removed (Settings → Removed). */
   removed: { domains: RemovedRow[]; capabilities: RemovedCapabilityRow[] };
   facts: FactRow[];
@@ -410,7 +408,6 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
   ]);
   // Relevance levels are the signed-in user's own (no user = none).
   const relevanceOf = new Map((userId ? await db.competitorRelevance.findMany({ where: { workspaceId, userId }, select: { competitorId: true, level: true } }) : []).map((r) => [r.competitorId, r.level]));
-  const removedFeatures = await db.feature.findMany({ where: { workspaceId, state: "removed", capability: { state: { not: "removed" } } }, orderBy: [{ removedAt: "desc" }, { name: "asc" }], select: { id: true, capabilityId: true, name: true } });
   const analysisRow = (a: (typeof activeAnalyses)[number]): AnalysisRow => ({ id: a.id, status: a.status, step: a.step, pagesDone: a.pagesDone, pagesTotal: a.pagesTotal, resumeAt: a.resumeAt?.toISOString() ?? null, error: a.error, finishedAt: a.finishedAt?.toISOString() ?? null });
   const analysisOf = (competitorId: string): AnalysisRow | null => {
     // The run that is working wins over one that waits its turn; with none active, the latest finished one.
@@ -700,7 +697,6 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         evidence: readEvidenceList(s.evidence),
       };
     }),
-    removedFeatures,
     removed: !opts.withRemoved ? { domains: [], capabilities: [] } : {
       domains: removedDomains
         .map((d) => ({ id: d.id, name: d.name, removedAt: d.removedAt?.toISOString() ?? null, removedByName: userName(d.removedById) }))

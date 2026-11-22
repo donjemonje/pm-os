@@ -1,12 +1,13 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
 import { EvidenceCard, EvidenceList } from "./EvidenceCard";
-import { DomainScore, FeatureAdder, FeatureName, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
+import { DomainScore, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
+import { Floating } from "./Floating";
 import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
@@ -17,6 +18,7 @@ import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
 import { domainScore, scoreRowKind, type EvidenceRef } from "@/lib/competitors/scores";
+import { allOpen, defaultOpenDomains, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { moveNextTo } from "@/lib/competitors/order";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -50,6 +52,8 @@ function chipClass(active: boolean): string {
  * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
  */
 const DEFAULT_SHOWN_COMPANIES = 6;
+/** The top cell(s) of a scored row — the highest score among the companies shown, the organization included (table-view.ts topScoreKeys). */
+const TOP_CELL = "bg-[rgba(23,178,106,.16)]";
 
 function toggleIn(setter: React.Dispatch<React.SetStateAction<string[]>>) {
   return (o: string) => setter((prev) => (prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]));
@@ -105,13 +109,13 @@ function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: 
       {open && (
         <>
           <div className="fixed inset-0 z-[24] cursor-default" onClick={() => setOpen(false)} />
-          <div role="menu" aria-label={C.matrix.relevanceTitle} className="absolute left-1/2 top-[calc(100%+5px)] z-[25] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
+          <Floating lock align="center" role="menu" aria-label={C.matrix.relevanceTitle} className="flex items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
             {RELEVANCE_LEVELS.map((l) => (
               <button key={l} type="button" role="menuitemradio" aria-checked={level === l} title={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} aria-label={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} onClick={() => { setOpen(false); onSet(l === level ? null : l); }} className={cn(circle, "h-[22px] w-[22px] text-[11px]", tone(l), level === l && "shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(36,87,245,.55)]")}>
                 {l}
               </button>
             ))}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -230,6 +234,9 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const [openCell, setOpenCell] = useState<OpenCell | null>(null);
   // Capabilities whose features are shown under them. Closed by default.
   const [openFeatures, setOpenFeatures] = useState<Set<string>>(new Set());
+  // Which domain groups are open. When the page loads: only the first one, and no capability shows its features (table-view.ts).
+  const [openDomains, setOpenDomains] = useState<Set<string>>(() => new Set(defaultOpenDomains(initialState.domains.filter((d) => d.state !== "dismissed" && initialState.capabilities.some((k) => k.state === "active" && k.domainId === d.id)).map((d) => d.id))));
+  const toggleDomain = (id: string) => setOpenDomains((cur) => { const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const toggleFeatures = (capabilityId: string, features: number) => {
     setOpenFeatures((cur) => {
       const next = new Set(cur);
@@ -288,7 +295,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const [watchedRun, setWatchedRun] = useState<string | null>(null);
   const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors !== "number";
 
-  // While PMOS AI re-evaluates a capability's row (a PM added reasoning, released a score or changed a feature row), learn when it is done.
+  // While PMOS AI re-evaluates a capability's row (a PM added reasoning or released a score), learn when it is done.
   const reevaluating = state.capabilities.some((k) => k.reevaluating);
   useEffect(() => {
     if (!reevaluating) return;
@@ -415,6 +422,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     return matchesStatus(k);
   });
   const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && visibleCaps.some((k) => k.domainId === d.id));
+  const allDomainsOpen = allOpen(domainsWithRows.map((d) => d.id), openDomains);
   const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
 
   // ——— News feed: items since the baseline, grouped by day, per-user read marks ———
@@ -518,21 +526,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     // The columns move at once; the saved order comes back with the answer. A refused save loads the page's state again.
     setState((s) => ({ ...s, competitors: ids.map((id) => s.competitors.find((c) => c.id === id)!) }));
     if (!(await patch("/api/competitors/order", { ids }))) void refresh();
-  }
-
-  /** POST with a body: a create action whose answer is the new state. */
-  async function postJson(url: string, body: unknown): Promise<boolean> {
-    setError(null);
-    try {
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? C.cell.saveFailed);
-      if (data.state) setState(data.state);
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : C.cell.saveFailed);
-      return false;
-    }
   }
 
   async function patch(url: string, body: unknown): Promise<boolean> {
@@ -671,6 +664,12 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                     <tr>
                       <th scope="col" className="border-b border-border px-4 pb-[30px] pl-[30px] pt-2.5 text-left align-middle text-[12px] font-semibold tracking-[0.06em] text-fg-muted">
                         {C.matrix.capability}
+                        {domainsWithRows.length > 0 && (
+                          <button type="button" onClick={() => setOpenDomains((cur) => toggleAll(domainsWithRows.map((d) => d.id), cur))} title={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains} aria-label={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains}
+                            className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-[6px] align-middle text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-domains-toggle-all">
+                            {allDomainsOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+                          </button>
+                        )}
                       </th>
                       <th scope="col" className="w-[104px] border-b border-t-[3px] border-b-border border-t-primary bg-[rgba(36,87,245,.08)] px-2 pb-2.5 text-center align-bottom">
                         <span className="flex flex-col items-center gap-1.5 pt-2.5">
@@ -734,28 +733,30 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
                         const covered = rows.filter((k) => ownOf(k) === "found").length;
                         const gaps = rows.filter((k) => rowKind(k) === "gap").length;
+                        // The capabilities of this domain that have features: "open / close all features" works on them.
+                        const withFeatures = rows.filter((k) => featuresOf(k.id).length > 0).map((k) => k.id);
                         // The domain's score of a company: the average over ALL the domain's capabilities (not only the filtered rows); a scored row the company has no cell in counts 0.
                         const domainRows = activeCaps.filter((k) => k.domainId === d.id);
                         const scores = domainRows.some((k) => k.ourScore != null)
                           ? { own: domainScore(domainRows.map((k) => k.ourScore)), ownName: own, companies: shownCompetitors.map((c) => ({ id: c.id, name: c.name, score: domainScore(domainRows.map((k) => (k.ourScore != null ? cellOf(c.id, k.id)?.score ?? 0 : null))) })) }
                           : null;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length} scores={scores}
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
+                            features={withFeatures.length ? { allOpen: allOpen(withFeatures, openFeatures), onToggle: () => setOpenFeatures((cur) => toggleAll(withFeatures, cur)) } : null}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "found").length;
                               const descOpen = openDesc === k.id;
                               const features = featuresOf(k.id);
-                              const removedFeatures = state.removedFeatures.filter((f) => f.capabilityId === k.id);
-                              const hasFeatureRows = features.length > 0 || removedFeatures.length > 0;
-                              const featuresOpen = hasFeatureRows && openFeatures.has(k.id);
+                              const featuresOpen = features.length > 0 && openFeatures.has(k.id);
+                              const top = topScoreKeys([{ key: "own", score: k.ourScore }, ...shownCompetitors.map((c) => ({ key: c.id, score: cellOf(c.id, k.id)?.score }))]);
                               return (
                                 <Fragment key={k.id}>
                                 <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
                                   <td className={cn("px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")}>
                                     <span className="inline-flex flex-wrap items-center gap-2">
-                                      {hasFeatureRows && (
+                                      {features.length > 0 && (
                                         <button type="button" onClick={() => toggleFeatures(k.id, features.length)} aria-expanded={featuresOpen} aria-label={C.matrix.featuresToggle(k.name, features.length)} title={C.matrix.featuresToggle(k.name, features.length)}
                                           className="-ml-[22px] inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle">
                                           {featuresOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -768,10 +769,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
                                     </span>
                                   </td>
-                                  <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
+                                  <td className={cn("text-center", top.has("own") && TOP_CELL)}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
                                       {k.ourScore != null ? (
-                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} own score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
+                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                           isOpen={openCell?.competitorId === "own" && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: "own", rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/capabilities/${k.id}/score`)} />
                                       ) : (
                                         <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
@@ -781,7 +782,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
                                     return (
-                                      <td key={c.id} className="text-center">
+                                      <td key={c.id} className={cn("text-center", top.has(c.id) && TOP_CELL)}>
                                         {cell && cell.score != null ? (
                                           <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                             isOpen={openCell?.competitorId === c.id && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: c.id, rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/statuses/${cell.id}/score`)} />
@@ -801,9 +802,8 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   </td>
                                 </tr>
                                 {featuresOpen && features.map((f) => (
-                                  <FeatureLine key={f.id} onRename={(name) => patch(`/api/competitors/features/${f.id}`, { name })} onRemove={() => patch(`/api/competitors/features/${f.id}`, { state: "removed" })} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
+                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
                                 ))}
-                                {featuresOpen && <FeatureAdder colSpan={3 + shownCompetitors.length} removed={removedFeatures} onAdd={(name) => postJson(`/api/competitors/capabilities/${k.id}/features`, { name })} onRestore={(id) => patch(`/api/competitors/features/${id}`, { state: "active" })} />}
                                 </Fragment>
                               );
                             })}
@@ -1051,7 +1051,7 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null }: {
+function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
   domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
   /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
   scores?: { own: number | null; ownName: string; companies: Array<{ id: string; name: string; score: number | null }> } | null;
@@ -1059,8 +1059,14 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
   suggestedBy?: string | null;
   canEdit?: boolean;
   onDecide?: (decision: "active" | "dismissed") => void;
+  /** The group is open; the page holds which ones are (only the first when it loads). */
+  open: boolean;
+  onToggle: () => void;
+  /** "Open / close the features of all capabilities" of this domain; null when none of them has features. */
+  features?: { allOpen: boolean; onToggle: () => void } | null;
 }) {
-  const [open, setOpen] = useState(true);
+  // The top domain score(s): the highest among the companies shown, the organization included.
+  const topScore = scores ? topScoreKeys([{ key: "own", score: scores.own }, ...scores.companies.map((c) => ({ key: c.id, score: c.score }))]) : new Set<string>();
   const isSuggested = suggestedBy != null;
   const inColumns = scores != null && !isSuggested;
   return (
@@ -1069,7 +1075,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
         <td colSpan={inColumns ? 1 : colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
             {/* The whole header opens and closes the group. A div with the button role, not a button: the info button sits inside it. */}
-            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen((v) => !v); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
+            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => onToggle()} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onToggle(); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
               <span className="text-[14px] font-bold">{domain.name}</span>
               {!isSuggested && <DomainInfo name={domain.name} covers={domain.summary || domain.description} doneBy={domain.doneBy} />}
@@ -1087,15 +1093,21 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
               </span>
               )}
             </div>
+            {features && open && (
+              <button type="button" onClick={features.onToggle} title={features.allOpen ? C.matrix.closeAllFeatures : C.matrix.openAllFeatures} aria-label={features.allOpen ? C.matrix.closeAllFeatures : C.matrix.openAllFeatures}
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle-all">
+                {features.allOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+              </button>
+            )}
             {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
         {inColumns && scores && (
           <>
-            <td className="border-b border-border bg-[rgba(36,87,245,.06)] px-2 text-center"><DomainScore score={scores.own} company={scores.ownName} own /></td>
-            {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} /></td>)}
+            <td className={cn("border-b border-border px-2 text-center", topScore.has("own") && TOP_CELL)}><DomainScore score={scores.own} company={scores.ownName} /></td>
+            {scores.companies.map((c) => <td key={c.id} className={cn("border-b border-border px-2 text-center", topScore.has(c.id) && TOP_CELL)}><DomainScore score={c.score} company={c.name} /></td>)}
             <td className="border-b border-border px-3">
-              <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
+              <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
                 <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -1111,11 +1123,8 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
 
 // ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
 
-function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile, onRename, onRemove }: {
+function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
   feature: FeatureRow;
-  /** A PM renames or removes the row; absent = the name is plain text. */
-  onRename?: (name: string) => Promise<boolean>;
-  onRemove?: () => Promise<boolean>;
   org: string;
   ownSite: boolean;
   competitors: CompetitorRow[];
@@ -1129,9 +1138,9 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
   return (
     <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
-        {onRename && onRemove ? <FeatureName name={feature.name} onRename={onRename} onRemove={onRemove} /> : feature.name}
+        {feature.name}
       </td>
-      <td className="bg-[rgba(36,87,245,.06)] text-center">
+      <td className="text-center">
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
           <OwnCell row={feature} kind="feature" org={org} ownSite={ownSite} open={open} setOpen={setOpen} onPatch={onPatch} />
         </span>
@@ -1298,7 +1307,7 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
       {open && (
         <>
           <div className="fixed inset-0 z-[24] cursor-default" onClick={close} />
-          <div className="absolute left-0 top-[calc(100%+6px)] z-[25] w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
+          <Floating lock className="w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
               <button type="button" onClick={close} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
@@ -1314,7 +1323,7 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
             {doneBy && (
               <button type="button" onClick={() => setMore((v) => !v)} aria-expanded={more} className="mt-1.5 text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-domain-more">{more ? C.matrix.showLess : C.matrix.showMore}</button>
             )}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1348,14 +1357,14 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle }:
       {open && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={onToggle} />
-          <div className={cn("absolute left-0 top-[calc(100%+6px)] z-[25] w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]")} data-testid="cmp-description-card">
+          <Floating lock className={cn("w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]")} data-testid="cmp-description-card">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
               <button type="button" onClick={onToggle} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
             </div>
             {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
             {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1481,15 +1490,15 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
         {cell?.override && <Pencil size={9} className="absolute right-0.5 top-0.5 text-[#8a5a00]" aria-label={C.matrix.edited} />}
       </button>
       {showHover && cell && (
-        <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
+        <Floating align="center" role="tooltip" className="w-[320px] rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
           <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.description} descriptionLabel={cell.evidence.length ? C.score.howItWorks : undefined} count={cell.evidence.length ? 0 : cell.evidenceCount} empty={cell.description && cell.evidence.length ? `${C.score.howItWorks}: ${cell.description}` : C.cell.notFoundHint} />
           <MoreEvidence evidence={cell.evidence} rowId={row.id} columnId={competitorId} />
-        </div>
+        </Floating>
       )}
       {isOpen && cell && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
+          <Floating lock align="center" className="w-[340px] rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
             <div className="mb-2 flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-bold">{row.name}</div>
@@ -1541,7 +1550,7 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
               )}
               {onProfile && !editing && <Button size="sm" variant="ghost" className="ml-auto" onClick={onProfile}>{C.cell.openProfile}</Button>}
             </div>
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1625,14 +1634,14 @@ function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
         <CellValue cell={fake} />
       </button>
       {showHover && (
-        <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-own-cell-hover">
+        <Floating align="center" role="tooltip" className="w-[320px] rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-own-cell-hover">
           {card}
-        </div>
+        </Floating>
       )}
       {isOpen && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className={cn("absolute left-1/2 top-[calc(100%+6px)] z-[25] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", ownSite ? "w-[340px]" : "w-[280px]")}>
+          <Floating lock align="center" className={cn("rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", ownSite ? "w-[340px]" : "w-[280px]")}>
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-bold">{row.name}</div>
@@ -1651,7 +1660,7 @@ function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
                 <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", row.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
               ))}
             </div>
-          </div>
+          </Floating>
         </>
       )}
     </span>
