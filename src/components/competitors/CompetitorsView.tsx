@@ -13,7 +13,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
 import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
-import { rankByCloseness } from "@/lib/competitors/closeness";
+import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -86,7 +86,7 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
         <span className="text-[12px] text-fg-faint">{C.strip.closestNone}</span>
       ) : (
         <ol className="m-0 grid list-none grid-cols-1 gap-x-[18px] gap-y-1 p-0 text-[12px] sm:grid-cols-2">
-          {ranked.map(({ competitor: c, closeness }) => {
+          {proximityPicks(ranked).map(({ competitor: c, closeness }) => {
             const [bar, fg] = tone(closeness.score);
             return (
               <li key={c.id}>

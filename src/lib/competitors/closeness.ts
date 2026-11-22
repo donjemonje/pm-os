@@ -31,3 +31,17 @@ export function rankByCloseness<T extends { id: string }>(competitors: readonly 
     .map((competitor) => ({ competitor, closeness: closenessOf(capabilityIds, (k) => valueOf(competitor.id, k)) }))
     .sort((a, b) => (b.closeness.score ?? -1) - (a.closeness.score ?? -1));
 }
+
+/** The Offering Proximity card shows at most this many companies. */
+export const PROXIMITY_SHOWN = 6;
+
+/**
+ * The companies the Offering Proximity card shows, from a list ranked closest first (Daniel 2026-11-22): all of them
+ * when there are six or fewer; with more, the two closest, the two in the middle of the ranking and the two farthest,
+ * kept in ranking order.
+ */
+export function proximityPicks<T>(ranked: readonly T[]): T[] {
+  if (ranked.length <= PROXIMITY_SHOWN) return [...ranked];
+  const mid = Math.floor(ranked.length / 2);
+  return [...ranked.slice(0, 2), ...ranked.slice(mid - 1, mid + 1), ...ranked.slice(-2)];
+}
