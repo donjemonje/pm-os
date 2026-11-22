@@ -767,7 +767,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                       )}
                                       {k.name}
                                       {features.length > 0 && <span className="text-[11px] font-normal text-fg-muted">{C.matrix.featuresCount(features.length)}</span>}
-                                      <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
+                                      <DescriptionInfo name={k.name} description={k.description} open={descOpen} onToggle={() => toggleDesc(k.id)} />
                                       {kind === "gap" && <span className={GAP_CHIP}>Gap</span>}
                                       {kind === "only" && <DifferentiatorChip org={own} />}
                                     </span>
@@ -1347,8 +1347,8 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
 }
 
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
-function DescriptionInfo({ name, description, ownProduct, org, open, onToggle }: {
-  name: string; description: string; ownProduct: string; org: string; open: boolean; onToggle: () => void;
+function DescriptionInfo({ name, description, open, onToggle }: {
+  name: string; description: string; open: boolean; onToggle: () => void;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -1379,7 +1379,6 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle }:
               <button type="button" onClick={onToggle} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
             </div>
             {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
-            {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
           </Floating>
         </>
       )}

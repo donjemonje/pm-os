@@ -10,8 +10,7 @@ import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
 import { aiTextSameAsCovers, aiTextToSave, capabilityChanges, definitionSameAsCovers, domainTextsToSave, type CapabilityDraft } from "@/lib/competitors/domain-texts";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_AI_DEFINITION, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
-import { ownProductLabel } from "@/lib/competitors/ownProduct";
+import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_AI_DEFINITION, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
 import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, OwnSiteRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
@@ -982,8 +981,8 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   onSave: (id: string, body: unknown) => Promise<boolean>;
   onRemove: (k: CapabilityRow) => Promise<void>;
 }) {
-  const draftOf = (k: CapabilityRow): CapabilityDraft => ({ name: k.name, domainId: k.domainId, description: k.description, aiDefinition: k.aiDefinition, same: aiTextSameAsCovers(k.description, k.aiDefinition), productLines: [...k.productLines], ownProduct: k.ownProduct });
-  const emptyDraft = (): CapabilityDraft => ({ name: "", domainId: domains[0]?.id ?? "", description: "", aiDefinition: "", same: true, productLines: [], ownProduct: "" });
+  const draftOf = (k: CapabilityRow): CapabilityDraft => ({ name: k.name, domainId: k.domainId, description: k.description, aiDefinition: k.aiDefinition, same: aiTextSameAsCovers(k.description, k.aiDefinition), productLines: [...k.productLines] });
+  const emptyDraft = (): CapabilityDraft => ({ name: "", domainId: domains[0]?.id ?? "", description: "", aiDefinition: "", same: true, productLines: [] });
   const [adding, setAdding] = useState(false);
   const [newDraft, setNewDraft] = useState<CapabilityDraft>(emptyDraft);
   // The open rows and their edits. A row is one short line until it is clicked; then it opens downward. More than one
@@ -1000,7 +999,7 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
 
   async function add() {
     if (!newDraft.name.trim() || !newDraft.domainId) return;
-    const body = { name: newDraft.name, domainId: newDraft.domainId, description: newDraft.description, aiDefinition: aiTextToSave({ covers: newDraft.description, aiText: newDraft.aiDefinition, same: newDraft.same }), productLines: newDraft.productLines, ownProduct: newDraft.ownProduct };
+    const body = { name: newDraft.name, domainId: newDraft.domainId, description: newDraft.description, aiDefinition: aiTextToSave({ covers: newDraft.description, aiText: newDraft.aiDefinition, same: newDraft.same }), productLines: newDraft.productLines };
     if (await onAdd(body)) { setNewDraft(emptyDraft()); setAdding(false); }
   }
   async function save(k: CapabilityRow) {
@@ -1019,7 +1018,7 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   /**
    * The five things a user changes on a capability, each under a visible label: 1. the name; 2. the domain; 3. what
    * it covers; 4. the text PMOS AI uses ("Same as what it covers" keeps the two in step); 5. its product lines, as
-   * one dropdown with a tick per line. The organization's own product keeps its field. The add form and an open row share it.
+   * one dropdown with a tick per line. The add form and an open row share it.
    */
   const fields = (d: CapabilityDraft, set: (patch: Partial<CapabilityDraft>) => void, focusName: boolean) => (
     <div className="flex min-w-0 flex-1 flex-col gap-2.5">
@@ -1033,10 +1032,6 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
           <select value={d.domainId} onChange={(e) => set({ domainId: e.target.value })} className={SELECT} disabled={busy} data-testid="cmp-capability-domain">
             {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
           </select>
-        </label>
-        <label className="block w-64">
-          <span className={FIELD_LABEL}>{C.settings.ownProduct}</span>
-          <input type="text" data-cap-field value={d.ownProduct} onChange={(e) => set({ ownProduct: e.target.value })} placeholder={C.settings.ownProductPlaceholder} className={INPUT} maxLength={MAX_OWN_PRODUCT} disabled={busy} />
         </label>
       </div>
       <label className="block">
@@ -1141,7 +1136,6 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                         <div><span className={FIELD_LABEL}>{C.settings.capabilityAiText}</span>{k.aiDefinition}</div>
                       )}
                       <div><span className={FIELD_LABEL}>{C.settings.productLines}</span>{k.productLines.length ? k.productLines.join(" · ") : <span className="italic text-fg-faint">{C.settings.capabilityNoProductLines}</span>}</div>
-                      {k.ownProduct && <div><span className={FIELD_LABEL}>{C.settings.ownProduct}</span>{ownProductLabel(k.ownProduct)}</div>}
                     </div>
                   )}
                 </div>

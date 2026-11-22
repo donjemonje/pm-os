@@ -40,13 +40,13 @@ export function capabilityTextForAI(covers: string, aiText: string | null | unde
 }
 
 /** A capability as the settings form edits it. */
-export interface CapabilityDraft { name: string; domainId: string; description: string; aiDefinition: string; same: boolean; productLines: string[]; ownProduct: string }
+export interface CapabilityDraft { name: string; domainId: string; description: string; aiDefinition: string; same: boolean; productLines: string[] }
 
 /**
  * What a save of an open capability row sends: only the fields that differ from the row, so an untouched field
  * records no change. The PMOS AI text follows aiTextToSave. {} = nothing changed.
  */
-export function capabilityChanges(row: { name: string; domainId: string; description: string; aiDefinition: string; productLines: readonly string[]; ownProduct: string }, draft: CapabilityDraft): Record<string, unknown> {
+export function capabilityChanges(row: { name: string; domainId: string; description: string; aiDefinition: string; productLines: readonly string[] }, draft: CapabilityDraft): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (draft.name.trim() !== row.name) out.name = draft.name.trim();
   if (draft.domainId !== row.domainId) out.domainId = draft.domainId;
@@ -55,6 +55,5 @@ export function capabilityChanges(row: { name: string; domainId: string; descrip
   // Compared with what is stored, so a stored copy of the covers text is cleared the first time the row is saved "same" (it could not follow a later change of the covers text).
   if (ai !== row.aiDefinition.trim()) out.aiDefinition = ai;
   if (draft.productLines.length !== row.productLines.length || draft.productLines.some((l) => !row.productLines.includes(l))) out.productLines = draft.productLines;
-  if (draft.ownProduct.trim() !== row.ownProduct.trim()) out.ownProduct = draft.ownProduct.trim();
   return out;
 }

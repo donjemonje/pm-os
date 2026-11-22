@@ -42,8 +42,8 @@ describe("a capability's PMOS AI text", () => {
 });
 
 describe("capabilityChanges — a save sends only what changed", () => {
-  const row = { name: "Invoice delivery", domainId: "d1", description: "Getting the invoice to the customer.", aiDefinition: "", productLines: ["Billing"], ownProduct: "" };
-  const draft = (over: Partial<CapabilityDraft> = {}): CapabilityDraft => ({ name: row.name, domainId: row.domainId, description: row.description, aiDefinition: "", same: true, productLines: [...row.productLines], ownProduct: "", ...over });
+  const row = { name: "Invoice delivery", domainId: "d1", description: "Getting the invoice to the customer.", aiDefinition: "", productLines: ["Billing"] };
+  const draft = (over: Partial<CapabilityDraft> = {}): CapabilityDraft => ({ name: row.name, domainId: row.domainId, description: row.description, aiDefinition: "", same: true, productLines: [...row.productLines], ...over });
   it("nothing when nothing was touched", () => {
     expect(capabilityChanges(row, draft())).toEqual({});
   });
