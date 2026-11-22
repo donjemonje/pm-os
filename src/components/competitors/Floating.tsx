@@ -3,8 +3,10 @@
 /**
  * A card of the Competitors table that floats above everything (Daniel 2026-11-22). It is drawn at the end of the
  * page (a portal to document.body), not inside the table, so neither the table's scrolling box nor the page cuts it.
- * It sits under the element it was opened from — left-aligned or centred — moves above it when there is no room
- * below, stays inside the window, and follows scrolling and resizing. A card taller than the window scrolls inside.
+ * Where it goes is one rule (table-view.ts placeCard): under the element it was opened from when the whole card fits
+ * there, else above it when it fits there, else on the side with more room with its height capped to that room and
+ * its own scrolling inside. "Bottom" is the bottom of the visible window. The card's real height is measured after it
+ * is drawn and again whenever it grows, and it follows scrolling and resizing.
  *
  * `lock` — for a card opened by a CLICK: while it is open, scrolling is caught, so the page and the table do not
  * move under it (wheel and touch). Scrolling inside the card still works, and stops at the card's end instead of
@@ -13,34 +15,35 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { boxCanScroll } from "@/lib/competitors/table-view";
+import { boxCanScroll, placeCard, type CardPlacement } from "@/lib/competitors/table-view";
 import { cn } from "@/lib/utils";
 
 export function Floating({ align = "left", lock = false, className, children, ...rest }: { align?: "left" | "center"; lock?: boolean } & HTMLAttributes<HTMLDivElement>) {
   const anchor = useRef<HTMLSpanElement>(null);
   const card = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<CardPlacement | null>(null);
   useLayoutEffect(() => {
     const place = () => {
       const host = anchor.current?.parentElement;
       const el = card.current;
       if (!host || !el) return;
       const r = host.getBoundingClientRect();
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      const left = Math.max(8, Math.min(align === "center" ? r.left + r.width / 2 - w / 2 : r.left, window.innerWidth - w - 8));
-      const below = r.bottom + 6;
-      // Under the anchor; above it when there is no room below and there is room above; never off the top or the bottom of the window.
-      const wanted = below + h > window.innerHeight - 8 && r.top - 6 - h >= 8 ? r.top - 6 - h : below;
-      const top = Math.max(8, Math.min(wanted, window.innerHeight - h - 8));
-      setPos((p) => (p && p.top === top && p.left === left ? p : { top, left }));
+      // The card's real height, whatever cap it has now: its whole content plus its borders.
+      const height = el.scrollHeight + (el.offsetHeight - el.clientHeight);
+      const next = placeCard({ top: r.top, bottom: r.bottom, left: r.left, width: r.width }, { width: el.offsetWidth, height }, { width: window.innerWidth, height: window.innerHeight }, align);
+      setPos((p) => (p && p.top === next.top && p.left === next.left && p.maxHeight === next.maxHeight ? p : next));
     };
     place();
+    // Placed again whenever the card changes size or content ("Show more", an editor opening), and on scroll and resize.
     const grown = new ResizeObserver(place);
-    if (card.current) grown.observe(card.current);
+    const changed = new MutationObserver(place);
+    if (card.current) {
+      grown.observe(card.current);
+      changed.observe(card.current, { childList: true, subtree: true, characterData: true });
+    }
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
-    return () => { grown.disconnect(); window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+    return () => { grown.disconnect(); changed.disconnect(); window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
   }, [align]);
   useEffect(() => {
     if (!lock) return;
@@ -75,7 +78,7 @@ export function Floating({ align = "left", lock = false, className, children, ..
     <>
       <span ref={anchor} hidden />
       {createPortal(
-        <div ref={card} {...rest} className={cn("fixed z-[60] max-h-[calc(100vh-16px)] overflow-y-auto overscroll-contain", className)} style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, visibility: pos ? "visible" : "hidden" }}>{children}</div>,
+        <div ref={card} {...rest} className={cn("fixed z-[60] overflow-y-auto overscroll-contain", className)} data-side={pos?.side} style={{ top: pos?.top ?? 0, left: pos?.left ?? 0, maxHeight: pos ? pos.maxHeight : undefined, visibility: pos ? "visible" : "hidden" }}>{children}</div>,
         document.body,
       )}
     </>

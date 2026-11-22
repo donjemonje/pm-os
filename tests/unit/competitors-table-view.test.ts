@@ -1,6 +1,6 @@
 /** Competitors — how the table opens and marks its cells: the default open state, close all / open all, the winners of a row, the colour step of a score's number, scrolling inside an open card. Pure module. */
 import { describe, expect, it } from "vitest";
-import { allOpen, boxCanScroll, defaultOpenDomains, rowKindCounts, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { allOpen, boxCanScroll, defaultOpenDomains, placeCard, rowKindCounts, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { scoreRowKind } from "@/lib/competitors/scores";
 
 describe("defaultOpenDomains", () => {
@@ -78,6 +78,52 @@ describe("rowKindCounts — a domain's header: its gaps and what only the organi
   it("with scored rows: only = our score above 0 and every competitor at 0; gap = ours 0 and a competitor above 0", () => {
     const rows: Array<[number, number[]]> = [[3, [0, 0]], [0, [2, 0]], [4, [1, 0]], [1, [0, 0, 0]], [0, [0, 0]]];
     expect(rowKindCounts(rows.map(([own, theirs]) => scoreRowKind(own, theirs) ?? "none"))).toEqual({ gaps: 1, only: 2 });
+  });
+});
+
+describe("placeCard — where a floating card opens", () => {
+  const win = { width: 1200, height: 800 };
+  const anchorAt = (top: number) => ({ top, bottom: top + 36, left: 500, width: 64 });
+  it("below its anchor when the whole card fits there", () => {
+    const p = placeCard(anchorAt(100), { width: 320, height: 200 }, win, "center");
+    expect(p.side).toBe("below");
+    expect(p.top).toBe(142); // anchor's bottom + the gap
+    expect(p.left).toBe(372); // centred on the anchor
+    expect(p.maxHeight).toBe(650); // the room below
+  });
+  it("above when it does not fit below but fits above — near the bottom of the window", () => {
+    const p = placeCard(anchorAt(700), { width: 320, height: 200 }, win, "center");
+    expect(p.side).toBe("above");
+    expect(p.top).toBe(494); // its bottom edge sits a gap above the anchor: 700 - 6 - 200
+    expect(p.top + 200).toBeLessThanOrEqual(700);
+  });
+  it("fits neither side, more room above: above, capped to that room", () => {
+    const p = placeCard(anchorAt(520), { width: 320, height: 700 }, win);
+    expect(p.side).toBe("above");
+    expect(p.maxHeight).toBe(506); // 520 - 6 - 8
+    expect(p.top).toBe(8);
+    expect(p.top + p.maxHeight).toBeLessThanOrEqual(520);
+  });
+  it("fits neither side, more room below: below, capped to that room", () => {
+    const p = placeCard(anchorAt(250), { width: 320, height: 700 }, win);
+    expect(p.side).toBe("below");
+    expect(p.maxHeight).toBe(500); // 800 - 8 - (286 + 6)
+    expect(p.top).toBe(292);
+  });
+  it("a card that grows after opening moves above when it no longer fits below", () => {
+    const anchor = anchorAt(480);
+    const first = placeCard(anchor, { width: 340, height: 180 }, win, "center");
+    expect(first.side).toBe("below");
+    const grown = placeCard(anchor, { width: 340, height: 420 }, win, "center"); // "Show more evidence" opened
+    expect(grown.side).toBe("above");
+    expect(grown.top).toBe(54); // 480 - 6 - 420
+  });
+  it("the bottom is the bottom of the window, wherever the page is scrolled: the same anchor place gives the same card place", () => {
+    expect(placeCard(anchorAt(740), { width: 320, height: 120 }, win)).toEqual({ top: 614, left: 500, maxHeight: 726, side: "above" });
+  });
+  it("stays inside the window sideways", () => {
+    expect(placeCard({ top: 100, bottom: 136, left: 1150, width: 40 }, { width: 320, height: 100 }, win, "center").left).toBe(872);
+    expect(placeCard({ top: 100, bottom: 136, left: 2, width: 20 }, { width: 320, height: 100 }, win, "center").left).toBe(8);
   });
 });
 

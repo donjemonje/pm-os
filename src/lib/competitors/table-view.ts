@@ -63,3 +63,35 @@ export function boxCanScroll(box: { scrollTop: number; clientHeight: number; scr
 export function rowKindCounts(kinds: ReadonlyArray<"gap" | "only" | "level" | "none">): { gaps: number; only: number } {
   return { gaps: kinds.filter((k) => k === "gap").length, only: kinds.filter((k) => k === "only").length };
 }
+
+/** Where a floating card goes: its corner, the height it may take, and the side of its anchor it opened on. */
+export interface CardPlacement {
+  top: number;
+  left: number;
+  /** The card is never taller than this; a longer card scrolls inside. */
+  maxHeight: number;
+  side: "below" | "above";
+}
+
+/**
+ * The place of a floating card (Floating.tsx), from what is on screen now — all in window (viewport) pixels, so "the
+ * bottom" is the bottom of the visible window, however far the table or the page is scrolled:
+ *   - below its anchor when the WHOLE card fits there;
+ *   - else above it when the whole card fits there;
+ *   - else on the side with more room, its height capped to that room (it scrolls inside).
+ * `card.height` is the card's real, uncapped height, measured after it is drawn — and measured again whenever it
+ * grows ("Show more", an editor opening), so a card that no longer fits below moves above.
+ * Left-aligned with the anchor or centred on it, and kept inside the window sideways.
+ */
+export function placeCard(anchor: { top: number; bottom: number; left: number; width: number }, card: { width: number; height: number }, win: { width: number; height: number }, align: "left" | "center" = "left", gap = 6, margin = 8): CardPlacement {
+  const roomBelow = win.height - margin - (anchor.bottom + gap);
+  const roomAbove = anchor.top - gap - margin;
+  const side: "below" | "above" = card.height <= roomBelow ? "below" : card.height <= roomAbove ? "above" : roomAbove > roomBelow ? "above" : "below";
+  // Never taller than the room on its side; and never taller than the window, also when the anchor itself is off screen.
+  const maxHeight = Math.max(0, Math.min(side === "below" ? roomBelow : roomAbove, win.height - 2 * margin));
+  const shown = Math.min(card.height, maxHeight);
+  const wanted = side === "below" ? anchor.bottom + gap : anchor.top - gap - shown;
+  const top = Math.max(margin, Math.min(wanted, win.height - margin - shown));
+  const left = Math.max(margin, Math.min(align === "center" ? anchor.left + anchor.width / 2 - card.width / 2 : anchor.left, win.width - card.width - margin));
+  return { top, left, maxHeight, side };
+}
