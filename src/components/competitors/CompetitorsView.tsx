@@ -14,6 +14,7 @@ import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type Ow
 import type { FeedItem } from "@/lib/competitors/feed";
 import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
+import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -77,6 +78,43 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 }
 
 /** The strip's last card (C2 "Risk" slot): competitors ranked by how much of the org's capability list they cover. */
+/**
+ * The signed-in user's own relevance level for a company (1 = most relevant, Daniel 2026-11-22): a small circle with
+ * the number on the top-right corner of the company's icon; an empty dashed circle when no level is set. Hover says
+ * "Level N". A click shows three numbered circles to choose from; choosing the current one clears the level. Esc or a
+ * click outside closes. Per user: nobody else sees or changes it. Its parent (the column's header cell) is `relative`.
+ */
+function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: number | null) => void }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  const tone = (l: number | null) => (l === 1 ? "border-transparent bg-primary text-white" : l === 2 ? "border-transparent bg-[#dfe7fe] text-[#2a5fd0]" : l === 3 ? "border-transparent bg-[#eef1f6] text-fg-3" : "border-dashed border-[#b9c3d4] bg-white text-fg-faint");
+  const circle = "flex items-center justify-center rounded-full border font-mono font-bold leading-none";
+  return (
+    <span className="absolute left-[calc(50%+6px)] top-[7px] z-[1]">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title={level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset} aria-label={level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset} className={cn(circle, "h-4 w-4 text-[9.5px] shadow-[0_0_0_1.5px_#fff]", tone(level))} data-testid="cmp-relevance-chip">
+        {level ?? ""}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24] cursor-default" onClick={() => setOpen(false)} />
+          <div role="menu" aria-label={C.matrix.relevanceTitle} className="absolute left-1/2 top-[calc(100%+5px)] z-[25] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
+            {RELEVANCE_LEVELS.map((l) => (
+              <button key={l} type="button" role="menuitemradio" aria-checked={level === l} title={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} aria-label={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} onClick={() => { setOpen(false); onSet(l === level ? null : l); }} className={cn(circle, "h-[22px] w-[22px] text-[11px]", tone(l), level === l && "shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(36,87,245,.55)]")}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; /** Opens the company's profile; null where Profiles is off (the rows are then plain). */ onOpen: ((competitorId: string) => void) | null }) {
   const tone = (score: number | null) => (score == null ? ["#9aa8be", "#5b6c85"] : score >= 70 ? ["#c23767", "#c23767"] : score >= 50 ? ["#f0b43c", "#8a5a00"] : ["#17b26a", "#0f7a47"]);
   return (
@@ -580,7 +618,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                         </span>
                       </th>
                       {shownCompetitors.map((c) => (
-                        <th key={c.id} scope="col" className="w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
+                        <th key={c.id} scope="col" className="relative w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
                           <HeadTag {...(parts.profiles ? { onClick: () => openProfile(c.id, "cell") } : {})} className={cn("flex w-full flex-col items-center gap-1.5 pt-[13px]", parts.profiles && "hover:opacity-80")} title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
@@ -598,6 +636,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                               </span>
                             )}
                           </HeadTag>
+                          <RelevanceChip level={c.relevance} onSet={(level) => void patch(`/api/competitors/${c.id}/relevance`, { level })} />
                         </th>
                       ))}
                       <th scope="col" className="w-[150px] border-b border-border px-4 py-2.5"><span className="sr-only">{C.matrix.coverage}</span></th>
