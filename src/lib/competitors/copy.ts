@@ -120,7 +120,8 @@ export const COMPETITORS_COPY = {
     openAllDomains: "Open all domains",
     closeAllFeatures: "Close the features of all capabilities in this domain",
     openAllFeatures: "Open the features of all capabilities in this domain",
-    gapN: (n: number) => `${n} gap${n === 1 ? "" : "s"}`,
+    /** In a domain's header: its gaps, with a capital G to match "N Diff" next to it. */
+    gapN: (n: number) => `${n} Gap${n === 1 ? "" : "s"}`,
     gapNTip: (org: string, n: number) => `${n} capabilit${n === 1 ? "y" : "ies"} ${org} is missing and a competitor has`,
     /** In a domain's header, next to its gaps: how many of its capabilities only the organization has — the number and "Diff" (Daniel 2026-11-22), the same for one and many. The tooltip says it in full. */
     onlyN: (n: number) => `${n} Diff`,
