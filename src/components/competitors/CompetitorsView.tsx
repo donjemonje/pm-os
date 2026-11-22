@@ -52,8 +52,8 @@ function chipClass(active: boolean): string {
  * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
  */
 const DEFAULT_SHOWN_COMPANIES = 6;
-/** The top cell(s) of a scored row — the highest score among the companies shown, the organization included (table-view.ts topScoreKeys). */
-const TOP_CELL = "bg-[rgba(23,178,106,.16)]";
+/** The light blue of the organization's own column: every one of its cells — capability rows, feature rows, the domain header. */
+const OWN_CELL = "bg-[rgba(36,87,245,.06)]";
 
 function toggleIn(setter: React.Dispatch<React.SetStateAction<string[]>>) {
   return (o: string) => setter((prev) => (prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]));
@@ -769,10 +769,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                       {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
                                     </span>
                                   </td>
-                                  <td className={cn("text-center", top.has("own") && TOP_CELL)}>
+                                  <td className={cn("text-center", OWN_CELL)}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
                                       {k.ourScore != null ? (
-                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
+                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} score={k.ourScore} top={top.has("own")} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                           isOpen={openCell?.competitorId === "own" && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: "own", rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/capabilities/${k.id}/score`)} />
                                       ) : (
                                         <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
@@ -782,9 +782,9 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
                                     return (
-                                      <td key={c.id} className={cn("text-center", top.has(c.id) && TOP_CELL)}>
+                                      <td key={c.id} className="text-center">
                                         {cell && cell.score != null ? (
-                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
+                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} top={top.has(c.id)} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                             isOpen={openCell?.competitorId === c.id && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: c.id, rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/statuses/${cell.id}/score`)} />
                                         ) : (
                                           <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
@@ -1065,7 +1065,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
   /** "Open / close the features of all capabilities" of this domain; null when none of them has features. */
   features?: { allOpen: boolean; onToggle: () => void } | null;
 }) {
-  // The top domain score(s): the highest among the companies shown, the organization included.
+  // The top domain score(s), underlined: the highest among the companies shown, the organization included.
   const topScore = scores ? topScoreKeys([{ key: "own", score: scores.own }, ...scores.companies.map((c) => ({ key: c.id, score: c.score }))]) : new Set<string>();
   const isSuggested = suggestedBy != null;
   const inColumns = scores != null && !isSuggested;
@@ -1104,8 +1104,8 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
         </td>
         {inColumns && scores && (
           <>
-            <td className={cn("border-b border-border px-2 text-center", topScore.has("own") && TOP_CELL)}><DomainScore score={scores.own} company={scores.ownName} /></td>
-            {scores.companies.map((c) => <td key={c.id} className={cn("border-b border-border px-2 text-center", topScore.has(c.id) && TOP_CELL)}><DomainScore score={c.score} company={c.name} /></td>)}
+            <td className={cn("border-b border-border px-2 text-center", OWN_CELL)}><DomainScore score={scores.own} company={scores.ownName} top={topScore.has("own")} /></td>
+            {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} top={topScore.has(c.id)} /></td>)}
             <td className="border-b border-border px-3">
               <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
                 <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
@@ -1140,7 +1140,7 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
         {feature.name}
       </td>
-      <td className="text-center">
+      <td className={cn("text-center", OWN_CELL)}>
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
           <OwnCell row={feature} kind="feature" org={org} ownSite={ownSite} open={open} setOpen={setOpen} onPatch={onPatch} />
         </span>

@@ -1,4 +1,4 @@
-/** Competitors — how the table opens and marks its cells: the default open state, close all / open all, the top cells of a row, the score's colour step, scrolling inside an open card. Pure module. */
+/** Competitors — how the table opens and marks its cells: the default open state, close all / open all, the winners of a row, the colour step of a score's number, scrolling inside an open card. Pure module. */
 import { describe, expect, it } from "vitest";
 import { allOpen, boxCanScroll, defaultOpenDomains, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 
@@ -25,10 +25,13 @@ describe("close all / open all", () => {
   });
 });
 
-describe("topScoreKeys — the top cells of a row", () => {
+describe("topScoreKeys — the winners of a row (their numbers are underlined)", () => {
   it("the highest score among the companies shown, the organization included", () => {
     expect([...topScoreKeys([{ key: "own", score: 3 }, { key: "c1", score: 5 }, { key: "c2", score: 2 }])]).toEqual(["c1"]);
     expect([...topScoreKeys([{ key: "own", score: 4 }, { key: "c1", score: 1 }])]).toEqual(["own"]);
+  });
+  it("works the same for a domain's header row: averages with a decimal", () => {
+    expect([...topScoreKeys([{ key: "own", score: 3.6 }, { key: "c1", score: 4.2 }, { key: "c2", score: 4.2 }, { key: "c3", score: null }])].sort()).toEqual(["c1", "c2"]);
   });
   it("ties are all top", () => {
     expect([...topScoreKeys([{ key: "own", score: 4 }, { key: "c1", score: 4 }, { key: "c2", score: 0 }])].sort()).toEqual(["c1", "own"]);

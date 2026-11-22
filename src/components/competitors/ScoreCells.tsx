@@ -2,8 +2,8 @@
 
 /**
  * The cells of the coverage model (Daniel 2026-11-22; rules in lib/competitors/scores.ts and table-view.ts):
- *   - ScoreMark / ScoreCell: a capability cell is the score's number, coloured from gray (0) to green (5), with a small
- *     upright bar filled in proportion to it, both centred in the cell. Its card (hover and click) shows only the
+ *   - ScoreMark / ScoreCell: a capability cell is the score's number, coloured from gray (0) to green (5), centred in
+ *     the cell; the winner of the row is underlined. Its card (hover and click) shows only the
  *     reasoning — no evidence quote, no "why". From the click card a PM can change the score (it is then locked and
  *     marked as edited, and can be released) or add reasoning (PMOS AI re-evaluates the row with it).
  *   - DomainScore: a company's score of a domain, in the domain's header row.
@@ -20,27 +20,26 @@ import { scoreColor } from "@/lib/competitors/table-view";
 import { cn } from "@/lib/utils";
 import { Floating } from "./Floating";
 
+/** The winner of a row — the highest score among the companies shown, the organization included (table-view.ts topScoreKeys) — is underlined. */
+const TOP_MARK = "underline decoration-2 underline-offset-[5px]";
+
 /**
- * A score as the table shows it: the number 0-5, coloured from gray (0) to green (5), and next to it one small upright
- * bar filled in proportion to the score (the row's coverage bar, turned upright).
+ * A score as the table shows it: the number 0-5, coloured from gray (0) to green (5). The winner of its row — the
+ * highest score among the companies shown — is underlined (`top`).
  */
-export function ScoreMark({ score, small = false }: { score: number; small?: boolean }) {
-  const color = scoreColor(score);
+export function ScoreMark({ score, small = false, top = false }: { score: number; small?: boolean; top?: boolean }) {
   return (
-    <span className="inline-flex items-center justify-center gap-1.5" role="img" aria-label={C.score.of(score)} data-testid="cmp-score-mark" data-score={score}>
-      <span className={cn("font-mono font-bold leading-none", small ? "text-[12px]" : "text-[14px]")} style={{ color }}>{score}</span>
-      <span className={cn("relative inline-flex w-1 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]", small ? "h-[14px]" : "h-[22px]")}>
-        <span className="absolute inset-x-0 bottom-0 block rounded-full" style={{ height: `${(Math.max(0, Math.min(MAX_SCORE, score)) / MAX_SCORE) * 100}%`, background: color }} />
-      </span>
+    <span className={cn("font-mono font-bold leading-none", small ? "text-[12px]" : "text-[14px]", top && TOP_MARK)} style={{ color: scoreColor(score) }} role="img" aria-label={top ? C.score.topOf(score) : C.score.of(score)} data-testid="cmp-score-mark" data-score={score} data-top={top ? "true" : undefined}>
+      {score}
     </span>
   );
 }
 
-/** A company's domain score in the domain's header row: the number, one decimal, in the colour of its nearest step. "—" when the domain has no scored capability. */
-export function DomainScore({ score, company }: { score: number | null; company: string }) {
+/** A company's domain score in the domain's header row: the number, one decimal, in the colour of its nearest step; the top one of the row is underlined. "—" when the domain has no scored capability. */
+export function DomainScore({ score, company, top = false }: { score: number | null; company: string; top?: boolean }) {
   if (score === null) return <span className="text-[11px] text-fg-faint">—</span>;
   return (
-    <span className="font-mono text-[12.5px] font-bold" style={{ color: scoreColor(score) }} title={C.score.domain(company, score)} data-testid="cmp-domain-score">
+    <span className={cn("font-mono text-[12.5px] font-bold", top && TOP_MARK)} style={{ color: scoreColor(score) }} title={C.score.domain(company, score)} data-testid="cmp-domain-score" data-top={top ? "true" : undefined}>
       {score.toFixed(1)}
     </span>
   );
@@ -61,18 +60,20 @@ const HOVER_OPEN_MS = 250;
 const HOVER_CLOSE_MS = 150;
 
 /**
- * A capability cell of the coverage model: the number and its bar, centred. Hover shows the reasoning; a click opens the
+ * A capability cell of the coverage model: the number, centred (underlined when it is the row's winner). Hover shows the reasoning; a click opens the
  * card with the reasoning and, when `actions` is given, "Change the score" and "Add reasoning".
  * Enter confirms, Esc cancels (a textarea confirms with Cmd/Ctrl+Enter). In "Change the score" the number that has the
  * focus is the picked one, so Tab + Enter saves what the PM is on.
  */
-export function ScoreCell({ rowId, rowName, columnId, company, score, reasoning, locked, lockedBy, pmReasoning, reevaluating, failed, isOpen, onOpen, onClose, actions }: {
+export function ScoreCell({ rowId, rowName, columnId, company, score, top = false, reasoning, locked, lockedBy, pmReasoning, reevaluating, failed, isOpen, onOpen, onClose, actions }: {
   rowId: string;
   rowName: string;
   /** The competitor's id, or "own". */
   columnId: string;
   company: string;
   score: number;
+  /** The row's winner: the highest score among the companies shown. */
+  top?: boolean;
   reasoning: string | null;
   locked: boolean;
   lockedBy: string | null;
@@ -151,7 +152,7 @@ export function ScoreCell({ rowId, rowName, columnId, company, score, reasoning,
     <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
       <button type="button" onClick={() => { setHover(false); if (isOpen) onClose(); else onOpen(); }} aria-expanded={isOpen} aria-label={`${rowName} — ${company}: ${C.score.of(score)}`} title={C.score.scoreHint(score)}
         className={cn("relative inline-flex h-9 min-w-[48px] items-center justify-center rounded-[8px] px-2 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")} data-testid="cmp-score-cell">
-        {reevaluating ? <Loader2 size={13} className="animate-spin text-fg-muted" aria-label={C.score.reevaluating} /> : <ScoreMark score={score} />}
+        {reevaluating ? <Loader2 size={13} className="animate-spin text-fg-muted" aria-label={C.score.reevaluating} /> : <ScoreMark score={score} top={top} />}
         {locked && <Lock size={9} className="absolute right-0.5 top-0.5 text-[#8a5a00]" aria-label={C.score.locked} />}
       </button>
       {hover && !isOpen && (

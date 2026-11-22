@@ -126,6 +126,7 @@ export const COMPETITORS_COPY = {
   /** The coverage model: a score 0-5 per company and capability, its reasoning, and what a PM can do with it. */
   score: {
     of: (score: number) => `${score} of 5`,
+    topOf: (score: number) => `${score} of 5, the highest in this row`,
     none: "Nothing found in this capability",
     domain: (company: string, score: number) => `${company}: ${score.toFixed(1)} of 5 in this domain — the average of its capability scores`,
     reasoningEmpty: "No reasoning yet.",

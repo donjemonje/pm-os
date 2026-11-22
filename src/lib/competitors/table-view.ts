@@ -25,8 +25,8 @@ export function toggleAll(ids: readonly string[], open: ReadonlySet<string>): Se
 }
 
 /**
- * The top cells of a scored row: the highest score among the companies shown (the organization included). Ties are
- * all top. A row whose highest score is 0 has no top, and a cell with no score is never one.
+ * The winners of a scored row — their numbers are underlined: the highest score among the companies shown (the
+ * organization included). Ties are all winners. A row whose highest score is 0 has none, and a cell with no score is never one.
  */
 export function topScoreKeys(cells: ReadonlyArray<{ key: string; score: number | null | undefined }>): Set<string> {
   const scored = cells.filter((c): c is { key: string; score: number } => typeof c.score === "number");
@@ -34,7 +34,7 @@ export function topScoreKeys(cells: ReadonlyArray<{ key: string; score: number |
   return new Set(max > 0 ? scored.filter((c) => c.score === max).map((c) => c.key) : []);
 }
 
-/** The colour of a score's number and of its bar: six steps from gray (0) to green (5). */
+/** The colour of a score's number: six steps from gray (0) to green (5). */
 export const SCORE_COLORS = ["#9aa8be", "#8aa69a", "#6fa287", "#4a9a70", "#27905c", "#0f7a47"] as const;
 
 /** The step of a score on that scale: whole steps, never outside 0-5 (a domain's average is rounded to its nearest step). */
