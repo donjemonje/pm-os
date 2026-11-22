@@ -15,7 +15,7 @@
 import { db } from "../db";
 import { callTool } from "./ai";
 import { NOT_OWN } from "./own";
-import { readRowAnswer, renderRow, REEVALUATE_SYSTEM_PROMPT, REEVALUATE_TOOL, type RowInput } from "./reevaluate-prompt";
+import { readRowAnswer, reevaluateTool, renderRow, REEVALUATE_SYSTEM_PROMPT, type RowInput } from "./reevaluate-prompt";
 import { valueOfScore } from "./scores";
 
 /** Daniel 2026-11-22: every prompt of the coverage model runs on this model with high thinking. */
@@ -75,8 +75,12 @@ export async function reevaluateRow(workspaceId: string, capabilityId: string, o
   try {
     const row = await loadRow(workspaceId, capabilityId, orgName);
     if (!row) return { ok: false, error: "the capability is gone" };
-    const answer = await callTool<unknown>(REEVALUATE_SYSTEM_PROMPT, "", renderRow(row), REEVALUATE_TOOL, { model: REEVALUATE_MODEL, maxTokens: REEVALUATE_MAX_TOKENS, thinking: "high", injected: opts.injected });
-    const read = readRowAnswer(answer.value, row);
+    // An answer that cannot be used (a company left out, a score against the features) is asked for once more; a second one ends the re-evaluation.
+    let read = readRowAnswer((await callTool<unknown>(REEVALUATE_SYSTEM_PROMPT, "", renderRow(row), reevaluateTool(row), { model: REEVALUATE_MODEL, maxTokens: REEVALUATE_MAX_TOKENS, thinking: "high", injected: opts.injected })).value, row);
+    if (read.problems.length && opts.injected === undefined) {
+      console.warn(`[competitors] re-evaluation of capability ${capabilityId}: the answer could not be used (${read.problems.slice(0, 3).join("; ")}) — asked again`);
+      read = readRowAnswer((await callTool<unknown>(REEVALUATE_SYSTEM_PROMPT, "", renderRow(row), reevaluateTool(row), { model: REEVALUATE_MODEL, maxTokens: REEVALUATE_MAX_TOKENS, thinking: "high" })).value, row);
+    }
     if (read.problems.length) return fail(`PMOS AI's answer could not be used (${read.problems.slice(0, 2).join("; ")})`);
     const applied = await db.$transaction(async (tx) => {
       // Only the newest re-evaluation of the row writes: a newer change claimed the row again while this one was asking.

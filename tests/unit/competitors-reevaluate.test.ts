@@ -1,6 +1,6 @@
 /** Competitors — re-evaluating one capability's row (the coverage model): the text sent and the reading of the answer. Pure module. */
 import { describe, expect, it } from "vitest";
-import { readRowAnswer, renderRow, REEVALUATE_SYSTEM_PROMPT, REEVALUATE_TOOL, type RowInput } from "@/lib/competitors/reevaluate-prompt";
+import { readRowAnswer, reevaluateTool, renderRow, REEVALUATE_SYSTEM_PROMPT, type RowInput } from "@/lib/competitors/reevaluate-prompt";
 
 const row = (over: Partial<RowInput> = {}): RowInput => ({
   domain: { name: "Billing", covers: "Charging customers and collecting what they owe." },
@@ -24,7 +24,9 @@ describe("the prompt and its answer form", () => {
   it("names the rules and requires every field", () => {
     expect(REEVALUATE_SYSTEM_PROMPT).toContain("At most 350 characters");
     expect(REEVALUATE_SYSTEM_PROMPT).toContain("fixed by a person");
-    expect(REEVALUATE_TOOL.input_schema.properties.companies.items.required).toEqual(["company", "score", "reasoning"]);
+    const items = (reevaluateTool(row()).input_schema as { properties: { companies: { items: { required: string[]; properties: { company: { enum: string[] } } } } } }).properties.companies.items;
+    expect(items.required).toEqual(["company", "score", "reasoning"]);
+    expect(items.properties.company.enum).toEqual(["C1", "C2", "C3"]);
   });
 });
 
@@ -34,7 +36,8 @@ describe("renderRow — what is sent", () => {
     expect(text).toContain("THE CAPABILITY\nInvoice delivery — Getting the invoice");
     expect(text).toContain("1. Scheduled sending\n   Acme: has it — Sends on the date the plan sets.\n   Globex (Europe): has it");
     expect(text).toContain("4. Customer portal\n   Acme: not found");
-    expect(text).toContain("Acme (the table is made for this company)\n   Score so far: 3 — fixed by a person");
+    expect(text).toContain("C1 | Acme (the table is made for this company)\n   Score so far: 3 — fixed by a person");
+    expect(text).toContain("C2 | Globex (Europe)\n");
     expect(text).toContain("A person's note: They sunset reminders last month.");
   });
   it("is the same text for the same row", () => {
@@ -43,7 +46,8 @@ describe("renderRow — what is sent", () => {
 });
 
 describe("readRowAnswer", () => {
-  it("takes a full answer; names are compared by letters and digits", () => {
+  it("takes a full answer by code; a name is accepted too, compared by letters and digits", () => {
+    expect(readRowAnswer(answer([["C1", 2, "Sends on a schedule."], ["C2", 5, "Covers nearly all of it."], ["C3", 0, "Nothing here."]]), row()).scores.map((x) => [x.key, x.score])).toEqual([["own", 2], ["c1", 5], ["c2", 0]]);
     const r = readRowAnswer(answer([["Acme", 2, "Sends on a schedule."], ["Globex (Europe) —", 5, "Covers nearly all of it."], ["Initech ", 0, "Nothing here."]]), row());
     expect(r.problems).toEqual([]);
     expect(r.scores).toEqual([{ key: "own", score: 2, reasoning: "Sends on a schedule." }, { key: "c1", score: 5, reasoning: "Covers nearly all of it." }, { key: "c2", score: 0, reasoning: "Nothing here." }]);
