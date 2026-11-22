@@ -15,6 +15,7 @@ import type { FeedItem } from "@/lib/competitors/feed";
 import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
+import { moveNextTo } from "@/lib/competitors/order";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -476,6 +477,34 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     }
   }
 
+  // A company's column is dragged to a new place in the table: that is the organization's order of its companies
+  // (the Settings list shows the same order). While it is dragged a marker shows where it will land.
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ target: string; side: "before" | "after"; left: number } | null>(null);
+  const endColumnDrag = () => { setDragCol(null); setDropAt(null); };
+  function overColumn(e: React.DragEvent<HTMLTableCellElement>, target: string) {
+    if (!dragCol) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const th = e.currentTarget;
+    const box = th.getBoundingClientRect();
+    const side = e.clientX > box.left + box.width / 2 ? "after" : "before";
+    const left = th.offsetLeft + (side === "after" ? th.offsetWidth : 0);
+    setDropAt((cur) => (cur && cur.target === target && cur.side === side ? cur : { target, side, left }));
+  }
+  async function dropColumn(e: React.DragEvent<HTMLTableCellElement>) {
+    e.preventDefault();
+    const moved = dragCol; const at = dropAt;
+    endColumnDrag();
+    if (!moved || !at) return;
+    const before = state.competitors.map((c) => c.id);
+    const ids = moveNextTo(before, moved, at.target, at.side);
+    if (ids.every((id, i) => id === before[i])) return;
+    // The columns move at once; the saved order comes back with the answer. A refused save loads the page's state again.
+    setState((s) => ({ ...s, competitors: ids.map((id) => s.competitors.find((c) => c.id === id)!) }));
+    if (!(await patch("/api/competitors/order", { ids }))) void refresh();
+  }
+
   async function patch(url: string, body: unknown): Promise<boolean> {
     setError(null);
     try {
@@ -603,7 +632,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
 
             {/* Matrix */}
             <div className="glass overflow-visible rounded-card">
-              <div className="overflow-x-auto rounded-card">
+              <div className="relative overflow-x-auto rounded-card">
+                {dragCol && dropAt && (
+                  <div aria-hidden className="pointer-events-none absolute bottom-0 top-0 z-[5] w-[3px] -translate-x-1/2 animate-pulse rounded-full bg-primary shadow-[0_0_0_4px_rgba(36,87,245,.16)] transition-[left] duration-150 ease-out" style={{ left: dropAt.left }} data-testid="cmp-column-drop-marker" />
+                )}
                 <table className="w-full border-collapse text-[13px]" style={{ minWidth: 560 + 104 * shownCompetitors.length }}>
                   <thead>
                     <tr>
@@ -617,7 +649,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                         </span>
                       </th>
                       {shownCompetitors.map((c) => (
-                        <th key={c.id} scope="col" className="relative w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
+                        <th key={c.id} scope="col" draggable title={C.matrix.dragColumn}
+                          onDragStart={(e) => { setDragCol(c.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.name); e.dataTransfer.setDragImage(e.currentTarget, 52, 24); }}
+                          onDragOver={(e) => overColumn(e, c.id)} onDrop={(e) => void dropColumn(e)} onDragEnd={endColumnDrag}
+                          className={cn("relative w-[104px] cursor-grab border-b border-border px-2 pb-2.5 text-center align-bottom transition-opacity active:cursor-grabbing", dragCol === c.id && "opacity-40")} data-testid="cmp-company-column">
                           <HeadTag {...(parts.profiles ? { onClick: () => openProfile(c.id, "cell") } : {})} className={cn("flex w-full flex-col items-center gap-1.5 pt-[13px]", parts.profiles && "hover:opacity-80")} title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
