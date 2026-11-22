@@ -6,7 +6,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { queueCatalogAnalyses } from "@/lib/competitors/analysis/engine";
 import { nextPosition } from "@/lib/competitors/store";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { isOwnStatus, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
+import { isOwnStatus, MAX_CAPABILITY_AI_DEFINITION, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
 import { aliasesWithout, aliasList, nameKey } from "@/lib/competitors/decisions";
 
 /**
@@ -63,6 +63,7 @@ export async function POST(req: Request) {
     // Removed or dismissed earlier: the PM's own add wins, and the recorded decision is cleared.
     const description = cleanText(body.description, MAX_DESCRIPTION);
     const ownProduct = cleanText(body.ownProduct, MAX_OWN_PRODUCT);
+    const aiDefinition = cleanText(body.aiDefinition, MAX_CAPABILITY_AI_DEFINITION);
     await db.capability.update({
       where: { id: dup.id },
       data: {
@@ -76,6 +77,7 @@ export async function POST(req: Request) {
         position: await nextPosition("capability", ctx.workspaceId),
         ...(description !== undefined ? { description } : {}),
         ...(ownProduct !== undefined ? { ownProduct } : {}),
+        ...(aiDefinition !== undefined ? { aiDefinition: aiDefinition || null } : {}),
         ...(body.productLines !== undefined ? { productLines: productLines as unknown as Prisma.InputJsonValue } : {}),
         // An own status given by hand is the PM's value: no run of the organization's own site changes it (lib/competitors/own.ts).
         ...(isOwnStatus(body.ourStatus) ? { ourStatus: body.ourStatus, ourStatusSetAt: new Date(), ourStatusSetById: ctx.user.id } : {}),
@@ -93,6 +95,7 @@ export async function POST(req: Request) {
       name,
       description: cleanText(body.description, MAX_DESCRIPTION) ?? "",
       ownProduct: cleanText(body.ownProduct, MAX_OWN_PRODUCT) ?? "",
+      aiDefinition: cleanText(body.aiDefinition, MAX_CAPABILITY_AI_DEFINITION) || null,
       productLines: productLines as unknown as Prisma.InputJsonValue,
       ourStatus: isOwnStatus(body.ourStatus) ? body.ourStatus : "found",
       // A row typed by hand carries the own status its PM gave it: the PM's value, never changed by a run (lib/competitors/own.ts).

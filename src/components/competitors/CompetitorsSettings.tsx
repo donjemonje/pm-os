@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { FilterPopover } from "@/components/ui/FilterPopover";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
-import { definitionSameAsCovers, domainTextsToSave } from "@/lib/competitors/domain-texts";
+import { aiTextSameAsCovers, aiTextToSave, capabilityChanges, definitionSameAsCovers, domainTextsToSave, type CapabilityDraft } from "@/lib/competitors/domain-texts";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
+import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_AI_DEFINITION, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, OwnSiteRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -981,59 +982,89 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   onSave: (id: string, body: unknown) => Promise<boolean>;
   onRemove: (k: CapabilityRow) => Promise<void>;
 }) {
+  const draftOf = (k: CapabilityRow): CapabilityDraft => ({ name: k.name, domainId: k.domainId, description: k.description, aiDefinition: k.aiDefinition, same: aiTextSameAsCovers(k.description, k.aiDefinition), productLines: [...k.productLines], ownProduct: k.ownProduct });
+  const emptyDraft = (): CapabilityDraft => ({ name: "", domainId: domains[0]?.id ?? "", description: "", aiDefinition: "", same: true, productLines: [], ownProduct: "" });
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [domainId, setDomainId] = useState(domains[0]?.id ?? "");
-  const [description, setDescription] = useState("");
-  const [ownProduct, setOwnProduct] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [editOwnProduct, setEditOwnProduct] = useState("");
+  const [newDraft, setNewDraft] = useState<CapabilityDraft>(emptyDraft);
+  // The open rows and their edits. A row is one short line until it is clicked; then it opens downward. More than one
+  // may be open. A row's draft starts from the row when it opens and is dropped when it closes.
+  const [drafts, setDrafts] = useState<Record<string, CapabilityDraft>>({});
 
   useEffect(() => {
-    if (!domainId && domains[0]) setDomainId(domains[0].id);
-  }, [domains, domainId]);
+    if (!newDraft.domainId && domains[0]) setNewDraft((d) => ({ ...d, domainId: domains[0].id }));
+  }, [domains, newDraft.domainId]);
 
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim() || !domainId) return;
-    if (await onAdd({ name, domainId, description, ownProduct })) { setName(""); setDescription(""); setOwnProduct(""); setAdding(false); }
+  const closeRow = (id: string) => setDrafts((cur) => { const next = { ...cur }; delete next[id]; return next; });
+  const toggleRow = (k: CapabilityRow) => setDrafts((cur) => { const next = { ...cur }; if (next[k.id]) delete next[k.id]; else next[k.id] = draftOf(k); return next; });
+  const setDraft = (id: string, patch: Partial<CapabilityDraft>) => setDrafts((cur) => (cur[id] ? { ...cur, [id]: { ...cur[id], ...patch } } : cur));
+
+  async function add() {
+    if (!newDraft.name.trim() || !newDraft.domainId) return;
+    const body = { name: newDraft.name, domainId: newDraft.domainId, description: newDraft.description, aiDefinition: aiTextToSave({ covers: newDraft.description, aiText: newDraft.aiDefinition, same: newDraft.same }), productLines: newDraft.productLines, ownProduct: newDraft.ownProduct };
+    if (await onAdd(body)) { setNewDraft(emptyDraft()); setAdding(false); }
   }
-  async function saveEdit(id: string) {
-    if (await onSave(id, { name: editName, description: editDescription, ownProduct: editOwnProduct })) setEditingId(null);
+  async function save(k: CapabilityRow) {
+    const d = drafts[k.id];
+    if (!d || !d.name.trim()) return;
+    const changes = capabilityChanges(k, d);
+    if (Object.keys(changes).length === 0 || (await onSave(k.id, changes))) closeRow(k.id);
   }
-  /** Name, domain, own product and description, each under its label; the add form and the row editor share it. */
-  const fields = (v: { name: string; domainId?: string; description: string; ownProduct: string }, set: { name: (s: string) => void; domainId?: (s: string) => void; description: (s: string) => void; ownProduct: (s: string) => void }) => (
-    <div className="flex min-w-0 flex-1 flex-col gap-2">
+  /** Enter saves from a single-line field of the form, Cmd/Ctrl+Enter from anywhere in it (a textarea keeps Enter for a new line); Esc cancels. */
+  const formKeys = (onSubmit: () => void, onCancel: () => void) => (e: React.KeyboardEvent) => {
+    const field = e.target instanceof HTMLElement && e.target.dataset.capField !== undefined;
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (field && e.target instanceof HTMLInputElement))) { e.preventDefault(); onSubmit(); }
+    else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+  };
+  const HINT = "mb-1 block text-[11.5px] text-fg-muted";
+  /**
+   * The five things a user changes on a capability, each under a visible label: 1. the name; 2. the domain; 3. what
+   * it covers; 4. the text PMOS AI uses ("Same as what it covers" keeps the two in step); 5. its product lines, as
+   * one dropdown with a tick per line. The organization's own product keeps its field. The add form and an open row share it.
+   */
+  const fields = (d: CapabilityDraft, set: (patch: Partial<CapabilityDraft>) => void, focusName: boolean) => (
+    <div className="flex min-w-0 flex-1 flex-col gap-2.5">
       <div className="flex flex-wrap gap-2">
-        <label className="block w-64">
+        <label className="block w-72">
           <span className={FIELD_LABEL}>{C.settings.capabilityName}</span>
-          <input value={v.name} onChange={(e) => set.name(e.target.value)} placeholder={C.settings.capabilityPlaceholder} className={INPUT} disabled={busy} autoFocus />
+          <input type="text" data-cap-field value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder={C.settings.capabilityPlaceholder} className={INPUT} disabled={busy} autoFocus={focusName} data-testid="cmp-capability-name" />
         </label>
-        {set.domainId && (
-          <label className="block w-52">
-            <span className={FIELD_LABEL}>{C.settings.capabilityDomain}</span>
-            <select value={v.domainId} onChange={(e) => set.domainId?.(e.target.value)} className={SELECT} disabled={busy}>
-              {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </label>
-        )}
+        <label className="block w-64">
+          <span className={FIELD_LABEL}>{C.settings.capabilityDomain}</span>
+          <select value={d.domainId} onChange={(e) => set({ domainId: e.target.value })} className={SELECT} disabled={busy} data-testid="cmp-capability-domain">
+            {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
+          </select>
+        </label>
         <label className="block w-64">
           <span className={FIELD_LABEL}>{C.settings.ownProduct}</span>
-          <input value={v.ownProduct} onChange={(e) => set.ownProduct(e.target.value)} placeholder={C.settings.ownProductPlaceholder} className={INPUT} maxLength={MAX_OWN_PRODUCT} disabled={busy} />
+          <input type="text" data-cap-field value={d.ownProduct} onChange={(e) => set({ ownProduct: e.target.value })} placeholder={C.settings.ownProductPlaceholder} className={INPUT} maxLength={MAX_OWN_PRODUCT} disabled={busy} />
         </label>
       </div>
       <label className="block">
         <span className={FIELD_LABEL}>{C.settings.capabilityDescription}</span>
-        <textarea value={v.description} onChange={(e) => set.description(e.target.value)} placeholder={C.settings.capabilityDescriptionPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} rows={3} maxLength={MAX_CAPABILITY_DESCRIPTION} disabled={busy} />
+        <span className={HINT}>{C.settings.capabilityDescriptionHint}</span>
+        <textarea data-cap-field value={d.description} onChange={(e) => set({ description: e.target.value })} placeholder={C.settings.capabilityDescriptionPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} rows={3} maxLength={MAX_CAPABILITY_DESCRIPTION} disabled={busy} data-testid="cmp-capability-covers" />
       </label>
+      <div>
+        <span className={FIELD_LABEL}>{C.settings.capabilityAiText}</span>
+        <span className={HINT}>{C.settings.capabilityAiTextHint}</span>
+        <label className="inline-flex w-fit items-center gap-2 text-[12.5px] text-fg-2">
+          <input type="checkbox" checked={d.same} onChange={(e) => set({ same: e.target.checked })} disabled={busy} data-testid="cmp-capability-same" />
+          {C.settings.capabilitySameAsCovers}
+        </label>
+        {!d.same && (
+          <textarea data-cap-field aria-label={C.settings.capabilityAiText} value={d.aiDefinition} onChange={(e) => set({ aiDefinition: e.target.value })} placeholder={C.settings.capabilityAiTextPlaceholder} className={cn(INPUT, "mt-1.5 resize-y leading-relaxed")} rows={4} maxLength={MAX_CAPABILITY_AI_DEFINITION} disabled={busy} data-testid="cmp-capability-ai-text" />
+        )}
+      </div>
+      <div>
+        <span className={FIELD_LABEL}>{C.settings.productLines}</span>
+        {productLines.length === 0 ? (
+          <span className="text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</span>
+        ) : (
+          <FilterPopover label={C.settings.productLines} options={productLines} selected={d.productLines} onToggle={(line) => set({ productLines: d.productLines.includes(line) ? d.productLines.filter((l) => l !== line) : [...d.productLines, line] })} />
+        )}
+      </div>
     </div>
   );
-  function toggleLine(k: CapabilityRow, line: string) {
-    const next = k.productLines.includes(line) ? k.productLines.filter((l) => l !== line) : [...k.productLines, line];
-    void onSave(k.id, { productLines: next });
-  }
 
   return (
     <section className="rounded-xl border border-border bg-card" data-testid="cmp-capabilities">
@@ -1043,14 +1074,15 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
           {canEdit && !settingUp && !(adding && open) && domains.length > 0 && <button type="button" onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
         </div>
         {open && <p className="mt-1 text-sm text-muted">{C.settings.capabilitiesBlurb}</p>}
-        {open && productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
       </div>
       {open && adding && !settingUp && (
-        <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void add(e); } }} className="flex items-end gap-2 border-b border-border px-5 py-4">
-          {fields({ name, domainId, description, ownProduct }, { name: setName, domainId: setDomainId, description: setDescription, ownProduct: setOwnProduct })}
-          <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
-          <Button type="submit" variant="primary" disabled={busy || !name.trim() || !domainId}><Check size={13} /> {C.settings.save}</Button>
-        </form>
+        <div onKeyDown={formKeys(() => void add(), () => setAdding(false))} className="flex flex-col gap-3 border-b border-border px-5 py-4" data-testid="cmp-capability-add-form">
+          {fields(newDraft, (patch) => setNewDraft((d) => ({ ...d, ...patch })), true)}
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+            <Button type="button" variant="primary" onClick={() => void add()} disabled={busy || !newDraft.name.trim() || !newDraft.domainId}><Check size={13} /> {C.settings.save}</Button>
+          </div>
+        </div>
       )}
       {open && capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{settingUp ? C.setup.catalogNote : C.settings.emptyCapabilities}</div>}
       {open && domains.map((d) => {
@@ -1063,23 +1095,26 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
               {d.name}
             </div>
             {rows.map((k) => {
-              const editing = editingId === k.id;
+              const draft = drafts[k.id];
+              const isOpen = draft !== undefined;
               return (
-                <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3">
-                  {editing ? (
-                    <div className="flex min-w-0 flex-1 items-end gap-2"
-                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !(e.target instanceof HTMLTextAreaElement))) { e.preventDefault(); void saveEdit(k.id); } if (e.key === "Escape") setEditingId(null); }}>
-                      {fields({ name: editName, description: editDescription, ownProduct: editOwnProduct }, { name: setEditName, description: setEditDescription, ownProduct: setEditOwnProduct })}
-                      <button onClick={() => setEditingId(null)} className={ICON_BTN} aria-label={C.settings.cancel}><X size={14} /></button>
-                      <button onClick={() => saveEdit(k.id)} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !editName.trim()}><Check size={14} /></button>
-                    </div>
-                  ) : (
-                    <div className="min-w-0 flex-1">
+                <div key={k.id} className="border-b border-border" data-testid="cmp-capability">
+                  {/* The short row: the name and its domain on one line, cut with "…" when long (the full text on hover). A click opens it downward. */}
+                  <div className="flex items-center gap-2 px-5 py-2">
+                    <button type="button" onClick={() => toggleRow(k)} aria-expanded={isOpen} aria-label={C.settings.capabilityOpen(k.name)} className="flex min-w-0 flex-1 items-center gap-2 text-left" data-testid="cmp-capability-row">
+                      <ChevronRight size={14} className={cn("shrink-0 text-fg-muted transition-transform", isOpen && "rotate-90")} />
+                      <span className="min-w-0 truncate text-[13.5px] font-medium" title={k.name}>{k.name}</span>
+                      {k.origin === "ai" && <span className="shrink-0 rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
+                      <span className="ml-auto max-w-[260px] shrink-0 truncate text-[12px] text-fg-muted" title={d.name}>{d.name}</span>
+                    </button>
+                    {canEdit && <button onClick={() => void onRemove(k)} className={cn(ICON_BTN, "shrink-0 hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>}
+                  </div>
+                  {isOpen && canEdit && (
+                    <div onKeyDown={formKeys(() => void save(k), () => closeRow(k.id))} className="flex flex-col gap-3 bg-[rgba(255,255,255,.6)] px-5 pb-4 pl-[42px] pt-1" data-testid="cmp-capability-form">
+                      {fields(draft, (patch) => setDraft(k.id, patch), false)}
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[14px] font-medium">{k.name}</span>
-                        {k.origin === "ai" && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
-                        {k.ownProduct && <span className="max-w-[220px] truncate rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[10px] font-semibold text-[#2a5fd0]" title={`${C.settings.ownProduct}: ${k.ownProduct}`}>{ownProductLabel(k.ownProduct)}</span>}
-                        <span className="ml-1 inline-flex items-center gap-1" title={C.settings.ourStatus}>
+                        <span className="inline-flex items-center gap-1" title={C.settings.ourStatus}>
+                          <span className="mr-1 text-[12px] font-medium text-fg-3">{C.settings.ourStatus}</span>
                           {OWN_STATUS_VALUES.map((v) => (
                             <button key={v} type="button" onClick={() => k.ourStatus !== v && void onSave(k.id, { ourStatus: v })} disabled={busy} aria-pressed={k.ourStatus === v}
                               className={cn("rounded-full border px-2 py-px font-mono text-[10px] font-semibold", k.ourStatus === v
@@ -1089,40 +1124,24 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                             </button>
                           ))}
                         </span>
+                        <span className="ml-auto flex items-center gap-2">
+                          <Button type="button" onClick={() => closeRow(k.id)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+                          <Button type="button" variant="primary" onClick={() => void save(k)} disabled={busy || !draft.name.trim()}><Check size={13} /> {C.settings.save}</Button>
+                        </span>
                       </div>
-                      {k.description && <div className="mt-0.5 text-[12.5px] text-fg-3">{k.description}</div>}
-                      {productLines.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {productLines.map((line) => {
-                            const on = k.productLines.includes(line);
-                            return (
-                              <button
-                                key={line}
-                                type="button"
-                                onClick={() => canEdit && toggleLine(k, line)}
-                                disabled={!canEdit || busy}
-                                aria-pressed={on}
-                                className={cn(
-                                  "rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold leading-[15px]",
-                                  on ? "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]" : "bg-[#eef1f6] text-fg-faint",
-                                  canEdit && "hover:ring-1 hover:ring-primary/40",
-                                )}
-                              >
-                                {line}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
                     </div>
                   )}
-                  {canEdit && !editing && (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <select value={k.domainId} onChange={(e) => void onSave(k.id, { domainId: e.target.value })} className="rounded-lg border border-border bg-white px-2 py-1 text-[12px]" disabled={busy} aria-label="Move to domain">
-                        {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
-                      </select>
-                      <button onClick={() => { setEditingId(k.id); setEditName(k.name); setEditDescription(k.description); setEditOwnProduct(k.ownProduct); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
-                      <button onClick={() => void onRemove(k)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>
+                  {isOpen && !canEdit && (
+                    <div className="flex flex-col gap-2 px-5 pb-3 pl-[42px] text-[12.5px] text-fg-2" data-testid="cmp-capability-details">
+                      <div><span className={FIELD_LABEL}>{C.settings.capabilityDescription}</span>{k.description || <span className="italic text-fg-faint">{C.settings.capabilityNoCovers}</span>}</div>
+                      {/* Never the same words twice: PMOS AI's own text shows only when it differs from what it covers. */}
+                      {aiTextSameAsCovers(k.description, k.aiDefinition) ? (
+                        <div className="text-[12px] text-fg-muted">{C.settings.capabilitySameNote}</div>
+                      ) : (
+                        <div><span className={FIELD_LABEL}>{C.settings.capabilityAiText}</span>{k.aiDefinition}</div>
+                      )}
+                      <div><span className={FIELD_LABEL}>{C.settings.productLines}</span>{k.productLines.length ? k.productLines.join(" · ") : <span className="italic text-fg-faint">{C.settings.capabilityNoProductLines}</span>}</div>
+                      {k.ownProduct && <div><span className={FIELD_LABEL}>{C.settings.ownProduct}</span>{ownProductLabel(k.ownProduct)}</div>}
                     </div>
                   )}
                 </div>

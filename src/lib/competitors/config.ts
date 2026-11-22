@@ -129,6 +129,8 @@ export const MAX_DOMAIN_DONE_BY = 300;
 export const MAX_CAPABILITY_DESCRIPTION = 500;
 /** The org's own product chip on a capability. */
 export const MAX_OWN_PRODUCT = 160;
+/** The text PMOS AI uses for a capability, when it is not the same as its description. */
+export const MAX_CAPABILITY_AI_DEFINITION = 2000;
 
 /** The org's own cell on a capability — set by PMs, never scanned. */
 export const OWN_STATUS_VALUES = ["found", "not_found"] as const;

@@ -199,6 +199,8 @@ export interface CapabilityRow {
   domainId: string;
   name: string;
   description: string;
+  /** The text PMOS AI uses for the capability when it is not the same as the description; "" = it uses the description. */
+  aiDefinition: string;
   /** The org's own product or module that carries it; "" when none. */
   ownProduct: string;
   productLines: string[];
@@ -618,6 +620,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       domainId: k.domainId,
       name: k.name,
       description: k.description,
+      aiDefinition: k.aiDefinition ?? "",
       ownProduct: k.ownProduct,
       productLines: asStringArray(k.productLines),
       ourStatus: (k.ourStatus === "not_found" ? "not_found" : "found") as OwnStatus,

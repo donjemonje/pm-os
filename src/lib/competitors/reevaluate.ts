@@ -17,6 +17,7 @@ import { callTool } from "./ai";
 import { NOT_OWN } from "./own";
 import { readRowAnswer, reevaluateTool, renderRow, REEVALUATE_SYSTEM_PROMPT, type RowInput } from "./reevaluate-prompt";
 import { valueOfScore } from "./scores";
+import { capabilityTextForAI } from "./domain-texts";
 
 /** Daniel 2026-11-22: every prompt of the coverage model runs on this model with high thinking. */
 export const REEVALUATE_MODEL = "gemini-4-carbon";
@@ -43,7 +44,8 @@ export async function loadRow(workspaceId: string, capabilityId: string, orgName
   const how = (raw: unknown) => { const d = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>).description : null; return typeof d === "string" && d ? d : null; };
   return {
     domain: { name: cap.domain.name, covers: cap.domain.summary || cap.domain.description },
-    capability: { name: cap.name, covers: cap.description },
+    // The capability's text for PMOS AI: its own when one is set (Settings → Capabilities), else what it covers.
+    capability: { name: cap.name, covers: capabilityTextForAI(cap.description, cap.aiDefinition) },
     features: cap.features.map((f) => ({
       name: f.name,
       has: Object.fromEntries([

@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { isOwnStatus, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
+import { isOwnStatus, MAX_CAPABILITY_AI_DEFINITION, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
 import { queueCatalogAnalyses } from "@/lib/competitors/analysis/engine";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { aliasesAfterRename } from "@/lib/competitors/decisions";
@@ -73,6 +73,12 @@ export async function PATCH(req: Request, { params }: Params) {
   if (description !== undefined) {
     data.description = description;
     field = field ?? "description";
+  }
+  // The text PMOS AI uses for the capability; "" = it uses the description.
+  const aiDefinition = cleanText(body.aiDefinition, MAX_CAPABILITY_AI_DEFINITION);
+  if (aiDefinition !== undefined) {
+    data.aiDefinition = aiDefinition || null;
+    field = field ?? "aiDefinition";
   }
   const ownProduct = cleanText(body.ownProduct, MAX_OWN_PRODUCT);
   if (ownProduct !== undefined) {
