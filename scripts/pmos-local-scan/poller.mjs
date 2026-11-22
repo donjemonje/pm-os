@@ -87,7 +87,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runAddressStep } from "./addresses.mjs";
 import { chromeReaderSupported, judgeChromeRead, killAllChrome, openChrome, refusedStop } from "./chrome.mjs";
-import { afterSlowDown, makeQueue, retryAfterMs, SLOWDOWN_WAITS_MS } from "./pace.mjs";
+import { afterProbeAnswered, afterSlowDown, afterStuckPage, makeQueue, retryAfterMs, sectionOf, SLOWDOWN_WAITS_MS } from "./pace.mjs";
 import { adoptLegacyPlace, clearPlace, loadPlace, loadPlaces, markStopped, savePlace } from "./places.mjs";
 import { NO_SCAN, orderWaiting, parallelLimit, pickNext, siteKey, statusOf } from "./schedule.mjs";
 
@@ -583,13 +583,17 @@ async function runFetch(job, limits, post, saved, scan) {
     }
   }
   const queue = makeQueue({ queue: saved?.queue ?? [], fresh: saved?.fresh ?? 0, known });
+  /** Sections whose pages keep answering "slow down" while the rest of the site answers: their pages are at the end of the line (kept across a continuation). */
+  const movedSections = new Set(saved?.movedSections ?? []);
   const add = (u) => {
     if (!/^https?:$/.test(u.protocol) || siteOf(u) !== host || NON_PAGE.test(u.pathname)) return;
     if (/\/(wp-json|wp-admin|wp-content|feed|page\/\d+|cdn-cgi)\b/i.test(u.pathname)) return;
     const k = pageKey(u, job.siteUrl);
     if (seen.has(k)) return;
     seen.add(k);
-    queue.add(k);
+    // A page of a section that is being slowed down joins that section at the end of the line, new or not.
+    if (movedSections.has(sectionOf(k))) queue.toEnd(k);
+    else queue.add(k);
   };
   let pendingLinked;
   if (saved) {
@@ -627,9 +631,23 @@ async function runFetch(job, limits, post, saved, scan) {
   /** The site refuses the plain request and answers Chrome: the rest of the scan is read with Chrome (kept across a continuation). */
   let chromeOnly = (READER === "chrome" && (await chromeReaderAvailable(log))) || (saved?.chromeOnly ?? false);
   if (READER === "chrome" && chromeOnly) log("  reader: Chrome for every page of this scan (station setting)");
-  /** Pages that used up their slow-down waits once and went to the end of the line; and how many pages in a row did. */
+  /** Pages that used up their slow-down waits and went to the end of the line, alone (no page of another section was left). */
   const sentToEnd = new Set();
-  let usedUpInARow = 0;
+  /** The page being read is the test after a stuck page (pace.mjs afterStuckPage): what was stuck, the pause before it, and whether the test itself was slowed. */
+  let probe = null;
+  /** The pause as it was before the page being read got its first "slow down". */
+  let pauseBefore = pause;
+  /** The page tried after a stuck page was answered: when it tested a section, that section goes to the end of the line. */
+  const probeAnswered = (url) => {
+    if (!probe) return;
+    const p = probe;
+    probe = null;
+    const movedPages = afterProbeAnswered({ probe: p, queue, moved: movedSections });
+    if (p.section === null) return;
+    // The site answers other pages: the pace was not the trouble. A test that was itself slowed keeps the slower pace.
+    if (!p.slowed) pause = p.pause;
+    log(`  ${url} was answered, so only the pages under /${p.section} are slowed down: ${movedPages} of them put at the end of the line, back to one page every ${Math.round(pause / 1000)} s`);
+  };
   /** Pages in a row the site refused — on the plain request and, where it can be used, in Chrome too. */
   let refused = 0;
   /** Pages in a row where Chrome could not be used at all (it did not start, its connection closed). */
@@ -655,7 +673,7 @@ async function runFetch(job, limits, post, saved, scan) {
   const homeKey = pageKey(new URL(job.siteUrl), job.siteUrl);
   let addressesDone = !job.addresses || saved?.addresses === "done";
   /** The scan's place, with the page being read still first in the queue — a stop in the middle of a page reads it again. */
-  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue.list()] : queue.list(), fresh: queue.fresh + (current ? 1 : 0), pauseMs: pause, chromeOnly, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0, ...(addressesDone && job.addresses ? { addresses: "done" } : {}) });
+  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue.list()] : queue.list(), fresh: queue.fresh + (current ? 1 : 0), pauseMs: pause, chromeOnly, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, movedSections: [...movedSections], elapsedMs: elapsedBefore + Date.now() - t0, ...(addressesDone && job.addresses ? { addresses: "done" } : {}) });
   while (queue.length) {
     if (elapsedBefore + Date.now() - t0 > limits.ms) break;
     const url = queue.next();
@@ -756,25 +774,30 @@ async function runFetch(job, limits, post, saved, scan) {
     if (body.status === "binary") {
       // A download, not a page: skipped, counted for nothing (the same rule as the remote lane).
       log(`  not a web page (${body.contentType}) — skipped ${url}`);
+      slowDowns = 0;
+      probeAnswered(url);
       continue;
     }
     if (body.status === "slowdown") {
       // The site asked us to slow down: wait, read the same page again, and go on more slowly (pace.mjs). Only a site
       // that keeps saying it ends the scan: the signal is handed in, the rest is "not attempted", the next scan continues.
+      if (slowDowns === 0) pauseBefore = pause;
+      if (probe) probe.slowed = true;
       const plan = afterSlowDown({ inARow: ++slowDowns, retryAfter: body.retryAfter ?? null, pauseMs: pause, waits: SLOWDOWN_WAITS });
       delete body.retryAfter;
       if (plan.stop) {
-        usedUpInARow++;
-        if (plan.waited && usedUpInARow < 2 && !sentToEnd.has(url) && queue.length > 0) {
-          // One page that keeps answering "slow down" must not cost the rest of the site: it goes to the end, once.
-          sentToEnd.add(url);
-          queue.toEnd(url);
+        // One page — or one section — that keeps answering "slow down" must not cost the rest of the site: the page goes
+        // to the end and a page of another section is tried (pace.mjs afterStuckPage). The site asking for a wait that is
+        // too long (plan.waited false) ends the scan now.
+        const stuckPlan = plan.waited ? afterStuckPage({ url, queue, probe, moved: movedSections, sentToEnd }) : { stop: true, why: plan.why };
+        if (!stuckPlan.stop) {
+          probe = { ...stuckPlan.probe, pause: pauseBefore, slowed: false };
           slowDowns = 0;
-          log(`  slow down (429) ${url} — still refused after the waits: put at the end of the line, going on with the other ${queue.length - 1} pages`);
+          log(`  slow down (429) ${url} — still refused after the waits: put at the end of the line; trying ${probe.section === null ? "the next page" : `a page outside /${sectionOf(url)}`} (${stuckPlan.next}), ${queue.length - 1} other pages left`);
           continue;
         }
         if ((await post(body)) === null) return { notAttempted: queue.length, ended: true };
-        log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one (${plan.why})`);
+        log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one (${stuckPlan.why})`);
         return { notAttempted: queue.length };
       }
       pause = plan.pauseMs;
@@ -786,7 +809,7 @@ async function runFetch(job, limits, post, saved, scan) {
       continue;
     }
     slowDowns = 0;
-    usedUpInARow = 0;
+    probeAnswered(url);
     if (body.status === "ok" && body.html) {
       // Headless Chrome for what plain HTTP cannot show: a page with no text, or a home/hub page whose menus are built by JavaScript.
       const u = new URL(url);

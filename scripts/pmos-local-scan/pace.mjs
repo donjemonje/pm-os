@@ -12,6 +12,15 @@
  *     "slow down" must not cost the rest of the site (KELA's /es, 2026-11-21: 600 pages left behind it). When the very
  *     next page ends the same way, the site is throttling everything and the scan stops as before: the page is "not
  *     read — the site asked us to slow down", the rest is "not attempted" and the next scan continues from them;
+ *   - a whole section can be the one that answers "slow down" (ZeroFox's /advisories/, 2026-11-22: every page of it, every
+ *     time, while 254 other pages were read without trouble; two of them stood one after the other, so four scans
+ *     stopped there with 1,479 pages left). So the page that is tried after a stuck page is the first page in the line
+ *     from ANOTHER section (the first part of the address path). When that page is read, the section is the problem, not
+ *     the site: the section's remaining pages go to the end of the line, the pause goes back to what it was, and the
+ *     scan goes on. When the line reaches that section again and a page of it is stuck again, the scan stops there —
+ *     its pages are not waited for one by one. When the page of the other section is stuck too, the site is slowing
+ *     everything down and the scan stops. With no page of another section in the line, the next page in line is tried
+ *     (the rule above);
  *   - no wait is longer than 5 minutes: PM-OS takes a scan that is silent for 10 minutes for a dead one. A site that
  *     asks for more than that ends the scan now;
  *   - pages PM-OS has never read come first, pages it already has come after them. The home page is always the very
@@ -95,10 +104,90 @@ export function makeQueue({ queue = [], fresh = 0, known = [] } = {}) {
     toEnd(k) {
       items.push(k);
     },
+    /**
+     * The first page in the line that `wanted` accepts is read next. Returns it, or undefined when there is none.
+     * @param {(k: string) => boolean} wanted
+     * @returns {string | undefined}
+     */
+    bringForward(wanted) {
+      const i = items.findIndex((k) => wanted(k));
+      if (i < 0) return undefined;
+      const [k] = items.splice(i, 1);
+      items.unshift(k);
+      // It is read next either way; the count of the front part stays true for the pages behind it.
+      if (i >= front) front++;
+      return k;
+    },
+    /**
+     * Every page `wanted` accepts goes to the very end, in the order they stood. Returns how many.
+     * @param {(k: string) => boolean} wanted
+     * @returns {number}
+     */
+    moveToEnd(wanted) {
+      const stay = [];
+      const go = [];
+      let frontGone = 0;
+      items.forEach((k, i) => {
+        if (wanted(k)) {
+          go.push(k);
+          if (i < front) frontGone++;
+        } else stay.push(k);
+      });
+      items.length = 0;
+      items.push(...stay, ...go);
+      front -= frontGone;
+      return go.length;
+    },
     /** The page goes back to be read first (it was not read: the site asked to slow down, or the network dropped). */
     putBack(k) {
       items.unshift(k);
       front++;
     },
   };
+}
+
+/** The section of a page: the first part of its address path, lower case. "" for the home page or an unreadable address. */
+export function sectionOf(url) {
+  try {
+    return (new URL(url).pathname.split("/").filter(Boolean)[0] ?? "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A page used up its "slow down" waits. What now?
+ *   url        the stuck page (already taken from the queue)
+ *   queue      the scan's queue (makeQueue); changed here when the scan goes on
+ *   probe      the test that is running: the page just read was tried because the page before it was stuck — or null
+ *   moved      the sections whose pages were already put at the end of the line (Set)
+ *   sentToEnd  pages that went to the end of the line once, alone (Set)
+ * Returns { stop: true, why } — hand the answer in and end the scan — or { stop: false, probe, next }: the stuck page
+ * is at the end of the line and `next` is read now. probe.section is the stuck page's section when `next` is a page of
+ * another section (the test of the section), null when no such page was left and the next page in line is tried.
+ * @param {{ url: string, queue: ReturnType<typeof makeQueue>, probe: { section: string | null, page: string } | null, moved: Set<string>, sentToEnd: Set<string> }} o
+ * @returns {{ stop: true, why: string } | { stop: false, probe: { section: string | null, page: string }, next: string }}
+ */
+export function afterStuckPage({ url, queue, probe, moved, sentToEnd }) {
+  const section = sectionOf(url);
+  if (probe) return { stop: true, why: probe.section === null ? "the next page ended the same way" : `a page outside /${probe.section} ended the same way: the site is slowing every page down` };
+  if (moved.has(section)) return { stop: true, why: `the pages under /${section} still answer "slow down"` };
+  if (sentToEnd.has(url)) return { stop: true, why: "the page ended the same way a second time" };
+  if (queue.length === 0) return { stop: true, why: "it was the last page" };
+  queue.toEnd(url);
+  const other = queue.bringForward((k) => sectionOf(k) !== section && !moved.has(sectionOf(k)));
+  if (other === undefined) sentToEnd.add(url);
+  return { stop: false, probe: { section: other === undefined ? null : section, page: url }, next: other ?? queue.first() };
+}
+
+/**
+ * The page tried after a stuck page was answered (anything but a used-up "slow down"). When it was the test of a
+ * section, the section is the problem: its remaining pages go to the end of the line. Returns how many pages moved
+ * (0 when the test was not of a section).
+ * @param {{ probe: { section: string | null, page: string }, queue: ReturnType<typeof makeQueue>, moved: Set<string> }} o
+ */
+export function afterProbeAnswered({ probe, queue, moved }) {
+  if (probe.section === null) return 0;
+  moved.add(probe.section);
+  return queue.moveToEnd((k) => sectionOf(k) === probe.section);
 }
