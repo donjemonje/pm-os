@@ -435,6 +435,9 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
   for (const s of statuses) if (s.overrideUserId) userIds.add(s.overrideUserId);
   for (const s of featureStatuses) if (s.overrideUserId) userIds.add(s.overrideUserId);
   for (const f of facts) if (f.overrideUserId) userIds.add(f.overrideUserId);
+  // The coverage model: who fixed a score ("Score set by <name>"), on a competitor's cell and on the organization's own.
+  for (const s of statuses) if (s.scoreLockedById) userIds.add(s.scoreLockedById);
+  for (const k of capabilities) if (k.ourScoreLockedById) userIds.add(k.ourScoreLockedById);
   const users = userIds.size
     ? await db.user.findMany({ where: { id: { in: [...userIds] } }, select: { id: true, name: true, email: true } })
     : [];

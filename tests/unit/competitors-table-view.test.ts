@@ -1,6 +1,6 @@
 /** Competitors — how the table opens and marks its cells: the default open state, close all / open all, the winners of a row, the colour step of a score's number, scrolling inside an open card. Pure module. */
 import { describe, expect, it } from "vitest";
-import { allOpen, boxCanScroll, defaultOpenDomains, featureIsDifferentiator, placeCard, rowKindCounts, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { allOpen, boxCanScroll, defaultOpenDomains, featureIsDifferentiator, placeCard, rowKindCounts, toCardSpace, zoomFactor, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { scoreRowKind } from "@/lib/competitors/scores";
 
 describe("defaultOpenDomains", () => {
@@ -139,6 +139,38 @@ describe("featureIsDifferentiator — a feature only the organization has", () =
   it("not when we do not have it, and never with no competitors", () => {
     expect(featureIsDifferentiator("not_found", ["not_found"])).toBe(false);
     expect(featureIsDifferentiator("found", [])).toBe(false);
+  });
+});
+
+describe("card placement under a CSS zoom on the body", () => {
+  it("zoomFactor: the card's on-screen width over its layout width", () => {
+    expect(zoomFactor(352, 320)).toBe(1.1);
+    expect(zoomFactor(320, 320)).toBe(1);
+    expect(zoomFactor(0, 320)).toBe(1);
+    expect(zoomFactor(320, 0)).toBe(1);
+    expect(zoomFactor(9000, 320)).toBe(1);
+  });
+  it("with no zoom nothing moves", () => {
+    const s = toCardSpace({ top: 497, bottom: 536, left: 500, width: 64 }, { width: 1280, height: 720 }, 1);
+    expect(s).toEqual({ anchor: { top: 497, bottom: 536, left: 500, width: 64 }, win: { width: 1280, height: 720 } });
+  });
+  it("at zoom 1.1 a card for a cell near the bottom lands in the window and above its cell, not over it", () => {
+    // Omri's case, 1280 × 720 screen pixels: the cell is at 497–536 on screen; the card is 162 layout pixels tall.
+    const z = 1.1;
+    const s = toCardSpace({ top: 497, bottom: 536, left: 500, width: 64 }, { width: 1280, height: 720 }, z);
+    const p = placeCard(s.anchor, { width: 340, height: 162 }, s.win, "center");
+    // On screen, after the zoom: the card ends above the cell's top and inside the window.
+    expect(p.side).toBe("above");
+    expect((p.top + Math.min(162, p.maxHeight)) * z).toBeLessThanOrEqual(497);
+    expect(p.top * z).toBeGreaterThanOrEqual(0);
+  });
+  it("at zoom 1.1 a card that opens below stays inside the window, with its height capped to the room", () => {
+    const z = 1.1;
+    const s = toCardSpace({ top: 300, bottom: 336, left: 40, width: 64 }, { width: 1280, height: 720 }, z);
+    const p = placeCard(s.anchor, { width: 340, height: 300 }, s.win);
+    expect(p.side).toBe("below");
+    expect(p.top * z).toBeGreaterThanOrEqual(336);
+    expect((p.top + Math.min(300, p.maxHeight)) * z).toBeLessThanOrEqual(720);
   });
 });
 
