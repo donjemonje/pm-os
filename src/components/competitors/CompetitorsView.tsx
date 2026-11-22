@@ -40,6 +40,13 @@ function chipClass(active: boolean): string {
     : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-[var(--app-glass)] px-3 text-[12.5px] font-semibold text-[#3f506b] shadow-sm hover:border-primary/55 hover:bg-white";
 }
 
+/**
+ * The table starts with this many companies shown, and that many fit without sideways scrolling (from a 1512 px wide
+ * window with the menu open). With more companies in the organization, the first ones in the list are ticked in the
+ * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
+ */
+const DEFAULT_SHOWN_COMPANIES = 6;
+
 function toggleIn(setter: React.Dispatch<React.SetStateAction<string[]>>) {
   return (o: string) => setter((prev) => (prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]));
 }
@@ -209,7 +216,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const [capQuery, setCapQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<string[]>([]);
   const [productFilter, setProductFilter] = useState<string[]>([]);
-  const [competitorFilter, setCompetitorFilter] = useState<string[]>([]);
+  // More companies than the table shows at first: the first six start ticked. Six or fewer: nothing ticked = all.
+  const [defaultShown] = useState<string[]>(() => (initialState.competitors.length > DEFAULT_SHOWN_COMPANIES ? initialState.competitors.slice(0, DEFAULT_SHOWN_COMPANIES).map((c) => c.name) : []));
+  const [competitorFilter, setCompetitorFilter] = useState<string[]>(defaultShown);
+  const competitorFilterChanged = competitorFilter.length !== defaultShown.length || competitorFilter.some((n) => !defaultShown.includes(n));
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [gapsOnly, setGapsOnly] = useState(false);
 
@@ -404,7 +414,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
       track("cmp_matrix_viewed", {
         competitors: competitors.length,
         capabilities: activeCaps.length,
-        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilter.length && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
+        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
         gapsOnly,
       });
     }, 800);
@@ -556,7 +566,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
             {/* Matrix */}
             <div className="glass overflow-visible rounded-card">
               <div className="overflow-x-auto rounded-card">
-                <table className="w-full border-collapse text-[13px]" style={{ minWidth: 640 + 104 * shownCompetitors.length }}>
+                <table className="w-full border-collapse text-[13px]" style={{ minWidth: 560 + 104 * shownCompetitors.length }}>
                   <thead>
                     <tr>
                       <th scope="col" className="border-b border-border px-4 pb-[30px] pl-[30px] pt-2.5 text-left align-middle text-[12px] font-semibold tracking-[0.06em] text-fg-muted">
