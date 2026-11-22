@@ -52,6 +52,9 @@ function chipClass(active: boolean): string {
  * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
  */
 const DEFAULT_SHOWN_COMPANIES = 6;
+/** The amber dashed chip of a gap (a capability row; "N Gaps" in a domain's header) and the green chip of what only the organization has ("Differentiator" on a row; "N Diff" in a domain's header). */
+const GAP_CHIP = "inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]";
+const DIFF_CHIP = "inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]";
 /** The light blue of the organization's own column: every one of its cells — capability rows, feature rows, the domain header. */
 const OWN_CELL = "bg-[rgba(36,87,245,.06)]";
 
@@ -768,7 +771,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                       {k.name}
                                       {features.length > 0 && <span className="text-[11px] font-normal text-fg-muted">{C.matrix.featuresCount(features.length)}</span>}
                                       <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
-                                      {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
+                                      {kind === "gap" && <span className={GAP_CHIP}>Gap</span>}
                                       {kind === "only" && <DifferentiatorChip org={own} />}
                                     </span>
                                   </td>
@@ -1093,8 +1096,8 @@ function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, childr
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
               {!inColumns && (
               <span className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-[12px] text-fg-3">
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]" title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
-                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
+                {gaps > 0 && <span className={GAP_CHIP} title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className={DIFF_CHIP} title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
               )}
@@ -1114,8 +1117,8 @@ function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, childr
             {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} top={topScore.has(c.id)} /></td>)}
             <td className="border-b border-border px-3">
               <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full items-center justify-end gap-x-2 whitespace-nowrap text-[11.5px] text-fg-3">
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]" title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
-                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
+                {gaps > 0 && <span className={GAP_CHIP} title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className={DIFF_CHIP} title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
             </td>
@@ -1129,7 +1132,7 @@ function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, childr
 
 /** The green chip of a row only the organization has — a capability or a feature. The tooltip says it in full. */
 function DifferentiatorChip({ org }: { org: string }) {
-  return <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]" title={C.matrix.differentiatorTip(org)} data-testid="cmp-differentiator">{C.matrix.differentiator}</span>;
+  return <span className={DIFF_CHIP} title={C.matrix.differentiatorTip(org)} data-testid="cmp-differentiator">{C.matrix.differentiator}</span>;
 }
 
 // ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
