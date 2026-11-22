@@ -47,13 +47,12 @@ const POLL_MS = 3000;
  * Settings → Competitors: your company first (the organization's own website,
  * its other addresses, its product lines), then competitors (with Scan now and the scan log),
  * domains (with the definition text PMOS AI reads), the capability catalog
- * with the org's own status per row, what the team removed, and who is
- * notified. Every section opens and closes; only Your company and Competitors
+ * with the org's own status per row, and what the team removed. Every section opens and closes; only Your company and Competitors
  * start open (Daniel 2026-11-12: the page was crowded). Reads are for
  * everyone; catalog writes need a customer admin (the API enforces the same).
  * Scan now and the log are for every member.
  */
-type SectionKey = "own" | "competitors" | "domains" | "capabilities" | "notifications";
+type SectionKey = "own" | "competitors" | "domains" | "capabilities";
 
 /** A section's title row: click to open or close. The count says what is inside while it is closed. */
 function SectionToggle({ section, title, count, open, onToggle, heading = false }: { section: SectionKey; title: string; count?: number; open: boolean; onToggle: () => void; heading?: boolean }) {
@@ -75,7 +74,7 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
   const [logFor, setLogFor] = useState<CompetitorRow | null>(null);
   /** The domain being removed while it still holds capabilities: the PM is asked once where they go. */
   const [movingOut, setMovingOut] = useState<{ domain: DomainRow; count: number } | null>(null);
-  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({ own: true, competitors: true, domains: false, capabilities: false, notifications: false });
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>({ own: true, competitors: true, domains: false, capabilities: false });
   const [addingCompetitor, setAddingCompetitor] = useState(false);
   const isOpen = (k: SectionKey) => openSections[k];
   const toggle = (k: SectionKey) => setOpenSections((o) => ({ ...o, [k]: !o[k] }));
@@ -290,9 +289,6 @@ export function CompetitorsSettings({ initialState, canEdit }: { initialState: C
           }}
         />
       )}
-
-      {/* Notifications */}
-      <NotificationsPanel members={state.members} selected={state.config.notifyUserIds} canEdit={canEdit} busy={busy} open={isOpen("notifications")} onToggle={() => toggle("notifications")} onSave={(ids) => call("PATCH", "/api/competitors/settings", { notifyUserIds: ids })} />
 
       {logFor && <ScanLogDrawer competitorId={logFor.id} competitorName={logFor.name} onClose={() => setLogFor(null)} />}
       {movingOut && (
@@ -1144,51 +1140,6 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
           </div>
         );
       })}
-    </section>
-  );
-}
-
-// ————— Notifications —————
-
-/** Who receives the scan notification email: every active user of the organization, ticked or not. */
-function NotificationsPanel({ members, selected, canEdit, busy, open, onToggle, onSave }: {
-  open: boolean;
-  onToggle: () => void;
-  members: CompetitorsState["members"];
-  selected: string[];
-  canEdit: boolean;
-  busy: boolean;
-  onSave: (ids: string[]) => Promise<boolean>;
-}) {
-  const picked = new Set(selected);
-  async function toggle(id: string) {
-    const next = picked.has(id) ? selected.filter((x) => x !== id) : [...selected, id];
-    await onSave(next);
-  }
-  return (
-    <section className="rounded-xl border border-border bg-card" data-testid="cmp-notifications">
-      <div className={cn("flex items-start justify-between gap-4 px-5 py-4", open && "border-b border-border")}>
-        <div>
-          <SectionToggle section="notifications" title={C.notify.title} open={open} onToggle={onToggle} />
-          {open && <p className="mt-1 text-sm text-muted">{C.notify.blurb}</p>}
-        </div>
-        <span className="shrink-0 text-[12px] text-fg-muted">{C.notify.selected(selected.filter((id) => members.some((m) => m.id === id)).length)}</span>
-      </div>
-      {!open ? null : members.length === 0 ? (
-        <div className="px-5 py-4 text-sm text-muted">{C.notify.empty}</div>
-      ) : (
-        <ul className="divide-y divide-border">
-          {members.map((m) => (
-            <li key={m.id}>
-              <label className={cn("flex items-center gap-3 px-5 py-2.5 text-sm", canEdit ? "cursor-pointer hover:bg-background" : "cursor-default")}>
-                <input type="checkbox" checked={picked.has(m.id)} onChange={() => void toggle(m.id)} disabled={!canEdit || busy} className="h-4 w-4 accent-[var(--app-accent)]" />
-                <span className="font-medium text-foreground">{m.name || m.email}</span>
-                {m.name && <span className="text-[12.5px] text-fg-muted">{m.email}</span>}
-              </label>
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
   );
 }

@@ -68,8 +68,6 @@ export function isStale(status: string, heartbeatAt: Date, t: Date): boolean {
 export async function sweepStale(t: Date): Promise<number> {
   const cutoff = new Date(t.getTime() - STALE_MS);
   const stale = await db.competitorScan.findMany({ where: { status: "running", heartbeatAt: { lt: cutoff } }, select: { id: true, sourceId: true, lane: true } });
-  /** Scans this sweep ended: the email of their Scan run may be due now. */
-  const ended: string[] = [];
   for (const s of stale) {
     if (s.lane === "local") {
       const req = await db.localScanRequest.findUnique({ where: { scanId: s.id }, select: { state: true, processAttempts: true } });
@@ -81,7 +79,6 @@ export async function sweepStale(t: Date): Promise<number> {
           await db.competitorScan.update({ where: { id: s.id }, data: { status: "failed", badge: "incomplete", finishedAt: t, errorKind: "other", error: `processing failed ${MAX_PROCESS_ATTEMPTS} times after the station handed the pages in — contact support@pm-os.io` } });
           await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "processing failed after the hand-in" } });
           console.error(`[competitors] scan ${s.id}: processing failed ${MAX_PROCESS_ATTEMPTS} times after the hand-in`);
-          ended.push(s.id);
           continue;
         }
         await db.localScanRequest.updateMany({ where: { scanId: s.id }, data: { state: "handed_in", processAttempts: { increment: 1 } } });
@@ -96,11 +93,6 @@ export async function sweepStale(t: Date): Promise<number> {
     }
     await db.competitorScan.update({ where: { id: s.id }, data: { status: "stale", badge: "stale", finishedAt: t, errorKind: "other", error: "the scan stopped reporting; the next run continues from its pending pages" } });
     await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "the scan stopped reporting" } });
-    ended.push(s.id);
-  }
-  if (ended.length) {
-    const { notifyRunsOfScans } = await import("./runs");
-    await notifyRunsOfScans(ended);
   }
   // Runs whose scans are all gone: close them so the next press can start.
   const runs = await db.competitorScanRun.findMany({ where: { status: "running", startedAt: { lt: cutoff } }, select: { id: true } });

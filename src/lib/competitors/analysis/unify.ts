@@ -55,42 +55,71 @@ const MAX_ENUM = 120;
 /** A row code that asks for a new row. */
 export const NEW_ROW = "new";
 
-const ROW_SIZE = `A row is ONE capability of the market: one thing a product can do — one line a buyer would write in a list of requirements. Take a car: "Car entertainment" is an area (a domain: never a row), "Bluetooth connection" is a capability (a row), "iPhone support" is a feature (a detail of one row).`;
+// ————— The rule text every table prompt shares —————
+// The setup prompts below and the prompt that adds a newly found ability to the table (news/table-prompt-new-intake.ts) are
+// built from these same sentences (Daniel 2026-11-21: "creating the table and adding a new ability found should
+// have similar prompts, as much as possible"). Editing one changes every prompt that holds it.
 
-export const UNIFY_CAPABILITIES_PROMPT = `A product team compares the companies of one market in a table. The material of each company was read, and for each company there is a list of the capabilities it offers, in its own words — each with a code, what it does and some of the features under it. Build the rows of the table.
+/** How every table prompt opens. */
+export const TABLE_FRAME = `A product team compares the companies of one market in a table.`;
+/** The same capability under two names is one row. */
+export const SAME_ROW_RULE = `When two companies offer the same capability under different names, it is ONE row.`;
+/** What makes two things the same row: what the buyer gets. */
+export const ROW_GROUPING_RULE = `A company's capability may be wider or narrower than another's. Group by what the buyer gets, not by the words.`;
+/** No umbrella rows. */
+export const NO_WIDE_ROW_RULE = `Never build a wide row to hold capabilities that are different things.`;
+/** A row's name and sentence. */
+export const ROW_NAME_RULE = `Name a row with the term the market uses for it — the words an analyst's report would use — never one company's product or brand name. Short, title case. Give one plain sentence saying what it is.`;
+/** No second row for what a row already says. */
+export const NO_DUPLICATE_ROW_RULE = `Never make a new row that says the same as an existing one in other words.`;
+/** Broader and narrower are two rows. */
+export const BROADER_NARROWER_RULE = `A broader capability and a narrower one are not the same`;
+/** What a feature row is. */
+export const FEATURE_ROW_IS = `a feature row is one feature — a detail of how that capability works`;
+/** The same feature at two companies is one feature row. */
+export const SAME_FEATURE_RULE = `The same feature at two companies is ONE feature row`;
+/** A feature row's name and sentence. */
+export const FEATURE_NAME_RULE = `Name a feature row with the term the market uses for it, never one company's brand name, and say what it is about (custom fields ON WHAT, reports ABOUT WHAT). Give one plain sentence saying what it does.`;
+/** Where a feature belongs. */
+export const FEATURE_PLACE_RULE = `A feature belongs under the row it is listed with, unless it clearly belongs to another row (a company's MCP server, listed with its integrations, belongs to the row about MCP servers).`;
+
+/** The sizes of the table: a domain, a row, a feature. */
+export const ROW_SIZE = `A row is ONE capability of the market: one thing a product can do — one line a buyer would write in a list of requirements. Take a car: "Car entertainment" is an area (a domain: never a row), "Bluetooth connection" is a capability (a row), "iPhone support" is a feature (a detail of one row).`;
+
+export const UNIFY_CAPABILITIES_PROMPT = `${TABLE_FRAME} The material of each company was read, and for each company there is a list of the capabilities it offers, in its own words — each with a code, what it does and some of the features under it. Build the rows of the table.
 
 ${ROW_SIZE}
 
 Rules:
-- When two companies offer the same capability under different names, it is ONE row. Put the code of each company's capability on the row. A capability only one company has is a row of its own.
-- A company's capability may be wider or narrower than another's. Group by what the buyer gets, not by the words. When one company's capability covers two rows, put its code on the row it fits best. Never build a wide row to hold capabilities that are different things.
-- Name a row with the term the market uses for it — the words an analyst's report would use — never one company's product or brand name. Short, title case. Give one plain sentence saying what it is.
-- ROWS SO FAR, when given, are the rows already made from other capabilities, each with a code (R…). Put a capability on a row that exists (its code) when it is the same capability. Make a new row (row = "new", with its name and description) only when no row is the same capability. Never make a new row that says the same as an existing one in other words.
+- ${SAME_ROW_RULE} Put the code of each company's capability on the row. A capability only one company has is a row of its own.
+- ${ROW_GROUPING_RULE} When one company's capability covers two rows, put its code on the row it fits best. ${NO_WIDE_ROW_RULE}
+- ${ROW_NAME_RULE}
+- ROWS SO FAR, when given, are the rows already made from other capabilities, each with a code (R…). Put a capability on a row that exists (its code) when it is the same capability. Make a new row (row = "new", with its name and description) only when no row is the same capability. ${NO_DUPLICATE_ROW_RULE}
 - Use every capability code exactly once. Use only the codes given.`;
 
 export const UNIFY_REVIEW_PROMPT = `Below are the rows of a comparison table of one market: each row is one capability, with a code, its name, what it is and what each company calls it. The rows were made in several passes, so two rows may be the same capability under different words. Find them.
 
 ${ROW_SIZE}
 
-Answer with "merge": the groups of rows that are the same capability — a buyer would write them as one line of a list of requirements. A broader capability and a narrower one are not the same: do not merge them. For each group give the name the merged row keeps: the term the market uses for it.
+Answer with "merge": the groups of rows that are the same capability — a buyer would write them as one line of a list of requirements. ${BROADER_NARROWER_RULE}: do not merge them. For each group give the name the merged row keeps: the term the market uses for it.
 
 Use only the row codes given. A row is in at most one group. Most rows are right as they are: an empty list is a correct answer.`;
 
-const FEATURE_RULES = `- The same feature at two companies is ONE feature row, with both codes. A feature only one company has is a feature row of its own.
-- Name a feature row with the term the market uses for it, never one company's brand name, and say what it is about (custom fields ON WHAT, reports ABOUT WHAT). Give one plain sentence saying what it does.
+const FEATURE_RULES = `- ${SAME_FEATURE_RULE}, with both codes. A feature only one company has is a feature row of its own.
+- ${FEATURE_NAME_RULE}
 - Put a feature on a feature row that exists (its code) when it is the same feature. Make a new feature row (feature_row = "new", with its name and description) only when none is.`;
 
-export const UNIFY_FEATURES_PROMPT = `A product team compares the companies of one market in a table. The rows of the table are made: each row is one capability of the market. Now the features: under each row, a feature row is one feature — a detail of how that capability works.
+export const UNIFY_FEATURES_PROMPT = `${TABLE_FRAME} The rows of the table are made: each row is one capability of the market. Now the features: under each row, ${FEATURE_ROW_IS}.
 
 You get ALL ROWS of the table (code, name, what it is). Then, for some of them (ROWS TO FILL), the features the companies have under the row — each with a code, the company, the company's own name for it and what it does — and the feature rows the row already has, when it has any.
 
 Rules:
 ${FEATURE_RULES}
-- A feature belongs under the row it is listed with, unless it clearly belongs to another row (a company's MCP server, listed with its integrations, belongs to the row about MCP servers). Then: when that other row is one of the ROWS TO FILL, put the feature in a feature row under it; when it is another row of ALL ROWS, list the feature under "moved" with that row's code.
+- ${FEATURE_PLACE_RULE} Then: when that other row is one of the ROWS TO FILL, put the feature in a feature row under it; when it is another row of ALL ROWS, list the feature under "moved" with that row's code.
 - Use every feature code exactly once — in a feature row or under "moved". Use only the codes given.`;
 
 /** The second round: features another call moved to these rows. They stay. */
-export const UNIFY_MOVED_FEATURES_PROMPT = `A product team compares the companies of one market in a table. The rows of the table are made: each row is one capability of the market, and under each row a feature row is one feature — a detail of how that capability works.
+export const UNIFY_MOVED_FEATURES_PROMPT = `${TABLE_FRAME} The rows of the table are made: each row is one capability of the market, and under each row ${FEATURE_ROW_IS}.
 
 The features below were listed by their company under another capability and belong to the row they are shown with here. For each row you get the feature rows it already has and the features to add — each with a code, the company, the company's own name for it and what it does.
 

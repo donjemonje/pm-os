@@ -1,188 +1,109 @@
 /**
- * The news feed — the archive of what scans found, item by item, newest
- * first: a status that moved (a gap when the org lacks it), a new dated fact,
- * a capability or domain a scan suggested. Derived from the pipeline's rows
- * (CapabilityStatus + history, ProfileFact, Capability), never stored twice.
- * Items dated before the workspace's `baselineUntil` are history, not news:
- * what the set-up imports brought in is the starting picture, and only what
- * scans find from then on is new. Read state is per user (CompetitorFeedRead).
+ * The news feed — news about what happened at the competitors, and nothing else.
+ *
+ * An item is a NEW ABILITY: something the news intake (news/intake.ts) found on a new or changed page of a
+ * competitor that was not on the company's list before. One CompetitorNews row with verdict "new" whose evidence is
+ * on its page is one item. No sizes here: capability or feature belongs to the table. News that is already on the
+ * list, and news that is not an ability (people, money, deals, prices), is stored and never shown here.
+ *
+ * The feed is not an audit log of the table (Daniel 2026-11-22: showing table changes here was a bug). It no longer
+ * reports a status that moved in the table, a capability a scan suggested or a dated fact; the code that derived
+ * those items is gone, not switched off.
+ *
+ * Items found before the workspace's `baselineUntil` are history, not news. Read state is per user
+ * (CompetitorFeedRead).
  */
 import { db } from "../db";
 import { NOT_OWN } from "./own";
-import type { OwnStatus, StatusValue } from "./config";
+import { abilityPhrase } from "./news/intake";
 
-export type FeedKind = "gap" | "raised" | "lowered" | "fact" | "suggestion";
+/** The one kind of item the feed holds. */
+export type FeedKind = "ability";
 export type FeedImpact = "High" | "Medium" | "Low";
 
 export interface FeedItem {
-  /** kind:rowId:timestamp — the read-state key. */
+  /** news:<CompetitorNews id> — the read-state key. */
   key: string;
   kind: FeedKind;
   impact: FeedImpact;
+  /** When the intake found it. */
   at: string;
   competitorId: string;
   competitorName: string;
-  /** Capability name, fact value or suggested name. */
+  /** The ability's name. */
   title: string;
-  domain: string | null;
-  capabilityId: string | null;
-  from: StatusValue | null;
-  to: StatusValue | null;
-  own: OwnStatus | null;
-  factKind: string | null;
-  factDate: string | null;
-  product: string | null;
+  /** The date the page states, when it states one. */
+  publishedAt: string | null;
+  /** One phrase, no label: the problem it solves, then how it solves it. */
+  summary: string | null;
+  /** The evidence: the passage of the page that shows it, and the page. */
   quote: string | null;
   sourceUrl: string | null;
-  /** The source type the finding came from (website, press, …), when known. */
+  /** The source type of the page it was on (changelog, helpcenter, press, …), when known. */
   sourceType: string | null;
-  /** PMOS AI's news digest: one line + two sentences (facts), one sentence (status moves); null when the row has none. */
-  headline: string | null;
-  summary: string | null;
-  /** The source page's preview image, when it had one. */
-  imageUrl: string | null;
-  /** For suggestions: suggested | active (accepted) | dismissed. */
-  suggestionState: string | null;
-  /** The suggestion's domain was itself proposed by the scan. */
-  newDomain: boolean;
+  /** How PMOS AI understood it: the problem it solves (also the first part of `summary`), the workflows it is part of, who it is for. */
+  problem: string | null;
+  workflows: string | null;
+  audience: string | null;
   read: boolean;
 }
 
-const RANK: Record<StatusValue, number> = { found: 3, low: 2, not_found: 1 };
-
-export function statusKind(from: StatusValue, to: StatusValue, own: OwnStatus): Exclude<FeedKind, "fact" | "suggestion"> | null {
-  if (RANK[to] === RANK[from]) return null;
-  if (RANK[to] < RANK[from]) return "lowered";
-  return own === "not_found" && (to === "found" || to === "low") ? "gap" : "raised";
-}
-
-export function impactOf(kind: FeedKind): FeedImpact {
-  return kind === "gap" ? "High" : kind === "raised" || kind === "lowered" ? "Medium" : "Low";
-}
+/** The feed's source-type label for the kind of page a piece of news was on (copy: profile.sourceTypes). */
+const NEWS_SOURCE_TYPE: Record<string, string> = { release_notes: "changelog", help: "helpcenter", api_docs: "apidocs", news: "press", blog: "blog", product: "website" };
 
 export const FEED_LIMIT = 500;
 
 const IMPACT_RANK: Record<FeedImpact, number> = { High: 0, Medium: 1, Low: 2 };
 
-/** The date a row is about: a fact's own date when the page states one, else when the scan found it. */
-export function newsDate(item: Pick<FeedItem, "at" | "factDate">): string {
-  return item.factDate ?? item.at;
+/** The date an item is about: the page's own date when it states one, else when the intake found it. */
+export function newsDate(item: Pick<FeedItem, "at" | "publishedAt">): string {
+  return item.publishedAt ?? item.at;
 }
 
-/** Feed order: high impact first, then newest news first (by the item's own date, not the scan time). */
-export function compareFeed(a: Pick<FeedItem, "at" | "factDate" | "impact">, b: Pick<FeedItem, "at" | "factDate" | "impact">): number {
+/** Feed order: high impact first, then newest news first (by the item's own date, not the time it was found). */
+export function compareFeed(a: Pick<FeedItem, "at" | "publishedAt" | "impact">, b: Pick<FeedItem, "at" | "publishedAt" | "impact">): number {
   return IMPACT_RANK[a.impact] - IMPACT_RANK[b.impact] || newsDate(b).localeCompare(newsDate(a)) || b.at.localeCompare(a.at);
-}
-
-const bare = (url: string) => url.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "");
-
-/**
- * Where a URL comes from, for the feed's "Source" line: the competitor's source
- * whose URL is the longest prefix of it (a page under /blog/ is the blog source,
- * whatever scan happened to find it), else a hint in the path, else null.
- */
-export function sourceTypeForUrl(url: string | null | undefined, sources: readonly { type: string; url: string }[]): string | null {
-  if (!url) return null;
-  const u = bare(url);
-  let best: { type: string; len: number } | null = null;
-  for (const s of sources) {
-    const p = bare(s.url);
-    if (s.type === "website" || s.type === "archive" || p.length < 4) continue;
-    if (u.startsWith(p) && (!best || p.length > best.len)) best = { type: s.type, len: p.length };
-  }
-  if (best) return best.type;
-  const path = u.slice(u.indexOf("/"));
-  if (/press-release|\/press\b|\/news\b|newsroom/.test(path)) return "press";
-  if (/changelog|release-notes|product-updates|whats-new/.test(path)) return "changelog";
-  if (/\/blog\b/.test(path)) return "blog";
-  return null;
 }
 
 /** Every news item of the workspace since the baseline, newest first, with the user's read marks. */
 export async function collectFeed(workspaceId: string, baselineUntil: string | null, userId: string | null): Promise<FeedItem[]> {
   const since = baselineUntil ? new Date(baselineUntil) : null;
-  const after = since ? { gt: since } : { not: null as unknown as Date };
-  const [statuses, facts, suggestions, competitors, reads] = await Promise.all([
-    db.capabilityStatus.findMany({
-      // News is history (Daniel 2026-11-11): what was reported about a capability stays in the feed after a PM removes it from the table.
-      where: { workspaceId, competitor: NOT_OWN, changedAt: since ? { gt: since } : { not: null } },
-      orderBy: { changedAt: "desc" },
-      take: FEED_LIMIT,
-      include: {
-        capability: { select: { name: true, ourStatus: true, domain: { select: { name: true } } } },
-        history: { orderBy: { at: "desc" }, take: 8 },
-      },
-    }),
-    db.profileFact.findMany({
-      where: { workspaceId, competitor: NOT_OWN, dismissedAt: null, changedAt: since ? { gt: since } : { not: null } },
-      orderBy: { changedAt: "desc" },
-      take: FEED_LIMIT,
-    }),
-    db.capability.findMany({
-      where: { workspaceId, origin: "ai", suggestedById: { not: null }, ...(since ? { createdAt: { gt: since } } : {}) },
+  const [competitors, reads, news] = await Promise.all([
+    // Never the organization's own site (own.ts): the feed is news about competitors.
+    db.competitor.findMany({ where: { workspaceId, ...NOT_OWN }, select: { id: true, name: true } }),
+    userId ? db.competitorFeedRead.findMany({ where: { workspaceId, userId }, select: { key: true } }) : [],
+    // A new ability whose quote is on its page.
+    db.competitorNews.findMany({
+      where: { workspaceId, verdict: "new", quoteOk: true, competitor: NOT_OWN, ...(since ? { createdAt: { gt: since } } : {}) },
       orderBy: { createdAt: "desc" },
       take: FEED_LIMIT,
-      include: { domain: { select: { name: true, state: true } } },
     }),
-    // Never the organization's own site (own.ts): the feed is news about competitors.
-    db.competitor.findMany({ where: { workspaceId, ...NOT_OWN }, select: { id: true, name: true, sources: { select: { type: true, url: true } } } }),
-    userId ? db.competitorFeedRead.findMany({ where: { workspaceId, userId }, select: { key: true } }) : [],
   ]);
-  void after;
   const nameOf = new Map(competitors.map((c) => [c.id, c.name]));
-  const sourcesOf = new Map(competitors.map((c) => [c.id, c.sources]));
-  const typeFor = (competitorId: string, url: string | null | undefined, scanId: string | null) =>
-    sourceTypeForUrl(url, sourcesOf.get(competitorId) ?? []) ?? (scanId ? sourceTypeOf.get(scanId) ?? null : null);
   const readKeys = new Set(reads.map((r) => r.key));
-  const scanIds = [...new Set([...statuses.map((s) => s.scanId), ...facts.map((f) => f.scanId)].filter((id): id is string => Boolean(id)))];
-  const scans = scanIds.length ? await db.competitorScan.findMany({ where: { id: { in: scanIds } }, select: { id: true, source: { select: { type: true } } } }) : [];
-  const sourceTypeOf = new Map(scans.map((s) => [s.id, s.source.type]));
 
-  const items: FeedItem[] = [];
-  for (const s of statuses) {
-    if (!s.changedAt) continue;
-    const at = s.changedAt;
-    // The value before the change: the newest history row written at (or just before) the change.
-    const before = s.history.find((h) => h.at.getTime() <= at.getTime() + 2000) ?? s.history[0];
-    if (!before) continue;
-    const own: OwnStatus = s.capability.ourStatus === "not_found" ? "not_found" : "found";
-    const kind = statusKind(before.value as StatusValue, s.value as StatusValue, own);
-    if (!kind) continue;
-    const key = `status:${s.id}:${at.getTime()}`;
-    items.push({
-      key, kind, impact: impactOf(kind), at: at.toISOString(),
-      competitorId: s.competitorId, competitorName: nameOf.get(s.competitorId) ?? "",
-      title: s.capability.name, domain: s.capability.domain.name, capabilityId: s.capabilityId,
-      from: before.value as StatusValue, to: s.value as StatusValue, own,
-      factKind: null, factDate: null, product: s.product, quote: s.quote, sourceUrl: s.sourceUrl,
-      sourceType: typeFor(s.competitorId, s.sourceUrl, s.scanId), headline: null, summary: s.summary, imageUrl: s.imageUrl, suggestionState: null, newDomain: false,
+  const items: FeedItem[] = news.map((n) => {
+    const key = `news:${n.id}`;
+    return {
+      key,
+      kind: "ability",
+      // Every new ability weighs the same for now: the intake does not rank them.
+      impact: "High",
+      at: n.createdAt.toISOString(),
+      competitorId: n.competitorId,
+      competitorName: nameOf.get(n.competitorId) ?? "",
+      title: n.name,
+      publishedAt: n.publishedAt?.toISOString() ?? null,
+      summary: abilityPhrase(n),
+      quote: n.quote,
+      sourceUrl: n.sourceUrl,
+      sourceType: NEWS_SOURCE_TYPE[n.sourceKind] ?? null,
+      problem: n.problem,
+      workflows: n.workflows,
+      audience: n.audience,
       read: readKeys.has(key),
-    });
-  }
-  for (const f of facts) {
-    if (!f.changedAt) continue;
-    const key = `fact:${f.id}:${f.changedAt.getTime()}`;
-    items.push({
-      key, kind: "fact", impact: "Low", at: f.changedAt.toISOString(),
-      competitorId: f.competitorId, competitorName: nameOf.get(f.competitorId) ?? "",
-      title: f.overrideValue ?? f.value, domain: null, capabilityId: null, from: null, to: null, own: null,
-      factKind: f.kind, factDate: f.factDate?.toISOString() ?? null, product: null, quote: null, sourceUrl: f.sourceUrl,
-      sourceType: typeFor(f.competitorId, f.sourceUrl, f.scanId), headline: f.headline, summary: f.summary, imageUrl: f.imageUrl, suggestionState: null, newDomain: false,
-      read: readKeys.has(key),
-    });
-  }
-  for (const k of suggestions) {
-    const key = `suggestion:${k.id}:${k.createdAt.getTime()}`;
-    const m = k.suggestedQuote?.match(/^(.*?)\s—\s(https?:\/\/\S+)$/);
-    items.push({
-      key, kind: "suggestion", impact: "Low", at: k.createdAt.toISOString(),
-      competitorId: k.suggestedById!, competitorName: nameOf.get(k.suggestedById!) ?? "",
-      title: k.name, domain: k.domain.name, capabilityId: k.id, from: null, to: null, own: null,
-      factKind: null, factDate: null, product: null, quote: m ? m[1] : k.suggestedQuote, sourceUrl: m ? m[2] : null,
-      sourceType: typeFor(k.suggestedById!, m ? m[2] : null, null), headline: null, summary: null, imageUrl: null, suggestionState: k.state, newDomain: k.domain.state === "suggested",
-      read: readKeys.has(key),
-    });
-  }
+    };
+  });
   items.sort(compareFeed);
-  return items.slice(0, FEED_LIMIT);
+  return items;
 }

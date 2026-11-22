@@ -7,9 +7,9 @@
  * Per-workspace settings (Workspace.competitorsConfig). Since the Website
  * Scanning PRD (2026-11-04) the scan frequency lives per source
  * (CompetitorSource.scanEveryDays, Administration) and there is no page cap;
- * what remains here is the notification recipients, the news baseline and
- * the three analysis settings (the daily manual-scan limit was removed,
- * Daniel 2026-11-12).
+ * what remains here is the news baseline (the daily manual-scan limit was
+ * removed, Daniel 2026-11-12; the Scan-run email and its recipients list,
+ * notifyUserIds, were removed 2026-11-22 — a stored value is ignored).
  */
 /** Scan frequency per source, in days (PRD: once every 2 days). */
 export const DEFAULT_SCAN_EVERY_DAYS = 2;
@@ -17,18 +17,15 @@ export const MIN_SCAN_EVERY_DAYS = 1;
 export const MAX_SCAN_EVERY_DAYS = 90;
 
 export interface CompetitorsConfig {
-  /** Users (ids, same organization) who receive the scan notification email. */
-  notifyUserIds: string[];
   /** News feed baseline: what scans found before this moment is history, not news (ISO, null = everything is news). */
   baselineUntil: string | null;
   // Three older analysis settings are gone and a stored value of them is ignored: readWeakPages (whether blog and
   // news are read is the installation's setting "What the analysis reads" now — analysis/reads.ts, one source of
   // truth), minPagesForNewRow (an item of a company's list has one proof) and secondLooksPerRun (the second look asks
-  // about all rows at once, per chunk).
+  // about all rows at once, per chunk). notifyUserIds (the recipients of the removed Scan-run email) is ignored too.
 }
 
 export const DEFAULT_COMPETITORS_CONFIG: CompetitorsConfig = {
-  notifyUserIds: [],
   baselineUntil: null,
 };
 
@@ -107,6 +104,16 @@ export type PageState = (typeof PAGE_STATES)[number];
 export function isAnalysisActive(status: string | null | undefined): boolean {
   return status === "queued" || status === "running" || status === "waiting";
 }
+/**
+ * Has a finished Scan run settled — is everything it started over? Not while one of its scans is still to be read (in
+ * the local lane a scan is parked and the run itself ends at once; its pages arrive when the station reads the site),
+ * and not while an analysis one of its scans queued is still to finish. The Competitors page says "Scan finished" then.
+ */
+export function runSettled(r: { runStatus: string; scanStatuses: string[]; analysesUnfinished: number }): boolean {
+  if (r.runStatus === "running") return false;
+  if (r.scanStatuses.some((s) => s === "queued" || s === "pending_local" || s === "running")) return false;
+  return r.analysesUnfinished === 0;
+}
 /** Where pages came from. */
 export const SCAN_LANES = ["remote", "local", "bundle"] as const;
 export type ScanLane = (typeof SCAN_LANES)[number];
@@ -114,7 +121,6 @@ export type ScanLane = (typeof SCAN_LANES)[number];
 export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
   const r = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
   return {
-    notifyUserIds: Array.isArray(r.notifyUserIds) ? [...new Set(r.notifyUserIds.filter((x): x is string => typeof x === "string"))].slice(0, 500) : [],
     baselineUntil: typeof r.baselineUntil === "string" && !Number.isNaN(Date.parse(r.baselineUntil)) ? r.baselineUntil : null,
   };
 }

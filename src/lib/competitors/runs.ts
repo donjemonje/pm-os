@@ -1,7 +1,8 @@
 /**
  * A scan run — the Scan button on the Competitors page (or a scheduled
- * round): every competitor scanned one after another, then ONE notification
- * email about what the run changed (lib/competitors/notify.ts).
+ * round): every competitor scanned one after another. A run sends no email of its
+ * own (the Scan-run email was removed 2026-11-22): what a competitor's pages newly
+ * show is reported by the news notification, per scan (news/after-scan.ts).
  *
  * A run always reads the real websites: the scanner crawls each competitor's
  * site (createScan + runScan), or parks the scan for the local station.
@@ -9,7 +10,6 @@
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { recordCompetitorEvent } from "./analytics";
-import { notifyRun, runEmailDue } from "./notify";
 import { NOT_OWN } from "./own";
 import { failStaleScans } from "./run";
 import { createScan, runScan } from "./scan";
@@ -23,7 +23,7 @@ interface PlanItem {
 
 /**
  * Which competitors a run would scan, in matrix order, and which it leaves out (with the reason). The organization's
- * own site (own.ts) is never part of a Scan run — not in its count, its progress or its email: it is scanned on its
+ * own site (own.ts) is never part of a Scan run — not in its count or its progress: it is scanned on its
  * own schedule, like every website source (tick.ts).
  */
 async function planRun(workspaceId: string): Promise<{ plan: PlanItem[]; skipped: { name: string; reason: string }[] }> {
@@ -75,7 +75,7 @@ export async function startRun(
   return { runId: run.id, total: plan.length };
 }
 
-/** Run every scan of the run in order, close the run, then send the notification. Safe to call once per run. */
+/** Run every scan of the run in order, then close the run. Safe to call once per run. */
 export async function executeRun(runId: string): Promise<void> {
   const run = await db.competitorScanRun.findUnique({ where: { id: runId } });
   if (!run || run.status !== "running") return;
@@ -112,41 +112,4 @@ export async function executeRun(runId: string): Promise<void> {
     data: { status: "failed", finishedAt: new Date(), errorKind: "other", error: failed ? `the run stopped before this scan: ${failed}` : "the run stopped before this scan" },
   });
   await recordCompetitorEvent(run.workspaceId, run.startedById, "cmp_run_finished", { runId, competitors: done, failed: failed ?? null, durationMs: Date.now() - t0 });
-  try {
-    await notifyRunWhenAnalyzed(runId);
-  } catch (e) {
-    console.error("[competitors] run notification failed", runId, e);
-  }
-}
-
-/**
- * The run's one notification, sent once, after its scans were read and the analyses they queued are done: the scans
- * only store pages, what changed in the table is known when the analyses are done. In the local lane the run ends
- * as soon as its scans are parked — the email waits for them (notify.ts runEmailDue). Called at the end of the run,
- * at the end of every scan of a run and at the end of every analysis; `summarizedAt` is the claim that makes it
- * happen once.
- */
-export async function notifyRunWhenAnalyzed(runId: string): Promise<void> {
-  const run = await db.competitorScanRun.findUnique({ where: { id: runId }, select: { status: true, summarizedAt: true, scans: { select: { id: true, status: true } } } });
-  if (!run) return;
-  const scanIds = run.scans.map((s) => s.id);
-  const analysesUnfinished = scanIds.length ? await db.competitorAnalysis.count({ where: { scanId: { in: scanIds }, status: { in: ["queued", "running", "waiting"] } } }) : 0;
-  if (!runEmailDue({ runStatus: run.status, summarized: Boolean(run.summarizedAt), scanStatuses: run.scans.map((s) => s.status), analysesUnfinished })) return;
-  const claimed = await db.competitorScanRun.updateMany({ where: { id: runId, summarizedAt: null }, data: { summarizedAt: new Date() } });
-  if (claimed.count !== 1) return;
-  await notifyRun(runId);
-}
-
-/**
- * Scans reached their end (read, failed, stale, cancelled): the email of the Scan run they belong to may be due now.
- * Scans outside a run (scheduled ones, "Scan now" on one site) have no email. Never throws.
- */
-export async function notifyRunsOfScans(scanIds: string[]): Promise<void> {
-  if (!scanIds.length) return;
-  try {
-    const scans = await db.competitorScan.findMany({ where: { id: { in: scanIds }, runId: { not: null } }, select: { runId: true } });
-    for (const runId of new Set(scans.map((s) => s.runId!))) await notifyRunWhenAnalyzed(runId);
-  } catch (e) {
-    console.error("[competitors] run notification after a scan failed", scanIds, e);
-  }
 }

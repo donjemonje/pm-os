@@ -342,7 +342,7 @@ export async function removeAddress(competitor: { id: string; workspaceId: strin
   const running = await db.competitorScan.findFirst({ where: { sourceId, status: "running" }, select: { id: true } });
   if (running) return { error: "scan_running" };
   const at = new Date();
-  const waiting = await db.competitorScan.findMany({ where: { sourceId, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true, runId: true } });
+  const waiting = await db.competitorScan.findMany({ where: { sourceId, status: { in: [...ACTIVE_SCAN_STATUSES] } }, select: { id: true } });
   const pages = await db.sourcePage.aggregate({ where: { sourceId, state: { not: "removed" }, text: { not: null } }, _sum: { chars: true }, _count: true });
   await db.$transaction([
     db.localScanRequest.updateMany({ where: { sourceId, state: { in: ["waiting", "running"] } }, data: { state: "cancelled", finishedAt: at } }),
@@ -352,12 +352,6 @@ export async function removeAddress(competitor: { id: string; workspaceId: strin
   ]);
   noteStoredChars(-(pages._sum.chars ?? 0));
   await recordCompetitorEvent(competitor.workspaceId, userId, "cmp_source_removed", { competitorId: competitor.id, own: competitor.isOwn, sourceId, kind: source.type, foundVia: source.foundVia ?? "unknown", pages: pages._count, cancelledScans: waiting.length });
-  // The email of a Scan run may be due now that its scan was cancelled.
-  const inRuns = waiting.filter((s) => s.runId).map((s) => s.id);
-  if (inRuns.length) {
-    const { notifyRunsOfScans } = await import("./runs");
-    await notifyRunsOfScans(inRuns);
-  }
   if (pages._count > 0) {
     try {
       const { queueAnalysis } = await import("./analysis/engine");

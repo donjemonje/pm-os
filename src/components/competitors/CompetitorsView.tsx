@@ -291,11 +291,11 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     }
   }, []);
 
-  // ——— Scan (every competitor, one notification) ———
+  // ——— Scan (every competitor) ———
   const [runNote, setRunNote] = useState<string | null>(null);
-  /** The run this page saw start: its note is shown when its summary arrives — after the analyses, which write it. */
+  /** The run this page saw start: its note is shown when the run has settled — its scans read and their analyses done. */
   const [watchedRun, setWatchedRun] = useState<string | null>(null);
-  const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors !== "number";
+  const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && !state.lastRun.settled;
 
   // While PMOS AI re-evaluates a capability's row (a PM added reasoning or released a score), learn when it is done.
   const reevaluating = state.capabilities.some((k) => k.reevaluating);
@@ -305,7 +305,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     return () => clearInterval(t);
   }, [reevaluating, refresh]);
 
-  // While a scan or an analysis runs (or a run's summary is still to come), learn when it ends; results land in one go.
+  // While a scan or an analysis runs (or a run has not settled yet), learn when it ends; results land in one go.
   useEffect(() => {
     if (!state.scanning && !state.analyzing && !awaitingSummary) return;
     const tick = async () => {
@@ -323,13 +323,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
       setWatchedRun(state.activeRun.id);
       return;
     }
-    // The summary is written when the last analysis of the run's scans is done, not when the scans end.
-    if (watchedRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors === "number") {
+    // A run has settled when the last analysis of its scans is done, not when the scans end.
+    if (watchedRun && state.lastRun?.id === watchedRun && state.lastRun.settled) {
       setWatchedRun(null);
-      const s = state.lastRun.summary;
-      const changed = typeof s.competitors === "number" ? s.competitors : 0;
-      const recipients = typeof s.recipients === "number" ? s.recipients : 0;
-      setRunNote(`${C.run.finished(changed)}${changed > 0 ? ` ${recipients > 0 ? C.run.notified(recipients) : C.run.noRecipients}` : ""}`);
+      setRunNote(C.run.finished);
     }
   }, [state.activeRun, state.lastRun, watchedRun]);
 
@@ -454,16 +451,8 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     return groups.filter((g) => g.items.length > 0);
   })();
   const [feedOpen, setFeedOpen] = useState<string | null>(null);
-  /** The "For <org>" line — derived from the data, no AI: what the item means against the org's own status. */
-  const feedMeaning = (i: FeedItem): string => {
-    if (i.kind === "gap" && i.capabilityId) {
-      const n = competitors.filter((c) => cellOf(c.id, i.capabilityId!)?.value === "found").length;
-      return C.feed.meaning.gap(own, i.competitorName, n, competitors.length);
-    }
-    if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "not_found"].toLowerCase());
-    if (i.kind === "fact") return C.feed.meaning.fact(i.competitorName, C.notify.email.factKinds[i.factKind ?? ""] ?? i.factKind ?? "");
-    return C.feed.meaning.suggestion((C.feed.suggestionStates[i.suggestionState ?? ""] ?? "").toLowerCase());
-  };
+  /** The line under an item's title: what the item is — something new at that competitor. */
+  const feedMeaning = (i: FeedItem): string => C.feed.meaning(i.competitorName);
   async function markRead(keys: string[]) {
     if (keys.length === 0) return;
     const res = await fetch("/api/competitors/feed/read", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) });
@@ -883,10 +872,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                           <div key={item.key} className={cn(isOpen && "bg-[rgba(36,87,245,.035)]")}>
                             <FeedRow item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null} open={isOpen}
                               meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(isOpen ? null : item.key); if (!item.read) void markRead([item.key]); }} />
-                            {isOpen && (
-                              <FeedDetail item={item} meaning={feedMeaning(item)}
-                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, rowId: item.capabilityId! }); } : null} />
-                            )}
+                            {isOpen && <FeedDetail item={item} meaning={feedMeaning(item)} />}
                           </div>
                         );
                       })}
@@ -1185,18 +1171,8 @@ const IMPACT_PILL: Record<string, string> = {
   Medium: "border-[rgba(240,180,60,.6)] bg-[#fff7e0] text-[#8a5a00]",
   Low: "border-[rgba(23,178,106,.4)] bg-[rgba(23,178,106,.14)] text-[#0f7a47]",
 };
-const FACT_TAG_TONE: Record<string, string> = {
-  product: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]", tagline: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]", pricingTier: "bg-[rgba(169,140,255,.16)] text-[#6b4bd0]",
-  customer: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]", hiring: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]", vertical: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]", funding: "bg-[rgba(24,145,121,.14)] text-[#0f6b57]",
-};
-
-/** What the row's tag says: gap evidence, capability, the fact kind, or suggestion. */
-function feedTag(item: FeedItem): { label: string; className: string } {
-  if (item.kind === "fact") return { label: C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind ?? "", className: FACT_TAG_TONE[item.factKind ?? ""] ?? "bg-[#eef1f6] text-[#4a5b74]" };
-  if (item.kind === "gap") return { label: C.feed.tags.gap, className: "border border-dashed border-[#f0b43c] bg-[#fff7e0] text-[#8a5a00]" };
-  if (item.kind === "suggestion") return { label: C.feed.tags.suggestion, className: "border border-dashed border-[rgba(36,87,245,.55)] bg-white text-[#2a5fd0]" };
-  return { label: C.feed.tags[item.kind], className: "bg-[#eef1f6] text-[#4a5b74]" };
-}
+/** The row's tag: every item of the feed is a new ability. */
+const FEED_TAG = { label: C.feed.tag, className: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]" };
 
 /** "Press & news · zerofox.com": the kind of source the item's URL belongs to, and the site it is on. */
 function feedSourceLabel(item: FeedItem): string {
@@ -1211,14 +1187,10 @@ function feedSourceLabel(item: FeedItem): string {
 }
 
 function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedItem; org: string; competitor: CompetitorRow | null; meaning: string; open: boolean; onOpen: () => void }) {
-  // A fact shows the date the page states for it (a launch, a deal); a status change or suggestion has only the scan time.
-  const when = item.factDate ? shortDate(item.factDate) : new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  const tag = feedTag(item);
-  const title = item.headline
-    ? item.headline
-    : item.kind === "fact" || item.kind === "suggestion"
-      ? `${item.competitorName}: ${item.title}`
-      : `${item.competitorName} ${C.values[item.from ?? "not_found"].toLowerCase()} → ${C.values[item.to ?? "not_found"].toLowerCase()} on ${item.title}`;
+  // The date the page states for it (a release, a launch) when it states one; else the time it was found.
+  const when = item.publishedAt ? shortDate(item.publishedAt) : new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const tag = FEED_TAG;
+  const title = `${item.competitorName}: ${item.title}`;
   return (
     <button type="button" onClick={onOpen} aria-expanded={open} className={cn("flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left hover:bg-[rgba(255,255,255,.7)]", !open && "[.group-last>&]:border-b-0")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
       {competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}
@@ -1235,11 +1207,8 @@ function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedI
   );
 }
 
-/** The signal opened in place, under its row: everything the feed knows about it, and the actions. */
-function FeedDetail({ item, meaning, onOpenCell }: {
-  item: FeedItem; meaning: string;
-  onOpenCell: (() => void) | null;
-}) {
+/** The item opened in place, under its row: what the ability solves and how, who it is for, the evidence and the page. */
+function FeedDetail({ item, meaning }: { item: FeedItem; meaning: string }) {
   const at = new Date(item.at);
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <div className="grid grid-cols-[120px_1fr] gap-3 border-b border-[rgba(200,212,232,.5)] py-2.5 text-[13px] last:border-b-0">
@@ -1252,19 +1221,8 @@ function FeedDetail({ item, meaning, onOpenCell }: {
       <div className="rounded-inner border border-border bg-white px-4 py-1">
           {item.summary && <p className="my-2 text-[14px] leading-relaxed text-foreground">{item.summary}</p>}
           <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground">{meaning}</div>
-          {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
-            <>
-              <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "not_found"]} → {C.values[item.to ?? "not_found"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>
-              <Row label={C.feed.detail.yourStatus}><span className="font-semibold">{C.values[item.own ?? "not_found"]}</span></Row>
-              {item.product && <Row label={C.feed.detail.product}>{item.product}</Row>}
-            </>
-          )}
-          {item.kind === "fact" && (
-            <Row label={C.feed.kinds.fact}>{C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind}{item.factDate && <span className="text-fg-muted"> · {shortDate(item.factDate)}</span>}</Row>
-          )}
-          {item.kind === "suggestion" && (
-            <Row label={C.feed.tags.suggestion}>{item.domain}{item.newDomain && <span className="text-fg-muted"> · {C.notify.email.newDomain}</span>}<span className="text-fg-muted"> · {C.feed.suggestionStates[item.suggestionState ?? ""] ?? ""}</span></Row>
-          )}
+          {item.audience && <Row label={C.feed.detail.audience}>{item.audience}</Row>}
+          {item.workflows && <Row label={C.feed.detail.workflows}>{item.workflows}</Row>}
           {item.quote && <Row label={C.feed.detail.evidence}><span className="italic text-[#1f2f47]">“{item.quote}”</span></Row>}
           <Row label={C.feed.detail.source}>
             <span className="flex flex-wrap items-center gap-2">
@@ -1273,11 +1231,6 @@ function FeedDetail({ item, meaning, onOpenCell }: {
             </span>
           </Row>
           <Row label={C.feed.detail.found}>{at.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Row>
-        {onOpenCell && (
-          <div className="flex items-center gap-2 py-3">
-            <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>
-          </div>
-        )}
       </div>
     </div>
   );

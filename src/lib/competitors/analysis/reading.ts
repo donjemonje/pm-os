@@ -54,12 +54,18 @@ export const WHERE_A_PM_LOOKS = `WHERE A PM LOOKS. What a product really does is
 6. Marketing pages — the home page, enterprise and solutions pages (also kind product), comparison pages (kind compare), news (kind news): how the company wants to look.
 Build the list from the strongest pages. A weaker page may add what no stronger page shows; it never outweighs one. When several pages show the same thing, take the quote from the strongest page that says it clearly.`;
 
+/**
+ * An area is not a capability: it is split. Shared with the prompt that adds a newly found ability to the table
+ * (news/table-prompt-new-intake.ts), which asks the same of a row that grew too wide.
+ */
+export const AREA_SPLIT_RULE = `An item with many unrelated things under it is an area, not a capability: split it into the capabilities it holds. "Car entertainment" with Bluetooth, radio, navigation and rear-seat screens under it is an area; "Bluetooth connection", "Radio", "Navigation" and "Rear-seat screens" are the capabilities, each with its own features.`;
+
 /** The rule of capability size, with Daniel's own example. */
 export const SIZE_RULE = `THE THREE SIZES. Take a car:
 - A domain is an area: "Car entertainment". Do not list domains.
 - A capability is ONE thing the product can do: "Bluetooth connection". It is one line a buyer would write in a list of requirements.
 - A feature is a detail of that one capability: "iPhone support".
-An item with many unrelated things under it is an area, not a capability: split it into the capabilities it holds. "Car entertainment" with Bluetooth, radio, navigation and rear-seat screens under it is an area; "Bluetooth connection", "Radio", "Navigation" and "Rear-seat screens" are the capabilities, each with its own features. A broad product has tens of capabilities, each with a few features — never a handful of big ones with long lists under them.`;
+${AREA_SPLIT_RULE} A broad product has tens of capabilities, each with a few features — never a handful of big ones with long lists under them.`;
 
 /** No invented umbrella: names are the company's own. */
 export const NAMES_RULE = `Names are the company's own. A capability's name is the company's own term for that one thing, as short as its pages allow. Never coin a name to hold what is left over: there is no "Other", "General", "Platform", "Administration" or "Operations & Reporting". When a feature fits none of the capabilities you listed, the capability it belongs to is missing from your list: find it on the pages and list it under the company's term for it.`;

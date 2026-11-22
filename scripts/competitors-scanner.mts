@@ -3,7 +3,7 @@
  * locally against the dev database:
  *
  *   npm run competitors:scan -- --scan <scanId>        one queued scan
- *   npm run competitors:scan -- --run <runId>        one Scan run (every competitor, then the notification)
+ *   npm run competitors:scan -- --run <runId>        one Scan run (every competitor)
  *   npm run competitors:scan -- --tick                 the hourly tick: stale sweep, due sources, queued starts,
  *                                                      24-hour alerts, retention (Cloud Scheduler runs this; --due is an alias)
  *   npm run competitors:scan -- --import <manifest>    hand a collector's pages to the pipeline
