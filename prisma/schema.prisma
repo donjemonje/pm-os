@@ -650,6 +650,7 @@ model Competitor {
   media    CompetitorMedia[]
   analyses        CompetitorAnalysis[]
   items           CompetitorItem[]
+  news            CompetitorNews[]
   findings        PageFinding[]
   featureStatuses FeatureStatus[]
   sections        CompetitorSection[]
@@ -1532,4 +1533,62 @@ model CompetitorMedia {
   createdAt    DateTime   @default(now())
 
   @@index([competitorId])
+}
+
+/// One piece of news found on a page of a company that was published or changed after the company's list
+/// (CompetitorItem) was made — the news intake (lib/competitors/news). Every piece is kept, whatever the verdict:
+///   "new"     — an ability the list did not hold: shown in the news feed and in the notification;
+///   "covered" — an ability the list already holds (renamed, re-announced): notification only;
+///   "other"   — not an ability (people, money, deals, prices, vision): stored and notified, no logic runs on it.
+model CompetitorNews {
+  id            String     @id @default(uuid())
+  workspaceId   String
+  competitorId  String
+  competitor    Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  /// The intake that found it: one id per batch of pages, one notification per batch.
+  batchId       String
+  /// "new" | "covered" | "other"
+  verdict       String
+  /// verdict "other" only: "hr" | "finance" | "partnership" | "pricing" | "event" | "marketing" | "other"
+  otherType     String?
+  /// verdict "new" only: "capability" | "feature"
+  size          String?
+  /// The company's own name for it (an ability), or a short title (other news).
+  name          String
+  /// One plain sentence: what the product does (an ability), or what happened (other news).
+  what          String
+  /// Abilities only — the problem it solves, the workflows it helps with, who uses it (job titles, or the type of agent).
+  problem       String?
+  workflows     String?
+  audience      String?
+  /// The passage of the page that proves it; null when the claimed passage is not on the page (quoteOk = false).
+  quote         String?
+  quoteOk       Boolean    @default(true)
+  /// Why it is covered by that item, or why nothing on the list holds it — one sentence, for whoever audits the verdict.
+  reason        String     @default("")
+  /// verdict "covered": the item of the list that already holds it. verdict "new", size "feature": the capability it belongs under.
+  coveredItemId String?
+  parentItemId  String?
+  /// Their names when the verdict was given (an item may be renamed or removed later).
+  coveredName   String?
+  parentName    String?
+  sourceUrl     String
+  sourceTitle   String     @default("")
+  /// The kind of page it was on: "release_notes" | "help" | "api_docs" | "product" | "news" | "blog" …
+  sourceKind    String     @default("")
+  /// The date the page states, when it states one.
+  publishedAt   DateTime?
+  /// Made-up news of a simulation (scripts/competitors-news-sim.mts): removed by the next simulation of the same company.
+  simulated     Boolean    @default(false)
+  /// What the call that found it cost (shared by the pieces of one page: stored on each).
+  inputTokens   Int        @default(0)
+  outputTokens  Int        @default(0)
+  ms            Int        @default(0)
+  model         String     @default("")
+  notifiedAt    DateTime?
+  createdAt     DateTime   @default(now())
+
+  @@index([workspaceId, verdict, createdAt])
+  @@index([competitorId, createdAt])
+  @@index([batchId])
 }
