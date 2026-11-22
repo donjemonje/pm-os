@@ -34,9 +34,20 @@ export function closenessOf(capabilityIds: readonly string[], valueOf: (capabili
   return { score: total ? Math.round(((found + low * 0.5) / total) * 100) : null, found, low, total };
 }
 
-/** Competitors ranked closest first; ties keep the given order (the matrix column order). */
+/**
+ * Competitors ranked closest first; ties keep the given order (the matrix column order).
+ *
+ * A company that is not analysed yet is not part of the ranking — neither ranked nor shown (Daniel 2026-11-22: a
+ * company with pages stored and no analysis came out as 0 and took a "farthest" place from an analysed one):
+ *   - where the table carries scores (the coverage model): a company with no score on any capability is left out;
+ *   - where it carries none: a company with no cell on any capability is left out;
+ *   - where no company is analysed at all, every company stays (there is nobody to rank them against).
+ */
 export function rankByCloseness<T extends { id: string }>(competitors: readonly T[], capabilityIds: readonly string[], valueOf: (competitorId: string, capabilityId: string) => StatusValue | undefined, scoreOf?: (competitorId: string, capabilityId: string) => number | null | undefined): Array<{ competitor: T; closeness: Closeness }> {
-  return competitors
+  const scored = scoreOf ? competitors.filter((c) => capabilityIds.some((k) => typeof scoreOf(c.id, k) === "number")) : [];
+  const withCells = competitors.filter((c) => capabilityIds.some((k) => valueOf(c.id, k) !== undefined));
+  const analysed = scored.length ? scored : withCells.length ? withCells : competitors;
+  return analysed
     .map((competitor) => ({ competitor, closeness: closenessOf(capabilityIds, (k) => valueOf(competitor.id, k), scoreOf ? (k) => scoreOf(competitor.id, k) : undefined) }))
     .sort((a, b) => (b.closeness.score ?? -1) - (a.closeness.score ?? -1));
 }

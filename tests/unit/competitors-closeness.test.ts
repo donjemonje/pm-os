@@ -1,6 +1,6 @@
 /** Story 6 (competitors) — closeness ranking in the summary strip. Pure module. */
 import { describe, expect, it } from "vitest";
-import { closenessOf, proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
+import { closenessOf, PROXIMITY_SHOWN, proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import type { StatusValue } from "@/lib/competitors/config";
 
 describe("closenessOf", () => {
@@ -48,3 +48,30 @@ describe("closeness from scores (the coverage model)", () => {
     expect(closenessOf(["a", "b"], (k) => (k === "a" ? "found" : "not_found"), () => null).score).toBe(50);
   });
 });
+
+describe("Offering Proximity leaves out a company that is not analysed yet", () => {
+  const caps = ["a", "b", "c"];
+  it("the coverage model: a company with no score on any capability is neither ranked nor shown", () => {
+    // Seven companies, one of them with pages stored and no analysis (no cell at all): it must not take a "farthest" place.
+    const scores: Record<string, number[]> = { zf: [5, 3, 1], rf: [4, 3, 1], bs: [4, 2, 1], i4: [3, 2, 1], fp: [3, 2, 0], sc: [1, 1, 1] };
+    const companies = ["rf", "fp", "i4", "sc", "zf", "bs", "new"].map((id) => ({ id }));
+    const ranked = rankByCloseness(companies, caps, (c, k) => (scores[c] ? (scores[c][caps.indexOf(k)] > 0 ? "found" : "not_found") : undefined), (c, k) => scores[c]?.[caps.indexOf(k)]);
+    expect(ranked.map((r) => r.competitor.id)).toEqual(["zf", "rf", "bs", "i4", "fp", "sc"]);
+    // Six analysed companies: all of them show, the unanalysed one does not.
+    expect(ranked).toHaveLength(PROXIMITY_SHOWN);
+    expect(proximityPicks(ranked).map((r) => r.competitor.id)).toEqual(["zf", "rf", "bs", "i4", "fp", "sc"]);
+  });
+  it("a company whose cells are of the earlier model (no score) is left out of a scored table too", () => {
+    const ranked = rankByCloseness([{ id: "x" }, { id: "old" }], ["a"], (c) => "found", (c) => (c === "x" ? 3 : null));
+    expect(ranked.map((r) => r.competitor.id)).toEqual(["x"]);
+  });
+  it("a table without scores: a company with no cell is left out", () => {
+    const cells: Record<string, Record<string, StatusValue>> = { x: { a: "found" }, y: { a: "not_found" } };
+    const ranked = rankByCloseness([{ id: "x" }, { id: "y" }, { id: "new" }], ["a", "b"], (c, k) => cells[c]?.[k]);
+    expect(ranked.map((r) => r.competitor.id)).toEqual(["x", "y"]);
+  });
+  it("nobody analysed at all: every company stays", () => {
+    expect(rankByCloseness([{ id: "x" }, { id: "y" }], ["a"], () => undefined).map((r) => r.competitor.id)).toEqual(["x", "y"]);
+  });
+});
+

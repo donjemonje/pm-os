@@ -53,12 +53,10 @@ export const COMPETITORS_COPY = {
   filters: {
     searchCapabilities: "Search capabilities…",
     domain: "Domain",
-    productLine: "Product line",
     competitor: "Competitor",
     status: "Status",
     gapsOnly: "Gaps only",
     noDomains: "No domains yet",
-    noProductLines: "No product lines yet",
     noCompetitors: "No competitors yet",
   },
   matrix: {

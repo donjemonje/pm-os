@@ -266,7 +266,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   // Parity matrix filters
   const [capQuery, setCapQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<string[]>([]);
-  const [productFilter, setProductFilter] = useState<string[]>([]);
   // More companies than the table shows at first: the first six start ticked. Six or fewer: nothing ticked = all.
   const [defaultShown] = useState<string[]>(() => (initialState.competitors.length > DEFAULT_SHOWN_COMPANIES ? initialState.competitors.slice(0, DEFAULT_SHOWN_COMPANIES).map((c) => c.name) : []));
   const [competitorFilter, setCompetitorFilter] = useState<string[]>(defaultShown);
@@ -420,7 +419,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const visibleCaps = activeCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q) && !k.description.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
-    if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
     if (gapsOnly && rowKind(k) !== "gap") return false;
     return matchesStatus(k);
   });
@@ -479,13 +477,13 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
       track("cmp_matrix_viewed", {
         competitors: competitors.length,
         capabilities: activeCaps.length,
-        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
+        filters: [domainFilter.length && "domain", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
         gapsOnly,
       });
     }, 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, domainFilter, productFilter, competitorFilter, statusFilter, gapsOnly]);
+  }, [tab, domainFilter, competitorFilter, statusFilter, gapsOnly]);
 
   // ——— Corrections ———
   /** POST without a body: a create action whose answer is the new state. */
@@ -647,7 +645,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
             <div className="mb-3.5 flex flex-wrap items-center gap-2">
               <SearchBox value={capQuery} onChange={setCapQuery} placeholder={C.filters.searchCapabilities} />
               <FilterPopover label={C.filters.domain} options={state.domains.map((d) => d.name)} selected={domainFilter} onToggle={toggleIn(setDomainFilter)} emptyText={C.filters.noDomains} />
-              <FilterPopover label={C.filters.productLine} options={state.productLines} selected={productFilter} onToggle={toggleIn(setProductFilter)} emptyText={C.filters.noProductLines} />
               <FilterPopover label={C.filters.competitor} accent="customer" options={competitors.map((c) => c.name)} selected={competitorFilter} onToggle={toggleIn(setCompetitorFilter)} emptyText={C.filters.noCompetitors} />
               <FilterPopover single label={C.filters.status} accent="status" options={STATUS_OPTIONS} selected={statusFilter} onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))} />
               <span className="mx-1 h-5 w-px bg-border" />
