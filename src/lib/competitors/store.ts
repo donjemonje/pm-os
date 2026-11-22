@@ -8,8 +8,12 @@ import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
 import { siteHost } from "./url";
 import { readEvidenceList, type EvidenceRef } from "./scores";
 
-/** A re-evaluation of a capability's row that has not reported for this long is taken for a dead one (the cell stops saying "re-evaluating"). */
-export const REEVALUATE_STALE_MS = STALE_MS;
+/**
+ * A re-evaluation of a capability's row that has not reported for this long is taken for a dead one (the cell stops
+ * saying "re-evaluating"). One call with high thinking took more than 6 minutes on 2026-11-22, so this is twice the
+ * scan's 10 minutes.
+ */
+export const REEVALUATE_STALE_MS = 2 * STALE_MS;
 /** "How it works" of the organization's own feature (Feature.ourEvidence.description), also when no quote is stored. */
 function ownHowOf(raw: unknown): string | null {
   const d = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>).description : null;
@@ -215,8 +219,8 @@ export interface CapabilityRow {
   ourPmReasoning: string | null;
   /** PMOS AI is re-evaluating this capability's row right now. */
   reevaluating: boolean;
-  /** Why the last re-evaluation did not finish; null after one that did. */
-  reevaluateError: string | null;
+  /** The last re-evaluation of the row did not finish (the reason stays on the server: the page says only that, and offers to try again). */
+  reevaluateFailed: boolean;
   position: number;
   origin: string;
   state: string;
@@ -628,7 +632,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       ourScoreLockedBy: userName(k.ourScoreLockedById),
       ourPmReasoning: k.ourPmReasoning,
       reevaluating: k.reevaluatingAt != null && Date.now() - k.reevaluatingAt.getTime() < REEVALUATE_STALE_MS,
-      reevaluateError: k.reevaluateError,
+      reevaluateFailed: k.reevaluateError != null,
       position: k.position,
       origin: k.origin,
       state: k.state,

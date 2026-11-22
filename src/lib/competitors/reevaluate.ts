@@ -20,7 +20,12 @@ import { valueOfScore } from "./scores";
 
 /** Daniel 2026-11-22: every prompt of the coverage model runs on this model with high thinking. */
 export const REEVALUATE_MODEL = "gemini-4-carbon";
-const REEVALUATE_MAX_TOKENS = 8_000;
+/**
+ * The answer itself is small (a score and 350 characters per company), but thinking is billed against the same limit and
+ * high thinking took more than 24,000 tokens on a row of 7 companies and 5 features (2026-11-22: the call ended
+ * "MAX_TOKENS" with an empty answer at 8,000 + the call's headroom). The limit leaves room for it.
+ */
+const REEVALUATE_MAX_TOKENS = 64_000;
 
 /** Marks the row as being re-evaluated. Null = not a row of the coverage model. */
 export async function claimReevaluation(workspaceId: string, capabilityId: string): Promise<Date | null> {
@@ -61,7 +66,12 @@ export async function loadRow(workspaceId: string, capabilityId: string, orgName
  */
 export async function reevaluateRow(workspaceId: string, capabilityId: string, orgName: string, stamp: Date, opts: { injected?: string } = {}): Promise<{ ok: boolean; error?: string }> {
   const mine = { id: capabilityId, workspaceId, reevaluatingAt: stamp };
-  const fail = async (error: string) => { await db.capability.updateMany({ where: mine, data: { reevaluatingAt: null, reevaluateError: error.slice(0, 300) } }); return { ok: false, error }; };
+  // The reason is for us (the server log and the row's reevaluateError): the page says only that it did not finish.
+  const fail = async (error: string) => {
+    console.error(`[competitors] re-evaluation of capability ${capabilityId} did not finish: ${error}`);
+    await db.capability.updateMany({ where: mine, data: { reevaluatingAt: null, reevaluateError: error.slice(0, 300) } });
+    return { ok: false, error };
+  };
   try {
     const row = await loadRow(workspaceId, capabilityId, orgName);
     if (!row) return { ok: false, error: "the capability is gone" };

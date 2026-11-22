@@ -12,6 +12,7 @@ type Params = { params: Promise<{ id: string }> };
  * PATCH a competitor's capability cell of the coverage model — any member of the organization, one action per request:
  *   {score: 0..5}        the PM sets the number: it is locked (no run and no re-evaluation overwrites it) and marked as edited
  *   {release: true}      the lock is taken off and PMOS AI scores the row again
+ *   {reevaluate: true}   "Try again": the capability's row is re-evaluated once more
  *   {reasoning: "…"}     the PM's reasoning for this cell (at most 350 characters; "" clears it): PMOS AI re-evaluates
  *                        the capability's whole row with it and uses it in every later run
  */
@@ -24,6 +25,11 @@ export async function PATCH(req: Request, { params }: Params) {
   const cell = await db.capabilityStatus.findFirst({ where: { id, workspaceId: ctx.workspaceId }, select: { id: true, competitorId: true, capabilityId: true, score: true, value: true, scoreLockedAt: true } });
   if (!cell || cell.score == null) return bad("Not found", 404);
 
+  // "Try again" after a re-evaluation that did not finish.
+  if (body.reevaluate === true) {
+    await reevaluateAfter(ctx, cell.capabilityId, body);
+    return stateResponse(ctx);
+  }
   if (body.release === true) {
     await db.capabilityStatus.update({ where: { id }, data: { scoreLockedAt: null, scoreLockedById: null } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_capability_score_released", { capabilityId: cell.capabilityId, competitorId: cell.competitorId, score: cell.score });

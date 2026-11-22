@@ -138,7 +138,13 @@ export const COMPETITORS_COPY = {
     save: "Save",
     cancel: "Cancel",
     reevaluating: "PMOS AI is re-evaluating this row…",
-    reevaluateFailed: (why: string) => `The last re-evaluation did not finish: ${why}`,
+    /** PRD (Loading, errors…): generic and plain, never the technical reason; "Try again" because a retry can succeed. */
+    reevaluateFailed: "The re-evaluation did not finish. Try again.",
+    retry: "Try again",
+    /** The hint of the strength meter. */
+    meterHint: (score: number) => `${score} of 5: how fully this company covers the area next to the other companies in the table. 5 is the most, 1 the least.`,
+    /** How much a page says about a feature, in plain words (the evidence hint). */
+    strength: (s: string) => (s === "explains" ? "explains how it works" : s === "describes" ? "describes it" : s === "names" ? "only names it" : ""),
     howItWorks: "How it works",
     moreEvidence: (n: number) => `Show more evidence · ${n}`,
     lessEvidence: "Show less evidence",

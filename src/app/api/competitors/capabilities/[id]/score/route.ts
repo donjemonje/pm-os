@@ -22,6 +22,11 @@ export async function PATCH(req: Request, { params }: Params) {
   const cap = await db.capability.findFirst({ where: { id, workspaceId: ctx.workspaceId, state: { not: "removed" } }, select: { id: true, ourScore: true } });
   if (!cap || cap.ourScore == null) return bad("Not found", 404);
 
+  // "Try again" after a re-evaluation that did not finish.
+  if (body.reevaluate === true) {
+    await reevaluateAfter(ctx, id, body);
+    return stateResponse(ctx);
+  }
   if (body.release === true) {
     await db.capability.update({ where: { id }, data: { ourScoreLockedAt: null, ourScoreLockedById: null } });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_capability_score_released", { capabilityId: id, competitorId: "own", score: cap.ourScore });

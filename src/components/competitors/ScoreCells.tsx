@@ -80,6 +80,8 @@ export interface ScoreActions {
   setScore: (score: number) => Promise<boolean>;
   release: () => Promise<boolean>;
   addReasoning: (text: string) => Promise<boolean>;
+  /** "Try again" after a re-evaluation of the row that did not finish. */
+  retry: () => Promise<boolean>;
 }
 
 const HOVER_OPEN_MS = 250;
@@ -91,7 +93,7 @@ const HOVER_CLOSE_MS = 150;
  * Enter confirms, Esc cancels (a textarea confirms with Cmd/Ctrl+Enter). In "Change the score" the number that has the
  * focus is the picked one, so Tab + Enter saves what the PM is on.
  */
-export function ScoreCell({ rowId, rowName, columnId, company, own = false, score, reasoning, locked, lockedBy, pmReasoning, reevaluating, error, isOpen, onOpen, onClose, actions }: {
+export function ScoreCell({ rowId, rowName, columnId, company, own = false, score, reasoning, locked, lockedBy, pmReasoning, reevaluating, failed, isOpen, onOpen, onClose, actions }: {
   rowId: string;
   rowName: string;
   /** The competitor's id, or "own". */
@@ -105,8 +107,8 @@ export function ScoreCell({ rowId, rowName, columnId, company, own = false, scor
   pmReasoning: string | null;
   /** PMOS AI is re-evaluating the row right now. */
   reevaluating: boolean;
-  /** Why the row's last re-evaluation did not finish. */
-  error: string | null;
+  /** The row's last re-evaluation did not finish. */
+  failed: boolean;
   isOpen: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -156,7 +158,12 @@ export function ScoreCell({ rowId, rowName, columnId, company, own = false, scor
         <p className="m-0 mt-1.5 text-[12px] leading-snug text-fg-2"><span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.score.teamReasoning} </span>{pmReasoning}</p>
       )}
       {reevaluating && <p className="m-0 mt-1.5 flex items-center gap-1.5 text-[12px] text-fg-muted" role="status"><Loader2 size={12} className="animate-spin" />{C.score.reevaluating}</p>}
-      {!reevaluating && error && <p className="m-0 mt-1.5 text-[12px] text-[#c94266]" role="alert">{C.score.reevaluateFailed(error)}</p>}
+      {!reevaluating && failed && (
+        <p className="m-0 mt-1.5 text-[12px] text-[#c94266]" role="alert" data-testid="cmp-score-failed">
+          {C.score.reevaluateFailed}
+          {isOpen && actions && <button type="button" onClick={() => void run(actions.retry)} disabled={busy} className="ml-1.5 font-semibold underline disabled:opacity-40" data-testid="cmp-score-retry">{C.score.retry}</button>}
+        </p>
+      )}
     </>
   );
   const head = (
@@ -170,7 +177,7 @@ export function ScoreCell({ rowId, rowName, columnId, company, own = false, scor
   );
   return (
     <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
-      <button type="button" onClick={() => { setHover(false); if (isOpen) onClose(); else onOpen(); }} aria-expanded={isOpen} aria-label={`${rowName} — ${company}: ${C.score.of(score)}`}
+      <button type="button" onClick={() => { setHover(false); if (isOpen) onClose(); else onOpen(); }} aria-expanded={isOpen} aria-label={`${rowName} — ${company}: ${C.score.of(score)}`} title={C.score.meterHint(score)}
         className={cn("relative inline-flex h-9 min-w-[64px] items-center justify-center gap-1.5 rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")} data-testid="cmp-score-cell">
         {reevaluating ? <Loader2 size={13} className="animate-spin text-fg-muted" aria-label={C.score.reevaluating} /> : <ScoreMeter score={score} own={own} />}
         <span className={cn("font-mono text-[11.5px] font-bold", score === 0 ? "text-fg-faint" : own ? "text-primary" : "text-[#1f2f47]")}>{score}</span>
@@ -234,20 +241,25 @@ function pageLabel(url: string): string {
 }
 
 /**
- * "Show more evidence · n" under a feature cell's strongest quote: the other pieces of evidence, the strongest
- * first, each with its link, the kind of page and how much the page says. `evidence` is the whole list; its first
- * entry is the one the card already shows.
+ * Under a feature cell's strongest quote: the hint of that quote (the kind of page and how much the page says) and
+ * "Show more evidence · n" — the other pieces of evidence, the strongest first, each with its link and its hint.
+ * `evidence` is the whole list; its first entry is the one the card already shows.
  */
 export function MoreEvidence({ evidence, rowId, columnId }: { evidence: EvidenceRef[]; rowId: string; columnId: string }) {
   const [open, setOpen] = useState(false);
+  if (evidence.length === 0) return null;
   const rest = evidence.slice(1);
-  if (rest.length === 0) return null;
+  // The hint of a piece of evidence: the kind of page and how much it says.
+  const hint = (e: EvidenceRef) => [e.pageKind, C.score.strength(e.strength), e.checked ? "" : C.score.notChecked].filter(Boolean).join(" · ");
   return (
     <div className="mt-1.5">
-      <button type="button" onClick={() => { if (!open) track("cmp_feature_more_evidence_opened", { columnId, featureId: rowId, count: rest.length }); setOpen((v) => !v); }} aria-expanded={open} className="text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-more-evidence">
-        {open ? C.score.lessEvidence : C.score.moreEvidence(rest.length)}
-      </button>
-      {open && (
+      {hint(evidence[0]) && <div className="text-[11.5px] text-fg-muted" data-testid="cmp-evidence-hint">{hint(evidence[0])}</div>}
+      {rest.length > 0 && (
+        <button type="button" onClick={() => { if (!open) track("cmp_feature_more_evidence_opened", { columnId, featureId: rowId, count: rest.length }); setOpen((v) => !v); }} aria-expanded={open} className="mt-1 text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-more-evidence">
+          {open ? C.score.lessEvidence : C.score.moreEvidence(rest.length)}
+        </button>
+      )}
+      {open && rest.length > 0 && (
         <ul className="m-0 mt-2 flex max-h-[220px] list-none flex-col gap-2 overflow-y-auto border-t border-border p-0 pt-2" data-testid="cmp-more-evidence-list">
           {rest.map((e, i) => (
             <li key={i} className="text-[12px] leading-snug">
@@ -256,7 +268,7 @@ export function MoreEvidence({ evidence, rowId, columnId }: { evidence: Evidence
                 {e.url && /^https?:\/\//.test(e.url) && (
                   <a href={e.url} target="_blank" rel="noreferrer" title={e.url} className="flex min-w-0 max-w-full items-center gap-1 text-primary hover:underline"><ExternalLink size={10} className="shrink-0" /><span className="min-w-0 truncate">{pageLabel(e.url)}</span></a>
                 )}
-                <span>{[e.pageKind, e.strength, e.checked ? "" : C.score.notChecked].filter(Boolean).join(" · ")}</span>
+                <span>{hint(e)}</span>
               </span>
             </li>
           ))}

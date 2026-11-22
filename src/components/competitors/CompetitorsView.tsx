@@ -398,8 +398,8 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     [competitors, activeCaps, state.cells],
   );
 
-  /** What a PM can do on a scored capability cell (every member of the organization): set the score (it is then locked), release it, add reasoning. */
-  const scoreActions = (url: string): ScoreActions => ({ setScore: (score) => patch(url, { score }), release: () => patch(url, { release: true }), addReasoning: (reasoning) => patch(url, { reasoning }) });
+  /** What a PM can do on a scored capability cell (every member of the organization): set the score (it is then locked), release it, add reasoning, try a re-evaluation again. */
+  const scoreActions = (url: string): ScoreActions => ({ setScore: (score) => patch(url, { score }), release: () => patch(url, { release: true }), addReasoning: (reasoning) => patch(url, { reasoning }), retry: () => patch(url, { reevaluate: true }) });
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
   const matchesStatus = (k: CapabilityRow) => {
@@ -771,7 +771,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
                                       {k.ourScore != null ? (
-                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} own score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} error={k.reevaluateError}
+                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} own score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                           isOpen={openCell?.competitorId === "own" && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: "own", rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/capabilities/${k.id}/score`)} />
                                       ) : (
                                         <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
@@ -783,7 +783,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                     return (
                                       <td key={c.id} className="text-center">
                                         {cell && cell.score != null ? (
-                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} error={null}
+                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                             isOpen={openCell?.competitorId === c.id && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: c.id, rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/statuses/${cell.id}/score`)} />
                                         ) : (
                                           <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
