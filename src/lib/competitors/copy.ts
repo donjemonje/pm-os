@@ -105,12 +105,13 @@ export const COMPETITORS_COPY = {
     domainCovers: "What it covers",
     domainDoneBy: "Who does the work",
     showMore: "Show more",
-    relevanceTip: (level: number | null) => (level ? `Relevance to you: ${level} of 3 (1 = most relevant). Only you see your levels. Click to change.` : "Set how relevant this company is to you (1 = most relevant). Only you see your levels."),
     relevanceTitle: "Relevance to you",
-    relevanceLevel: (level: number) => (level === 1 ? "1 — most relevant" : level === 3 ? "3 — least relevant" : "2"),
-    relevanceNone: "No level",
-    relevanceUnset: "Set level",
+    /** Hover of the circle on a company's icon. */
     relevanceChip: (level: number) => `Level ${level}`,
+    relevanceUnset: "Set level",
+    /** Hover of a circle in the picker. */
+    relevanceLevel: (level: number) => (level === 1 ? "Level 1 — most relevant" : level === 3 ? "Level 3 — least relevant" : "Level 2"),
+    relevanceClear: (level: number) => `Level ${level} — click to clear`,
     showLess: "Show less",
     capabilitiesCount: (n: number) => `${n} capabilit${n === 1 ? "y" : "ies"}`,
     covered: "covered",

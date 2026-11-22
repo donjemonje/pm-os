@@ -79,9 +79,10 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 
 /** The strip's last card (C2 "Risk" slot): competitors ranked by how much of the org's capability list they cover. */
 /**
- * The signed-in user's own relevance level for a company (1 = most relevant, Daniel 2026-11-22): a chip under the
- * company's name in its column. A click opens the three levels and "No level"; Esc or a click outside closes.
- * Per user: nobody else sees or changes it.
+ * The signed-in user's own relevance level for a company (1 = most relevant, Daniel 2026-11-22): a small circle with
+ * the number on the top-right corner of the company's icon; an empty dashed circle when no level is set. Hover says
+ * "Level N". A click shows three numbered circles to choose from; choosing the current one clears the level. Esc or a
+ * click outside closes. Per user: nobody else sees or changes it. Its parent (the column's header cell) is `relative`.
  */
 function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: number | null) => void }) {
   const [open, setOpen] = useState(false);
@@ -91,26 +92,22 @@ function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
-  const tone = level === 1 ? "border-transparent bg-primary text-white" : level === 2 ? "border-transparent bg-[rgba(36,87,245,.14)] text-[#2a5fd0]" : level === 3 ? "border-transparent bg-[#eef1f6] text-fg-3" : "border-dashed border-border text-fg-faint hover:text-fg-3";
-  const option = "flex w-full items-center justify-between gap-2 rounded-[6px] px-2 py-1.5 text-left text-[12px] text-fg-2 hover:bg-background";
+  const tone = (l: number | null) => (l === 1 ? "border-transparent bg-primary text-white" : l === 2 ? "border-transparent bg-[#dfe7fe] text-[#2a5fd0]" : l === 3 ? "border-transparent bg-[#eef1f6] text-fg-3" : "border-dashed border-[#b9c3d4] bg-white text-fg-faint");
+  const circle = "flex items-center justify-center rounded-full border font-mono font-bold leading-none";
   return (
-    <span className="relative mt-1 flex justify-center">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title={C.matrix.relevanceTip(level)} className={cn("inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-full border px-2 font-mono text-[10px] font-semibold", tone)} data-testid="cmp-relevance-chip">
-        {level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset}
+    <span className="absolute left-[calc(50%+6px)] top-[7px] z-[1]">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title={level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset} aria-label={level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset} className={cn(circle, "h-4 w-4 text-[9.5px] shadow-[0_0_0_1.5px_#fff]", tone(level))} data-testid="cmp-relevance-chip">
+        {level ?? ""}
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-[24] cursor-default" onClick={() => setOpen(false)} />
-          <div role="menu" aria-label={C.matrix.relevanceTitle} className="absolute left-1/2 top-[calc(100%+4px)] z-[25] w-[176px] -translate-x-1/2 rounded-inner border border-border bg-white p-1 text-left font-normal shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
-            <div className="px-2 pb-1 pt-1 text-[10.5px] font-semibold text-fg-muted">{C.matrix.relevanceTitle}</div>
+          <div role="menu" aria-label={C.matrix.relevanceTitle} className="absolute left-1/2 top-[calc(100%+5px)] z-[25] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
             {RELEVANCE_LEVELS.map((l) => (
-              <button key={l} type="button" role="menuitemradio" aria-checked={level === l} onClick={() => { setOpen(false); if (l !== level) onSet(l); }} className={option}>
-                {C.matrix.relevanceLevel(l)}{level === l && <Check size={12} strokeWidth={3} />}
+              <button key={l} type="button" role="menuitemradio" aria-checked={level === l} title={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} aria-label={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} onClick={() => { setOpen(false); onSet(l === level ? null : l); }} className={cn(circle, "h-[22px] w-[22px] text-[11px]", tone(l), level === l && "shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(36,87,245,.55)]")}>
+                {l}
               </button>
             ))}
-            <button type="button" role="menuitemradio" aria-checked={level == null} onClick={() => { setOpen(false); if (level != null) onSet(null); }} className={cn(option, "text-fg-muted")}>
-              {C.matrix.relevanceNone}{level == null && <Check size={12} strokeWidth={3} />}
-            </button>
           </div>
         </>
       )}
@@ -620,7 +617,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                         </span>
                       </th>
                       {shownCompetitors.map((c) => (
-                        <th key={c.id} scope="col" className="w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
+                        <th key={c.id} scope="col" className="relative w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
                           <HeadTag {...(parts.profiles ? { onClick: () => openProfile(c.id, "cell") } : {})} className={cn("flex w-full flex-col items-center gap-1.5 pt-[13px]", parts.profiles && "hover:opacity-80")} title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
