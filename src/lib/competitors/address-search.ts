@@ -1,3 +1,5 @@
+import { alertedKeyAfter, shouldAlertUndecided, undecidedAlertKey } from "./address-alert";
+import { sendUndecidedAlert } from "./address-alert-send";
 import { randomBytes } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
@@ -193,6 +195,9 @@ export async function searchAddresses(
     let result: Extract<SearchOutcome, { status: string }> = { status: "done", candidates: 0, added: [], alreadyThere: 0, removedByPm: 0, note: "" };
     let finding: Finding | null = null;
     let tokens = 0;
+    // For the internal alert of an undecided result (address-alert.ts): the candidates PMOS AI was to judge, and whether the test knob kept it off.
+    let alertCandidates: Array<{ url: string; via: string }> = [];
+    let aiOffByKnob = false;
     // The search follows the scan lanes (Website Scanning PRD; Daniel 2026-11-16): the station's report when there is
     // one; else the server's own requests, only while remote scanning is ON; else nothing is requested at all.
     const lane = searchLane({ remoteOn: (await getGlobalScanSettings()).remoteScanEnabled, stationReport: Boolean(opts.station) });
@@ -214,6 +219,7 @@ export async function searchAddresses(
       if (website) await storeLlmsTxt(competitor.workspaceId, website, finding.llms);
       const screened = screenCandidates(finding.candidates, knownAddresses(competitor.sources, competitor.host));
       result = { ...result, candidates: screened.fresh.length, alreadyThere: screened.alreadyThere.length, removedByPm: screened.removedByPm.length };
+      alertCandidates = screened.fresh.map((c) => ({ url: c.url, via: c.via }));
       if (screened.fresh.length) {
         // 4. PMOS AI says what each new address is. Closed sets; an unusable answer adds nothing.
         const entries = pickEntries(screened.fresh);
@@ -221,6 +227,7 @@ export async function searchAddresses(
         const answers = await testAiAnswers(competitorId);
         // TEST KNOB (COMPETITORS_AI=off): nothing automatic reaches a model — only a search asked by hand, or one whose answer a test injected.
         if (!answers && !aiStepEnabled() && opts.trigger !== "manual") {
+          aiOffByKnob = true;
           result = { ...result, status: "undecided", note: "PMOS AI is switched off (test knob): the candidates were not judged" };
         } else {
           const r = await callTool<Record<string, unknown>>(ADDRESS_PICK_SYSTEM_PROMPT, "", renderAddressPick({ name: competitor.name, site: site.url }, entries), addressPickTool(codes), {
@@ -251,7 +258,11 @@ export async function searchAddresses(
     }
     if (opts.station?.note) result = { ...result, note: [result.note, opts.station.note].filter(Boolean).join(" · ").slice(0, 300) };
 
-    const stored: AddressSearchResult = { status: result.status, at: new Date().toISOString(), trigger: opts.trigger, candidates: result.candidates, added: result.added.length, note: result.note, scanId: opts.station?.scanId ?? null };
+    // An undecided result is PM-OS's to look at, not the customer's: one alert email per company and set of candidates.
+    const alert = { status: result.status, aiOffByKnob, key: undecidedAlertKey(alertCandidates.map((c) => c.url)), earlierKey: readAddressSearch(competitor.addressSearch)?.alertedKey ?? null };
+    const sent = shouldAlertUndecided(alert) ? await sendUndecidedAlert({ workspaceId: competitor.workspaceId, competitorId, company: competitor.name, website: site.url, candidates: alertCandidates, note: result.note }) : false;
+    const alertedKey = alertedKeyAfter({ ...alert, sent });
+    const stored: AddressSearchResult = { status: result.status, at: new Date().toISOString(), trigger: opts.trigger, candidates: result.candidates, added: result.added.length, note: result.note, scanId: opts.station?.scanId ?? null, ...(alertedKey ? { alertedKey } : {}) };
     await db.competitor.updateMany({ where: { id: competitorId, addressSearchStartedAt: claimedAt }, data: { addressSearchStartedAt: null, addressSearch: stored as unknown as Prisma.InputJsonValue } });
     claimedAt = null;
     const kinds = new Map<string, number>();

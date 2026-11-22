@@ -447,7 +447,6 @@ export const COMPETITORS_COPY = {
       kind: "What it is",
       searching: "Looking for help center and docs…",
       noneFound: "No help center, developer docs or release notes were found on another address. If there is one, add it.",
-      undecided: "PMOS AI could not tell which of the addresses it found are worth scanning, so none was added. It looks again after the next scan of the website.",
       pages: (n: number) => `${n.toLocaleString("en-US")} page${n === 1 ? "" : "s"} stored`,
       scanInProgress: (pages: number) => `Scan in progress · ${pages} page${pages === 1 ? "" : "s"} so far`,
       scanPending: "Scan pending",

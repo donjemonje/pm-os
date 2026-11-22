@@ -665,8 +665,6 @@ function AddressList({ addresses, search, canEdit, busy, onAdd, onRemove }: {
       ))}
       {search.running ? (
         <div className="flex items-center gap-1.5 py-1 text-[12px] text-fg-muted" data-testid="cmp-address-search"><Loader2 size={12} className="animate-spin" />{A.searching}</div>
-      ) : search.status === "undecided" ? (
-        <div className="py-1 text-[12px] text-[#8a5a00]" data-testid="cmp-address-search">{A.undecided}</div>
       ) : search.status === "done" && addresses.length === 0 ? (
         <div className="py-1 text-[12px] text-fg-muted" data-testid="cmp-address-search">{A.noneFound}</div>
       ) : null}
