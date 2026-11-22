@@ -122,8 +122,8 @@ export const COMPETITORS_COPY = {
     openAllFeatures: "Open the features of all capabilities in this domain",
     gapN: (n: number) => `${n} gap${n === 1 ? "" : "s"}`,
     gapNTip: (org: string, n: number) => `${n} capabilit${n === 1 ? "y" : "ies"} ${org} is missing and a competitor has`,
-    /** In a domain's header, next to its gaps: how many of its capabilities only the organization has — the number and the organization's name. */
-    onlyN: (org: string, n: number) => `${n} ${org}`,
+    /** In a domain's header, next to its gaps: how many of its capabilities only the organization has — the number and "Diff" (Daniel 2026-11-22), the same for one and many. The tooltip says it in full. */
+    onlyN: (n: number) => `${n} Diff`,
     onlyNTip: (org: string, n: number) => `${n} capabilit${n === 1 ? "y" : "ies"} only ${org} has`,
   },
   /** The coverage model: a score 0-5 per company and capability, its reasoning, and what a PM can do with it. */

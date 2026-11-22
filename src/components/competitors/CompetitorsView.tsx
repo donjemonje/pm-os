@@ -1053,7 +1053,7 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
   domain: DomainRow; rows: CapabilityRow[]; lines: string[]; gaps: number; colSpan: number; children: React.ReactNode;
-  /** How many of the domain's capabilities only the organization has, shown next to the gaps as "N <organization>"; and the organization's name. */
+  /** How many of the domain's capabilities only the organization has, shown next to the gaps as "N Diff"; and the organization's name (for the tooltips). */
   onlyOurs: number;
   org: string;
   /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
@@ -1091,7 +1091,7 @@ function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, childr
               {!inColumns && (
               <span className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-[12px] text-fg-3">
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]" title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
-                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
+                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
               )}
@@ -1112,7 +1112,7 @@ function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, childr
             <td className="border-b border-border px-3">
               <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full items-center justify-end gap-x-2 whitespace-nowrap text-[11.5px] text-fg-3">
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]" title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
-                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
+                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
             </td>
