@@ -18,7 +18,7 @@ import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
 import { domainScore, scoreRowKind, type EvidenceRef } from "@/lib/competitors/scores";
-import { allOpen, defaultOpenDomains, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { allOpen, defaultOpenDomains, rowKindCounts, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { moveNextTo } from "@/lib/competitors/order";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -732,7 +732,8 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
                         const covered = rows.filter((k) => ownOf(k) === "found").length;
-                        const gaps = rows.filter((k) => rowKind(k) === "gap").length;
+                        // The header's counts: its gaps, and the capabilities only the organization has (the same rule as each row's chip).
+                        const { gaps, only: onlyOurs } = rowKindCounts(rows.map(rowKind));
                         // The capabilities of this domain that have features: "open / close all features" works on them.
                         const withFeatures = rows.filter((k) => featuresOf(k.id).length > 0).map((k) => k.id);
                         // The domain's score of a company: the average over ALL the domain's capabilities (not only the filtered rows); a scored row the company has no cell in counts 0.
@@ -741,7 +742,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                           ? { own: domainScore(domainRows.map((k) => k.ourScore)), ownName: own, companies: shownCompetitors.map((c) => ({ id: c.id, name: c.name, score: domainScore(domainRows.map((k) => (k.ourScore != null ? cellOf(c.id, k.id)?.score ?? 0 : null))) })) }
                           : null;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} onlyOurs={onlyOurs} org={own} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
                             features={withFeatures.length ? { allOpen: allOpen(withFeatures, openFeatures), onToggle: () => setOpenFeatures((cur) => toggleAll(withFeatures, cur)) } : null}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
@@ -1051,8 +1052,11 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
+function DomainGroup({ domain, rows, lines, covered, gaps, onlyOurs, org, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
   domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
+  /** How many of the domain's capabilities only the organization has, shown next to the gaps in the same way; and the organization's name. */
+  onlyOurs: number;
+  org: string;
   /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
   scores?: { own: number | null; ownName: string; companies: Array<{ id: string; name: string; score: number | null }> } | null;
   /** Set when the domain itself is suggested by an analysis (dashed group at the bottom of the table): the competitor it was seen at. Its capabilities are ordinary rows. */
@@ -1089,6 +1093,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
               <span className="ml-auto flex shrink-0 items-center gap-[18px] text-[12px] text-fg-3">
                 {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
               )}
@@ -1110,6 +1115,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
               <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
                 <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
             </td>

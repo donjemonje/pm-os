@@ -55,3 +55,11 @@ export function boxCanScroll(box: { scrollTop: number; clientHeight: number; scr
   if (box.scrollHeight <= box.clientHeight) return false;
   return deltaY < 0 ? box.scrollTop > 0 : box.scrollTop + box.clientHeight < box.scrollHeight - 1;
 }
+
+/**
+ * What a domain's header says about its rows: how many are gaps and how many only the organization has. The kind of
+ * each row is the row's own rule (a scored row: scores.ts scoreRowKind; a row without scores: found / not found).
+ */
+export function rowKindCounts(kinds: ReadonlyArray<"gap" | "only" | "level" | "none">): { gaps: number; only: number } {
+  return { gaps: kinds.filter((k) => k === "gap").length, only: kinds.filter((k) => k === "only").length };
+}

@@ -122,6 +122,8 @@ export const COMPETITORS_COPY = {
     openAllFeatures: "Open the features of all capabilities in this domain",
     covered: "covered",
     gapN: (n: number) => `${n} gap${n === 1 ? "" : "s"}`,
+    /** In a domain's header, next to its gaps: how many of its capabilities only the organization has. */
+    onlyN: (org: string, n: number) => `${n} only ${org}`,
   },
   /** The coverage model: a score 0-5 per company and capability, its reasoning, and what a PM can do with it. */
   score: {

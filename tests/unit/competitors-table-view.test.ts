@@ -1,6 +1,7 @@
 /** Competitors — how the table opens and marks its cells: the default open state, close all / open all, the winners of a row, the colour step of a score's number, scrolling inside an open card. Pure module. */
 import { describe, expect, it } from "vitest";
-import { allOpen, boxCanScroll, defaultOpenDomains, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { allOpen, boxCanScroll, defaultOpenDomains, rowKindCounts, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { scoreRowKind } from "@/lib/competitors/scores";
 
 describe("defaultOpenDomains", () => {
   it("only the first domain is open when the page loads", () => {
@@ -68,3 +69,15 @@ describe("boxCanScroll — scrolling inside an open card", () => {
     expect(boxCanScroll(box(120), 10)).toBe(true);
   });
 });
+
+describe("rowKindCounts — a domain's header: its gaps and what only the organization has", () => {
+  it("counts each kind", () => {
+    expect(rowKindCounts(["gap", "only", "level", "only", "none"])).toEqual({ gaps: 1, only: 2 });
+    expect(rowKindCounts([])).toEqual({ gaps: 0, only: 0 });
+  });
+  it("with scored rows: only = our score above 0 and every competitor at 0; gap = ours 0 and a competitor above 0", () => {
+    const rows: Array<[number, number[]]> = [[3, [0, 0]], [0, [2, 0]], [4, [1, 0]], [1, [0, 0, 0]], [0, [0, 0]]];
+    expect(rowKindCounts(rows.map(([own, theirs]) => scoreRowKind(own, theirs) ?? "none"))).toEqual({ gaps: 1, only: 2 });
+  });
+});
+
