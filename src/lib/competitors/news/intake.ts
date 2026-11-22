@@ -65,9 +65,14 @@ export const NEWS_INTAKE_PROMPT: PromptDef = {
     ["Step 1. Find every feature the pages describe."],
     [FEATURE_IS],
     [
+      // Daniel 2026-11-22: an ability is a new item or a significant improvement — never a small fix.
+      "News is a new thing the product does, or a significant improvement of one it has. Small fixes are not news and are written nowhere, not under new_features, not under on_the_list and not under left_out: a bug fix, a small change of an icon or of how something looks, a column whose width was fixed, a note that something loads faster.",
+    ],
+    [
       "Step 2. For every feature found, search the LIST for the same feature: by what it does, never by its name. Companies rename, repackage and announce again what they already have.",
       "- The LIST holds it, under any name or wording: write it under on_the_list with the code of the item that holds it. Do not describe it.",
-      "- It is only a detail of an item of the LIST, one that would not be a line of its own next to the lines that are there (one more option, a higher limit, a new look): it is on the list too, under that item.",
+      "- It is only a detail of an item of the LIST, one that would not be a line of its own next to the lines that are there (one more option, a higher limit): it is on the list too, under that item.",
+      "- It is a significant improvement of an item of the LIST, one that lets the user do something they could not do with it before: it is new. Write it under new_features, and in its reason name the item of the LIST it improves.",
       "- Nothing on the LIST holds it: it is new. Write it under new_features.",
       "- It is only announced for the future, with no release stated (no date, no beta, no early access): it is not new yet. Put it under left_out.",
       "Be strict about what is new. A product manager who gets one false \"new\" stops reading; one who misses a real one finds out in a meeting.",
