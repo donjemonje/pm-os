@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
 import { EvidenceCard, EvidenceList } from "./EvidenceCard";
+import { DomainScore, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
 import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
@@ -15,6 +16,7 @@ import type { FeedItem } from "@/lib/competitors/feed";
 import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
+import { domainScore, scoreRowKind, type EvidenceRef } from "@/lib/competitors/scores";
 import { moveNextTo } from "@/lib/competitors/order";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -352,6 +354,9 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const ownOf = (k: CapabilityRow): OwnStatus => k.ourStatus;
   /** Gap = not found at the org while found at a competitor (a low-confidence find opens no gap); only-us = found at the org and at no competitor, not even with low confidence. */
   const rowKind = (k: CapabilityRow): "gap" | "only" | "level" | "none" => {
+    // The coverage model: a scored row is a gap when our score is 0 and a competitor is above 0 (scores.ts). Rows with no score keep the rule below.
+    const byScore = scoreRowKind(k.ourScore, competitors.map((c) => cellOf(c.id, k.id)?.score));
+    if (byScore) return byScore;
     const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "not_found");
     const anyFound = theirs.some((v) => v === "found");
     const anyFoundOrLow = theirs.some((v) => v === "found" || v === "low");
@@ -377,11 +382,13 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   }, [activeCaps, state.cells, competitors.length]);
 
   const closest = useMemo(
-    () => rankByCloseness(competitors, activeCaps.map((k) => k.id), (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.value),
+    () => rankByCloseness(competitors, activeCaps.map((k) => k.id), (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.value, (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.score),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [competitors, activeCaps, state.cells],
   );
 
+  /** What a PM can do on a scored capability cell: null = read-only. */
+  const scoreActions = (_url: string): ScoreActions | null => null;
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
   const matchesStatus = (k: CapabilityRow) => {
@@ -693,8 +700,13 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
                         const covered = rows.filter((k) => ownOf(k) === "found").length;
                         const gaps = rows.filter((k) => rowKind(k) === "gap").length;
+                        // The domain's score of a company: the average over ALL the domain's capabilities (not only the filtered rows); a scored row the company has no cell in counts 0.
+                        const domainRows = activeCaps.filter((k) => k.domainId === d.id);
+                        const scores = domainRows.some((k) => k.ourScore != null)
+                          ? { own: domainScore(domainRows.map((k) => k.ourScore)), ownName: own, companies: shownCompetitors.map((c) => ({ id: c.id, name: c.name, score: domainScore(domainRows.map((k) => (k.ourScore != null ? cellOf(c.id, k.id)?.score ?? 0 : null))) })) }
+                          : null;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length}
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length} scores={scores}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
@@ -722,14 +734,24 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   </td>
                                   <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
-                                      <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      {k.ourScore != null ? (
+                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} own score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} error={k.reevaluateError}
+                                          isOpen={openCell?.competitorId === "own" && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: "own", rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/capabilities/${k.id}/score`)} />
+                                      ) : (
+                                        <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      )}
                                     </span>
                                   </td>
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
                                     return (
                                       <td key={c.id} className="text-center">
-                                        <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+                                        {cell && cell.score != null ? (
+                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} error={null}
+                                            isOpen={openCell?.competitorId === c.id && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: c.id, rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/statuses/${cell.id}/score`)} />
+                                        ) : (
+                                          <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+                                        )}
                                       </td>
                                     );
                                   })}
@@ -989,8 +1011,10 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide }: {
+function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null }: {
   domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
+  /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
+  scores?: { own: number | null; ownName: string; companies: Array<{ id: string; name: string; score: number | null }> } | null;
   /** Set when the domain itself is suggested by an analysis (dashed group at the bottom of the table): the competitor it was seen at. Its capabilities are ordinary rows. */
   suggestedBy?: string | null;
   canEdit?: boolean;
@@ -998,10 +1022,11 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
 }) {
   const [open, setOpen] = useState(true);
   const isSuggested = suggestedBy != null;
+  const inColumns = scores != null && !isSuggested;
   return (
     <>
       <tr data-testid={isSuggested ? "cmp-suggested-domain" : undefined}>
-        <td colSpan={colSpan} className="p-0">
+        <td colSpan={inColumns ? 1 : colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
             {/* The whole header opens and closes the group. A div with the button role, not a button: the info button sits inside it. */}
             <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen((v) => !v); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
@@ -1014,15 +1039,30 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
                 <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
               )}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
+              {!inColumns && (
               <span className="ml-auto flex shrink-0 items-center gap-[18px] text-[12px] text-fg-3">
                 {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
+              )}
             </div>
             {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
+        {inColumns && scores && (
+          <>
+            <td className="border-b border-border bg-[rgba(36,87,245,.06)] px-2 text-center"><DomainScore score={scores.own} company={scores.ownName} own /></td>
+            {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} /></td>)}
+            <td className="border-b border-border px-3">
+              <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
+                <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
+                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+                {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+            </td>
+          </>
+        )}
       </tr>
       {open && children}
     </>
@@ -1366,7 +1406,8 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
       </button>
       {showHover && cell && (
         <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
-          <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.description} count={cell.evidenceCount} empty={C.cell.notFoundHint} />
+          <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.description} descriptionLabel={cell.evidence.length ? C.score.howItWorks : undefined} count={cell.evidence.length ? 0 : cell.evidenceCount} empty={cell.description && cell.evidence.length ? `${C.score.howItWorks}: ${cell.description}` : C.cell.notFoundHint} />
+          <MoreEvidence evidence={cell.evidence} rowId={row.id} columnId={competitorId} />
         </div>
       )}
       {isOpen && cell && (
@@ -1393,8 +1434,8 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
             {!editing && (
               <div className="text-[12.5px] text-fg-2">
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
-                <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} count={cell.evidenceCount} empty={cell.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
-                {cell.evidenceCount > 1 && <EvidenceList cellId={cell.id} kind={kind} competitorId={competitorId} rowId={row.id} count={cell.evidenceCount} />}
+                <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.evidence.length ? cell.description : undefined} descriptionLabel={C.score.howItWorks} count={cell.evidence.length ? 0 : cell.evidenceCount} empty={cell.description && cell.evidence.length ? `${C.score.howItWorks}: ${cell.description}` : cell.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
+                {cell.evidence.length > 0 ? <MoreEvidence evidence={cell.evidence} rowId={row.id} columnId={competitorId} /> : cell.evidenceCount > 1 && <EvidenceList cellId={cell.id} kind={kind} competitorId={competitorId} rowId={row.id} count={cell.evidenceCount} />}
               </div>
             )}
             {editing && (
@@ -1435,7 +1476,7 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
 
 function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
   /** The row: a capability or a feature, with the org's own mark on it and the evidence of its own website behind it. */
-  row: { id: string; name: string; ourStatus: OwnStatus; ourStatusByPm: boolean; ownEvidence: OwnEvidence | null };
+  row: { id: string; name: string; ourStatus: OwnStatus; ourStatusByPm: boolean; ownEvidence: OwnEvidence | null; /** The coverage model, features only: "how it works" at the organization and every piece of its evidence. */ ownHow?: string | null; ownEvidenceList?: EvidenceRef[] };
   kind: "capability" | "feature";
   org: string;
   /** The organization's own website is analysed: the value comes from it unless a PM set it. */
@@ -1480,12 +1521,13 @@ function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, description: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [] };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, description: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [], score: null, scoreReasoning: null, scoreLocked: false, scoreLockedBy: null, pmReasoning: null, evidence: [] };
   // A quote from the product lines has no page to open: the card says where it is from instead of linking an internal address.
   const fromProductLines = isProductLinesPage(evidence?.sourceUrl);
   const card = (
     <>
-      <EvidenceCard quote={evidence?.quote ?? null} url={fromProductLines ? null : evidence?.sourceUrl ?? null} reasoning={evidence?.reasoning || null} wording={null} description={evidence?.description ?? null} count={evidence?.count ?? 0} empty={C.matrix.ownEvidenceEmpty} />
+      <EvidenceCard quote={evidence?.quote ?? null} url={fromProductLines ? null : evidence?.sourceUrl ?? null} reasoning={evidence?.reasoning || null} wording={null} description={evidence?.description ?? row.ownHow ?? null} descriptionLabel={row.ownEvidenceList?.length || row.ownHow ? C.score.howItWorks : undefined} count={row.ownEvidenceList?.length ? 0 : evidence?.count ?? 0} empty={row.ownHow ? `${C.score.howItWorks}: ${row.ownHow}` : C.matrix.ownEvidenceEmpty} />
+      {row.ownEvidenceList && <MoreEvidence evidence={row.ownEvidenceList} rowId={row.id} columnId="own" />}
       {evidence && fromProductLines && <div className="mt-1 text-[12px] text-fg-muted" data-testid="cmp-own-evidence-product-lines">{C.matrix.ownFromProductLines}</div>}
     </>
   );

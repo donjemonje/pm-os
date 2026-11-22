@@ -35,3 +35,16 @@ describe("proximityPicks — the Offering Proximity card shows at most six", () 
     expect(proximityPicks(list(15))).toEqual([0, 1, 6, 7, 13, 14]);
   });
 });
+
+describe("closeness from scores (the coverage model)", () => {
+  it("is the average score on the 0-100 scale when the capabilities are scored", () => {
+    const scores: Record<string, Record<string, number>> = { x: { a: 5, b: 0 }, y: { a: 2, b: 2 } };
+    const values: Record<string, Record<string, StatusValue>> = { x: { a: "found", b: "not_found" }, y: { a: "found", b: "found" } };
+    const ranked = rankByCloseness([{ id: "y" }, { id: "x" }], ["a", "b"], (c, k) => values[c]?.[k], (c, k) => scores[c]?.[k]);
+    expect(ranked.map((r) => [r.competitor.id, r.closeness.score])).toEqual([["x", 50], ["y", 40]]);
+    expect(ranked[0].closeness.found).toBe(1);
+  });
+  it("falls back to the share found when nothing is scored", () => {
+    expect(closenessOf(["a", "b"], (k) => (k === "a" ? "found" : "not_found"), () => null).score).toBe(50);
+  });
+});

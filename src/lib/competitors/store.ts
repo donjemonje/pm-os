@@ -5,6 +5,15 @@ import { isScannedAddress, readAddressSearch, searchLooking, searchRunning } fro
 import { orgSetupState, type OrgSetupState } from "./analysis/setup-rules";
 import { NOT_OWN, readOwnEvidence, type OwnEvidence } from "./own";
 import { siteHost } from "./url";
+import { readEvidenceList, type EvidenceRef } from "./scores";
+
+/** A re-evaluation of a capability's row that has not reported for this long is taken for a dead one (the cell stops saying "re-evaluating"). */
+export const REEVALUATE_STALE_MS = STALE_MS;
+/** "How it works" of the organization's own feature (Feature.ourEvidence.description), also when no quote is stored. */
+function ownHowOf(raw: unknown): string | null {
+  const d = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>).description : null;
+  return typeof d === "string" && d ? d : null;
+}
 
 /**
  * Reads for the Competitors pages — one query set, returned in the shape the
@@ -194,6 +203,19 @@ export interface CapabilityRow {
   ourStatusByPm: boolean;
   /** The top evidence of ours behind the own cell (from the organization's own site); null = none. */
   ownEvidence: OwnEvidence | null;
+  /** The coverage model (scores.ts): the organization's own score 0-5 for this capability; null = a row of the earlier model. */
+  ourScore: number | null;
+  /** Why this score, at most 350 characters. */
+  ourScoreReasoning: string | null;
+  /** A PM set the own score by hand: locked until released. Who, when known. */
+  ourScoreLocked: boolean;
+  ourScoreLockedBy: string | null;
+  /** Reasoning a PM added for the own cell; PMOS AI uses it in every evaluation. */
+  ourPmReasoning: string | null;
+  /** PMOS AI is re-evaluating this capability's row right now. */
+  reevaluating: boolean;
+  /** Why the last re-evaluation did not finish; null after one that did. */
+  reevaluateError: string | null;
   position: number;
   origin: string;
   state: string;
@@ -227,6 +249,17 @@ export interface CellRow {
   product: string | null;
   /** Earlier values of the cell, newest first ([] for a feature cell: features carry no history). */
   history: { value: StatusValue; quote: string | null; sourceUrl: string | null; at: string }[];
+  /** The coverage model (scores.ts), capability cells only: the company's score 0-5; null = a cell of the earlier model, and always null on a feature cell. */
+  score: number | null;
+  /** Why this score, at most 350 characters. */
+  scoreReasoning: string | null;
+  /** A PM set the score by hand: locked until released. Who, when known. */
+  scoreLocked: boolean;
+  scoreLockedBy: string | null;
+  /** Reasoning a PM added for this cell; PMOS AI uses it in every evaluation. */
+  pmReasoning: string | null;
+  /** Feature cells of the coverage model: every piece of evidence, the strongest first ([] otherwise). */
+  evidence: EvidenceRef[];
 }
 
 /** A feature: the level under a capability. */
@@ -239,6 +272,9 @@ export interface FeatureRow {
   ourStatus: OwnStatus;
   ourStatusByPm: boolean;
   ownEvidence: OwnEvidence | null;
+  /** The coverage model: "how it works" at the organization, and every piece of its evidence, the strongest first ([] otherwise). */
+  ownHow: string | null;
+  ownEvidenceList: EvidenceRef[];
   position: number;
   origin: string;
 }
@@ -583,6 +619,13 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
       ourStatus: (k.ourStatus === "not_found" ? "not_found" : "found") as OwnStatus,
       ourStatusByPm: k.ourStatusSetAt != null,
       ownEvidence: readOwnEvidence(k.ourEvidence),
+      ourScore: k.ourScore,
+      ourScoreReasoning: k.ourScoreReasoning,
+      ourScoreLocked: k.ourScoreLockedAt != null,
+      ourScoreLockedBy: userName(k.ourScoreLockedById),
+      ourPmReasoning: k.ourPmReasoning,
+      reevaluating: k.reevaluatingAt != null && Date.now() - k.reevaluatingAt.getTime() < REEVALUATE_STALE_MS,
+      reevaluateError: k.reevaluateError,
       position: k.position,
       origin: k.origin,
       state: k.state,
@@ -613,9 +656,15 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
         product: s.product,
         history: s.history.map((h) => ({ value: h.value as StatusValue, quote: h.quote, sourceUrl: h.sourceUrl, at: h.at.toISOString() })),
+        score: s.score,
+        scoreReasoning: s.scoreReasoning,
+        scoreLocked: s.scoreLockedAt != null,
+        scoreLockedBy: userName(s.scoreLockedById),
+        pmReasoning: s.pmReasoning,
+        evidence: [],
       };
     }),
-    features: features.map((f) => ({ id: f.id, capabilityId: f.capabilityId, name: f.name, description: f.description, ourStatus: (f.ourStatus === "found" ? "found" : "not_found") as OwnStatus, ourStatusByPm: f.ourStatusSetAt != null, ownEvidence: readOwnEvidence(f.ourEvidence), position: f.position, origin: f.origin })),
+    features: features.map((f) => ({ id: f.id, capabilityId: f.capabilityId, name: f.name, description: f.description, ourStatus: (f.ourStatus === "found" ? "found" : "not_found") as OwnStatus, ourStatusByPm: f.ourStatusSetAt != null, ownEvidence: readOwnEvidence(f.ourEvidence), ownHow: ownHowOf(f.ourEvidence), ownEvidenceList: readEvidenceList((f.ourEvidence as { evidence?: unknown } | null)?.evidence), position: f.position, origin: f.origin })),
     featureCells: featureStatuses.map((s) => {
       const scanned = s.value as StatusValue;
       const ov = s.overrideValue as StatusValue | null;
@@ -636,6 +685,12 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         override: ov && s.overrideAt ? { value: ov, note: s.overrideNote, userName: userName(s.overrideUserId), at: s.overrideAt.toISOString() } : null,
         product: null,
         history: [],
+        score: null,
+        scoreReasoning: null,
+        scoreLocked: false,
+        scoreLockedBy: null,
+        pmReasoning: null,
+        evidence: readEvidenceList(s.evidence),
       };
     }),
     removed: !opts.withRemoved ? { domains: [], capabilities: [] } : {

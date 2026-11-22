@@ -14,13 +14,15 @@ function pageLabel(url: string): string {
  * The evidence behind a cell: the quote from the competitor's page, why it means they offer it, the competitor's
  * own name for it, and the page. Read-only; shared by the cell's hover card, its popover and the profile.
  */
-export function EvidenceCard({ quote, url, reasoning, wording, description, count, empty }: {
+export function EvidenceCard({ quote, url, reasoning, wording, description, descriptionLabel, count, empty }: {
   quote: string | null;
   url: string | null;
   reasoning: string | null;
   wording: string | null;
   /** One plain sentence of what it does, from the competitor's pages. Shown only where a caller passes it (the matrix hover). */
   description?: string | null;
+  /** The label in front of the description; "What it does" unless a caller says otherwise (the coverage model says "How it works"). */
+  descriptionLabel?: string;
   /** Distinct pages that carry evidence. */
   count: number;
   /** What to say when there is no quote. */
@@ -32,7 +34,7 @@ export function EvidenceCard({ quote, url, reasoning, wording, description, coun
       <blockquote className="m-0 border-l-2 border-border pl-2.5 italic leading-relaxed text-[#1f2f47]">“{quote}”</blockquote>
       {description && (
         <div className="leading-snug" data-testid="cmp-evidence-description">
-          <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.whatItDoes} </span>
+          <span className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{descriptionLabel ?? C.cell.whatItDoes} </span>
           {description}
         </div>
       )}
@@ -43,7 +45,7 @@ export function EvidenceCard({ quote, url, reasoning, wording, description, coun
         </div>
       )}
       {wording && <div className="text-[12px] text-fg-muted">{C.cell.theirName(wording)}</div>}
-      {url && (
+      {url && /^https?:\/\//.test(url) && (
         <a href={url} target="_blank" rel="noreferrer" title={url} className="flex max-w-full items-center gap-1 text-[12px] text-primary hover:underline" data-testid="cmp-evidence-link">
           <ExternalLink size={11} className="shrink-0" /> <span className="min-w-0 truncate">{pageLabel(url)}</span>
         </a>
