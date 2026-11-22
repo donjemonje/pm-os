@@ -13,7 +13,7 @@ import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
 import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
-import { rankByCloseness } from "@/lib/competitors/closeness";
+import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -39,6 +39,13 @@ function chipClass(active: boolean): string {
     ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-transparent bg-primary px-3 text-[12.5px] font-semibold text-white shadow-[0_6px_16px_-6px_var(--app-accent)]"
     : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-[var(--app-glass)] px-3 text-[12.5px] font-semibold text-[#3f506b] shadow-sm hover:border-primary/55 hover:bg-white";
 }
+
+/**
+ * The table starts with this many companies shown, and that many fit without sideways scrolling (from a 1512 px wide
+ * window with the menu open). With more companies in the organization, the first ones in the list are ticked in the
+ * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
+ */
+const DEFAULT_SHOWN_COMPANIES = 6;
 
 function toggleIn(setter: React.Dispatch<React.SetStateAction<string[]>>) {
   return (o: string) => setter((prev) => (prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]));
@@ -79,7 +86,7 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
         <span className="text-[12px] text-fg-faint">{C.strip.closestNone}</span>
       ) : (
         <ol className="m-0 grid list-none grid-cols-1 gap-x-[18px] gap-y-1 p-0 text-[12px] sm:grid-cols-2">
-          {ranked.map(({ competitor: c, closeness }) => {
+          {proximityPicks(ranked).map(({ competitor: c, closeness }) => {
             const [bar, fg] = tone(closeness.score);
             return (
               <li key={c.id}>
@@ -209,7 +216,10 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const [capQuery, setCapQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<string[]>([]);
   const [productFilter, setProductFilter] = useState<string[]>([]);
-  const [competitorFilter, setCompetitorFilter] = useState<string[]>([]);
+  // More companies than the table shows at first: the first six start ticked. Six or fewer: nothing ticked = all.
+  const [defaultShown] = useState<string[]>(() => (initialState.competitors.length > DEFAULT_SHOWN_COMPANIES ? initialState.competitors.slice(0, DEFAULT_SHOWN_COMPANIES).map((c) => c.name) : []));
+  const [competitorFilter, setCompetitorFilter] = useState<string[]>(defaultShown);
+  const competitorFilterChanged = competitorFilter.length !== defaultShown.length || competitorFilter.some((n) => !defaultShown.includes(n));
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [gapsOnly, setGapsOnly] = useState(false);
 
@@ -405,7 +415,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
       track("cmp_matrix_viewed", {
         competitors: competitors.length,
         capabilities: activeCaps.length,
-        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilter.length && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
+        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
         gapsOnly,
       });
     }, 800);
@@ -557,7 +567,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
             {/* Matrix */}
             <div className="glass overflow-visible rounded-card">
               <div className="overflow-x-auto rounded-card">
-                <table className="w-full border-collapse text-[13px]" style={{ minWidth: 640 + 104 * shownCompetitors.length }}>
+                <table className="w-full border-collapse text-[13px]" style={{ minWidth: 560 + 104 * shownCompetitors.length }}>
                   <thead>
                     <tr>
                       <th scope="col" className="border-b border-border px-4 pb-[30px] pl-[30px] pt-2.5 text-left align-middle text-[12px] font-semibold tracking-[0.06em] text-fg-muted">
@@ -934,9 +944,11 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
       <tr data-testid={isSuggested ? "cmp-suggested-domain" : undefined}>
         <td colSpan={colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
-            <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : domain.summary || undefined}>
+            {/* The whole header opens and closes the group. A div with the button role, not a button: the info button sits inside it. */}
+            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen((v) => !v); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
               <span className="text-[14px] font-bold">{domain.name}</span>
+              {!isSuggested && <DomainInfo name={domain.name} covers={domain.summary || domain.description} doneBy={domain.doneBy} />}
               {isSuggested ? (
                 <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-2 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedDomain} · {C.settings.suggestedBy(suggestedBy)}</span>
               ) : (
@@ -948,7 +960,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
                 {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
-            </button>
+            </div>
             {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
@@ -1119,6 +1131,59 @@ function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: s
     <span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
       <button type="button" onClick={() => onDecide("active")} title={approve} aria-label={approve} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
       <button type="button" onClick={() => onDecide("dismissed")} title={declineHint} aria-label={decline} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
+    </span>
+  );
+}
+
+/**
+ * Small (i) after a domain name: click opens a card with what the domain covers; "Show more" adds who does the work.
+ * Esc or a click outside closes it. Nothing here reaches the group's open/close toggle it sits in.
+ */
+function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; doneBy: string }) {
+  const [open, setOpen] = useState(false);
+  const [more, setMore] = useState(false);
+  const close = () => { setOpen(false); setMore(false); };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setMore(false); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  const text = covers.split("\n").map((l) => l.trim()).filter(Boolean);
+  return (
+    <span className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => (open ? close() : setOpen(true))}
+        aria-label={C.matrix.domainInfoToggle(name)}
+        aria-expanded={open}
+        className={cn("inline-flex h-5 w-5 items-center justify-center rounded-full text-fg-faint hover:bg-white hover:text-fg-2", open && "bg-white text-primary shadow-[0_0_0_2px_var(--app-accent-soft)]")}
+        data-testid="cmp-domain-info"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24] cursor-default" onClick={close} />
+          <div className="absolute left-0 top-[calc(100%+6px)] z-[25] w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
+            <div className="mb-1 flex items-start gap-2">
+              <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
+              <button type="button" onClick={close} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
+            </div>
+            <div className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.matrix.domainCovers}</div>
+            {text.length ? text.map((l, i) => <p key={i} className="m-0">{l}</p>) : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
+            {doneBy && more && (
+              <div className="mt-2" data-testid="cmp-domain-done-by">
+                <div className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.matrix.domainDoneBy}</div>
+                <p className="m-0">{doneBy}</p>
+              </div>
+            )}
+            {doneBy && (
+              <button type="button" onClick={() => setMore((v) => !v)} aria-expanded={more} className="mt-1.5 text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-domain-more">{more ? C.matrix.showLess : C.matrix.showMore}</button>
+            )}
+          </div>
+        </>
+      )}
     </span>
   );
 }

@@ -215,3 +215,18 @@ describe("the temperature of a Gemini call", () => {
     expect(GEMINI_TEMPERATURE).toBe(1);
   });
 });
+
+describe("an answer that continued over several requests", () => {
+  it("is one text: the pieces of every request joined in order, finished by the last stop reason", async () => {
+    async function* stream(): AsyncGenerator<StreamPiece> {
+      yield { candidates: [{ content: { parts: [{ text: "thinking…", thought: true }] } }] };
+      yield { candidates: [{ content: { parts: [{ text: '{"rows":[1,' }] }, finishReason: "CONTINUATION" }] };
+      yield { candidates: [{ content: { parts: [{ text: "2]}" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 300, initialPromptTokenCount: 100, candidatesTokenCount: 9, thoughtsTokenCount: 70000 } };
+    }
+    const got = await collectStream(stream());
+    expect(got.text).toBe('{"rows":[1,2]}');
+    expect(got.finish).toBe("STOP");
+    // The prompt is counted once, not once per request.
+    expect(got.usage).toMatchObject({ input: 100, thinking: 70000, output: 70009 });
+  });
+});

@@ -233,9 +233,11 @@ export function asCapacityError(e: unknown): unknown {
  * What a Gemini answer says it used. Gemini reports the visible answer (candidatesTokenCount) and the model's own
  * thinking (thoughtsTokenCount) apart; both are billed as output.
  */
-export function geminiUsage(u: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number } | null | undefined): Usage {
+export function geminiUsage(u: { promptTokenCount?: number; initialPromptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number } | null | undefined): Usage {
   const thinking = u?.thoughtsTokenCount ?? 0;
-  return { input: u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + thinking, cached: u?.cachedContentTokenCount ?? 0, thinking };
+  // An answer that continued over several requests (see callTool) reports promptTokenCount summed over all of them;
+  // initialPromptTokenCount is the prompt as it was sent once.
+  return { input: u?.initialPromptTokenCount ?? u?.promptTokenCount ?? 0, output: (u?.candidatesTokenCount ?? 0) + thinking, cached: u?.cachedContentTokenCount ?? 0, thinking };
 }
 
 /**
@@ -249,7 +251,7 @@ export const CALL_TIMEOUT_MS = 60 * 60_000;
 /** One piece of a streamed answer, as the provider sends it: some text parts (the model's own thoughts are marked), and on the last pieces why it stopped and what it used. */
 export interface StreamPiece {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: unknown }>;
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number };
+  usageMetadata?: { promptTokenCount?: number; initialPromptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number };
 }
 
 export interface CollectedStream {
@@ -331,6 +333,12 @@ export async function callTool<T>(system: string, shared: string, tail: string, 
           // role's (models.ts thinkingFor); thinking is billed against maxOutputTokens, hence the headroom.
           thinkingConfig: { thinkingLevel: level, ...(log?.thoughts ? { includeThoughts: true } : {}) },
           maxOutputTokens,
+          // One request gives at most 65,536 tokens of thinking and answer together; a call that needs more ends
+          // with finish CONTINUATION and a token to go on with. The SDK (2.29.1 and later) then sends the same
+          // request again with that token until the model finishes, and the stream carries all of it. Said
+          // explicitly because an answer cut at that step is otherwise lost (found 2026-11-21: 62,068 tokens of
+          // thinking left 3,468 for the answer). maxOutputTokens is the total over all those requests.
+          automaticContinuation: true,
           responseMimeType: "application/json",
           responseSchema,
           httpOptions: { timeout: CALL_TIMEOUT_MS },

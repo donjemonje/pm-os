@@ -154,6 +154,8 @@ export interface DomainRow {
   description: string;
   /** Plain text for people; "" when not written yet. */
   summary: string;
+  /** Who does this domain's work (roles and teams); "" when not written. */
+  doneBy: string;
   color: string | null;
   position: number;
   /** "manual" | "ai" */
@@ -565,7 +567,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
     }),
-    domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, summary: d.summary, color: d.color, position: d.position, origin: d.origin, state: d.state, suggestedById: d.suggestedById })),
+    domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description, summary: d.summary, doneBy: d.doneBy, color: d.color, position: d.position, origin: d.origin, state: d.state, suggestedById: d.suggestedById })),
     capabilities: capabilities.map((k) => ({
       id: k.id,
       domainId: k.domainId,

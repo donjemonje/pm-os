@@ -246,8 +246,8 @@ interface Collected {
   seenUrls: Set<string>;
   /** Home page could not be read; the kind says Blocked vs Unreachable. */
   homeFailed: FetchErrorKind | null;
-  /** The scan stopped early: ceiling or slow down. */
-  stoppedBy: "cap" | "slowdown" | "storage" | null;
+  /** The scan stopped early: ceiling, slow down, the store is full, or the site refused the station page after page. */
+  stoppedBy: "cap" | "slowdown" | "storage" | "refused" | null;
   mode: FetchMode | ScanLane;
   errorKind: string | null;
   error: string | null;
@@ -488,6 +488,10 @@ async function collectLocal(ctx: CollectContext): Promise<Collected> {
     // The site answered 429: the station handed the signal in and stopped; what it had left is not a time-limit stop.
     out.stoppedBy = "slowdown";
     if (log.notAttempted) log.add("warn", `${log.notAttempted} discovered page${log.notAttempted === 1 ? "" : "s"} not attempted after the slow-down answer`);
+  } else if (row?.errorKind === "refused") {
+    // The site refused page after page, in the station's Chrome too: the station stopped asking. Not a time-limit stop.
+    out.stoppedBy = "refused";
+    log.add("warn", `The site refused the scan page after page — the station stopped asking; ${log.notAttempted} discovered page${log.notAttempted === 1 ? "" : "s"} not attempted`);
   } else if (log.notAttempted) {
     out.stoppedBy = "cap";
     log.count("cap", log.notAttempted);

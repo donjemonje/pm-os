@@ -7,7 +7,9 @@ type Params = { params: Promise<{ id: string }> };
 
 /**
  * POST — the station finished reading (scan token as bearer). Body:
- *   { notAttempted?: number }   pages the station discovered but did not read (time or storage limit, slow-down)
+ *   { notAttempted?: number }   pages the station discovered but did not read (time or storage limit, slow-down, the site refused the scan)
+ *   { stopped?: "refused" }     the station ended the scan because the site refused several pages in a row, in its
+ *                               Chrome too — what is left is "not attempted", and not a time-limit stop
  * Answers "received" at once in every environment and hands the process half (page states, hash compare, badge —
  * then queueing the analysis run) to the runner: a Cloud Run job in production, a background task in
  * this Node process in local dev (lib/competitors/run.ts). The station never waits for processing; the result
@@ -35,7 +37,9 @@ export async function POST(req: Request, { params }: Params) {
   }
   if (scan.status !== "running") await startLocalScan(id, null);
   const notAttempted = typeof body.notAttempted === "number" && Number.isFinite(body.notAttempted) ? Math.max(0, Math.round(body.notAttempted)) : 0;
-  await db.competitorScan.update({ where: { id }, data: { pagesNotAttempted: notAttempted, heartbeatAt: new Date() } });
+  // "refused" rides on errorKind until the scan is processed (as "storage" does from the hand-in route); a store that is full wins.
+  const refusedStop = body.stopped === "refused" && (await db.competitorScan.findUnique({ where: { id }, select: { errorKind: true } }))?.errorKind !== "storage";
+  await db.competitorScan.update({ where: { id }, data: { pagesNotAttempted: notAttempted, heartbeatAt: new Date(), ...(refusedStop ? { errorKind: "refused" } : {}) } });
   await db.localScanRequest.updateMany({ where: { scanId: id, state: "running" }, data: { state: "handed_in" } });
   try {
     await launchScan(id);

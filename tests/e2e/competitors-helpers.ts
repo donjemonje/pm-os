@@ -152,6 +152,8 @@ export interface PollerOpts {
   /** Time knobs: how long the station waits for the network before it parks the scan, and how often it asks. */
   offlineWaitMs?: number;
   offlineProbeMs?: number;
+  /** Time knob: the waits after a "slow down" answer, in ms (the real ones are 1, 2 and 5 minutes). Default: three waits of 0 — the same three tries, no waiting. */
+  slowdownWaitsMs?: number[];
 }
 
 export function pollerArgs(o: PollerOpts & { key: string }): string[] {
@@ -162,6 +164,7 @@ export function pollerArgs(o: PollerOpts & { key: string }): string[] {
     "--probe-urls", o.probeUrl ?? LOCAL_BASE_URL,
     ...(o.offlineWaitMs !== undefined ? ["--offline-wait-ms", String(o.offlineWaitMs)] : []),
     ...(o.offlineProbeMs !== undefined ? ["--offline-probe-ms", String(o.offlineProbeMs)] : []),
+    "--slowdown-waits-ms", (o.slowdownWaitsMs ?? [0, 0, 0]).join(","),
   ];
 }
 

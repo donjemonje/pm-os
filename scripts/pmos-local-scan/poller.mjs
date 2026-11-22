@@ -38,7 +38,13 @@
  *           Sitemap lines, /sitemap.xml, /sitemap_index.xml, indexes followed)
  *           plus the links on every page, same site only; robots.txt rules are
  *           read for discovery only, never obeyed (a person's intent), a
- *           pause between pages, stop on 429. Pages that come back empty, and
+ *           pause between pages. A site that answers "slow down" (429) is
+ *           waited for and then read more slowly; the scan stops only when it
+ *           keeps saying so (pace.mjs). Pages PM-OS has never read come before
+ *           the ones it has. A page the site refuses on the plain request
+ *           (403) is read with the installed Chrome (chrome.mjs); once that
+ *           works, the rest of the scan is read with Chrome. Five refused
+ *           pages in a row end the scan. Pages that come back empty, and
  *           the home / hub pages when their navigation is built by JavaScript,
  *           are rendered with the installed Chrome in headless mode. PDFs are
  *           downloaded and handed in as documents.
@@ -61,8 +67,12 @@
  *   --runner fetch|claude (default fetch)
  *   --max-parallel N     scans read at the same time (default 10 — a safety net, not a working limit; the claude runner is always 1)
  *   --render auto|off    headless Chrome for empty pages and JS-built navigation (default auto; off = plain fetch only)
+ *   --reader auto|chrome how pages are read (default auto: plain HTTP, Chrome for a page the site refuses; chrome: every
+ *                        page with the installed Chrome from the first one). <state-dir>/station.json {"reader":"chrome"}
+ *                        sets it for a station started by its LaunchAgent; the flag wins.
  *   --chrome PATH        the Chrome binary (default: PMOS_CHROME, else the Mac's /Applications path)
  *   --pause-ms N         pause between pages of one site in the fetch runner (default 2000)
+ *   --slowdown-waits-ms A,B,C  TESTS ONLY: the waits after a "slow down" answer (default 60000,120000,300000; "" = stop at the first)
  *   --max-minutes N      stop a scan after N minutes (default: the server's time limit, 8 h; no page limit) — per scan
  *   --state-dir PATH     where the status file, the saved places and the log live (default ~/.pmos)
  *   --recheck-ms N       while scans run, ask PM-OS for new waiting scans this often (default 15 min)
@@ -76,6 +86,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runAddressStep } from "./addresses.mjs";
+import { chromeReaderSupported, judgeChromeRead, killAllChrome, openChrome, refusedStop } from "./chrome.mjs";
+import { afterProbeAnswered, afterSlowDown, afterStuckPage, makeQueue, retryAfterMs, sectionOf, SLOWDOWN_WAITS_MS } from "./pace.mjs";
 import { adoptLegacyPlace, clearPlace, loadPlace, loadPlaces, markStopped, savePlace } from "./places.mjs";
 import { NO_SCAN, orderWaiting, parallelLimit, pickNext, siteKey, statusOf } from "./schedule.mjs";
 
@@ -98,7 +110,19 @@ const RECHECK_MS = Number(flag("recheck-ms", String(POLL_MS))) || POLL_MS;
 /** Scans read at the same time, as asked (schedule.mjs parallelLimit decides: default 10, the claude runner 1). */
 const MAX_PARALLEL_FLAG = flag("max-parallel", "");
 const PAUSE_MS = Number(flag("pause-ms", "2000"));
+/** The waits after a "slow down" answer (pace.mjs). The flag is a test knob: real stations use the default. */
+const SLOWDOWN_WAITS = has("slowdown-waits-ms") ? String(flag("slowdown-waits-ms", "")).split(",").map((v) => v.trim()).filter(Boolean).map(Number).filter((n) => n >= 0) : SLOWDOWN_WAITS_MS;
 const RENDER = flag("render", "auto");
+/** How pages are read: "auto" (plain HTTP first) or "chrome" (every page with Chrome). The flag, else <state-dir>/station.json, else auto. */
+const READER = (() => {
+  const asked = flag("reader", "");
+  if (asked === "chrome" || asked === "auto") return asked;
+  try {
+    return JSON.parse(readFileSync(join(STATE_DIR, "station.json"), "utf8")).reader === "chrome" ? "chrome" : "auto";
+  } catch {
+    return "auto";
+  }
+})();
 const CHROME = flag("chrome", process.env.PMOS_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 /** Headless renders per scan are bounded: home, hubs and empty pages only. */
 const MAX_RENDERS = 40;
@@ -211,6 +235,7 @@ process.on("exit", () => {
  * Returns how many running scans have a saved place.
  */
 function stopAll(reason, detail) {
+  killAllChrome();
   const saved = [...LIVE.keys()].filter((id) => markStopped(STATE_DIR, id, reason, detail)).length;
   LIVE.clear();
   if (saved) status({ ...NO_SCAN, state: "idle", message: saved === 1 ? "Station stopped — the scan continues at the next check-in" : `Station stopped — ${saved} scans continue at the next check-in` });
@@ -382,6 +407,70 @@ function renderWithChrome(url, slog) {
   return mine;
 }
 
+/** Can a page the site refused be read with Chrome on this Mac? The reason it cannot is logged once. */
+let chromeReaderSaid = false;
+async function chromeReaderAvailable(slog) {
+  if (!(await chromeAvailable())) return false;
+  if (chromeReaderSupported()) return true;
+  if (!chromeReaderSaid) slog("  refused pages cannot be read with Chrome on this Mac: Node 22 or newer is needed (no built-in WebSocket)");
+  chromeReaderSaid = true;
+  return false;
+}
+
+/**
+ * A page the site refused on the plain request, read with the installed Chrome (chrome.mjs) — in the same one-at-a-time
+ * turn as the renders: one profile folder. Returns a page as readOnce does; "blocked" when Chrome was refused too.
+ */
+/** One Chrome profile folder per site, and one read at a time per site: different sites are read side by side. The folder keeps the site's cookies between reads and between scans, as a person's browser does. */
+const siteTurns = new Map();
+/** The Chrome kept open for each site while its scan runs: host → { browser, reads }. Started again after CHROME_READS_PER_BROWSER pages (a browser that never restarts grows without end). */
+const siteBrowsers = new Map();
+const CHROME_READS_PER_BROWSER = 150;
+async function closeSiteBrowser(host) {
+  const open = siteBrowsers.get(host);
+  siteBrowsers.delete(host);
+  if (open) await open.browser.close().catch(() => undefined);
+}
+async function readWithSiteBrowser(host, url) {
+  let open = siteBrowsers.get(host);
+  if (open && (!open.browser.alive() || open.reads >= CHROME_READS_PER_BROWSER)) {
+    await closeSiteBrowser(host);
+    open = undefined;
+  }
+  if (!open) {
+    const profile = join(STATE_DIR, "chrome-profiles", host.replace(/[^a-z0-9.-]/gi, "_"));
+    mkdirSync(profile, { recursive: true });
+    const browser = await openChrome({ chrome: CHROME, profile, userAgent: BROWSER_UA });
+    if (browser.error) return { error: browser.error };
+    open = { browser, reads: 0 };
+    siteBrowsers.set(host, open);
+  }
+  open.reads++;
+  const r = await open.browser.read(url);
+  // A browser that stopped answering is closed: the next page starts a new one.
+  if (r.error && (!open.browser.alive() || /did not answer|not running|DevTools/.test(r.error))) await closeSiteBrowser(host);
+  return r;
+}
+function readRefusedWithChrome(url, started, host) {
+  const mine = (siteTurns.get(host) ?? Promise.resolve()).then(async () => {
+    const r = await readWithSiteBrowser(host, url);
+    const ms = Date.now() - started;
+    if (r.error) return { url, status: "blocked", ms, viaChrome: true, chromeFailed: true, chromeNote: r.error };
+    const status = judgeChromeRead(r);
+    if (status !== "ok") return { url, status, ms, viaChrome: true, chromeNote: `Chrome got HTTP ${r.status ?? "no answer"}` };
+    let finalUrl;
+    try {
+      finalUrl = new URL(r.finalUrl || url);
+    } catch {
+      finalUrl = new URL(url);
+    }
+    if (siteOf(finalUrl) !== host) return { url, status: "notfound", ms, viaChrome: true, error: `redirected outside the site (${finalUrl.hostname})` };
+    return { url, status: "ok", html: r.html, ms, finalUrl: finalUrl.href, viaChrome: true };
+  });
+  siteTurns.set(host, mine.then(() => undefined, () => undefined));
+  return mine;
+}
+
 /**
  * One attempt to read a page with this machine's own HTTP. The same rules as the remote lane (fetcher.ts): a redirect
  * that leaves the site is "not found" (one domain per source — and nothing a competitor's page points at on this Mac's
@@ -396,7 +485,7 @@ async function readOnce(url, started, host) {
     if (siteOf(finalUrl) !== host) return { url, status: "notfound", ms, error: `redirected outside the site (${finalUrl.hostname})` };
     if (res.status === 404 || res.status === 410) return { url, status: "notfound", ms };
     if (res.status === 401 || res.status === 402 || res.status === 407) return { url, status: "login", ms };
-    if (res.status === 429) return { url, status: "slowdown", ms };
+    if (res.status === 429) return { url, status: "slowdown", ms, retryAfter: retryAfterMs(res.headers.get("retry-after")) };
     if (res.status === 403) return { url, status: "blocked", ms };
     if (res.status >= 500) return { url, status: "other", ms };
     if (ct.includes("application/pdf") || /\.pdf$/i.test(finalUrl.pathname)) {
@@ -420,10 +509,14 @@ async function readOnce(url, started, host) {
  * /sitemap_index.xml. A sitemap index is followed into its child sitemaps (same site only).
  * Returns the page URLs found and a short summary for the log.
  */
-async function discoverSitemaps(siteUrl, host) {
+async function discoverSitemaps(siteUrl, host, log = () => {}) {
+  let asked = 0;
   const get = async (u) => {
     try {
+      // One request per pause, like the pages: a site with 20 sitemap files must not get them in one burst (KELA 2026-11-21).
+      if (asked++ > 0 && PAUSE_MS > 0) await sleep(PAUSE_MS);
       const res = await fetch(u, { headers: { "user-agent": BROWSER_UA }, signal: AbortSignal.timeout(15_000) });
+      if (res.status === 429) log(`  sitemap not read — the site asked to slow down (429): ${u}`);
       return res.ok ? await res.text() : null;
     } catch {
       return null;
@@ -480,14 +573,27 @@ async function runFetch(job, limits, post, saved, scan) {
   const log = scan.log;
   const host = siteOf(new URL(job.siteUrl));
   const seen = new Set(saved?.seen ?? []);
-  const queue = saved ? [...saved.queue] : [];
+  /** The pages PM-OS already has, as page keys: they are read after the pages it has never read (pace.mjs). */
+  const known = [];
+  for (const k of job.knownUrls ?? []) {
+    try {
+      known.push(pageKey(new URL(k), job.siteUrl));
+    } catch {
+      // skip
+    }
+  }
+  const queue = makeQueue({ queue: saved?.queue ?? [], fresh: saved?.fresh ?? 0, known });
+  /** Sections whose pages keep answering "slow down" while the rest of the site answers: their pages are at the end of the line (kept across a continuation). */
+  const movedSections = new Set(saved?.movedSections ?? []);
   const add = (u) => {
     if (!/^https?:$/.test(u.protocol) || siteOf(u) !== host || NON_PAGE.test(u.pathname)) return;
     if (/\/(wp-json|wp-admin|wp-content|feed|page\/\d+|cdn-cgi)\b/i.test(u.pathname)) return;
     const k = pageKey(u, job.siteUrl);
     if (seen.has(k)) return;
     seen.add(k);
-    queue.push(k);
+    // A page of a section that is being slowed down joins that section at the end of the line, new or not.
+    if (movedSections.has(sectionOf(k))) queue.toEnd(k);
+    else queue.add(k);
   };
   let pendingLinked;
   if (saved) {
@@ -495,6 +601,10 @@ async function runFetch(job, limits, post, saved, scan) {
     pendingLinked = saved.pendingLinked ?? [];
     log(`  continuing where the scan stopped (${saved.stopped?.reason ?? "crash"}): ${saved.pagesRead ?? 0} pages already read, ${queue.length} left`);
   } else {
+    // The home page first, whether PM-OS has it or not: its links and the search for the other addresses start from it.
+    const home = pageKey(new URL(job.siteUrl), job.siteUrl);
+    seen.add(home);
+    queue.putBack(home);
     for (const k of job.knownUrls ?? []) {
       try {
         add(new URL(k));
@@ -502,11 +612,10 @@ async function runFetch(job, limits, post, saved, scan) {
         // skip
       }
     }
-    add(new URL(job.siteUrl));
     // Sitemaps are a hint for discovery, never a reason to skip a page.
-    const sitemaps = await discoverSitemaps(job.siteUrl, host);
+    const sitemaps = await discoverSitemaps(job.siteUrl, host, log);
     for (const u of sitemaps.pages) add(u);
-    log(`  sitemaps: ${sitemaps.summary} · ${queue.length} URLs to start with`);
+    log(`  sitemaps: ${sitemaps.summary} · ${queue.length} URLs to start with, ${queue.fresh - 1} of them never read by PM-OS — those come first`);
     // The sitemap points at its pages: PM-OS must hear that, or a page only the sitemap lists ends "unlinked" (713 Flashpoint
     // pages on 2026-11-09). Handed in with the first page PM-OS accepts.
     pendingLinked = sitemaps.pages.map((u) => pageKey(u, job.siteUrl));
@@ -515,14 +624,42 @@ async function runFetch(job, limits, post, saved, scan) {
   // The time limit counts the whole scan, not each continuation.
   const elapsedBefore = saved?.elapsedMs ?? 0;
   let n = 0;
+  /** The pause between two pages of this site: PAUSE_MS, longer once the site asked to slow down (kept across a continuation). */
+  let pause = saved?.pauseMs ?? PAUSE_MS;
+  /** "Slow down" answers in a row on the page being read. */
+  let slowDowns = 0;
+  /** The site refuses the plain request and answers Chrome: the rest of the scan is read with Chrome (kept across a continuation). */
+  let chromeOnly = (READER === "chrome" && (await chromeReaderAvailable(log))) || (saved?.chromeOnly ?? false);
+  if (READER === "chrome" && chromeOnly) log("  reader: Chrome for every page of this scan (station setting)");
+  /** Pages that used up their slow-down waits and went to the end of the line, alone (no page of another section was left). */
+  const sentToEnd = new Set();
+  /** The page being read is the test after a stuck page (pace.mjs afterStuckPage): what was stuck, the pause before it, and whether the test itself was slowed. */
+  let probe = null;
+  /** The pause as it was before the page being read got its first "slow down". */
+  let pauseBefore = pause;
+  /** The page tried after a stuck page was answered: when it tested a section, that section goes to the end of the line. */
+  const probeAnswered = (url) => {
+    if (!probe) return;
+    const p = probe;
+    probe = null;
+    const movedPages = afterProbeAnswered({ probe: p, queue, moved: movedSections });
+    if (p.section === null) return;
+    // The site answers other pages: the pace was not the trouble. A test that was itself slowed keeps the slower pace.
+    if (!p.slowed) pause = p.pause;
+    log(`  ${url} was answered, so only the pages under /${p.section} are slowed down: ${movedPages} of them put at the end of the line, back to one page every ${Math.round(pause / 1000)} s`);
+  };
+  /** Pages in a row the site refused — on the plain request and, where it can be used, in Chrome too. */
+  let refused = 0;
+  /** Pages in a row where Chrome could not be used at all (it did not start, its connection closed). */
+  let chromeBroken = 0;
   let renders = saved?.renders ?? 0;
   // A page that takes the station down (a crash or an error, twice, on the same page) is handed in as not read and the
   // scan moves on — otherwise every check-in would start with that page again, for ever, ahead of every other scan.
   let stuck = saved?.stuck ?? null;
   if (saved && queue.length && ["crash", "error"].includes(saved.stopped?.reason ?? "crash")) {
-    stuck = stuck?.url === queue[0] ? { url: queue[0], count: stuck.count + 1 } : { url: queue[0], count: 1 };
+    stuck = stuck?.url === queue.first() ? { url: queue.first(), count: stuck.count + 1 } : { url: queue.first(), count: 1 };
     if (stuck.count >= 2) {
-      const bad = queue.shift();
+      const bad = queue.next();
       stuck = null;
       log(`  the station stopped twice while reading ${bad} — recorded as not read, moving on`);
       if ((await post({ url: bad, status: "unreadable", error: "the station stopped twice while reading this page", ms: 0, attempts: 2 })) === null) return { notAttempted: queue.length, ended: true };
@@ -536,23 +673,35 @@ async function runFetch(job, limits, post, saved, scan) {
   const homeKey = pageKey(new URL(job.siteUrl), job.siteUrl);
   let addressesDone = !job.addresses || saved?.addresses === "done";
   /** The scan's place, with the page being read still first in the queue — a stop in the middle of a page reads it again. */
-  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue] : queue, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, elapsedMs: elapsedBefore + Date.now() - t0, ...(addressesDone && job.addresses ? { addresses: "done" } : {}) });
+  const place = (current) => ({ scanId: job.scanId, competitor: job.competitorName, siteUrl: job.siteUrl, queue: current ? [current, ...queue.list()] : queue.list(), fresh: queue.fresh + (current ? 1 : 0), pauseMs: pause, chromeOnly, seen: [...seen], pendingLinked, renders, lost, pagesRead: job.pagesRead ?? 0, stuck, movedSections: [...movedSections], elapsedMs: elapsedBefore + Date.now() - t0, ...(addressesDone && job.addresses ? { addresses: "done" } : {}) });
   while (queue.length) {
     if (elapsedBefore + Date.now() - t0 > limits.ms) break;
-    const url = queue.shift();
+    const url = queue.next();
     /** The home page as it is handed in, when the search for the company's other addresses is still to be fed. */
     let homePage = null;
     scan.save(place(url));
     // The pause between two pages of THIS site. Other sites are read by other scans in the meantime; no other scan of
     // this site runs (schedule.mjs), so the site sees one request per pause, as it always did.
-    if (n > 0 && PAUSE_MS > 0) await new Promise((r) => setTimeout(r, PAUSE_MS));
+    if (n > 0 && pause > 0) await new Promise((r) => setTimeout(r, pause));
     n++;
     const started = Date.now();
     let body;
     /** Tries not counted against the page (offline, the Mac slept) — bounded so one odd page can never loop for ever. */
     let free = 0;
+    if (chromeOnly && !/\.pdf$/i.test(new URL(url).pathname)) {
+      // The site refuses the plain request: asking it again for every page would only be refused again.
+      body = await readRefusedWithChrome(url, started, host);
+      body.attempts = 1;
+      if (body.chromeFailed) {
+        // Chrome could not open it at all (a download, not a page; Chrome did not start): the plain request says what it is.
+        const note = body.chromeNote;
+        body = await readOnce(url, started, host);
+        body.attempts = 1;
+        if (body.status === "blocked") Object.assign(body, { viaChrome: true, chromeFailed: true, chromeNote: note });
+      }
+    }
     // PRD: a page is pending until done — up to 3 attempts on a timeout or a server error.
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    else for (let attempt = 1; attempt <= 3; attempt++) {
       const attemptStarted = Date.now();
       body = await readOnce(url, started, host);
       body.attempts = attempt;
@@ -592,24 +741,82 @@ async function runFetch(job, limits, post, saved, scan) {
         await new Promise((r) => setTimeout(r, Math.max(PAUSE_MS, 500)));
       }
     }
+    if (body.status === "blocked" && !body.viaChrome && (await chromeReaderAvailable(log))) {
+      // PRD: a site that blocks the scan is read in the PM's Chrome. The plain request was refused: ask with Chrome.
+      const again = await readRefusedWithChrome(url, started, host);
+      again.attempts = body.attempts;
+      if (again.status === "ok" && !chromeOnly) {
+        chromeOnly = true;
+        log(`  the site refuses the plain request and answers Chrome — reading the rest of this scan with Chrome`);
+      }
+      body = again;
+    }
+    if (body.status === "blocked") {
+      // Refused by the site (403 on the plain request, and in Chrome when it could be used) — or Chrome itself could
+      // not be used on this Mac: that is the station's trouble, never counted as the site refusing the scan.
+      if (body.chromeFailed) {
+        chromeBroken++;
+        log(`  refused on the plain request, and Chrome could not be used (${body.chromeNote}) ${url}`);
+      } else {
+        if (body.chromeNote) log(`  refused in Chrome too (${body.chromeNote}) ${url}`);
+        refused++;
+        chromeBroken = 0;
+      }
+    } else {
+      refused = 0;
+      chromeBroken = 0;
+    }
+    const readWith = body.viaChrome && body.status === "ok" ? " (read with Chrome)" : "";
+    const viaChrome = Boolean(body.viaChrome);
+    delete body.viaChrome;
+    delete body.chromeNote;
+    delete body.chromeFailed;
     if (body.status === "binary") {
       // A download, not a page: skipped, counted for nothing (the same rule as the remote lane).
       log(`  not a web page (${body.contentType}) — skipped ${url}`);
+      slowDowns = 0;
+      probeAnswered(url);
       continue;
     }
     if (body.status === "slowdown") {
-      // The site asked us to slow down: hand the signal in and stop this scan; the rest is "not attempted" and the next scan continues.
-      if ((await post(body)) === null) return { notAttempted: queue.length, ended: true };
-      log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one`);
-      return { notAttempted: queue.length };
+      // The site asked us to slow down: wait, read the same page again, and go on more slowly (pace.mjs). Only a site
+      // that keeps saying it ends the scan: the signal is handed in, the rest is "not attempted", the next scan continues.
+      if (slowDowns === 0) pauseBefore = pause;
+      if (probe) probe.slowed = true;
+      const plan = afterSlowDown({ inARow: ++slowDowns, retryAfter: body.retryAfter ?? null, pauseMs: pause, waits: SLOWDOWN_WAITS });
+      delete body.retryAfter;
+      if (plan.stop) {
+        // One page — or one section — that keeps answering "slow down" must not cost the rest of the site: the page goes
+        // to the end and a page of another section is tried (pace.mjs afterStuckPage). The site asking for a wait that is
+        // too long (plan.waited false) ends the scan now.
+        const stuckPlan = plan.waited ? afterStuckPage({ url, queue, probe, moved: movedSections, sentToEnd }) : { stop: true, why: plan.why };
+        if (!stuckPlan.stop) {
+          probe = { ...stuckPlan.probe, pause: pauseBefore, slowed: false };
+          slowDowns = 0;
+          log(`  slow down (429) ${url} — still refused after the waits: put at the end of the line; trying ${probe.section === null ? "the next page" : `a page outside /${sectionOf(url)}`} (${stuckPlan.next}), ${queue.length - 1} other pages left`);
+          continue;
+        }
+        if ((await post(body)) === null) return { notAttempted: queue.length, ended: true };
+        log(`  slow down (429) ${url} — stopping this scan, ${queue.length} pages left for the next one (${stuckPlan.why})`);
+        return { notAttempted: queue.length };
+      }
+      pause = plan.pauseMs;
+      queue.putBack(url);
+      scan.save(place());
+      log(`  slow down (429) ${url} — waiting ${Math.round(plan.waitMs / 1000)} s, then reading it again; from here one page every ${Math.round(pause / 1000)} s, ${queue.length} pages left`);
+      await sleep(plan.waitMs);
+      n = 0;
+      continue;
     }
+    slowDowns = 0;
+    probeAnswered(url);
     if (body.status === "ok" && body.html) {
       // Headless Chrome for what plain HTTP cannot show: a page with no text, or a home/hub page whose menus are built by JavaScript.
       const u = new URL(url);
       const plainHtml = body.html;
       const links = inSiteLinks(body.html, body.finalUrl || url, host);
       const empty = roughText(body.html).length < 200;
-      if (renders < MAX_RENDERS && (empty || (isHub(u) && links < 8)) && (await chromeAvailable())) {
+      if (!viaChrome && renders < MAX_RENDERS && (empty || (isHub(u) && links < 8)) && (await chromeAvailable())) {
         renders++;
         const rendered = await renderWithChrome(url, log);
         if (rendered && (roughText(rendered).length > roughText(body.html).length || inSiteLinks(rendered, body.finalUrl || url, host) > links)) {
@@ -646,7 +853,7 @@ async function runFetch(job, limits, post, saved, scan) {
     }
     if (r && r.refused && /^network/.test(r.refused) && !(await online())) {
       // The network dropped during the hand-in: the page is not lost — it goes back to the front and the scan is parked.
-      queue.unshift(url);
+      queue.putBack(url);
       scan.save(place());
       scan.stopped("network");
       log(`  network lost while handing in ${url} — scan parked, ${queue.length} pages left; it continues from this page at the next check-in`);
@@ -664,7 +871,19 @@ async function runFetch(job, limits, post, saved, scan) {
       log(`  refused by PM-OS (${r.refused}) — ${!note || note.refused ? "page lost, reported with done" : "recorded as not read"} ${url}`);
       continue;
     }
-    log(`  ${body.status === "ok" ? r.outcome : body.status} ${url}`);
+    log(`  ${body.status === "ok" ? r.outcome : body.status}${readWith} ${url}`);
+    if (chromeBroken >= 5) {
+      // The station's Chrome does not work right now: the scan is parked with its place, not ended — it continues at the next check-in.
+      scan.save(place());
+      scan.stopped("error");
+      log(`  Chrome could not be used for ${chromeBroken} pages in a row — scan parked, ${queue.length} pages left; it continues at the next check-in`);
+      return { paused: "error", notAttempted: queue.length };
+    }
+    if (refusedStop(refused).stop) {
+      // The site refuses the station: its other pages are not asked one by one. They are "not attempted"; the next scan continues.
+      log(`  the site refused ${refused} pages in a row — stopping this scan, ${queue.length} pages left for the next one`);
+      return { notAttempted: queue.length + lost, stopped: "refused" };
+    }
     if (homePage) {
       // PM-OS has the home page: bring the rest of what the search for the company's other addresses needs — the site's
       // /llms.txt and what the addresses PM-OS lists answer. One request per pause, like the pages; it never fails the scan.
@@ -672,7 +891,7 @@ async function runFetch(job, limits, post, saved, scan) {
         siteUrl: job.siteUrl,
         home: homePage,
         call: (payload) => api(`/api/competitors/local/scans/${job.scanId}/addresses`, { method: "POST", headers: { authorization: `Bearer ${job.token}` }, body: JSON.stringify(payload) }),
-        pause: () => (PAUSE_MS > 0 ? sleep(PAUSE_MS) : Promise.resolve()),
+        pause: () => (pause > 0 ? sleep(pause) : Promise.resolve()),
         online,
         deps: { fetch: (u, init) => fetch(u, init), lookup: (h) => lookup(h, { all: true }), allowPrivate: ALLOW_PRIVATE, userAgent: BROWSER_UA, timeoutMs: 20_000 },
         log,
@@ -810,7 +1029,13 @@ async function runJob(job, runner, live, log) {
     }
   };
   // A scan that stopped after its last page (only the hand-in call was missing) goes straight to the hand-in.
-  const result = saved?.finished ? saved.finished : runner === "claude" ? await runClaude(job, limits, job.token, log) : await runFetch(job, limits, post, saved, scan);
+  let result;
+  try {
+    result = saved?.finished ? saved.finished : runner === "claude" ? await runClaude(job, limits, job.token, log) : await runFetch(job, limits, post, saved, scan);
+  } finally {
+    // The Chrome kept open for this site while it was read (reader chrome, or a site that refuses the plain request).
+    await closeSiteBrowser(siteOf(new URL(job.siteUrl)));
+  }
   job.pagesRead = pagesRead;
   if (result.paused) {
     // Parked with its place saved: PM-OS puts the scan back to waiting and the next check-in continues it.
@@ -828,7 +1053,7 @@ async function runJob(job, runner, live, log) {
   let done;
   for (let attempt = 1; ; attempt++) {
     try {
-      done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted }) }, 5 * 60_000);
+      done = await api(`/api/competitors/local/scans/${job.scanId}/done`, { method: "POST", headers: auth, body: JSON.stringify({ notAttempted: result.notAttempted, ...(result.stopped ? { stopped: result.stopped } : {}) }) }, 5 * 60_000);
       break;
     } catch (e) {
       const m = /→ (\d{3}) /.exec(e instanceof Error ? e.message : String(e));

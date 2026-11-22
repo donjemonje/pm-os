@@ -56,6 +56,8 @@ export function openCallLog(request: { tool: string; model: string; location: st
   let firstPieceMs: number | null = null;
   let firstAnswerMs: number | null = null;
   let headers: unknown = null;
+  /** Requests the answer took: 1, plus one for every time the provider stopped at its per-request limit and the SDK went on (finish CONTINUATION). */
+  let continued = 0;
   const meta: Record<string, unknown> = {};
   return {
     thoughts: process.env.COMPETITORS_CALL_LOG_THOUGHTS === "1",
@@ -72,6 +74,7 @@ export function openCallLog(request: { tool: string; model: string; location: st
       }
       if (text && firstAnswerMs === null) firstAnswerMs = ms;
       if (c?.finishReason != null) finish = c.finishReason;
+      if (String(c?.finishReason ?? "") === "CONTINUATION") continued++;
       if (c?.finishMessage != null) finishMessage = c.finishMessage;
       if (p.usageMetadata) usage = p.usageMetadata;
       if (p.sdkHttpResponse?.headers && !headers) headers = p.sdkHttpResponse.headers;
@@ -84,7 +87,7 @@ export function openCallLog(request: { tool: string; model: string; location: st
         sent: { instructionChars: request.instruction.length, contentChars: request.contents.length, schema: request.schema },
         timing: { startedAt: new Date(started).toISOString(), totalMs: Date.now() - started, firstPieceMs, firstAnswerMs },
         judged: outcome.judged, error: outcome.error === undefined ? undefined : describeError(outcome.error),
-        finishReason: finish, finishMessage, usageMetadata: usage, ...meta, responseHeaders: headers,
+        finishReason: finish, finishMessage, requests: 1 + continued, usageMetadata: usage, ...meta, responseHeaders: headers,
         answerChars: answer.length, thoughtChars: thoughtText.length, pieces,
         answer, thoughts: thoughtText || undefined,
       }, null, 1));
