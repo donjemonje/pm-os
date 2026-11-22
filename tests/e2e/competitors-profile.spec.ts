@@ -1,10 +1,11 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
 import { hashPasswordLikeApp, loginWithTotp, seedQaOrgWithUser, withTestDb, type TotpCreds } from "./helpers";
-import { RESOLVED_ENV } from "./test-env";
+import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
 /**
  * Competitors — story 4, the competitor profile (feature/competitors_mvp,
@@ -281,12 +282,38 @@ async function expectNoCrash(page: Page): Promise<void> {
   await expect(page.locator("body")).not.toContainText(/demo data/i);
 }
 
+/**
+ * One login per user for the whole file (2026-11-22). Every row used to log in on its own; two logins of the same
+ * user wait for a fresh 30-second TOTP window (by design), which put P-03 … P-05 next to the 60 s limit of a test —
+ * they timed out inside a full-suite run. The rows now open the session saved here; nothing they assert changed.
+ */
+const SESSION_DIR = join(tmpdir(), "pmos-qa-cmp");
+const SESSION = { user: join(SESSION_DIR, "user-state.json"), admin: join(SESSION_DIR, "admin-state.json") };
+const SIGNED_OUT = { cookies: [], origins: [] };
+
+async function loginAndSave(browser: Browser, creds: TotpCreds, path: string): Promise<void> {
+  const context = await browser.newContext({ storageState: SIGNED_OUT });
+  try {
+    await loginWithTotp(await context.newPage(), creds);
+    await context.storageState({ path });
+  } finally {
+    await context.close();
+  }
+}
+
 test.describe("Competitor profile (P-01 … P-07)", () => {
-  test.beforeAll(async () => {
+  // Every row's page is the member's saved session.
+  test.use({ storageState: SESSION.user });
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
     await withTestDb(async (db) => {
       await deleteFixtures(db);
       await seedFixtures(db);
     });
+    mkdirSync(SESSION_DIR, { recursive: true });
+    await loginAndSave(browser, USER, SESSION.user);
+    await loginAndSave(browser, ADMIN, SESSION.admin);
     if (MEDIA_DIR) {
       mkdirSync(join(MEDIA_DIR, MEDIA_SUBDIR), { recursive: true });
       writeFileSync(join(MEDIA_DIR, MEDIA_SUBDIR, "alerts.png"), PNG_1X1);
@@ -304,7 +331,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-01 profile with every pipeline table filled renders each section from its rows", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
 
     // Chip line: most recent source scan, sources with a scan, media rows.
@@ -424,7 +450,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-02 profile with a website scan only: header, facts and statuses render; empty sections show their empty state", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, BETA.name);
 
     await expect(page.getByText(/Last scan 5 h ago · 1 source · 0 UI captures/)).toBeVisible();
@@ -492,7 +517,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-03 timeline type filter narrows the dated facts, All restores, and the filter is recorded", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
     const timeline = timelineOf(page);
     await expect(timeline.getByText("Founded", { exact: true })).toBeVisible();
@@ -519,7 +543,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-04 capability deep dive: one open at a time, and each opening is recorded", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
     await expect(dives(page)).toHaveCount(0);
 
@@ -550,7 +573,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-05 Flag as wrong from the profile saves the override, marks the matrix cell, records surface profile", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
     await expect(lowMark(page, CAP.vuln)).toHaveCount(1);
     await expect(capRow(page, CAP.vuln)).toContainText("Level");
@@ -605,10 +627,9 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     }
   });
 
-  test("P-06 media route serves only files inside the store, to signed-in members of an org with the feature on", async ({ page, request }) => {
+  test("P-06 media route serves only files inside the store, to signed-in members of an org with the feature on", async ({ page, playwright }) => {
     test.skip(!MEDIA_DIR, "COMPETITORS_MEDIA_DIR is not set in test-apphosting.yaml — without a store every path 404s and the sweep would be vacuous");
     const url = (p: string) => `/api/competitors/media?p=${encodeURIComponent(p)}`;
-    await loginWithTotp(page, USER);
 
     const ok = await page.request.get(url(`${MEDIA_SUBDIR}/alerts.png`));
     expect(ok.status(), await ok.text()).toBe(200);
@@ -632,9 +653,14 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     }
 
     // Signed out: the org gate runs before auth, an anonymous caller sees the env default (off here) → 404, no bytes.
-    const anon = await request.get(url(`${MEDIA_SUBDIR}/alerts.png`));
-    expect(anon.status()).toBe(404);
-    expect(await anon.json()).toEqual({ error: "Not found" });
+    const signedOut = await playwright.request.newContext({ baseURL: LOCAL_BASE_URL, storageState: SIGNED_OUT });
+    try {
+      const anon = await signedOut.get(url(`${MEDIA_SUBDIR}/alerts.png`));
+      expect(anon.status()).toBe(404);
+      expect(await anon.json()).toEqual({ error: "Not found" });
+    } finally {
+      await signedOut.dispose();
+    }
 
     // Feature off for the org: 404 with the same session; back on: 200 again.
     await withTestDb((db) => db.organization.update({ where: { id: orgId }, data: { features: { competitors: false } } }));
@@ -649,11 +675,10 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-07 RBAC: a plain member sees the same profile as the org admin", async ({ browser }) => {
-    const snapshot = async (creds: TotpCreds) => {
-      const context = await browser.newContext();
+    const snapshot = async (session: string) => {
+      const context = await browser.newContext({ storageState: session });
       const page = await context.newPage();
       try {
-        await loginWithTotp(page, creds);
         await openProfiles(page, ALPHA.name);
         await capRow(page, CAP.darkWeb).click();
         await expect(page.getByText(`“${QUOTE.darkWeb}”`, { exact: true })).toBeVisible();
@@ -675,8 +700,8 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
         await context.close();
       }
     };
-    const admin = await snapshot(ADMIN);
-    const user = await snapshot(USER);
+    const admin = await snapshot(SESSION.admin);
+    const user = await snapshot(SESSION.user);
     expect(user).toEqual(admin);
     expect(admin.identity).toBe(1);
     expect(admin.risk).toBe(1);

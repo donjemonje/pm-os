@@ -319,7 +319,8 @@ test.describe("Website Scanning rows", () => {
     const page = await newPage(browser, "pm");
     await page.goto("/settings/competitors");
     await page.getByRole("button", { name: "Add competitor" }).click();
-    await page.getByLabel("Website").fill(site.url);
+    // The competitor form's field: "Your company" above it has a "Your website" field of its own (since d4cbdae).
+    await page.getByTestId("cmp-competitors").getByLabel("Website").fill(site.url);
     await page.getByRole("button", { name: "Save" }).click();
     // The name comes from the site's <title>.
     const name = "Acme Fake";
