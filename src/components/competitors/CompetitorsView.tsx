@@ -668,7 +668,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                       {/* The label and its open/close-all button sit at the vertical centre of the header row, next to the company icons: even padding, one line. */}
                       <th scope="col" className="border-b border-border px-4 py-2.5 pl-[30px] text-left align-middle text-[14.5px] font-bold tracking-[0.06em] text-fg-muted">
                         <span className="inline-flex items-center gap-2">
-                        {C.matrix.capability}
+                        {C.matrix.domainsHeader}
                         {domainsWithRows.length > 0 && (
                           <button type="button" onClick={() => setOpenDomains((cur) => toggleAll(domainsWithRows.map((d) => d.id), cur))} title={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains} aria-label={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains}
                             className="inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-domains-toggle-all">

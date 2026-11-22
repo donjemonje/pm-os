@@ -62,7 +62,8 @@ export const COMPETITORS_COPY = {
     noCompetitors: "No competitors yet",
   },
   matrix: {
-    capability: "Capability",
+    /** The label of the table's first header cell: the rows are grouped by domain (Daniel 2026-11-22; it read "Capability" before). */
+    domainsHeader: "Domains",
     coverage: "Coverage",
     emptyTitle: "No capabilities or competitors yet",
     emptyBody: (org: string) =>
