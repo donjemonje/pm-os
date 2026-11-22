@@ -731,7 +731,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                       domainsWithRows.map((d) => {
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
-                        const covered = rows.filter((k) => ownOf(k) === "found").length;
                         // The header's counts: its gaps, and the capabilities only the organization has (the same rule as each row's chip).
                         const { gaps, only: onlyOurs } = rowKindCounts(rows.map(rowKind));
                         // The capabilities of this domain that have features: "open / close all features" works on them.
@@ -742,7 +741,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                           ? { own: domainScore(domainRows.map((k) => k.ourScore)), ownName: own, companies: shownCompetitors.map((c) => ({ id: c.id, name: c.name, score: domainScore(domainRows.map((k) => (k.ourScore != null ? cellOf(c.id, k.id)?.score ?? 0 : null))) })) }
                           : null;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} onlyOurs={onlyOurs} org={own} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} gaps={gaps} onlyOurs={onlyOurs} org={own} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
                             features={withFeatures.length ? { allOpen: allOpen(withFeatures, openFeatures), onToggle: () => setOpenFeatures((cur) => toggleAll(withFeatures, cur)) } : null}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
@@ -1052,9 +1051,9 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, gaps, onlyOurs, org, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
-  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
-  /** How many of the domain's capabilities only the organization has, shown next to the gaps in the same way; and the organization's name. */
+function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
+  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; gaps: number; colSpan: number; children: React.ReactNode;
+  /** How many of the domain's capabilities only the organization has, shown next to the gaps as "N <organization>"; and the organization's name. */
   onlyOurs: number;
   org: string;
   /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
@@ -1090,10 +1089,9 @@ function DomainGroup({ domain, rows, lines, covered, gaps, onlyOurs, org, colSpa
               )}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
               {!inColumns && (
-              <span className="ml-auto flex shrink-0 items-center gap-[18px] text-[12px] text-fg-3">
-                {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
-                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
+              <span className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-[12px] text-fg-3">
+                {gaps > 0 && <span className="font-semibold text-[#8a5a00]" title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
               )}
@@ -1112,10 +1110,9 @@ function DomainGroup({ domain, rows, lines, covered, gaps, onlyOurs, org, colSpa
             <td className={cn("border-b border-border px-2 text-center", OWN_CELL)}><DomainScore score={scores.own} company={scores.ownName} top={topScore.has("own")} /></td>
             {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} top={topScore.has(c.id)} /></td>)}
             <td className="border-b border-border px-3">
-              <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
-                <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
-                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
+              <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full items-center justify-end gap-x-2 whitespace-nowrap text-[11.5px] text-fg-3">
+                {gaps > 0 && <span className="font-semibold text-[#8a5a00]" title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className="font-semibold text-[#0f7a47]" title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(org, onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
             </td>
