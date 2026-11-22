@@ -14,7 +14,7 @@ type EventProps = Record<string, string | number | boolean | null>;
 type Params = { params: Promise<{ id: string }> };
 
 /**
- * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
+ * PATCH: rename, describe, set the text PMOS AI uses, move to another domain, set product lines, set the
  * org's own status (`ourStatus`: found / not_found — any member; a value set here is the PM's and survives every run), or restore a removed row
  * (`state`: "active", with an active `domainId` when its own domain is not in the table).
  * There is nothing to accept or decline: a capability an analysis finds is just added to the table.

@@ -127,7 +127,6 @@ export const MAX_DOMAIN_SUMMARY = 600;
 export const MAX_DOMAIN_DONE_BY = 300;
 /** A capability's plain description (row tooltip; also in the scan prompt). */
 export const MAX_CAPABILITY_DESCRIPTION = 500;
-/** The org's own product chip on a capability. */
 /** The text PMOS AI uses for a capability, when it is not the same as its description. */
 export const MAX_CAPABILITY_AI_DEFINITION = 2000;
 
