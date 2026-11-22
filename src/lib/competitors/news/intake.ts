@@ -29,8 +29,12 @@ import { changedText } from "./changed";
  * Pure: no database, no network.
  */
 
-/** Visible output tokens of one request's answer. */
-export const NEWS_MAX_TOKENS = 30_000;
+/**
+ * Output tokens of one request, THINKING INCLUDED (thinking is billed against the output limit). At thinking high a
+ * request of 13 short pages against a list of 158 thought for 46,000 tokens and left nothing for its answer
+ * (2026-11-22), so the limit is the one the list-building reads use.
+ */
+export const NEWS_MAX_TOKENS = 104_000;
 /** A page's text is sent up to this many characters (a release-notes page can be long; the newest entries are on top). */
 export const NEWS_PAGE_MAX_CHARS = 60_000;
 /** One request holds pages up to this many characters of text in all, and at most this many pages. */
