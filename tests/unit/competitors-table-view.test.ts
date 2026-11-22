@@ -1,6 +1,6 @@
 /** Competitors — how the table opens and marks its cells: the default open state, close all / open all, the winners of a row, the colour step of a score's number, scrolling inside an open card. Pure module. */
 import { describe, expect, it } from "vitest";
-import { allOpen, boxCanScroll, defaultOpenDomains, placeCard, rowKindCounts, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { allOpen, boxCanScroll, defaultOpenDomains, featureIsDifferentiator, placeCard, rowKindCounts, SCORE_COLORS, scoreColor, scoreStep, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { scoreRowKind } from "@/lib/competitors/scores";
 
 describe("defaultOpenDomains", () => {
@@ -124,6 +124,21 @@ describe("placeCard — where a floating card opens", () => {
   it("stays inside the window sideways", () => {
     expect(placeCard({ top: 100, bottom: 136, left: 1150, width: 40 }, { width: 320, height: 100 }, win, "center").left).toBe(872);
     expect(placeCard({ top: 100, bottom: 136, left: 2, width: 20 }, { width: 320, height: 100 }, win, "center").left).toBe(8);
+  });
+});
+
+describe("featureIsDifferentiator — a feature only the organization has", () => {
+  it("our mark is found and no competitor's is", () => {
+    expect(featureIsDifferentiator("found", ["not_found", "not_found"])).toBe(true);
+    expect(featureIsDifferentiator("found", ["not_found", undefined, null])).toBe(true); // a competitor with no cell has not got it
+  });
+  it("not when a competitor has it, also with low confidence", () => {
+    expect(featureIsDifferentiator("found", ["not_found", "found"])).toBe(false);
+    expect(featureIsDifferentiator("found", ["low", "not_found"])).toBe(false);
+  });
+  it("not when we do not have it, and never with no competitors", () => {
+    expect(featureIsDifferentiator("not_found", ["not_found"])).toBe(false);
+    expect(featureIsDifferentiator("found", [])).toBe(false);
   });
 });
 

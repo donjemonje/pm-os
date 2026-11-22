@@ -116,6 +116,9 @@ export const COMPETITORS_COPY = {
     relevanceClear: (level: number) => `Level ${level} — click to clear`,
     showLess: "Show less",
     capabilitiesCount: (n: number) => `${n} capabilit${n === 1 ? "y" : "ies"}`,
+    /** The chip on a capability row and on a feature row that only the organization has; its tooltip says it in full. */
+    differentiator: "Differentiator",
+    differentiatorTip: (org: string) => `Only ${org} has this`,
     closeAllDomains: "Close all domains",
     openAllDomains: "Open all domains",
     closeAllFeatures: "Close the features of all capabilities in this domain",

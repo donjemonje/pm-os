@@ -64,6 +64,16 @@ export function rowKindCounts(kinds: ReadonlyArray<"gap" | "only" | "level" | "n
   return { gaps: kinds.filter((k) => k === "gap").length, only: kinds.filter((k) => k === "only").length };
 }
 
+/**
+ * A feature row is a DIFFERENTIATOR when only the organization has the feature: its own mark is found and no
+ * competitor's is — not found, not even with low confidence (a competitor with no cell on the row has not got it).
+ * The same companies as the capability-level "only" rule: every competitor of the organization. Never with no
+ * competitors: there is nobody to differ from.
+ */
+export function featureIsDifferentiator(own: string, theirs: ReadonlyArray<string | null | undefined>): boolean {
+  return theirs.length > 0 && own === "found" && theirs.every((v) => v !== "found" && v !== "low");
+}
+
 /** Where a floating card goes: its corner, the height it may take, and the side of its anchor it opened on. */
 export interface CardPlacement {
   top: number;

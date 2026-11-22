@@ -18,7 +18,7 @@ import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
 import { domainScore, scoreRowKind, type EvidenceRef } from "@/lib/competitors/scores";
-import { allOpen, defaultOpenDomains, rowKindCounts, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { allOpen, defaultOpenDomains, featureIsDifferentiator, rowKindCounts, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { moveNextTo } from "@/lib/competitors/order";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -769,7 +769,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                       {features.length > 0 && <span className="text-[11px] font-normal text-fg-muted">{C.matrix.featuresCount(features.length)}</span>}
                                       <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
                                       {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
-                                      {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
+                                      {kind === "only" && <DifferentiatorChip org={own} />}
                                     </span>
                                   </td>
                                   <td className={cn("text-center", OWN_CELL)}>
@@ -805,7 +805,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   </td>
                                 </tr>
                                 {featuresOpen && features.map((f) => (
-                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
+                                  <FeatureLine key={f.id} feature={f} differentiator={featureIsDifferentiator(f.ourStatus, competitors.map((c) => featureCellOf(c.id, f.id)?.value))} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
                                 ))}
                                 </Fragment>
                               );
@@ -1127,10 +1127,17 @@ function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, childr
   );
 }
 
+/** The green chip of a row only the organization has — a capability or a feature. The tooltip says it in full. */
+function DifferentiatorChip({ org }: { org: string }) {
+  return <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]" title={C.matrix.differentiatorTip(org)} data-testid="cmp-differentiator">{C.matrix.differentiator}</span>;
+}
+
 // ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
 
-function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
+function FeatureLine({ feature, differentiator, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
   feature: FeatureRow;
+  /** Only the organization has this feature (table-view.ts featureIsDifferentiator, over every competitor — not only the ones shown). */
+  differentiator: boolean;
   org: string;
   ownSite: boolean;
   competitors: CompetitorRow[];
@@ -1144,7 +1151,10 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
   return (
     <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
-        {feature.name}
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {feature.name}
+          {differentiator && <DifferentiatorChip org={org} />}
+        </span>
       </td>
       <td className={cn("text-center", OWN_CELL)}>
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
