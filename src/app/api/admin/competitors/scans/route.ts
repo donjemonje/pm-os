@@ -11,6 +11,8 @@ export interface AdminScanRow {
   orgName: string;
   competitorName: string;
   url: string;
+  /** What the scanned source is: website | helpcenter | apidocs | changelog | … (config.ts SOURCE_TYPES). */
+  sourceType: string;
   trigger: string;
   status: string;
   /** remote | local | bundle — admin only. */
@@ -56,14 +58,15 @@ export async function GET(req: Request) {
     orderBy: { startedAt: "desc" },
     take: limit,
     include: {
-      source: { include: { competitor: { select: { name: true, workspace: { select: { organization: { select: { name: true } } } } } } } },
+      source: { include: { competitor: { select: { name: true, isOwn: true, workspace: { select: { organization: { select: { name: true } } } } } } } },
     },
   });
   const rows: AdminScanRow[] = scans.map((s) => ({
     id: s.id,
     orgName: s.source.competitor.workspace.organization.name,
-    competitorName: s.source.competitor.name,
+    competitorName: s.source.competitor.isOwn ? `${s.source.competitor.name} — own site` : s.source.competitor.name,
     url: s.source.url,
+    sourceType: s.source.type,
     trigger: s.trigger,
     status: s.status,
     lane: s.lane,

@@ -13,6 +13,8 @@
     <string>__APP_URL__</string>
     <string>--state-dir</string>
     <string>__STATE_DIR__</string>
+    <string>--max-parallel</string>
+    <string>__MAX_PARALLEL__</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

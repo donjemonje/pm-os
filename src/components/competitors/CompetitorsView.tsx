@@ -1,20 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
+import { EvidenceCard, EvidenceList } from "./EvidenceCard";
+import { DomainScore, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
+import { Floating } from "./Floating";
 import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { FACT_KINDS, OWN_STATUS_VALUES, STATUS_VALUES, splitSuggestedQuote, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
+import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type OwnStatus, type StatusValue } from "@/lib/competitors/config";
 import type { FeedItem } from "@/lib/competitors/feed";
-import { rankByCloseness } from "@/lib/competitors/closeness";
-import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow } from "@/lib/competitors/store";
+import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
+import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
+import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
+import { domainScore, scoreRowKind, type EvidenceRef } from "@/lib/competitors/scores";
+import { allOpen, defaultOpenDomains, featureIsDifferentiator, rowKindCounts, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
+import { moveNextTo } from "@/lib/competitors/order";
+import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
+import { NO_PARTS, type CompetitorsParts } from "@/lib/competitors/parts";
 import { cn } from "@/lib/utils";
 
 type Tab = "parity" | "feed" | "profiles" | "cards" | "roadmap";
@@ -30,14 +39,24 @@ const TABS: { key: Tab; label: string }[] = [
 const STATUS_OPTIONS = STATUS_VALUES.map((v) => C.values[v]);
 const IMPACTS = ["High", "Medium", "Low"];
 const POLL_MS = 3000;
-/** A cell counts as "new change" when it changed within this window before the competitor's last scan. */
-const NEW_CHANGE_WINDOW_MS = 2 * 3600_000;
 
 function chipClass(active: boolean): string {
   return active
     ? "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-transparent bg-primary px-3 text-[12.5px] font-semibold text-white shadow-[0_6px_16px_-6px_var(--app-accent)]"
     : "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-[var(--app-glass)] px-3 text-[12.5px] font-semibold text-[#3f506b] shadow-sm hover:border-primary/55 hover:bg-white";
 }
+
+/**
+ * The table starts with this many companies shown, and that many fit without sideways scrolling (from a 1512 px wide
+ * window with the menu open). With more companies in the organization, the first ones in the list are ticked in the
+ * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
+ */
+const DEFAULT_SHOWN_COMPANIES = 6;
+/** The amber dashed chip of a gap (a capability row; "N Gaps" in a domain's header) and the green chip of what only the organization has ("Differentiator" on a row; "N Diff" in a domain's header). */
+const GAP_CHIP = "inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]";
+const DIFF_CHIP = "inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]";
+/** The light blue of the organization's own column: every one of its cells — capability rows, feature rows, the domain header. */
+const OWN_CELL = "bg-[rgba(36,87,245,.06)]";
 
 function toggleIn(setter: React.Dispatch<React.SetStateAction<string[]>>) {
   return (o: string) => setter((prev) => (prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]));
@@ -69,7 +88,44 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 }
 
 /** The strip's last card (C2 "Risk" slot): competitors ranked by how much of the org's capability list they cover. */
-function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; onOpen: (competitorId: string) => void }) {
+/**
+ * The signed-in user's own relevance level for a company (1 = most relevant, Daniel 2026-11-22): a small circle with
+ * the number on the top-right corner of the company's icon; an empty dashed circle when no level is set. Hover says
+ * "Level N". A click shows three numbered circles to choose from; choosing the current one clears the level. Esc or a
+ * click outside closes. Per user: nobody else sees or changes it. Its parent (the column's header cell) is `relative`.
+ */
+function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: number | null) => void }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  const tone = (l: number | null) => (l === 1 ? "border-transparent bg-primary text-white" : l === 2 ? "border-transparent bg-[#dfe7fe] text-[#2a5fd0]" : l === 3 ? "border-transparent bg-[#eef1f6] text-fg-3" : "border-dashed border-[#b9c3d4] bg-white text-fg-faint");
+  const circle = "flex items-center justify-center rounded-full border font-mono font-bold leading-none";
+  return (
+    <span className="absolute left-[calc(50%+6px)] top-[7px] z-[1]">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title={level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset} aria-label={level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset} className={cn(circle, "h-4 w-4 text-[9.5px] shadow-[0_0_0_1.5px_#fff]", tone(level))} data-testid="cmp-relevance-chip">
+        {level ?? ""}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24] cursor-default" onClick={() => setOpen(false)} />
+          <Floating lock align="center" role="menu" aria-label={C.matrix.relevanceTitle} className="flex items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
+            {RELEVANCE_LEVELS.map((l) => (
+              <button key={l} type="button" role="menuitemradio" aria-checked={level === l} title={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} aria-label={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} onClick={() => { setOpen(false); onSet(l === level ? null : l); }} className={cn(circle, "h-[22px] w-[22px] text-[11px]", tone(l), level === l && "shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(36,87,245,.55)]")}>
+                {l}
+              </button>
+            ))}
+          </Floating>
+        </>
+      )}
+    </span>
+  );
+}
+
+function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; /** Opens the company's profile; null where Profiles is off (the rows are then plain). */ onOpen: ((competitorId: string) => void) | null }) {
   const tone = (score: number | null) => (score == null ? ["#9aa8be", "#5b6c85"] : score >= 70 ? ["#c23767", "#c23767"] : score >= 50 ? ["#f0b43c", "#8a5a00"] : ["#17b26a", "#0f7a47"]);
   return (
     <div className="flex flex-[1_1_300px] flex-col gap-1.5 rounded-inner border border-border bg-[rgba(255,255,255,.72)] px-3.5 pb-2.5 pt-3" data-testid="cmp-closest-card">
@@ -78,11 +134,12 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
         <span className="text-[12px] text-fg-faint">{C.strip.closestNone}</span>
       ) : (
         <ol className="m-0 grid list-none grid-cols-1 gap-x-[18px] gap-y-1 p-0 text-[12px] sm:grid-cols-2">
-          {ranked.map(({ competitor: c, closeness }) => {
+          {proximityPicks(ranked).map(({ competitor: c, closeness }) => {
             const [bar, fg] = tone(closeness.score);
             return (
               <li key={c.id}>
-                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.strip.closestScore(closeness.has, closeness.partial, closeness.total)}`}>
+                {onOpen ? (
+                <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-2 rounded-[6px] text-left hover:bg-white" title={`${c.name} · ${C.strip.closestScore(closeness.found, closeness.low, closeness.total)}`}>
                   <Logo c={c} size={16} />
                   <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
                   <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
@@ -90,6 +147,16 @@ function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: R
                   </span>
                   <span className="w-[22px] shrink-0 text-right text-[10.5px] font-semibold" style={{ color: fg }}>{closeness.score ?? "—"}</span>
                 </button>
+                ) : (
+                <span className="flex w-full items-center gap-2 text-left" title={`${c.name} · ${C.strip.closestScore(closeness.found, closeness.low, closeness.total)}`}>
+                  <Logo c={c} size={16} />
+                  <span className="min-w-0 flex-1 truncate text-[#1f2f47]">{c.name}</span>
+                  <span className="inline-flex h-1 w-[54px] shrink-0 overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+                    <span className="block h-full" style={{ width: `${closeness.score ?? 0}%`, background: bar }} />
+                  </span>
+                  <span className="w-[22px] shrink-0 text-right text-[10.5px] font-semibold" style={{ color: fg }}>{closeness.score ?? "—"}</span>
+                </span>
+                )}
               </li>
             );
           })}
@@ -136,20 +203,19 @@ function Logo({ c, size = 28, dark }: { c: CompetitorRow; size?: number; dark?: 
   );
 }
 
-/** The value a cell displays — a correction wins; a low-confidence scan shows as "partial?". */
+/** The value a cell displays — a correction wins. Found = a check; low confidence = the check in an amber dashed ring; not found = the words (no X). */
 function CellValue({ cell, size = 22 }: { cell: CellRow | undefined; size?: number }) {
   if (!cell) return <span className="text-[12px] text-fg-faint">—</span>;
   const v = cell.value;
-  if (v === "has") return <OkMark size={size} />;
-  if (v === "partial") {
+  if (v === "found") return <OkMark size={size} />;
+  if (v === "low") {
     return (
-      <span className="inline-block rounded-full bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0]" title={cell.lowConfidence ? C.matrix.lowConfidence : undefined}>
-        {C.values.partial}{cell.lowConfidence ? "?" : ""}
+      <span className="inline-flex rounded-full border border-dashed border-[#f0b43c] p-px" title={C.matrix.lowConfidence} data-testid="cmp-cell-low">
+        <OkMark size={size - 4} />
       </span>
     );
   }
-  if (v === "missing") return <span className="font-semibold text-[#5b6c85]">—</span>;
-  return <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" title={C.matrix.unknownTip} aria-label={C.values.unknown} />;
+  return <span className="whitespace-nowrap text-[11px] text-fg-faint">{C.values.not_found}</span>;
 }
 
 /**
@@ -158,12 +224,33 @@ function CellValue({ cell, size = 22 }: { cell: CellRow | undefined; size?: numb
  * a summary strip, filters, cell evidence with a correction, lean profiles.
  * Feed and battle cards stay empty until their stories.
  */
-export function CompetitorsView({ initialState, canEdit = false }: { initialState: CompetitorsState; canEdit?: boolean }) {
+export function CompetitorsView({ initialState, canEdit = false, parts = NO_PARTS }: { initialState: CompetitorsState; canEdit?: boolean; /** Which switched parts of the page are on for this organization (lib/competitors/parts.ts): all off unless given. */ parts?: CompetitorsParts }) {
+  // The tabs this organization sees: the matrix and the feed always, the three switched ones only when on.
+  // A company's column header opens its profile; where Profiles is off it is plain.
+  const HeadTag = parts.profiles ? "button" : "div";
+  const tabs = TABS.filter(({ key }) => key === "parity" || key === "feed" || (key === "profiles" && parts.profiles) || (key === "cards" && parts.cards) || (key === "roadmap" && parts.roadmap));
   const [state, setState] = useState(initialState);
   const own = state.orgName.trim() || "Your organization";
   const [tab, setTab] = useState<Tab>("parity");
   const [selectedCompetitor, setSelectedCompetitor] = useState<string | null>(null);
-  const [openCell, setOpenCell] = useState<{ competitorId: string; capabilityId: string } | null>(null);
+  /** The open cell popover: a competitor's cell (or "own") on a capability row or a feature row. */
+  const [openCell, setOpenCell] = useState<OpenCell | null>(null);
+  // Capabilities whose features are shown under them. Closed by default.
+  const [openFeatures, setOpenFeatures] = useState<Set<string>>(new Set());
+  // Which domain groups are open. When the page loads: only the first one, and no capability shows its features (table-view.ts).
+  const [openDomains, setOpenDomains] = useState<Set<string>>(() => new Set(defaultOpenDomains(initialState.domains.filter((d) => d.state !== "dismissed" && initialState.capabilities.some((k) => k.state === "active" && k.domainId === d.id)).map((d) => d.id))));
+  const toggleDomain = (id: string) => setOpenDomains((cur) => { const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const toggleFeatures = (capabilityId: string, features: number) => {
+    setOpenFeatures((cur) => {
+      const next = new Set(cur);
+      if (next.has(capabilityId)) next.delete(capabilityId);
+      else {
+        next.add(capabilityId);
+        track("cmp_features_opened", { capabilityId, features });
+      }
+      return next;
+    });
+  };
   // Capability whose description row is open under it (click on the name cell).
   const [openDesc, setOpenDesc] = useState<string | null>(null);
   const toggleDesc = useCallback((capabilityId: string) => {
@@ -179,11 +266,12 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   // Parity matrix filters
   const [capQuery, setCapQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<string[]>([]);
-  const [productFilter, setProductFilter] = useState<string[]>([]);
-  const [competitorFilter, setCompetitorFilter] = useState<string[]>([]);
+  // More companies than the table shows at first: the first six start ticked. Six or fewer: nothing ticked = all.
+  const [defaultShown] = useState<string[]>(() => (initialState.competitors.length > DEFAULT_SHOWN_COMPANIES ? initialState.competitors.slice(0, DEFAULT_SHOWN_COMPANIES).map((c) => c.name) : []));
+  const [competitorFilter, setCompetitorFilter] = useState<string[]>(defaultShown);
+  const competitorFilterChanged = competitorFilter.length !== defaultShown.length || competitorFilter.some((n) => !defaultShown.includes(n));
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [gapsOnly, setGapsOnly] = useState(false);
-  const [newChanges, setNewChanges] = useState(false);
 
   // News feed filters (story 4 fills them)
   const [signalQuery, setSignalQuery] = useState("");
@@ -203,9 +291,23 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     }
   }, []);
 
-  // While a scan runs, learn when it ends; results land in one go.
+  // ——— Scan (every competitor, one notification) ———
+  const [runNote, setRunNote] = useState<string | null>(null);
+  /** The run this page saw start: its note is shown when its summary arrives — after the analyses, which write it. */
+  const [watchedRun, setWatchedRun] = useState<string | null>(null);
+  const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors !== "number";
+
+  // While PMOS AI re-evaluates a capability's row (a PM added reasoning or released a score), learn when it is done.
+  const reevaluating = state.capabilities.some((k) => k.reevaluating);
   useEffect(() => {
-    if (!state.scanning) return;
+    if (!reevaluating) return;
+    const t = setInterval(() => void refresh(), POLL_MS);
+    return () => clearInterval(t);
+  }, [reevaluating, refresh]);
+
+  // While a scan or an analysis runs (or a run's summary is still to come), learn when it ends; results land in one go.
+  useEffect(() => {
+    if (!state.scanning && !state.analyzing && !awaitingSummary) return;
     const tick = async () => {
       await refresh();
       pollRef.current = setTimeout(tick, POLL_MS);
@@ -214,24 +316,22 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [state.scanning, refresh]);
+  }, [state.scanning, state.analyzing, awaitingSummary, refresh]);
 
-  // ——— Scan (every competitor, one notification) ———
-  const [runNote, setRunNote] = useState<string | null>(null);
-  const watchedRun = useRef<string | null>(null);
   useEffect(() => {
     if (state.activeRun) {
-      watchedRun.current = state.activeRun.id;
+      setWatchedRun(state.activeRun.id);
       return;
     }
-    if (watchedRun.current && state.lastRun?.id === watchedRun.current) {
-      watchedRun.current = null;
+    // The summary is written when the last analysis of the run's scans is done, not when the scans end.
+    if (watchedRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors === "number") {
+      setWatchedRun(null);
       const s = state.lastRun.summary;
       const changed = typeof s.competitors === "number" ? s.competitors : 0;
       const recipients = typeof s.recipients === "number" ? s.recipients : 0;
       setRunNote(`${C.run.finished(changed)}${changed > 0 ? ` ${recipients > 0 ? C.run.notified(recipients) : C.run.noRecipients}` : ""}`);
     }
-  }, [state.activeRun, state.lastRun]);
+  }, [state.activeRun, state.lastRun, watchedRun]);
 
   async function scanAll() {
     setError(null);
@@ -249,11 +349,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   // ——— Derived data ———
   const competitors = state.competitors;
   const activeCaps = useMemo(() => state.capabilities.filter((k) => k.state === "active"), [state.capabilities]);
-  // Scan suggestions wait in the matrix itself (dashed rows / a dashed domain group) for a PM's ✓ or ×.
-  const suggestedCaps = useMemo(() => state.capabilities.filter((k) => k.state === "suggested"), [state.capabilities]);
+  // Capabilities an analysis finds are just added. Only a NEW DOMAIN waits for a PM: a dashed group at the bottom of the table, approve or decline.
   const activeDomains = state.domains.filter((d) => d.state === "active");
-  const [suggestionsOnly, setSuggestionsOnly] = useState(false);
-  const decideCapability = (id: string, decision: "active" | "dismissed") => patch(`/api/competitors/capabilities/${id}`, { state: decision });
   const decideDomain = (id: string, decision: "active" | "dismissed") => patch(`/api/competitors/domains/${id}`, { state: decision });
   const cellMap = useMemo(() => {
     const m = new Map<string, CellRow>();
@@ -261,73 +358,72 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     return m;
   }, [state.cells]);
   const cellOf = (competitorId: string | null | undefined, capabilityId: string) => (competitorId ? cellMap.get(`${competitorId}|${capabilityId}`) : undefined);
-  /** The org's own cell is the capability's ourStatus — set by PMs, never scanned. */
-  const ownOf = (k: CapabilityRow): StatusValue => k.ourStatus;
-  const lastScanOf = new Map(state.competitors.map((c) => [c.id, c.source?.lastScanAt ? new Date(c.source.lastScanAt).getTime() : null]));
-  const isNewChange = (cell: CellRow | undefined) => {
-    if (!cell?.changedAt) return false;
-    const last = lastScanOf.get(cell.competitorId);
-    if (!last) return false;
-    return new Date(cell.changedAt).getTime() >= last - NEW_CHANGE_WINDOW_MS;
-  };
-  /** Gap = own missing while any competitor has it; only-us = own has while no competitor has/partial. */
-  const rowKind = (k: CapabilityRow): "gap" | "partial" | "only" | "level" | "none" => {
-    const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "unknown");
-    const anyHas = theirs.some((v) => v === "has");
-    const anyHasOrPartial = theirs.some((v) => v === "has" || v === "partial");
+  const featuresByCapability = useMemo(() => {
+    const m = new Map<string, FeatureRow[]>();
+    for (const f of [...state.features].sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))) m.set(f.capabilityId, [...(m.get(f.capabilityId) ?? []), f]);
+    return m;
+  }, [state.features]);
+  const featuresOf = (capabilityId: string) => featuresByCapability.get(capabilityId) ?? [];
+  const featureCellMap = useMemo(() => {
+    const m = new Map<string, CellRow>();
+    for (const c of state.featureCells) m.set(`${c.competitorId}|${c.featureId}`, c);
+    return m;
+  }, [state.featureCells]);
+  const featureCellOf = (competitorId: string, featureId: string) => featureCellMap.get(`${competitorId}|${featureId}`);
+  /** The org's own cell is the capability's ourStatus — from its own website where that is analysed, else set by PMs; a PM's value always wins. */
+  const ownOf = (k: CapabilityRow): OwnStatus => k.ourStatus;
+  /** Gap = not found at the org while found at a competitor (a low-confidence find opens no gap); only-us = found at the org and at no competitor, not even with low confidence. */
+  const rowKind = (k: CapabilityRow): "gap" | "only" | "level" | "none" => {
+    // The coverage model: a scored row is a gap when our score is 0 and a competitor is above 0 (scores.ts). Rows with no score keep the rule below.
+    const byScore = scoreRowKind(k.ourScore, competitors.map((c) => cellOf(c.id, k.id)?.score));
+    if (byScore) return byScore;
+    const theirs = competitors.map((c) => cellOf(c.id, k.id)?.value ?? "not_found");
+    const anyFound = theirs.some((v) => v === "found");
+    const anyFoundOrLow = theirs.some((v) => v === "found" || v === "low");
     const ownV = ownOf(k);
     if (competitors.length === 0) return "none";
-    if (ownV === "has" && !anyHasOrPartial) return "only";
-    if (ownV === "missing" && anyHas) return "gap";
-    if (ownV === "partial" && anyHas) return "partial";
+    if (ownV === "found" && !anyFoundOrLow) return "only";
+    if (ownV === "not_found" && anyFound) return "gap";
     return "level";
   };
 
   const summary = useMemo(() => {
     const total = activeCaps.length;
-    let full = 0, partial = 0, gaps = 0, only = 0;
+    let full = 0, gaps = 0, only = 0;
     for (const k of activeCaps) {
       const kind = rowKind(k);
-      const ownV = ownOf(k);
-      if (ownV === "has") full++;
-      else if (ownV === "partial") partial++;
+      if (ownOf(k) === "found") full++;
       if (kind === "gap") gaps++;
       if (kind === "only") only++;
     }
     const measured = competitors.length > 0 && total > 0 && state.cells.length > 0;
-    return { total, full, partial, gaps, only, measured, parity: measured ? Math.round(((full + partial * 0.5) / total) * 100) : null };
+    return { total, full, gaps, only, measured, parity: measured ? Math.round((full / total) * 100) : null };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCaps, state.cells, competitors.length]);
 
   const closest = useMemo(
-    () => rankByCloseness(competitors, activeCaps.map((k) => k.id), (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.value),
+    () => rankByCloseness(competitors, activeCaps.map((k) => k.id), (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.value, (competitorId, capabilityId) => cellOf(competitorId, capabilityId)?.score),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [competitors, activeCaps, state.cells],
   );
 
+  /** What a PM can do on a scored capability cell (every member of the organization): set the score (it is then locked), release it, add reasoning, try a re-evaluation again. */
+  const scoreActions = (url: string): ScoreActions => ({ setScore: (score) => patch(url, { score }), release: () => patch(url, { release: true }), addReasoning: (reasoning) => patch(url, { reasoning }), retry: () => patch(url, { reevaluate: true }) });
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
   const matchesStatus = (k: CapabilityRow) => {
     if (statusFilter.length === 0) return true;
     const wanted = STATUS_VALUES[STATUS_OPTIONS.indexOf(statusFilter[0])];
-    return shownCompetitors.some((c) => (cellOf(c.id, k.id)?.value ?? "unknown") === wanted);
+    return shownCompetitors.some((c) => (cellOf(c.id, k.id)?.value ?? "not_found") === wanted);
   };
-  const visibleCaps = suggestionsOnly ? [] : activeCaps.filter((k) => {
+  const visibleCaps = activeCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q) && !k.description.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
-    if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
-    if (gapsOnly && rowKind(k) !== "gap" && rowKind(k) !== "partial") return false;
-    if (newChanges && !shownCompetitors.some((c) => isNewChange(cellOf(c.id, k.id)))) return false;
+    if (gapsOnly && rowKind(k) !== "gap") return false;
     return matchesStatus(k);
   });
-  // Suggested rows follow the search, domain and competitor filters; status/gap/product-line filters do not apply to them.
-  const visibleSuggested = gapsOnly || newChanges || productFilter.length || statusFilter.length ? [] : suggestedCaps.filter((k) => {
-    if (q && !k.name.toLowerCase().includes(q)) return false;
-    if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
-    if (competitorFilter.length && !shownCompetitors.some((c) => c.id === k.suggestedById)) return false;
-    return true;
-  });
-  const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && (visibleCaps.some((k) => k.domainId === d.id) || visibleSuggested.some((k) => k.domainId === d.id)));
+  const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && visibleCaps.some((k) => k.domainId === d.id));
+  const allDomainsOpen = allOpen(domainsWithRows.map((d) => d.id), openDomains);
   const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
 
   // ——— News feed: items since the baseline, grouped by day, per-user read marks ———
@@ -361,10 +457,10 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   /** The "For <org>" line — derived from the data, no AI: what the item means against the org's own status. */
   const feedMeaning = (i: FeedItem): string => {
     if (i.kind === "gap" && i.capabilityId) {
-      const n = competitors.filter((c) => cellOf(c.id, i.capabilityId!)?.value === "has").length;
+      const n = competitors.filter((c) => cellOf(c.id, i.capabilityId!)?.value === "found").length;
       return C.feed.meaning.gap(own, i.competitorName, n, competitors.length);
     }
-    if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "unknown"].toLowerCase());
+    if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "not_found"].toLowerCase());
     if (i.kind === "fact") return C.feed.meaning.fact(i.competitorName, C.notify.email.factKinds[i.factKind ?? ""] ?? i.factKind ?? "");
     return C.feed.meaning.suggestion((C.feed.suggestionStates[i.suggestionState ?? ""] ?? "").toLowerCase());
   };
@@ -381,14 +477,13 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
       track("cmp_matrix_viewed", {
         competitors: competitors.length,
         capabilities: activeCaps.length,
-        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilter.length && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
+        filters: [domainFilter.length && "domain", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
         gapsOnly,
-        newChanges,
       });
     }, 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, domainFilter, productFilter, competitorFilter, statusFilter, gapsOnly, newChanges]);
+  }, [tab, domainFilter, competitorFilter, statusFilter, gapsOnly]);
 
   // ——— Corrections ———
   /** POST without a body: a create action whose answer is the new state. */
@@ -406,6 +501,34 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
     }
   }
 
+  // A company's column is dragged to a new place in the table: that is the organization's order of its companies
+  // (the Settings list shows the same order). While it is dragged a marker shows where it will land.
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ target: string; side: "before" | "after"; left: number } | null>(null);
+  const endColumnDrag = () => { setDragCol(null); setDropAt(null); };
+  function overColumn(e: React.DragEvent<HTMLTableCellElement>, target: string) {
+    if (!dragCol) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const th = e.currentTarget;
+    const box = th.getBoundingClientRect();
+    const side = e.clientX > box.left + box.width / 2 ? "after" : "before";
+    const left = th.offsetLeft + (side === "after" ? th.offsetWidth : 0);
+    setDropAt((cur) => (cur && cur.target === target && cur.side === side ? cur : { target, side, left }));
+  }
+  async function dropColumn(e: React.DragEvent<HTMLTableCellElement>) {
+    e.preventDefault();
+    const moved = dragCol; const at = dropAt;
+    endColumnDrag();
+    if (!moved || !at) return;
+    const before = state.competitors.map((c) => c.id);
+    const ids = moveNextTo(before, moved, at.target, at.side);
+    if (ids.every((id, i) => id === before[i])) return;
+    // The columns move at once; the saved order comes back with the answer. A refused save loads the page's state again.
+    setState((s) => ({ ...s, competitors: ids.map((id) => s.competitors.find((c) => c.id === id)!) }));
+    if (!(await patch("/api/competitors/order", { ids }))) void refresh();
+  }
+
   async function patch(url: string, body: unknown): Promise<boolean> {
     setError(null);
     try {
@@ -421,6 +544,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   }
 
   function openProfile(competitorId: string, from: "tab" | "cell") {
+    if (!parts.profiles) return;
     setSelectedCompetitor(competitorId);
     setTab("profiles");
     setOpenCell(null);
@@ -429,7 +553,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
   }
 
   const sourcesCount = state.competitors.filter((c) => c.source).length;
-  const headerScan = state.scanning ? C.header.scanning : state.lastScanAt ? C.header.scanned(timeAgo(state.lastScanAt)) : C.header.neverScanned;
+  const headerScan = state.scanning ? C.header.scanning : state.analyzing ? C.header.analyzing : state.lastScanAt ? C.header.scanned(timeAgo(state.lastScanAt)) : C.header.neverScanned;
 
   return (
     <div className="app-canvas font-title min-h-full">
@@ -464,9 +588,9 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
             </span>
           </div>
           <div role="tablist" aria-label="Competitor views" className="flex flex-wrap gap-1.5 border-b border-border pb-3">
-            {TABS.map(({ key, label }) => {
+            {tabs.map(({ key, label }) => {
               const on = tab === key;
-              const badge = key === "roadmap" && summary.measured ? summary.gaps + summary.partial : 0;
+              const badge = key === "roadmap" && summary.measured ? summary.gaps : 0;
               return (
                 <button
                   key={key}
@@ -507,47 +631,48 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                 <div>
                   <div className="font-title text-[15px] font-bold">{C.strip.parityTitle}</div>
                   <div className="mt-0.5 text-[12.5px] text-fg-3">
-                    {summary.parity == null ? C.strip.parityNone : C.strip.paritySub(summary.full, summary.partial, summary.total)}
+                    {summary.parity == null ? C.strip.parityNone : C.strip.paritySub(summary.full, summary.total)}
                   </div>
-                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(activeDomains.length, activeCaps.length, competitors.length)}{suggestedCaps.length > 0 && ` · ${C.matrix.suggestedN(suggestedCaps.length)}`}</div>
+                  <div className="mt-1 font-mono text-[10.5px] text-fg-faint">{C.strip.counts(activeDomains.length, activeCaps.length, competitors.length)}</div>
                 </div>
               </div>
               <StatCard label={C.strip.gaps} tone="#f0b43c" toneFg="#8a5a00" value={summary.measured ? summary.gaps : null} sub={summary.measured ? C.strip.gapsSub(summary.gaps) : C.strip.gapsNone} />
-              <StatCard label={C.strip.partial} tone="#3b7cf6" toneFg="#2a5fd0" value={summary.measured ? summary.partial : null} sub={C.strip.partialSub} />
               <StatCard label={C.strip.only(own)} tone="#17b26a" toneFg="#0f7a47" value={summary.measured ? summary.only : null} sub={summary.measured ? C.strip.onlySub(summary.only) : C.strip.onlyNone} />
-              <ClosestCard org={own} ranked={closest} measured={summary.measured} onOpen={(id) => openProfile(id, "cell")} />
+              <ClosestCard org={own} ranked={closest} measured={summary.measured} onOpen={parts.profiles ? (id) => openProfile(id, "cell") : null} />
             </div>
 
             {/* Filters */}
             <div className="mb-3.5 flex flex-wrap items-center gap-2">
               <SearchBox value={capQuery} onChange={setCapQuery} placeholder={C.filters.searchCapabilities} />
               <FilterPopover label={C.filters.domain} options={state.domains.map((d) => d.name)} selected={domainFilter} onToggle={toggleIn(setDomainFilter)} emptyText={C.filters.noDomains} />
-              <FilterPopover label={C.filters.productLine} options={state.productLines} selected={productFilter} onToggle={toggleIn(setProductFilter)} emptyText={C.filters.noProductLines} />
               <FilterPopover label={C.filters.competitor} accent="customer" options={competitors.map((c) => c.name)} selected={competitorFilter} onToggle={toggleIn(setCompetitorFilter)} emptyText={C.filters.noCompetitors} />
               <FilterPopover single label={C.filters.status} accent="status" options={STATUS_OPTIONS} selected={statusFilter} onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))} />
               <span className="mx-1 h-5 w-px bg-border" />
               <button aria-pressed={gapsOnly} onClick={() => setGapsOnly((v) => !v)} className={chipClass(gapsOnly)}>
                 {C.filters.gapsOnly}{gapsOnly && <Check size={12} strokeWidth={3} />}
               </button>
-              <button aria-pressed={newChanges} onClick={() => setNewChanges((v) => !v)} className={chipClass(newChanges)}>
-                {C.filters.newChanges}{newChanges && <Check size={12} strokeWidth={3} />}
-              </button>
-              {suggestedCaps.length > 0 && (
-                <button aria-pressed={suggestionsOnly} onClick={() => setSuggestionsOnly((v) => !v)} className={cn(chipClass(suggestionsOnly), !suggestionsOnly && "border-dashed")} data-testid="cmp-suggestions-chip">
-                  {C.matrix.suggestionsOnly}
-                  <span className={cn("inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 font-mono text-[10px] font-semibold", suggestionsOnly ? "bg-white/25 text-white" : "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]")}>{suggestedCaps.length}</span>
-                </button>
-              )}
             </div>
 
             {/* Matrix */}
             <div className="glass overflow-visible rounded-card">
-              <div className="overflow-x-auto rounded-card">
-                <table className="w-full border-collapse text-[13px]" style={{ minWidth: 640 + 104 * shownCompetitors.length }}>
+              <div className="relative overflow-x-auto rounded-card">
+                {dragCol && dropAt && (
+                  <div aria-hidden className="pointer-events-none absolute bottom-0 top-0 z-[5] w-[3px] -translate-x-1/2 animate-pulse rounded-full bg-primary shadow-[0_0_0_4px_rgba(36,87,245,.16)] transition-[left] duration-150 ease-out" style={{ left: dropAt.left }} data-testid="cmp-column-drop-marker" />
+                )}
+                <table className="w-full border-collapse text-[13px]" style={{ minWidth: 560 + 104 * shownCompetitors.length }}>
                   <thead>
                     <tr>
-                      <th scope="col" className="border-b border-border px-4 pb-[30px] pl-[30px] pt-2.5 text-left align-middle text-[12px] font-semibold tracking-[0.06em] text-fg-muted">
-                        {C.matrix.capability}
+                      {/* The label and its open/close-all button sit at the vertical centre of the header row, next to the company icons: even padding, one line. */}
+                      <th scope="col" className="border-b border-border px-4 py-2.5 pl-[30px] text-left align-middle text-[14.5px] font-bold tracking-[0.06em] text-fg-muted">
+                        <span className="inline-flex items-center gap-2">
+                        {C.matrix.domainsHeader}
+                        {domainsWithRows.length > 0 && (
+                          <button type="button" onClick={() => setOpenDomains((cur) => toggleAll(domainsWithRows.map((d) => d.id), cur))} title={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains} aria-label={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-domains-toggle-all">
+                            {allDomainsOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+                          </button>
+                        )}
+                        </span>
                       </th>
                       <th scope="col" className="w-[104px] border-b border-t-[3px] border-b-border border-t-primary bg-[rgba(36,87,245,.08)] px-2 pb-2.5 text-center align-bottom">
                         <span className="flex flex-col items-center gap-1.5 pt-2.5">
@@ -556,69 +681,117 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                         </span>
                       </th>
                       {shownCompetitors.map((c) => (
-                        <th key={c.id} scope="col" className="w-[104px] border-b border-border px-2 pb-2.5 text-center align-bottom">
-                          <button onClick={() => openProfile(c.id, "cell")} className="flex w-full flex-col items-center gap-1.5 pt-[13px] hover:opacity-80" title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
+                        <th key={c.id} scope="col" draggable title={C.matrix.dragColumn}
+                          onDragStart={(e) => { setDragCol(c.id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c.name); e.dataTransfer.setDragImage(e.currentTarget, 52, 24); }}
+                          onDragOver={(e) => overColumn(e, c.id)} onDrop={(e) => void dropColumn(e)} onDragEnd={endColumnDrag}
+                          className={cn("relative w-[104px] cursor-grab border-b border-border px-2 pb-2.5 text-center align-bottom transition-opacity active:cursor-grabbing", dragCol === c.id && "opacity-40")} data-testid="cmp-company-column">
+                          <HeadTag {...(parts.profiles ? { onClick: () => openProfile(c.id, "cell") } : {})} className={cn("flex w-full flex-col items-center gap-1.5 pt-[13px]", parts.profiles && "hover:opacity-80")} title={c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable" ? `${c.name} — ${C.settings.badges[c.lastScan.badge]}${c.lastGoodScanAt ? `. ${C.settings.showingDataFrom(shortDate(c.lastGoodScanAt))}` : ""}` : c.name}>
                             <Logo c={c} />
                             <span className="max-w-[96px] truncate text-[11.5px] font-medium text-fg-3">{c.name}</span>
                             {(c.lastScan?.badge === "blocked" || c.lastScan?.badge === "unreachable") && (
                               <span className="rounded-full bg-[rgba(239,90,138,.15)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#c23767]">{C.settings.badges[c.lastScan.badge]}{c.lastGoodScanAt ? ` · ${shortDate(c.lastGoodScanAt)}` : ""}</span>
                             )}
-                          </button>
+                            {c.analysis && isAnalysisActive(c.analysis.status) && (
+                              <span
+                                className="inline-flex items-center gap-1 rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[9px] font-semibold text-[#2a5fd0]"
+                                title={c.analysis.status === "waiting" ? C.matrix.analysisWaiting : c.analysis.status === "queued" ? C.settings.analysisQueued : c.analysis.step === "reading" && c.analysis.pagesTotal > 0 ? C.settings.analyzingPages(c.analysis.pagesDone, c.analysis.pagesTotal) : C.settings.analysisStep[c.analysis.step] ?? C.matrix.analyzing}
+                                data-testid="cmp-analyzing-chip"
+                              >
+                                <Loader2 size={9} className="animate-spin" />
+                                {c.analysis.status === "waiting" ? C.matrix.analysisWaiting : C.matrix.analyzing}
+                              </span>
+                            )}
+                          </HeadTag>
+                          <RelevanceChip level={c.relevance} onSet={(level) => void patch(`/api/competitors/${c.id}/relevance`, { level })} />
                         </th>
                       ))}
                       <th scope="col" className="w-[150px] border-b border-border px-4 py-2.5"><span className="sr-only">{C.matrix.coverage}</span></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(activeCaps.length === 0 && suggestedCaps.length === 0) || competitors.length === 0 ? (
+                    {state.setup !== "done" || activeCaps.length === 0 || competitors.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-14 text-center">
-                          <div className="font-title mb-1 text-[15px] font-bold">{activeCaps.length === 0 ? C.matrix.noCatalogTitle : C.matrix.emptyTitle}</div>
-                          <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{activeCaps.length === 0 ? C.matrix.noCatalogBody : C.matrix.emptyBody(own)}</div>
+                          {state.setup !== "done" ? (
+                            // Competitors needs its initial setup before it works: no empty table, no "add your domains".
+                            <div data-testid="cmp-being-set-up">
+                              <div className="font-title mb-1 text-[15px] font-bold">{C.setup.title}</div>
+                              <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{C.setup.body} {C.setup.settingsHint}</div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="font-title mb-1 text-[15px] font-bold">{activeCaps.length === 0 ? C.matrix.noCatalogTitle : C.matrix.emptyTitle}</div>
+                              <div className="mx-auto max-w-[460px] text-[13px] leading-relaxed text-fg-3">{activeCaps.length === 0 ? C.matrix.noCatalogBody : C.matrix.emptyBody(own)}</div>
+                            </>
+                          )}
                         </td>
                       </tr>
-                    ) : visibleCaps.length === 0 && visibleSuggested.length === 0 ? (
+                    ) : visibleCaps.length === 0 ? (
                       <tr>
                         <td colSpan={3 + shownCompetitors.length} className="px-10 py-10 text-center text-[13px] text-fg-3">No capability matches these filters.</td>
                       </tr>
                     ) : (
                       domainsWithRows.map((d) => {
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
-                        const sugRows = visibleSuggested.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
-                        const covered = rows.filter((k) => ownOf(k) === "has").length;
-                        const partial = rows.filter((k) => ownOf(k) === "partial").length;
-                        const gaps = rows.filter((k) => rowKind(k) === "gap").length;
+                        // The header's counts: its gaps, and the capabilities only the organization has (the same rule as each row's chip).
+                        const { gaps, only: onlyOurs } = rowKindCounts(rows.map(rowKind));
+                        // The capabilities of this domain that have features: "open / close all features" works on them.
+                        const withFeatures = rows.filter((k) => featuresOf(k.id).length > 0).map((k) => k.id);
+                        // The domain's score of a company: the average over ALL the domain's capabilities (not only the filtered rows); a scored row the company has no cell in counts 0.
+                        const domainRows = activeCaps.filter((k) => k.domainId === d.id);
+                        const scores = domainRows.some((k) => k.ourScore != null)
+                          ? { own: domainScore(domainRows.map((k) => k.ourScore)), ownName: own, companies: shownCompetitors.map((c) => ({ id: c.id, name: c.name, score: domainScore(domainRows.map((k) => (k.ourScore != null ? cellOf(c.id, k.id)?.score ?? 0 : null))) })) }
+                          : null;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} partial={partial} gaps={gaps} colSpan={3 + shownCompetitors.length}
-                            suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} suggestedCount={sugRows.length} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}
-                            suggestedRows={sugRows.map((k) => (
-                              <SuggestedRow key={k.id} capability={k} org={own} seenAt={competitorName(k.suggestedById)} competitors={shownCompetitors} canEdit={canEdit} onDecide={(decision) => void decideCapability(k.id, decision)} descOpen={openDesc === k.id} onToggleDesc={() => toggleDesc(k.id)} />
-                            ))}>
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} gaps={gaps} onlyOurs={onlyOurs} org={own} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
+                            features={withFeatures.length ? { allOpen: allOpen(withFeatures, openFeatures), onToggle: () => setOpenFeatures((cur) => toggleAll(withFeatures, cur)) } : null}
+                            suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
-                              const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "has").length;
+                              const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "found").length;
                               const descOpen = openDesc === k.id;
+                              const features = featuresOf(k.id);
+                              const featuresOpen = features.length > 0 && openFeatures.has(k.id);
+                              const top = topScoreKeys([{ key: "own", score: k.ourScore }, ...shownCompetitors.map((c) => ({ key: c.id, score: cellOf(c.id, k.id)?.score }))]);
                               return (
-                                <tr key={k.id} className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
+                                <Fragment key={k.id}>
+                                <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
                                   <td className={cn("px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")}>
                                     <span className="inline-flex flex-wrap items-center gap-2">
+                                      {features.length > 0 && (
+                                        <button type="button" onClick={() => toggleFeatures(k.id, features.length)} aria-expanded={featuresOpen} aria-label={C.matrix.featuresToggle(k.name, features.length)} title={C.matrix.featuresToggle(k.name, features.length)}
+                                          className="-ml-[22px] inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle">
+                                          {featuresOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                                        </button>
+                                      )}
                                       {k.name}
-                                      <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
-                                      {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
-                                      {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
+                                      {features.length > 0 && <span className="text-[11px] font-normal text-fg-muted">{C.matrix.featuresCount(features.length)}</span>}
+                                      <DescriptionInfo name={k.name} description={k.description} open={descOpen} onToggle={() => toggleDesc(k.id)} />
+                                      {kind === "gap" && <span className={GAP_CHIP}>Gap</span>}
+                                      {kind === "only" && <DifferentiatorChip org={own} />}
                                     </span>
                                   </td>
-                                  <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
+                                  <td className={cn("text-center", OWN_CELL)}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
-                                      <OwnCell capability={k} org={own} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      {k.ourScore != null ? (
+                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} score={k.ourScore} top={top.has("own")} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
+                                          isOpen={openCell?.competitorId === "own" && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: "own", rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/capabilities/${k.id}/score`)} />
+                                      ) : (
+                                        <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
+                                      )}
                                     </span>
                                   </td>
                                   {shownCompetitors.map((c) => {
                                     const cell = cellOf(c.id, k.id);
                                     return (
                                       <td key={c.id} className="text-center">
-                                        <Cell cell={cell} competitorId={c.id} capability={k} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={() => openProfile(c.id, "cell")} isNew={isNewChange(cell)} notScanned={!c.source?.lastScanAt} />
+                                        {cell && cell.score != null ? (
+                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} top={top.has(c.id)} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
+                                            isOpen={openCell?.competitorId === c.id && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: c.id, rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/statuses/${cell.id}/score`)} />
+                                        ) : (
+                                          <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+                                        )}
                                       </td>
                                     );
                                   })}
@@ -631,6 +804,10 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                                     </span>
                                   </td>
                                 </tr>
+                                {featuresOpen && features.map((f) => (
+                                  <FeatureLine key={f.id} feature={f} differentiator={featureIsDifferentiator(f.ourStatus, competitors.map((c) => featureCellOf(c.id, f.id)?.value))} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
+                                ))}
+                                </Fragment>
                               );
                             })}
                           </DomainGroup>
@@ -644,14 +821,12 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
 
             {/* Legend */}
             <div className="mt-3 flex flex-wrap items-center gap-[18px] px-1 text-[12px] text-fg-3">
-              <span className="inline-flex items-center gap-1.5"><OkMark size={16} />{C.matrix.legendHas}</span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="inline-block rounded-full bg-[rgba(59,124,246,.15)] px-2 py-px text-[11px] font-semibold text-[#2a5fd0]">{C.matrix.legendPartial}</span>
-                {C.matrix.legendPartialSub}
+              <span className="inline-flex items-center gap-1.5"><OkMark size={16} />{C.matrix.legendFound}</span>
+              <span className="inline-flex items-center gap-1.5" title={C.matrix.legendLowSub}>
+                <span className="inline-flex rounded-full border border-dashed border-[#f0b43c] p-px"><OkMark size={12} /></span>
+                {C.matrix.legendLow}
               </span>
-              <span className="inline-flex items-center gap-1.5"><span className="font-semibold text-[#5b6c85]">—</span>{C.matrix.legendMissing}</span>
-              <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" />{C.matrix.legendUnknown}</span>
-              {suggestedCaps.length > 0 && <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-[3px] border border-dashed border-[rgba(36,87,245,.6)] bg-[rgba(36,87,245,.06)]" />{C.matrix.legendSuggested}</span>}
+              <span className="inline-flex items-center gap-1.5"><span className="text-[11px] text-fg-faint">{C.values.not_found}</span>{C.matrix.legendNotFound}</span>
               <span className="ml-auto text-fg-muted">{C.matrix.legendHint}</span>
             </div>
           </section>
@@ -709,9 +884,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                             <FeedRow item={item} org={own} competitor={competitors.find((c) => c.id === item.competitorId) ?? null} open={isOpen}
                               meaning={feedMeaning(item)} onOpen={() => { setFeedOpen(isOpen ? null : item.key); if (!item.read) void markRead([item.key]); }} />
                             {isOpen && (
-                              <FeedDetail item={item} org={own} meaning={feedMeaning(item)} canEdit={canEdit}
-                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, capabilityId: item.capabilityId! }); } : null}
-                                onDecide={item.kind === "suggestion" && item.suggestionState === "suggested" && item.capabilityId ? (decision) => { void decideCapability(item.capabilityId!, decision); } : null} />
+                              <FeedDetail item={item} meaning={feedMeaning(item)}
+                                onOpenCell={item.capabilityId && item.kind !== "suggestion" ? () => { setTab("parity"); setOpenCell({ competitorId: item.competitorId, rowId: item.capabilityId! }); } : null} />
                             )}
                           </div>
                         );
@@ -724,7 +898,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           </section>
         )}
 
-        {tab === "profiles" && (
+        {tab === "profiles" && parts.profiles && (
           <ProfilePanel
             org={own}
             competitors={competitors}
@@ -747,7 +921,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           />
         )}
 
-        {tab === "cards" && (
+        {tab === "cards" && parts.cards && (
           <section aria-label={C.tabs.cards} className="flex flex-col">
             <div className="mb-3.5 flex items-center gap-2">
               <span className="text-[12.5px] text-fg-3">{C.cards.count(0)}</span>
@@ -761,13 +935,11 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
           </section>
         )}
 
-        {tab === "roadmap" && (() => {
+        {tab === "roadmap" && parts.roadmap && (() => {
           const gapRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "gap") : [];
-          const partialRows = summary.measured ? activeCaps.filter((k) => rowKind(k) === "partial") : [];
-          const total = gapRows.length + partialRows.length;
+          const total = gapRows.length;
           const sections = [
             { key: "gap", title: C.roadmap.gaps, sub: C.roadmap.gapsSub(own), empty: C.roadmap.gapsEmpty, rows: gapRows, color: "#f0b43c", glow: "rgba(240,180,60,.6)", gradient: "linear-gradient(90deg, rgba(240,180,60,.18), rgba(255,255,255,0) 60%)" },
-            { key: "partial", title: C.roadmap.partial, sub: C.roadmap.partialSub(own), empty: C.roadmap.partialEmpty, rows: partialRows, color: "#3b7cf6", glow: "rgba(59,124,246,.6)", gradient: "linear-gradient(90deg, rgba(59,124,246,.16), rgba(255,255,255,0) 60%)" },
           ];
           return (
             <section aria-label={C.tabs.roadmap} className="flex flex-col gap-4">
@@ -789,7 +961,7 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
                       <div className="px-4 py-8 text-center text-[13px] text-fg-3">{g.empty}</div>
                     ) : (
                       g.rows.map((k) => (
-                        <RoadmapRow key={k.id} capability={k} kind={g.key as "gap" | "partial"} competitors={competitors} cellOf={cellOf} domain={state.domains.find((d) => d.id === k.domainId)?.name ?? ""} onCreateIdea={() => post(`/api/competitors/capabilities/${k.id}/idea`)} />
+                        <RoadmapRow key={k.id} capability={k} competitors={competitors} cellOf={cellOf} domain={state.domains.find((d) => d.id === k.domainId)?.name ?? ""} onCreateIdea={() => post(`/api/competitors/capabilities/${k.id}/idea`)} />
                       ))
                     )}
                   </div>
@@ -805,9 +977,8 @@ export function CompetitorsView({ initialState, canEdit = false }: { initialStat
 
 // ————— Roadmap row (design C2): name, evidence line, Jira / idea pill, Create idea, Evidence · N —————
 
-function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreateIdea }: {
+function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }: {
   capability: CapabilityRow;
-  kind: "gap" | "partial";
   competitors: CompetitorRow[];
   cellOf: (competitorId: string, capabilityId: string) => CellRow | undefined;
   domain: string;
@@ -817,15 +988,14 @@ function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreate
   const [busy, setBusy] = useState(false);
   const withIt = competitors
     .map((c) => ({ c, cell: cellOf(c.id, k.id) }))
-    .filter(({ cell }) => cell && (cell.value === "has" || cell.value === "partial"));
-  const full = withIt.filter(({ cell }) => cell?.value === "has").length;
+    .filter(({ cell }) => cell && (cell.value === "found" || cell.value === "low"));
   const names = withIt.map(({ c }) => c.name);
-  const headline = kind === "gap" ? C.roadmap.haveIt(withIt.length, competitors.length) : C.roadmap.haveItFull(full, competitors.length);
+  const headline = C.roadmap.haveIt(withIt.length, competitors.length);
   const sub = [headline, names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} +${names.length - 3}`, domain].filter(Boolean).join(" · ");
   const evidence = withIt.filter(({ cell }) => cell?.quote || cell?.sourceUrl);
   const toggle = () => {
     setOpen((v) => !v);
-    if (!open) track("cmp_roadmap_evidence_opened", { capabilityId: k.id, kind, count: evidence.length });
+    if (!open) track("cmp_roadmap_evidence_opened", { capabilityId: k.id, kind: "gap", count: evidence.length });
   };
   async function create() {
     setBusy(true);
@@ -884,46 +1054,127 @@ function RoadmapRow({ capability: k, kind, competitors, cellOf, domain, onCreate
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, partial, gaps, colSpan, children, suggestedBy, suggestedCount = 0, suggestedRows, canEdit = false, onDecide }: {
-  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; partial: number; gaps: number; colSpan: number; children: React.ReactNode;
-  /** Set when the domain itself is a scan suggestion (dashed group): the competitor it was seen at. */
+function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
+  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; gaps: number; colSpan: number; children: React.ReactNode;
+  /** How many of the domain's capabilities only the organization has, shown next to the gaps as "N Diff"; and the organization's name (for the tooltips). */
+  onlyOurs: number;
+  org: string;
+  /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
+  scores?: { own: number | null; ownName: string; companies: Array<{ id: string; name: string; score: number | null }> } | null;
+  /** Set when the domain itself is suggested by an analysis (dashed group at the bottom of the table): the competitor it was seen at. Its capabilities are ordinary rows. */
   suggestedBy?: string | null;
-  suggestedCount?: number;
-  suggestedRows?: React.ReactNode;
   canEdit?: boolean;
   onDecide?: (decision: "active" | "dismissed") => void;
+  /** The group is open; the page holds which ones are (only the first when it loads). */
+  open: boolean;
+  onToggle: () => void;
+  /** "Open / close the features of all capabilities" of this domain; null when none of them has features. */
+  features?: { allOpen: boolean; onToggle: () => void } | null;
 }) {
-  const [open, setOpen] = useState(true);
+  // The top domain score(s), underlined: the highest among the companies shown, the organization included.
+  const topScore = scores ? topScoreKeys([{ key: "own", score: scores.own }, ...scores.companies.map((c) => ({ key: c.id, score: c.score }))]) : new Set<string>();
   const isSuggested = suggestedBy != null;
+  const inColumns = scores != null && !isSuggested;
   return (
     <>
       <tr data-testid={isSuggested ? "cmp-suggested-domain" : undefined}>
-        <td colSpan={colSpan} className="p-0">
+        <td colSpan={inColumns ? 1 : colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
-            <button onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : domain.summary || undefined}>
+            {/* The whole header opens and closes the group. A div with the button role, not a button: the info button sits inside it. */}
+            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => onToggle()} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onToggle(); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
               <span className="text-[14px] font-bold">{domain.name}</span>
+              {!isSuggested && <DomainInfo name={domain.name} covers={domain.summary || domain.description} doneBy={domain.doneBy} />}
               {isSuggested ? (
                 <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-2 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedDomain} · {C.settings.suggestedBy(suggestedBy)}</span>
               ) : (
                 <span className="text-[11px] text-fg-muted">{C.matrix.capabilitiesCount(rows.length)}</span>
               )}
-              {suggestedCount > 0 && !isSuggested && <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggestedN(suggestedCount)}</span>}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
-              <span className="ml-auto flex items-center gap-[18px] text-[12px] text-fg-3">
-                {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
-                {partial > 0 && <span className="font-semibold text-[#2a5fd0]">{C.matrix.partialN(partial)}</span>}
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+              {!inColumns && (
+              <span className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-[12px] text-fg-3">
+                {gaps > 0 && <span className={GAP_CHIP} title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className={DIFF_CHIP} title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
-            </button>
-            {isSuggested && canEdit && onDecide && <DecideButtons accept={C.matrix.acceptDomain} dismiss={C.matrix.dismissDomain} onDecide={onDecide} />}
+              )}
+            </div>
+            {features && open && (
+              <button type="button" onClick={features.onToggle} title={features.allOpen ? C.matrix.closeAllFeatures : C.matrix.openAllFeatures} aria-label={features.allOpen ? C.matrix.closeAllFeatures : C.matrix.openAllFeatures}
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle-all">
+                {features.allOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+              </button>
+            )}
+            {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
+        {inColumns && scores && (
+          <>
+            <td className={cn("border-b border-border px-2 text-center", OWN_CELL)}><DomainScore score={scores.own} company={scores.ownName} top={topScore.has("own")} /></td>
+            {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} top={topScore.has(c.id)} /></td>)}
+            <td className="border-b border-border px-3">
+              <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full items-center justify-end gap-x-2 whitespace-nowrap text-[11.5px] text-fg-3">
+                {gaps > 0 && <span className={GAP_CHIP} title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className={DIFF_CHIP} title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
+                {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+            </td>
+          </>
+        )}
       </tr>
       {open && children}
-      {open && suggestedRows}
     </>
+  );
+}
+
+/** The green chip of a row only the organization has — a capability or a feature. The tooltip says it in full. */
+function DifferentiatorChip({ org }: { org: string }) {
+  return <span className={DIFF_CHIP} title={C.matrix.differentiatorTip(org)} data-testid="cmp-differentiator">{C.matrix.differentiator}</span>;
+}
+
+// ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
+
+function FeatureLine({ feature, differentiator, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
+  feature: FeatureRow;
+  /** Only the organization has this feature (table-view.ts featureIsDifferentiator, over every competitor — not only the ones shown). */
+  differentiator: boolean;
+  org: string;
+  ownSite: boolean;
+  competitors: CompetitorRow[];
+  cellOf: (competitorId: string) => CellRow | undefined;
+  open: OpenCell | null;
+  setOpen: (v: OpenCell | null) => void;
+  onPatch: (url: string, body: unknown) => Promise<boolean>;
+  onProfile: ((competitorId: string) => void) | null;
+}) {
+  const haveN = competitors.filter((c) => cellOf(c.id)?.value === "found").length;
+  return (
+    <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
+      <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {feature.name}
+          {differentiator && <DifferentiatorChip org={org} />}
+        </span>
+      </td>
+      <td className={cn("text-center", OWN_CELL)}>
+        <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
+          <OwnCell row={feature} kind="feature" org={org} ownSite={ownSite} open={open} setOpen={setOpen} onPatch={onPatch} />
+        </span>
+      </td>
+      {competitors.map((c) => (
+        <td key={c.id} className="text-center">
+          <Cell cell={cellOf(c.id)} competitorId={c.id} row={feature} kind="feature" open={open} setOpen={setOpen} onPatch={onPatch} onProfile={onProfile ? () => onProfile(c.id) : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
+        </td>
+      ))}
+      <td className="px-4">
+        <span className="flex items-center gap-2">
+          <span className="inline-flex h-1 w-[54px] overflow-hidden rounded-full bg-[rgba(12,25,41,.08)]">
+            <span className="block h-full bg-[#5b6c85]" style={{ width: `${competitors.length ? Math.round((haveN / competitors.length) * 100) : 0}%` }} />
+          </span>
+          <span className="font-mono text-[11px] font-semibold text-fg-3">{C.matrix.ofN(haveN, competitors.length)}</span>
+        </span>
+      </td>
+    </tr>
   );
 }
 
@@ -967,7 +1218,7 @@ function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedI
     ? item.headline
     : item.kind === "fact" || item.kind === "suggestion"
       ? `${item.competitorName}: ${item.title}`
-      : `${item.competitorName} ${C.values[item.from ?? "unknown"].toLowerCase()} → ${C.values[item.to ?? "unknown"].toLowerCase()} on ${item.title}`;
+      : `${item.competitorName} ${C.values[item.from ?? "not_found"].toLowerCase()} → ${C.values[item.to ?? "not_found"].toLowerCase()} on ${item.title}`;
   return (
     <button type="button" onClick={onOpen} aria-expanded={open} className={cn("flex h-[58px] w-full items-center gap-3.5 border-b border-[rgba(200,212,232,.5)] px-4 text-left hover:bg-[rgba(255,255,255,.7)]", !open && "[.group-last>&]:border-b-0")} data-testid="cmp-feed-item" data-read={item.read ? "1" : "0"}>
       {competitor ? <Logo c={competitor} /> : <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-[#0b1430] text-[11px] font-bold text-[#f3f1fb]">{initialsOf(item.competitorName)}</span>}
@@ -985,9 +1236,9 @@ function FeedRow({ item, org, competitor, meaning, open, onOpen }: { item: FeedI
 }
 
 /** The signal opened in place, under its row: everything the feed knows about it, and the actions. */
-function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
-  item: FeedItem; org: string; meaning: string; canEdit: boolean;
-  onOpenCell: (() => void) | null; onDecide: ((decision: "active" | "dismissed") => void) | null;
+function FeedDetail({ item, meaning, onOpenCell }: {
+  item: FeedItem; meaning: string;
+  onOpenCell: (() => void) | null;
 }) {
   const at = new Date(item.at);
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
@@ -1003,8 +1254,8 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
           <div className="my-2 rounded-inner border border-[rgba(36,87,245,.25)] bg-[rgba(36,87,245,.06)] px-4 py-3 text-[13px] text-foreground">{meaning}</div>
           {(item.kind === "gap" || item.kind === "raised" || item.kind === "lowered") && (
             <>
-              <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "unknown"]} → {C.values[item.to ?? "unknown"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>
-              <Row label={C.feed.detail.yourStatus}><span className="font-semibold">{C.values[item.own ?? "unknown"]}</span></Row>
+              <Row label={C.feed.detail.change}><span className="font-semibold">{C.values[item.from ?? "not_found"]} → {C.values[item.to ?? "not_found"]}</span>{item.domain && <span className="text-fg-muted"> · {item.domain}</span>}</Row>
+              <Row label={C.feed.detail.yourStatus}><span className="font-semibold">{C.values[item.own ?? "not_found"]}</span></Row>
               {item.product && <Row label={C.feed.detail.product}>{item.product}</Row>}
             </>
           )}
@@ -1022,15 +1273,9 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
             </span>
           </Row>
           <Row label={C.feed.detail.found}>{at.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</Row>
-        {(onOpenCell || (onDecide && canEdit)) && (
+        {onOpenCell && (
           <div className="flex items-center gap-2 py-3">
-            {onOpenCell && <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>}
-            {onDecide && canEdit && (
-              <span className="ml-auto inline-flex gap-2">
-                <Button size="sm" onClick={() => onDecide("active")}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
-                <Button size="sm" variant="secondary" onClick={() => onDecide("dismissed")}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
-              </span>
-            )}
+            <Button size="sm" variant="secondary" onClick={onOpenCell}>{C.feed.openCell}</Button>
           </div>
         )}
       </div>
@@ -1038,112 +1283,72 @@ function FeedDetail({ item, org, meaning, canEdit, onOpenCell, onDecide }: {
   );
 }
 
-/** ✓ / × for a suggestion, same pair on a row and on a suggested domain's header. */
-function DecideButtons({ accept, dismiss, onDecide }: { accept: string; dismiss: string; onDecide: (decision: "active" | "dismissed") => void }) {
+/** ✓ / × on a suggested domain's header: approve keeps the domain, decline moves its capabilities to the closest existing domain. */
+function DecideButtons({ approve, decline, declineHint, onDecide }: { approve: string; decline: string; declineHint: string; onDecide: (decision: "active" | "dismissed") => void }) {
   return (
     <span className="inline-flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
-      <button type="button" onClick={() => onDecide("active")} title={accept} aria-label={accept} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
-      <button type="button" onClick={() => onDecide("dismissed")} title={dismiss} aria-label={dismiss} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
+      <button type="button" onClick={() => onDecide("active")} title={approve} aria-label={approve} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-[rgba(23,178,106,.5)] bg-white text-[#0f7a47] hover:bg-[rgba(23,178,106,.14)]" data-testid="cmp-suggestion-accept"><Check size={14} strokeWidth={2.5} /></button>
+      <button type="button" onClick={() => onDecide("dismissed")} title={declineHint} aria-label={decline} className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-white text-fg-3 hover:border-[#ef5a8a] hover:text-[#c23767]" data-testid="cmp-suggestion-dismiss"><X size={14} strokeWidth={2.5} /></button>
     </span>
   );
 }
 
-/** A capability a scan proposed: dashed row at the end of its domain, same height as a catalog row; the proposing competitor's ✓ opens the evidence; ✓ / × to decide. */
-function SuggestedRow({ capability, org, seenAt, competitors, canEdit, onDecide, descOpen, onToggleDesc }: {
-  capability: CapabilityRow; org: string; seenAt: string; competitors: CompetitorRow[]; canEdit: boolean; onDecide: (decision: "active" | "dismissed") => void;
-  descOpen: boolean; onToggleDesc: () => void;
-}) {
-  const { quote, url } = splitSuggestedQuote(capability.suggestedQuote);
+/**
+ * Small (i) after a domain name: click opens a card with what the domain covers; "Show more" adds who does the work.
+ * Esc or a click outside closes it. Nothing here reaches the group's open/close toggle it sits in.
+ */
+function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; doneBy: string }) {
   const [open, setOpen] = useState(false);
+  const [more, setMore] = useState(false);
+  const close = () => { setOpen(false); setMore(false); };
   useEffect(() => {
     if (!open) return;
-    track("cmp_suggestion_evidence_opened", { capabilityId: capability.id, competitorId: capability.suggestedById, hasUrl: Boolean(url) });
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setOpen(false); setMore(false); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  const text = covers.split("\n").map((l) => l.trim()).filter(Boolean);
   return (
-    <>
-    <tr className="group h-11 border-b border-dashed border-[rgba(36,87,245,.45)] bg-[rgba(36,87,245,.035)] last:border-b-0 hover:bg-[rgba(36,87,245,.07)]" data-testid="cmp-suggested-row">
-      <td className="px-4 pl-[30px] font-medium text-[#1f2f47]">
-        <span className="inline-flex flex-wrap items-center gap-2">
-          {capability.name}
-          <DescriptionInfo name={capability.name} description={capability.description} ownProduct="" org={org} open={descOpen} onToggle={onToggleDesc} suggested hint={C.matrix.suggestedRowHint} />
-          <span className="inline-flex items-center rounded-full border border-dashed border-[rgba(36,87,245,.55)] bg-white px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#2a5fd0]">{C.matrix.suggested}</span>
-        </span>
-      </td>
-      <td className="bg-[rgba(36,87,245,.06)] text-center" title={C.matrix.ownCellTitle(org)}>
-        <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-2 py-px font-mono text-[10px] font-semibold text-[#8a5a00]">{C.matrix.ownSuggested}</span>
-      </td>
-      {competitors.map((c) => (
-        <td key={c.id} className="text-center">
-          {c.id === capability.suggestedById ? (
-            <span className="relative inline-flex items-center justify-center">
-              <button
-                type="button"
-                onClick={() => setOpen(!open)}
-                title={C.matrix.suggestedCellHint(seenAt)}
-                aria-label={`${capability.name}: ${C.values.has} — ${C.matrix.suggestedCellHint(seenAt)}`}
-                aria-expanded={open}
-                className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", open && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-                data-testid="cmp-suggestion-evidence"
-              >
-                <OkMark size={16} />
-              </button>
-              {open && (
-                <>
-                  <div className="fixed inset-0 z-[24]" onClick={() => setOpen(false)} />
-                  <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
-                    <div className="mb-2 flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13px] font-bold">{capability.name}</div>
-                        <div className="text-[11.5px] text-fg-muted">{C.matrix.suggested} · {C.settings.suggestedBy(seenAt)}</div>
-                      </div>
-                      <button type="button" onClick={() => setOpen(false)} aria-label={C.feed.detail.close} className="rounded-md p-1 text-fg-muted hover:bg-background"><X size={14} /></button>
-                    </div>
-                    {capability.description && <p className="m-0 mb-2 text-[12.5px] leading-snug text-foreground">{capability.description}</p>}
-                    {quote ? (
-                      <blockquote className="m-0 rounded-[8px] border-l-[3px] border-primary bg-bg-2 px-2.5 py-2 text-[12.5px] italic leading-snug text-[#1f2f47]">“{quote}”</blockquote>
-                    ) : (
-                      <div className="text-[12px] text-fg-faint">{C.cell.noEvidence}</div>
-                    )}
-                    {url && (
-                      <a href={url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-[12.5px] text-primary hover:underline" data-testid="cmp-suggestion-link">
-                        {C.matrix.learnMore}<ExternalLink size={12} />
-                      </a>
-                    )}
-                    {canEdit && (
-                      <div className="mt-3 flex items-center gap-2 border-t border-border pt-2.5">
-                        <Button size="sm" onClick={() => { setOpen(false); onDecide("active"); }}><Check size={13} strokeWidth={2.5} />{C.matrix.accept}</Button>
-                        <Button size="sm" variant="secondary" onClick={() => { setOpen(false); onDecide("dismissed"); }}><X size={13} strokeWidth={2.5} />{C.matrix.dismiss}</Button>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </span>
-          ) : (
-            <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#9aa8be]" aria-label={C.values.unknown} />
-          )}
-        </td>
-      ))}
-      <td className="px-4">
-        {/* Same 98 px footprint as the coverage bar + "n of N" above, so the ✓ / × pair sits centred under it. */}
-        <span className="flex w-[98px] items-center justify-center">
-          {canEdit ? <DecideButtons accept={C.matrix.accept} dismiss={C.matrix.dismiss} onDecide={onDecide} /> : <span className="text-[11px] text-fg-faint">{C.matrix.suggested}</span>}
-        </span>
-      </td>
-    </tr>
-    </>
+    <span className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => (open ? close() : setOpen(true))}
+        aria-label={C.matrix.domainInfoToggle(name)}
+        aria-expanded={open}
+        className={cn("inline-flex h-5 w-5 items-center justify-center rounded-full text-fg-faint hover:bg-white hover:text-fg-2", open && "bg-white text-primary shadow-[0_0_0_2px_var(--app-accent-soft)]")}
+        data-testid="cmp-domain-info"
+      >
+        <Info size={13} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24] cursor-default" onClick={close} />
+          <Floating lock className="w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
+            <div className="mb-1 flex items-start gap-2">
+              <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
+              <button type="button" onClick={close} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
+            </div>
+            <div className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.matrix.domainCovers}</div>
+            {text.length ? text.map((l, i) => <p key={i} className="m-0">{l}</p>) : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
+            {doneBy && more && (
+              <div className="mt-2" data-testid="cmp-domain-done-by">
+                <div className="font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.matrix.domainDoneBy}</div>
+                <p className="m-0">{doneBy}</p>
+              </div>
+            )}
+            {doneBy && (
+              <button type="button" onClick={() => setMore((v) => !v)} aria-expanded={more} className="mt-1.5 text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-domain-more">{more ? C.matrix.showLess : C.matrix.showMore}</button>
+            )}
+          </Floating>
+        </>
+      )}
+    </span>
   );
 }
 
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
-function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, suggested = false, hint }: {
-  name: string; description: string; ownProduct: string; org: string; open: boolean; onToggle: () => void; suggested?: boolean; hint?: string;
+function DescriptionInfo({ name, description, open, onToggle }: {
+  name: string; description: string; open: boolean; onToggle: () => void;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -1168,15 +1373,13 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, s
       {open && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={onToggle} />
-          <div className={cn("absolute left-0 top-[calc(100%+6px)] z-[25] w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", suggested && "border-dashed border-[rgba(36,87,245,.45)]")} data-testid="cmp-description-card">
+          <Floating lock className={cn("w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]")} data-testid="cmp-description-card">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
               <button type="button" onClick={onToggle} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
             </div>
             {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
-            {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
-            {suggested && hint && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{hint}</p>}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1185,20 +1388,68 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle, s
 
 // ————— One cell with its evidence / correction popover —————
 
-function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfile, isNew, notScanned }: {
+/** Cells whose evidence was shown on hover in this page view (the event is recorded once per cell). */
+const hoverShown = new Set<string>();
+/** The pointer rests this long on a cell before its evidence shows. */
+const HOVER_OPEN_MS = 250;
+/** The card stays this long after the pointer leaves, so it can cross the gap to the card and click the link. */
+const HOVER_CLOSE_MS = 150;
+
+/** Which popover is open: the competitor's column (or "own") and the row — a capability or a feature. */
+interface OpenCell {
+  competitorId: string;
+  rowId: string;
+}
+/** Where a row's own mark and its competitor cells are saved. */
+const PATCH_BASE = {
+  capability: { own: "/api/competitors/capabilities", cell: "/api/competitors/statuses" },
+  feature: { own: "/api/competitors/features", cell: "/api/competitors/feature-statuses" },
+} as const;
+
+function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile, notScanned, analyzing }: {
   cell: CellRow | undefined;
   competitorId: string;
-  capability: CapabilityRow;
-  open: { competitorId: string; capabilityId: string } | null;
-  setOpen: (v: { competitorId: string; capabilityId: string } | null) => void;
+  /** The row of the cell: a capability or a feature. */
+  row: { id: string; name: string };
+  kind: "capability" | "feature";
+  open: OpenCell | null;
+  setOpen: (v: OpenCell | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
   onProfile: (() => void) | null;
-  isNew: boolean;
   notScanned?: boolean;
+  /** The competitor's analysis run is queued or in progress. */
+  analyzing?: boolean;
 }) {
-  const isOpen = open?.competitorId === competitorId && open.capabilityId === capability.id;
+  const isOpen = open?.competitorId === competitorId && open.rowId === row.id;
+  // Hover: the evidence, read-only, from the cell data already in the state — no fetch, nothing to wait for.
+  const [hover, setHover] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTo = (next: boolean, ms: number) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHover(next), ms);
+  };
+  useEffect(() => () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
+  const showHover = hover && !isOpen && Boolean(cell) && (Boolean(cell?.quote) || cell?.value === "not_found");
+  useEffect(() => {
+    if (!showHover || !cell) return;
+    const key = `${competitorId}|${row.id}`;
+    if (!hoverShown.has(key)) {
+      hoverShown.add(key);
+      track("cmp_cell_evidence_shown", { competitorId, rowKind: kind, rowId: row.id, value: cell.value, via: "hover", hasEvidence: Boolean(cell.quote) });
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHover(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHover]);
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState<StatusValue>(cell?.value ?? "unknown");
+  // A PM corrects to found or not found; "low confidence" is a value only the analysis sets.
+  const correctable = (v: StatusValue | undefined): OwnStatus => (v === "not_found" || v === undefined ? "not_found" : "found");
+  const [value, setValue] = useState<OwnStatus>(correctable(cell?.value));
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -1207,8 +1458,9 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
       setEditing(false);
       setNote("");
     } else {
-      setValue(cell?.value ?? "unknown");
-      track("cmp_cell_opened", { competitorId, capabilityId: capability.id, value: cell?.value ?? "unknown", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
+      setValue(correctable(cell?.value));
+      track("cmp_cell_opened", { competitorId, rowKind: kind, ...(kind === "capability" ? { capabilityId: row.id } : { featureId: row.id }), value: cell?.value ?? "not_found", hasEvidence: Boolean(cell?.quote), overridden: Boolean(cell?.override) });
+      track("cmp_cell_evidence_shown", { competitorId, rowKind: kind, rowId: row.id, value: cell?.value ?? "not_found", via: "click", hasEvidence: Boolean(cell?.quote) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
@@ -1222,47 +1474,52 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
 
-  if (notScanned && !cell) {
-    return <span className="text-[11px] text-fg-faint">{C.matrix.notScanned}</span>;
+  if (!cell && (notScanned || analyzing)) {
+    // No cell yet: the site was never scanned, or its first analysis is still filling the table.
+    return <span className="text-[11px] text-fg-faint">{analyzing ? C.matrix.analyzingCell : C.matrix.notScanned}</span>;
   }
 
   async function save() {
     if (!cell) return;
     setBusy(true);
-    const ok = await onPatch(`/api/competitors/statuses/${cell.id}`, { value, note });
+    const ok = await onPatch(`${PATCH_BASE[kind].cell}/${cell.id}`, { value, note });
     setBusy(false);
     if (ok) setEditing(false);
   }
   async function reset() {
     if (!cell) return;
     setBusy(true);
-    await onPatch(`/api/competitors/statuses/${cell.id}`, { reset: true });
+    await onPatch(`${PATCH_BASE[kind].cell}/${cell.id}`, { reset: true });
     setBusy(false);
   }
 
   return (
-    <span className="relative inline-flex items-center justify-center">
+    <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
       <button
-        onClick={() => setOpen(isOpen ? null : { competitorId, capabilityId: capability.id })}
+        onClick={() => { setHover(false); setOpen(isOpen ? null : { competitorId, rowId: row.id }); }}
         className={cn("relative inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-        aria-label={`${capability.name}: ${C.values[cell?.value ?? "unknown"]}`}
+        aria-label={`${row.name}: ${C.values[cell?.value ?? "not_found"]}`}
         aria-expanded={isOpen}
       >
         <CellValue cell={cell} />
         {cell?.override && <Pencil size={9} className="absolute right-0.5 top-0.5 text-[#8a5a00]" aria-label={C.matrix.edited} />}
-        {isNew && !cell?.override && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary" aria-label="Changed in the last scan" />}
       </button>
+      {showHover && cell && (
+        <Floating align="center" role="tooltip" className="w-[320px] rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
+          <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.description} descriptionLabel={cell.evidence.length ? C.score.howItWorks : undefined} count={cell.evidence.length ? 0 : cell.evidenceCount} empty={cell.description && cell.evidence.length ? `${C.score.howItWorks}: ${cell.description}` : C.cell.notFoundHint} />
+          <MoreEvidence evidence={cell.evidence} rowId={row.id} columnId={competitorId} />
+        </Floating>
+      )}
       {isOpen && cell && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
+          <Floating lock align="center" className="w-[340px] rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
             <div className="mb-2 flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-bold">{capability.name}</div>
+                <div className="text-[13px] font-bold">{row.name}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11.5px] text-fg-muted">
                   <span className="inline-flex items-center gap-1.5"><CellValue cell={cell} size={16} /> {C.values[cell.value]}</span>
                   {cell.changedAt && <span>· {C.matrix.changed(shortDate(cell.changedAt))}</span>}
-                  {cell.confidence != null && !cell.override && <span>· {Math.round(cell.confidence * 100)}%</span>}
                 </div>
               </div>
               <button onClick={() => setOpen(null)} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label="Close"><X size={14} /></button>
@@ -1277,19 +1534,15 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
             {!editing && (
               <div className="text-[12.5px] text-fg-2">
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
-                {cell.quote ? <blockquote className="border-l-2 border-border pl-2.5 italic leading-relaxed">“{cell.quote}”</blockquote> : <div className="text-fg-faint">{C.cell.noEvidence}</div>}
-                {cell.sourceUrl && (
-                  <a href={cell.sourceUrl} target="_blank" rel="noreferrer" title={cell.sourceUrl} className="mt-1.5 flex max-w-full items-center gap-1 text-[12px] text-primary hover:underline">
-                    <ExternalLink size={11} className="shrink-0" /> <span className="min-w-0 truncate">{cell.sourceUrl.replace(/^https?:\/\//, "")}</span>
-                  </a>
-                )}
+                <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.evidence.length ? cell.description : undefined} descriptionLabel={C.score.howItWorks} count={cell.evidence.length ? 0 : cell.evidenceCount} empty={cell.description && cell.evidence.length ? `${C.score.howItWorks}: ${cell.description}` : cell.scannedValue === "not_found" ? C.cell.notFoundHint : C.cell.noEvidence} />
+                {cell.evidence.length > 0 ? <MoreEvidence evidence={cell.evidence} rowId={row.id} columnId={competitorId} /> : cell.evidenceCount > 1 && <EvidenceList cellId={cell.id} kind={kind} competitorId={competitorId} rowId={row.id} count={cell.evidenceCount} />}
               </div>
             )}
             {editing && (
               <div className="text-[12.5px]">
                 <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.setTo}</div>
                 <div className="mb-2 flex flex-wrap gap-1.5">
-                  {STATUS_VALUES.map((v) => (
+                  {OWN_STATUS_VALUES.map((v) => (
                     <button key={v} onClick={() => setValue(v)} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", value === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
                   ))}
                 </div>
@@ -1312,24 +1565,54 @@ function Cell({ cell, competitorId, capability, open, setOpen, onPatch, onProfil
               )}
               {onProfile && !editing && <Button size="sm" variant="ghost" className="ml-auto" onClick={onProfile}>{C.cell.openProfile}</Button>}
             </div>
-          </div>
+          </Floating>
         </>
       )}
     </span>
   );
 }
 
-// ————— The org's own cell: its status on a capability, set by PMs —————
+// ————— The org's own cell: its status on a row — from its own website where it is analysed, or set by PMs —————
 
-function OwnCell({ capability, org, open, setOpen, onPatch }: {
-  capability: CapabilityRow;
+function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
+  /** The row: a capability or a feature, with the org's own mark on it and the evidence of its own website behind it. */
+  row: { id: string; name: string; ourStatus: OwnStatus; ourStatusByPm: boolean; ownEvidence: OwnEvidence | null; /** The coverage model, features only: "how it works" at the organization and every piece of its evidence. */ ownHow?: string | null; ownEvidenceList?: EvidenceRef[] };
+  kind: "capability" | "feature";
   org: string;
-  open: { competitorId: string; capabilityId: string } | null;
-  setOpen: (v: { competitorId: string; capabilityId: string } | null) => void;
+  /** The organization's own website is analysed: the value comes from it unless a PM set it. */
+  ownSite: boolean;
+  open: OpenCell | null;
+  setOpen: (v: OpenCell | null) => void;
   onPatch: (url: string, body: unknown) => Promise<boolean>;
 }) {
-  const isOpen = open?.competitorId === "own" && open.capabilityId === capability.id;
+  const isOpen = open?.competitorId === "own" && open.rowId === row.id;
   const [busy, setBusy] = useState(false);
+  // Hover: the evidence of the own website, read-only, from the row already in the state — the same card as a competitor's cell.
+  const [hover, setHover] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTo = (next: boolean, ms: number) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHover(next), ms);
+  };
+  useEffect(() => () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
+  const evidence = row.ownEvidence;
+  const showHover = hover && !isOpen && ownSite && (Boolean(evidence) || row.ourStatus === "not_found");
+  useEffect(() => {
+    if (!showHover) return;
+    const key = `own|${row.id}`;
+    if (!hoverShown.has(key)) {
+      hoverShown.add(key);
+      track("cmp_cell_evidence_shown", { competitorId: "own", rowKind: kind, rowId: row.id, value: row.ourStatus, via: "hover", hasEvidence: Boolean(evidence) });
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHover(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showHover]);
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1338,41 +1621,61 @@ function OwnCell({ capability, org, open, setOpen, onPatch }: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isOpen, setOpen]);
-  const fake: CellRow = { id: "", competitorId: "own", capabilityId: capability.id, value: capability.ourStatus, scannedValue: capability.ourStatus, confidence: null, lowConfidence: false, quote: null, sourceUrl: null, changedAt: null, override: null, product: null, history: [] };
+  const fake: CellRow = { id: "", competitorId: "own", capabilityId: kind === "capability" ? row.id : null, featureId: kind === "feature" ? row.id : null, value: row.ourStatus, scannedValue: row.ourStatus, quote: null, sourceUrl: null, reasoning: null, wording: null, description: null, evidenceCount: 0, changedAt: null, override: null, product: null, history: [], score: null, scoreReasoning: null, scoreLocked: false, scoreLockedBy: null, pmReasoning: null, evidence: [] };
+  // A quote from the product lines has no page to open: the card says where it is from instead of linking an internal address.
+  const fromProductLines = isProductLinesPage(evidence?.sourceUrl);
+  const card = (
+    <>
+      <EvidenceCard quote={evidence?.quote ?? null} url={fromProductLines ? null : evidence?.sourceUrl ?? null} reasoning={evidence?.reasoning || null} wording={null} description={evidence?.description ?? row.ownHow ?? null} descriptionLabel={row.ownEvidenceList?.length || row.ownHow ? C.score.howItWorks : undefined} count={row.ownEvidenceList?.length ? 0 : evidence?.count ?? 0} empty={row.ownHow ? `${C.score.howItWorks}: ${row.ownHow}` : C.matrix.ownEvidenceEmpty} />
+      {row.ownEvidenceList && <MoreEvidence evidence={row.ownEvidenceList} rowId={row.id} columnId="own" />}
+      {evidence && fromProductLines && <div className="mt-1 text-[12px] text-fg-muted" data-testid="cmp-own-evidence-product-lines">{C.matrix.ownFromProductLines}</div>}
+    </>
+  );
   async function set(v: OwnStatus) {
-    if (v === capability.ourStatus) return;
+    if (v === row.ourStatus) return;
     setBusy(true);
-    const ok = await onPatch(`/api/competitors/capabilities/${capability.id}`, { ourStatus: v });
+    const ok = await onPatch(`${PATCH_BASE[kind].own}/${row.id}`, { ourStatus: v });
     setBusy(false);
     if (ok) setOpen(null);
   }
   return (
-    <span className="relative inline-flex items-center justify-center">
+    <span className="relative inline-flex items-center justify-center" onMouseEnter={() => hoverTo(true, HOVER_OPEN_MS)} onMouseLeave={() => hoverTo(false, HOVER_CLOSE_MS)}>
       <button
-        onClick={() => setOpen(isOpen ? null : { competitorId: "own", capabilityId: capability.id })}
+        onClick={() => { setHover(false); setOpen(isOpen ? null : { competitorId: "own", rowId: row.id }); }}
         className={cn("inline-flex h-9 min-w-[40px] items-center justify-center rounded-[8px] px-1.5 hover:bg-white/80", isOpen && "bg-white shadow-[0_0_0_2px_var(--app-accent-soft)]")}
-        aria-label={`${capability.name}: ${org} ${C.values[capability.ourStatus]}`}
+        aria-label={`${row.name}: ${org} ${C.values[row.ourStatus]}`}
         aria-expanded={isOpen}
       >
         <CellValue cell={fake} />
       </button>
+      {showHover && (
+        <Floating align="center" role="tooltip" className="w-[320px] rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-own-cell-hover">
+          {card}
+        </Floating>
+      )}
       {isOpen && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[280px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]">
+          <Floating lock align="center" className={cn("rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", ownSite ? "w-[340px]" : "w-[280px]")}>
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-bold">{capability.name}</div>
-                <div className="mt-0.5 text-[11.5px] text-fg-muted">{C.matrix.ownCellTitle(org)} · {C.matrix.ownCellHint}</div>
+                <div className="text-[13px] font-bold">{row.name}</div>
+                <div className="mt-0.5 text-[11.5px] text-fg-muted" data-testid="cmp-own-cell-hint">{C.matrix.ownCellTitle(org)} · {!ownSite ? C.matrix.ownCellHint : row.ourStatusByPm ? C.matrix.ownCellByTeam : C.matrix.ownCellFromSite}</div>
               </div>
               <button onClick={() => setOpen(null)} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label="Close"><X size={14} /></button>
             </div>
+            {ownSite && (
+              <div className="mt-2 text-[12.5px] text-fg-2">
+                <div className="mb-1 font-mono text-[10px] font-medium tracking-[0.04em] text-fg-muted">{C.cell.evidence}</div>
+                {card}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {OWN_STATUS_VALUES.map((v) => (
-                <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", capability.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
+                <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", row.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
               ))}
             </div>
-          </div>
+          </Floating>
         </>
       )}
     </span>

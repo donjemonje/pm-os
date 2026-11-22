@@ -71,12 +71,22 @@ export const FLAG_AREAS: readonly FlagArea[] = [
       {
         key: "competitors",
         label: "Competitors",
-        description: "Competitors page: parity matrix, news feed, profiles, battle cards and roadmap.",
+        description: "Competitors page: parity matrix and news feed. Its other tabs have their own switches below.",
       },
       {
-        key: "competitorsDemoNews",
-        label: "Scan reads demo news",
-        description: "The Scan button on the Competitors page reads prepared pages from the collector bundle folder instead of crawling the websites. Showcase setting; off = live crawl.",
+        key: "competitorsProfiles",
+        label: "Competitors: Profiles",
+        description: "The Profiles tab of the Competitors page, and every link that opens a competitor's profile. Needs Competitors on.",
+      },
+      {
+        key: "competitorsBattleCards",
+        label: "Competitors: Battle cards",
+        description: "The Battle cards tab of the Competitors page. Needs Competitors on.",
+      },
+      {
+        key: "competitorsRoadmap",
+        label: "Competitors: Roadmap",
+        description: "The Roadmap tab of the Competitors page: the gaps, and creating an idea from one. Needs Competitors on.",
       },
     ],
   },

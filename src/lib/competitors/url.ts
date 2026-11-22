@@ -40,6 +40,30 @@ export function siteHost(u: URL): string {
 }
 
 /**
+ * The site that bounds the pages of ONE source of a company. The website source is bounded by the company's own
+ * host, as it always was (a second website source on another site: by that site). Every other source that is scanned (a help center, developer docs, release notes) lives
+ * at its own address — support.acme.com is not inside acme.com — so it is bounded by the site of that address.
+ */
+export function sourceSiteHost(source: { type: string; url: string }, companyHost: string): string {
+  if (source.type === "website") {
+    // A website source on another site than the company's own (a second product site of the same company, added by
+    // hand — KELA's ultrared.ai, 2026-11-21) is bounded by its own address. The company's main website, with or
+    // without "www." or under a sub-address of the same host, stays bounded by the company's host as it always was.
+    try {
+      const own = siteHost(new URL(source.url));
+      return own === companyHost || own.endsWith(`.${companyHost}`) || companyHost.endsWith(`.${own}`) ? companyHost : own;
+    } catch {
+      return companyHost;
+    }
+  }
+  try {
+    return siteHost(new URL(source.url));
+  } catch {
+    return companyHost;
+  }
+}
+
+/**
  * TEST KNOB (never in production): let a competitor site live on localhost so
  * the e2e fixture (tests/fixtures/fake-site) can be scanned. Logic unchanged
  * otherwise — the private-network guard stays on everywhere else.

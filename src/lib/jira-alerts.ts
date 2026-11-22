@@ -33,7 +33,8 @@ type AlertRow = {
 
 type HealthForAlerts = { status: "ok" | "unavailable" | "not_connected"; cause?: string };
 
-function recipient(): string | null {
+/** Who gets PM-OS's internal alerts (this file's, and the Competitors address-search alert): JIRA_ALERT_EMAIL, default support@pm-os.io; "off" = none. */
+export function alertRecipient(): string | null {
   const raw = process.env.JIRA_ALERT_EMAIL?.trim();
   if (raw?.toLowerCase() === "off") return null;
   return raw || DEFAULT_RECIPIENT;
@@ -45,7 +46,7 @@ function adminUrl(): string {
 }
 
 async function sendOutageAlert(org: string, site: string | null, cause: string, since: Date | null) {
-  const to = recipient();
+  const to = alertRecipient();
   if (!to) return;
   const sinceDay = since ? since.toISOString().slice(0, 10) : null;
   const heading = sinceDay ? `Jira still not working for ${org} (since ${sinceDay})` : `Jira not working for ${org}`;
@@ -64,7 +65,7 @@ async function sendOutageAlert(org: string, site: string | null, cause: string, 
 }
 
 async function sendExpiryWarning(org: string, row: AlertRow, expiresAt: Date) {
-  const to = recipient();
+  const to = alertRecipient();
   if (!to) return;
   const day = expiresAt.toISOString().slice(0, 10);
   const { html, text } = renderBrandedEmail({

@@ -2,11 +2,15 @@ import { expect, test, type APIRequestContext, type Browser, type Page } from "@
 import type { PrismaClient } from "@prisma/client";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
-import { BIG_PAGE_MARKERS, HOVER_HINTS, HOVER_HINTS_NOT_A_HINT, PAGE_PATHS, startFakeSite, type FakeSite } from "../fixtures/fake-site/fake-site";
+import { BIG_PAGE_MARKERS, HOVER_HINTS, HOVER_HINTS_NOT_A_HINT, PAGE_PATHS, type FakeSite } from "../fixtures/fake-site/fake-site";
+import {
+  addCompetitor, cleanupCompetitorsOf, createStationKey, FINAL, freshStateDir, isolateOtherOrgs, pagesOf, pathOf, pollerArgs as stationPollerArgs, postKnob, requestOf, restoreOtherOrgs,
+  runStationPoller, scanNow, scanRow, scansOf, SCRATCH, SITE_HOST, spawnStationPoller, startSite, waitForScanEnd, waitForScanWithStatus,
+  type Cmp, type PollerOpts,
+} from "./competitors-helpers";
 import { acceptConfirm, hashPasswordLikeApp, loginWithTotp, seedQaOrgWithUser, withTestDb, type TotpCreds } from "./helpers";
 import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
@@ -65,15 +69,11 @@ const ADMIN: TotpCreds & { name: string } = {
   totpSecret: "QAWSADMNQAWSADMNQAWSADMNQAWSADMN", // synthetic, test-only
 };
 const KEY_LABEL = "QA-WS station";
-const SITE_HOST = "localtest.me";
-const POLLER = join(__dirname, "../../scripts/pmos-local-scan/poller.mjs");
-const SCRATCH = join(tmpdir(), "pmos-qa-ws");
-const SNAPSHOT = join(SCRATCH, "isolation-snapshot.json");
+// The fake site, the poller, the knobs route, the scan waits and the parking of other organizations live in
+// competitors-helpers.ts (shared with competitors-decisions.spec.ts since 2026-11-10); this file binds them to its own state.
 const KEYS_SNAPSHOT = join(SCRATCH, "station-keys-snapshot.json");
-const FAR_FUTURE = new Date("2126-01-01T00:00:00Z");
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const FINAL = /^(ok|partial|failed|stale|cancelled)$/;
 
 // ————— Environment gate —————
 const envProblems: string[] = [];
@@ -109,31 +109,6 @@ async function seedFixtures(db: PrismaClient): Promise<void> {
   await db.user.create({
     data: { email: ADMIN.email, name: ADMIN.name, passwordHash: hashPasswordLikeApp(ADMIN.password), organizationId: orgId, role: "PMOS_ADMIN", totpSecretEnc: encryptTotpSecret(ADMIN.totpSecret), totpEnabledAt: new Date(), totpLastUsedStep: null },
   });
-}
-
-interface Snapshot {
-  sources: { id: string; lastScanAt: string | null }[];
-  requests: { id: string; state: string }[];
-}
-
-/** Other organizations' due sources and waiting requests are parked for the run (restored byte-exact in afterAll). */
-async function isolateOtherOrgs(db: PrismaClient): Promise<void> {
-  await restoreOtherOrgs(db); // a previous run that died mid-way
-  const sources = await db.competitorSource.findMany({ where: { type: "website", workspaceId: { not: workspaceId } }, select: { id: true, lastScanAt: true } });
-  const requests = await db.localScanRequest.findMany({ where: { workspaceId: { not: workspaceId }, state: "waiting" }, select: { id: true, state: true } });
-  const snap: Snapshot = { sources: sources.map((s) => ({ id: s.id, lastScanAt: s.lastScanAt?.toISOString() ?? null })), requests };
-  mkdirSync(SCRATCH, { recursive: true });
-  writeFileSync(SNAPSHOT, JSON.stringify(snap, null, 2));
-  await db.competitorSource.updateMany({ where: { id: { in: sources.map((s) => s.id) } }, data: { lastScanAt: FAR_FUTURE } });
-  await db.localScanRequest.updateMany({ where: { id: { in: requests.map((r) => r.id) } }, data: { state: "qa_parked" } });
-}
-
-async function restoreOtherOrgs(db: PrismaClient): Promise<void> {
-  if (!existsSync(SNAPSHOT)) return;
-  const snap = JSON.parse(readFileSync(SNAPSHOT, "utf8")) as Snapshot;
-  for (const s of snap.sources) await db.competitorSource.updateMany({ where: { id: s.id }, data: { lastScanAt: s.lastScanAt ? new Date(s.lastScanAt) : null } });
-  for (const r of snap.requests) await db.localScanRequest.updateMany({ where: { id: r.id }, data: { state: r.state } });
-  rmSync(SNAPSHOT, { force: true });
 }
 
 /**
@@ -197,11 +172,7 @@ async function resetGlobalKnobs(db: PrismaClient): Promise<void> {
 }
 
 // ————— API knobs —————
-async function knob(body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const res = await adminApi.post("/api/admin/competitors/knobs", { data: body });
-  expect(res.status(), `knobs ${JSON.stringify(body)}: ${await res.text()}`).toBe(200);
-  return (await res.json()) as Record<string, unknown>;
-}
+const knob = (body: Record<string, unknown>) => postKnob(adminApi, body);
 const setClock = (offsetMs: number) => knob({ clockOffsetMs: offsetMs });
 /** Limits knobs (Daniel 2026-11-09: no page limit; 8 h per scan; 10 GB of page text in all). null = back to the default. */
 const setCeilingMs = (ms: number | null) => knob({ ceilingMs: ms });
@@ -221,56 +192,12 @@ async function setAnalysisDisabled(on: boolean): Promise<void> {
   expect(res.status(), await res.text()).toBe(200);
   expect(((await res.json()) as { settings: { analysisDisabled: boolean } }).settings.analysisDisabled).toBe(on);
 }
-async function createKey(label: string): Promise<{ id: string; secret: string; file: string }> {
-  const res = await adminApi.post("/api/admin/competitors/keys", { data: { label } });
-  expect(res.status(), await res.text()).toBe(201);
-  const json = (await res.json()) as { id: string; secret: string };
-  mkdirSync(SCRATCH, { recursive: true });
-  const file = join(SCRATCH, `key-${json.id}`);
-  writeFileSync(file, json.secret, { mode: 0o600 });
-  return { ...json, file };
-}
+const createKey = (label: string) => createStationKey(adminApi, label);
 
 // ————— Sites and competitors —————
-/**
- * A fixture site on a free port. Host "localtest.me" (public DNS → 127.0.0.1,
- * wildcard subdomains): the site rule wants a dotted host — plain "localhost"
- * is refused by normalizeWebsite even with COMPETITORS_ALLOW_PRIVATE_HOSTS=on —
- * and app.localtest.me gives WS-23 a real subdomain.
- */
-async function newSite(): Promise<FakeSite> {
-  const site = await startFakeSite({ port: 0, host: SITE_HOST });
-  openSites.push(site);
-  return site;
-}
+/** A fixture site on a free port (see startSite); stopped in afterEach. */
+const newSite = () => startSite(openSites);
 
-interface Cmp {
-  id: string;
-  sourceId: string;
-  name: string;
-  site: FakeSite;
-}
-
-/** Add a competitor through the API (the UI form is exercised in WS-01). The first scan starts on add. */
-async function addCompetitor(api: APIRequestContext, site: FakeSite, name: string): Promise<Cmp> {
-  const res = await api.post("/api/competitors", { data: { website: site.url, name } });
-  expect(res.status(), `add ${name}: ${await res.text()}`).toBe(201);
-  const state = ((await res.json()) as { state: { competitors: { id: string; name: string; source: { id: string } | null }[] } }).state;
-  const c = state.competitors.find((x) => x.name === name);
-  expect(c, `competitor ${name} in the state`).toBeTruthy();
-  return { id: c!.id, sourceId: c!.source!.id, name, site };
-}
-
-async function scanNow(api: APIRequestContext, competitorId: string) {
-  return api.post("/api/competitors/scan", { data: { competitorId } });
-}
-
-// ————— DB reads —————
-const scanRow = (scanId: string) => withTestDb((db) => db.competitorScan.findUniqueOrThrow({ where: { id: scanId } }));
-const scansOf = (sourceId: string) => withTestDb((db) => db.competitorScan.findMany({ where: { sourceId }, orderBy: { startedAt: "asc" } }));
-const pagesOf = (sourceId: string) => withTestDb((db) => db.sourcePage.findMany({ where: { sourceId }, orderBy: { url: "asc" } }));
-const requestOf = (scanId: string) => withTestDb((db) => db.localScanRequest.findUniqueOrThrow({ where: { scanId } }));
-const pathOf = (url: string) => url.replace(/^https?:\/\/[^/]+/, "") || "/";
 /** The remote scanner's page requests on the site itself: after its robots.txt read (the add route probes "/" first), without robots/sitemap. */
 async function scannerPageRequests(site: FakeSite) {
   const all = await site.requests();
@@ -279,59 +206,11 @@ async function scannerPageRequests(site: FakeSite) {
   return all.slice(start).filter((q) => q.host === site.host && q.path !== "/robots.txt" && q.path !== "/sitemap.xml");
 }
 
-/** The newest scan of a source once it has reached `status` (the add route starts the first scan fire-and-forget). */
-async function waitForScanWithStatus(sourceId: string, status: string, timeout = 30_000) {
-  let found: Awaited<ReturnType<typeof scansOf>>[number] | undefined;
-  await expect.poll(async () => {
-    const list = await scansOf(sourceId);
-    found = [...list].reverse().find((s) => s.status === status);
-    return found?.id ?? null;
-  }, { timeout, intervals: [250, 500] }).not.toBeNull();
-  return found!;
-}
-async function waitForScanEnd(scanId: string, timeout = 120_000) {
-  await expect.poll(async () => (await scanRow(scanId)).status, { timeout, intervals: [500] }).toMatch(FINAL);
-  return scanRow(scanId);
-}
-
 // ————— The poller —————
-interface PollerOpts {
-  stateDir?: string;
-  pauseMs?: number;
-  /** Time knob: the station's own stop, in minutes (fractions allowed). */
-  maxMinutes?: number;
-  key?: string;
-  /** Network knob: the address the station asks "is the internet there". Default: the app itself, so no test depends on the real internet. */
-  probeUrl?: string;
-  /** Time knobs: how long the station waits for the network before it parks the scan, and how often it asks. */
-  offlineWaitMs?: number;
-  offlineProbeMs?: number;
-}
-function pollerArgs(o: PollerOpts): string[] {
-  return [
-    POLLER, "--app-url", LOCAL_BASE_URL, "--key-file", o.key ?? keyFile, "--state-dir", o.stateDir ?? freshStateDir(),
-    "--runner", "fetch", "--pause-ms", String(o.pauseMs ?? 0),
-    ...(o.maxMinutes ? ["--max-minutes", String(o.maxMinutes)] : []),
-    "--probe-urls", o.probeUrl ?? LOCAL_BASE_URL,
-    ...(o.offlineWaitMs !== undefined ? ["--offline-wait-ms", String(o.offlineWaitMs)] : []),
-    ...(o.offlineProbeMs !== undefined ? ["--offline-probe-ms", String(o.offlineProbeMs)] : []),
-  ];
-}
-function freshStateDir(): string {
-  const dir = join(SCRATCH, `state-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  mkdirSync(dir, { recursive: true });
-  return dir;
-}
-/** One check-in ("run once"): the real poller, fetch runner. Waiting scans start without asking. */
-function runPoller(o: PollerOpts = {}, timeoutMs = 150_000): Promise<{ stdout: string; code: number }> {
-  return new Promise((resolve, reject) => {
-    execFile("node", pollerArgs(o), { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const out = `${stdout}${stderr}`;
-      if (err && (err as { killed?: boolean }).killed) return reject(new Error(`poller timed out after ${timeoutMs} ms\n${out}`));
-      resolve({ stdout: out, code: err ? ((err as { code?: number }).code ?? 1) : 0 });
-    });
-  });
-}
+/** One check-in ("run once") with this file's station key unless the row brings its own. Waiting scans start without asking. */
+const pollerArgs = (o: PollerOpts): string[] => stationPollerArgs({ ...o, key: o.key ?? keyFile });
+const runPoller = (o: PollerOpts = {}, timeoutMs = 150_000) => runStationPoller({ ...o, key: o.key ?? keyFile }, timeoutMs);
+const spawnPoller = (o: PollerOpts): ChildProcess => spawnStationPoller({ ...o, key: o.key ?? keyFile });
 /** The "internet" the station probes: on = answers, off = the connection is dropped (what a lost network looks like). */
 async function startProbe(): Promise<{ url: string; set(on: boolean): void; close(): Promise<void> }> {
   let on = true;
@@ -345,14 +224,16 @@ async function startProbe(): Promise<{ url: string; set(on: boolean): void; clos
 }
 /** The station's own files in its state dir: what the menu bar icon reads, and the scan's saved place. */
 const stationStatus = (dir: string) => JSON.parse(readFileSync(join(dir, "status.json"), "utf8")) as { state: string; message: string; pagesRead: number | null };
-const savedPlace = (dir: string) =>
-  existsSync(join(dir, "scan-state.json")) ? (JSON.parse(readFileSync(join(dir, "scan-state.json"), "utf8")) as { scanId: string; queue: string[]; pagesRead: number; stopped?: { reason: string; at: string } }) : null;
+// One file per scan under scan-state/ since the station reads several sites at the same time (2026-11-16); the rows that
+// read it run one scan, so the folder holds one file or none.
+const savedPlace = (dir: string) => {
+  const folder = join(dir, "scan-state");
+  const file = existsSync(folder) ? readdirSync(folder).find((n) => n.endsWith(".json")) : undefined;
+  return file ? (JSON.parse(readFileSync(join(folder, file), "utf8")) as { scanId: string; queue: string[]; pagesRead: number; stopped?: { reason: string; at: string } }) : null;
+};
 const logOf = (scan: { log: unknown }) => (Array.isArray(scan.log) ? (scan.log as { msg: string; level?: string }[]) : []).map((l) => l.msg);
 function exited(child: ChildProcess): Promise<number | null> {
   return new Promise((r) => child.once("exit", (code) => r(code)));
-}
-function spawnPoller(o: PollerOpts): ChildProcess {
-  return spawn("node", pollerArgs(o), { stdio: ["ignore", "pipe", "pipe"] });
 }
 
 // ————— UI —————
@@ -372,14 +253,7 @@ const adminScanRows = (page: Page, name: string) =>
   page.locator("table", { has: page.getByRole("columnheader", { name: "Lane" }) }).locator("tbody tr", { hasText: ORG.orgName }).filter({ hasText: name });
 
 /** Soft-delete this org's competitors and end their scans so the next row starts clean (no tick leftovers). */
-async function cleanupCompetitors(): Promise<void> {
-  await withTestDb(async (db) => {
-    const t = new Date();
-    await db.localScanRequest.updateMany({ where: { workspaceId, state: { in: ["waiting", "running"] } }, data: { state: "cancelled", finishedAt: t } });
-    await db.competitorScan.updateMany({ where: { workspaceId, status: { in: ["queued", "pending_local", "running"] } }, data: { status: "cancelled", finishedAt: t, error: "QA cleanup" } });
-    await db.competitor.updateMany({ where: { workspaceId, deletedAt: null }, data: { deletedAt: t } });
-  });
-}
+const cleanupCompetitors = () => cleanupCompetitorsOf(workspaceId);
 
 test.describe("Website Scanning rows", () => {
   test.skip(envProblems.length > 0, envProblems.join("; "));
@@ -391,7 +265,7 @@ test.describe("Website Scanning rows", () => {
       await restoreStationKeys(db); // a previous run that died inside WS-31
       await deleteFixtures(db);
       await seedFixtures(db);
-      await isolateOtherOrgs(db);
+      await isolateOtherOrgs(db, [workspaceId]);
       await parkSettings(db);
       await resetGlobalKnobs(db);
     });
@@ -1660,6 +1534,7 @@ test.describe("Website Scanning rows", () => {
 
   test("WS-20 site says slow down (local lane): 429 after the 5th page → the station hands the signal in and stops, Incomplete, reason slow down (not 'time limit'), the rest not attempted; the next scan completes 12", async ({ browser }) => {
     // Knobs: run-once, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
+    // Since 2026-11-21 the station waits and reads the page again before it gives up (pace.mjs): knob slow-down waits 0,0,0 — the same three tries with no waiting. The site keeps saying slow down, so the scan still stops.
     // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".
     test.setTimeout(200_000);
     const site = await newSite();

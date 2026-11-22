@@ -8,6 +8,7 @@
  * scans find from then on is new. Read state is per user (CompetitorFeedRead).
  */
 import { db } from "../db";
+import { NOT_OWN } from "./own";
 import type { OwnStatus, StatusValue } from "./config";
 
 export type FeedKind = "gap" | "raised" | "lowered" | "fact" | "suggestion";
@@ -47,12 +48,12 @@ export interface FeedItem {
   read: boolean;
 }
 
-const RANK: Record<StatusValue, number> = { has: 3, partial: 2, missing: 1, unknown: 0 };
+const RANK: Record<StatusValue, number> = { found: 3, low: 2, not_found: 1 };
 
 export function statusKind(from: StatusValue, to: StatusValue, own: OwnStatus): Exclude<FeedKind, "fact" | "suggestion"> | null {
   if (RANK[to] === RANK[from]) return null;
   if (RANK[to] < RANK[from]) return "lowered";
-  return own === "missing" && (to === "has" || to === "partial") ? "gap" : "raised";
+  return own === "not_found" && (to === "found" || to === "low") ? "gap" : "raised";
 }
 
 export function impactOf(kind: FeedKind): FeedImpact {
@@ -103,7 +104,8 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
   const after = since ? { gt: since } : { not: null as unknown as Date };
   const [statuses, facts, suggestions, competitors, reads] = await Promise.all([
     db.capabilityStatus.findMany({
-      where: { workspaceId, changedAt: since ? { gt: since } : { not: null } },
+      // News is history (Daniel 2026-11-11): what was reported about a capability stays in the feed after a PM removes it from the table.
+      where: { workspaceId, competitor: NOT_OWN, changedAt: since ? { gt: since } : { not: null } },
       orderBy: { changedAt: "desc" },
       take: FEED_LIMIT,
       include: {
@@ -112,7 +114,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       },
     }),
     db.profileFact.findMany({
-      where: { workspaceId, dismissedAt: null, changedAt: since ? { gt: since } : { not: null } },
+      where: { workspaceId, competitor: NOT_OWN, dismissedAt: null, changedAt: since ? { gt: since } : { not: null } },
       orderBy: { changedAt: "desc" },
       take: FEED_LIMIT,
     }),
@@ -122,7 +124,8 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
       take: FEED_LIMIT,
       include: { domain: { select: { name: true, state: true } } },
     }),
-    db.competitor.findMany({ where: { workspaceId }, select: { id: true, name: true, sources: { select: { type: true, url: true } } } }),
+    // Never the organization's own site (own.ts): the feed is news about competitors.
+    db.competitor.findMany({ where: { workspaceId, ...NOT_OWN }, select: { id: true, name: true, sources: { select: { type: true, url: true } } } }),
     userId ? db.competitorFeedRead.findMany({ where: { workspaceId, userId }, select: { key: true } }) : [],
   ]);
   void after;
@@ -142,7 +145,7 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
     // The value before the change: the newest history row written at (or just before) the change.
     const before = s.history.find((h) => h.at.getTime() <= at.getTime() + 2000) ?? s.history[0];
     if (!before) continue;
-    const own = (s.capability.ourStatus === "partial" || s.capability.ourStatus === "missing" ? s.capability.ourStatus : "has") as OwnStatus;
+    const own: OwnStatus = s.capability.ourStatus === "not_found" ? "not_found" : "found";
     const kind = statusKind(before.value as StatusValue, s.value as StatusValue, own);
     if (!kind) continue;
     const key = `status:${s.id}:${at.getTime()}`;

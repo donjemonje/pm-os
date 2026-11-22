@@ -24,7 +24,7 @@ export interface CollectedPage {
   observedAt?: string | null;
 }
 
-/** Longer texts (a 200-page PDF) are cut; the AI step truncates far below this anyway. */
+/** Longer texts (a 200-page PDF) are cut. */
 export const MAX_IMPORTED_PAGE_CHARS = 200_000;
 
 export type ImportResult =
@@ -45,12 +45,8 @@ export async function importPages(opts: {
   sourceUrl?: string | null;
   pages: CollectedPage[];
   startedById: string | null;
-  /** The Scan run this hand-in belongs to (bundle mode), if any. */
-  runId?: string | null;
-  /** How the scan row is labelled; "import" for the CLI, "manual" when a Scan press reads a bundle. */
-  trigger?: "manual" | "scheduled" | "import";
 }): Promise<ImportResult> {
-  const competitor = await db.competitor.findFirst({ where: { id: opts.competitorId, workspaceId: opts.workspaceId }, select: { id: true, websiteUrl: true } });
+  const competitor = await db.competitor.findFirst({ where: { id: opts.competitorId, workspaceId: opts.workspaceId, isOwn: false }, select: { id: true, websiteUrl: true } });
   if (!competitor) return { error: "no_competitor" };
   const active = await db.competitorScan.findFirst({ where: { workspaceId: opts.workspaceId, status: { in: ["queued", "running"] } }, select: { id: true } });
   if (active) return { error: "running" };
@@ -90,14 +86,14 @@ export async function importPages(opts: {
   }
   if (rows.length === 0) return { error: "no_pages" };
 
-  const source = await db.competitorSource.upsert({
-    where: { competitorId_type: { competitorId: competitor.id, type: opts.sourceType } },
-    create: { workspaceId: opts.workspaceId, competitorId: competitor.id, type: opts.sourceType, url: opts.sourceUrl?.trim() || competitor.websiteUrl, lastStatus: "running" },
-    update: { lastStatus: "running", ...(opts.sourceUrl?.trim() ? { url: opts.sourceUrl.trim() } : {}) },
-    select: { id: true },
-  });
+  // A collector's pages go into the company's source of that type — its oldest one that a PM did not remove (a
+  // company may have several addresses of one type since they are scanned; lib/competitors/addresses.ts).
+  const existing = (await db.competitorSource.findMany({ where: { competitorId: competitor.id, type: opts.sourceType }, orderBy: { createdAt: "asc" } })).find((s) => !s.removedAt);
+  const source = existing
+    ? await db.competitorSource.update({ where: { id: existing.id }, data: { lastStatus: "running", ...(opts.sourceUrl?.trim() ? { url: opts.sourceUrl.trim() } : {}) }, select: { id: true } })
+    : await db.competitorSource.create({ data: { workspaceId: opts.workspaceId, competitorId: competitor.id, type: opts.sourceType, url: opts.sourceUrl?.trim() || competitor.websiteUrl, lastStatus: "running" }, select: { id: true } });
   const scan = await db.competitorScan.create({
-    data: { workspaceId: opts.workspaceId, sourceId: source.id, trigger: opts.trigger ?? "import", fetchMode: "bundle", startedById: opts.startedById, status: "queued", runId: opts.runId ?? null },
+    data: { workspaceId: opts.workspaceId, sourceId: source.id, trigger: "import", fetchMode: "bundle", startedById: opts.startedById, status: "queued" },
     select: { id: true },
   });
   // In batches: a help center is hundreds of rows.

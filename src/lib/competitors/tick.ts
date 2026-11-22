@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { envFeatureDefault, resolveFeature } from "../feature-flags";
-import { ACTIVE_SCAN_STATUSES, MAX_PARALLEL_REMOTE, MAX_PROCESS_ATTEMPTS, STALE_MS } from "./config";
+import { isScannedSource } from "./addresses";
+import { ACTIVE_SCAN_STATUSES, ADDRESS_KINDS, MAX_PARALLEL_REMOTE, MAX_PROCESS_ATTEMPTS, STALE_MS } from "./config";
 import { alertOldRequests, appUrl, cleanupScanTokens, createLocalRequest, hasActiveScannerKey, requeueLocalScan } from "./local";
 import { getGlobalScanSettings, now } from "./settings";
 
@@ -16,12 +17,17 @@ import { getGlobalScanSettings, now } from "./settings";
  *                         the runner stopped) is processed again, three times at
  *                         most, then failed — the station never re-reads a site
  *                         it already handed in (Tomer's review 2026-11-10);
- *   2. due sources      — every website source whose last scan is older than
- *                         its own frequency gets a scan: remote ON → queued for
- *                         the remote lane, remote OFF → parked in the local lane;
+ *   2. due sources      — every website source, and every other address of a
+ *                         company (help center, developer docs, release notes),
+ *                         whose last scan is older than its own frequency gets a
+ *                         scan: remote ON → queued for the remote lane, remote
+ *                         OFF → parked in the local lane;
  *   3. start queued     — remote scans start while fewer than 8 run, one per
  *                         site at a time;
- *   4. 24-hour alert    — waiting local requests older than a day email
+ *   4. analysis queue   — an analysis run whose runner stopped reporting goes
+ *                         back to the queue, and the head of the queue starts
+ *                         when nothing is running (analysis/engine.ts);
+ *   5. 24-hour alert    — waiting local requests older than a day email
  *                         support once.
  *
  * A finishing scan calls startQueuedScans() itself, so a freed slot is used at
@@ -45,6 +51,9 @@ export async function runTick(launch: Launcher, log: (msg: string) => void = () 
   const due = await queueDueScans(t, settings.remoteScanEnabled, log);
   await promoteQueued(null, settings.remoteScanEnabled);
   const started = await startQueuedScans(launch, log);
+  // The safety net of the analysis queue: a run whose runner died is put back and the head of the queue is started.
+  const { kickAnalyses } = await import("./analysis/engine");
+  await kickAnalyses();
   const alerts = await alertOldRequests(appUrl());
   if (alerts) log(`${alerts} waiting-request alert${alerts === 1 ? "" : "s"} sent to support`);
   await cleanupScanTokens(t);
@@ -59,6 +68,8 @@ export function isStale(status: string, heartbeatAt: Date, t: Date): boolean {
 export async function sweepStale(t: Date): Promise<number> {
   const cutoff = new Date(t.getTime() - STALE_MS);
   const stale = await db.competitorScan.findMany({ where: { status: "running", heartbeatAt: { lt: cutoff } }, select: { id: true, sourceId: true, lane: true } });
+  /** Scans this sweep ended: the email of their Scan run may be due now. */
+  const ended: string[] = [];
   for (const s of stale) {
     if (s.lane === "local") {
       const req = await db.localScanRequest.findUnique({ where: { scanId: s.id }, select: { state: true, processAttempts: true } });
@@ -70,6 +81,7 @@ export async function sweepStale(t: Date): Promise<number> {
           await db.competitorScan.update({ where: { id: s.id }, data: { status: "failed", badge: "incomplete", finishedAt: t, errorKind: "other", error: `processing failed ${MAX_PROCESS_ATTEMPTS} times after the station handed the pages in — contact support@pm-os.io` } });
           await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "processing failed after the hand-in" } });
           console.error(`[competitors] scan ${s.id}: processing failed ${MAX_PROCESS_ATTEMPTS} times after the hand-in`);
+          ended.push(s.id);
           continue;
         }
         await db.localScanRequest.updateMany({ where: { scanId: s.id }, data: { state: "handed_in", processAttempts: { increment: 1 } } });
@@ -84,6 +96,11 @@ export async function sweepStale(t: Date): Promise<number> {
     }
     await db.competitorScan.update({ where: { id: s.id }, data: { status: "stale", badge: "stale", finishedAt: t, errorKind: "other", error: "the scan stopped reporting; the next run continues from its pending pages" } });
     await db.competitorSource.update({ where: { id: s.sourceId }, data: { lastStatus: "failed", lastError: "the scan stopped reporting" } });
+    ended.push(s.id);
+  }
+  if (ended.length) {
+    const { notifyRunsOfScans } = await import("./runs");
+    await notifyRunsOfScans(ended);
   }
   // Runs whose scans are all gone: close them so the next press can start.
   const runs = await db.competitorScanRun.findMany({ where: { status: "running", startedAt: { lt: cutoff } }, select: { id: true } });
@@ -95,12 +112,18 @@ export async function sweepStale(t: Date): Promise<number> {
   return stale.length;
 }
 
-/** One scheduled scan per due website source (frequency per source, in days). */
+/**
+ * One scheduled scan per due source the scanner crawls (frequency per source, in days): every website, and every
+ * other address of a company — its help center, developer docs, release notes (addresses.ts isScannedSource).
+ * Never a source a collector feeds, never an address a PM removed.
+ */
 export async function queueDueScans(t: Date, remoteOn: boolean, log: (msg: string) => void): Promise<number> {
-  const sources = await db.competitorSource.findMany({
-    where: { type: "website", competitor: { deletedAt: null } },
-    select: { id: true, workspaceId: true, competitorId: true, scanEveryDays: true, lastScanAt: true, competitor: { select: { name: true, workspace: { select: { organization: { select: { features: true } } } } } } },
-  });
+  const sources = (
+    await db.competitorSource.findMany({
+      where: { type: { in: ["website", ...ADDRESS_KINDS] }, competitor: { deletedAt: null } },
+      include: { competitor: { select: { name: true, host: true, workspace: { select: { organization: { select: { features: true } } } } } } },
+    })
+  ).filter((s) => isScannedSource(s, s.competitor.host));
   let queued = 0;
   for (const s of sources) {
     if (!resolveFeature(s.competitor.workspace.organization.features, "competitors", envFeatureDefault("competitors"))) continue;
@@ -111,7 +134,7 @@ export async function queueDueScans(t: Date, remoteOn: boolean, log: (msg: strin
     const scan = await db.competitorScan.create({ data: { workspaceId: s.workspaceId, sourceId: s.id, trigger: "scheduled", status: "queued", startedAt: t, heartbeatAt: t }, select: { id: true } });
     await db.competitorSource.update({ where: { id: s.id }, data: { lastStatus: "running" } });
     await routeScan(scan.id, remoteOn);
-    log(`due: ${s.competitor.name} (${scan.id})`);
+    log(`due: ${s.competitor.name}${s.type === "website" ? "" : ` — ${s.url}`} (${scan.id})`);
     queued++;
   }
   return queued;

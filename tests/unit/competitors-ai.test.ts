@@ -1,67 +1,7 @@
-/**
- * Story 5 (competitors) — the pure parts of the AI step over many pages:
- * chunking by size, merging statuses across chunks, the dates facts state,
- * and the page key that keeps a video id.
- */
+/** Competitors — the model boundary (lib/competitors/ai.ts): the string cleaners, an unusable answer, a streamed answer; and the page key that keeps a video id. Pure parts only. */
 import { describe, expect, it } from "vitest";
-import { chunkPages, cut, factDateOf, mergeStatus, packPages, tidy, type ClassifiedStatus, type PageText } from "@/lib/competitors/ai";
+import { AnswerError, CALL_TIMEOUT_MS, collectStream, cut, NO_USAGE, RAW_ANSWER_KEPT, rawForRecord, tidy, type StreamPiece } from "@/lib/competitors/ai";
 import { pageKey } from "@/lib/competitors/url";
-
-const page = (i: number, chars: number, extra: Partial<PageText> = {}): PageText => ({ url: `https://e.com/p${i}`, title: `P${i}`, text: "x".repeat(chars), ...extra });
-
-describe("chunkPages", () => {
-  it("keeps a small set in one chunk, in order", () => {
-    const chunks = chunkPages([page(1, 100), page(2, 100), page(3, 100)], 10_000);
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].map((p) => p.url)).toEqual(["https://e.com/p1", "https://e.com/p2", "https://e.com/p3"]);
-  });
-  it("splits when the limit is reached and never drops a page", () => {
-    const pages = Array.from({ length: 10 }, (_, i) => page(i, 3000));
-    const chunks = chunkPages(pages, 7000);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.flat().map((p) => p.url)).toEqual(pages.map((p) => p.url));
-    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(2);
-  });
-  it("a page longer than the per-page cut counts at its truncated size", () => {
-    const chunks = chunkPages([page(1, 50_000), page(2, 50_000)], 20_000);
-    expect(chunks).toHaveLength(1);
-  });
-  it("packs the source kind, label and date into the page header", () => {
-    const packed = packPages([page(1, 10, { kind: "article", sourceLabel: "Help center", observedAt: "2026-09-29T13:56:20Z" })]);
-    expect(packed).toContain("### PAGE https://e.com/p1");
-    expect(packed).toContain("Source: article · Help center · dated 2026-09-29");
-  });
-});
-
-describe("mergeStatus", () => {
-  const s = (value: ClassifiedStatus["value"], confidence: number, product = ""): ClassifiedStatus => ({ capability: "A", value, confidence, quote: value === "unknown" ? "" : `q-${value}`, url: value === "unknown" ? "" : `https://e.com/${value}`, product, summary: "" });
-  it("presence beats absence whatever the confidence", () => {
-    expect(mergeStatus(s("missing", 0.95), s("has", 0.6)).value).toBe("has");
-    expect(mergeStatus(s("partial", 0.9), s("missing", 0.99)).value).toBe("partial");
-    expect(mergeStatus(s("has", 0.5), s("partial", 0.9)).value).toBe("has");
-  });
-  it("unknown never wins over a value", () => {
-    expect(mergeStatus(s("unknown", 1), s("missing", 0.3)).value).toBe("missing");
-    expect(mergeStatus(s("has", 0.4), s("unknown", 1)).value).toBe("has");
-  });
-  it("same value: the more confident answer wins, and a product name survives from either side", () => {
-    const m = mergeStatus(s("has", 0.6, ""), s("has", 0.9, "Core"));
-    expect(m.confidence).toBe(0.9);
-    expect(m.product).toBe("Core");
-    expect(mergeStatus(s("has", 0.9, "Edge"), s("has", 0.6, "")).product).toBe("Edge");
-  });
-});
-
-describe("factDateOf", () => {
-  it("accepts a year, a month or a day", () => {
-    expect(factDateOf("2024")?.toISOString()).toBe("2024-01-01T00:00:00.000Z");
-    expect(factDateOf("2024-12")?.toISOString()).toBe("2024-12-01T00:00:00.000Z");
-    expect(factDateOf("2024-12-20")?.toISOString()).toBe("2024-12-20T00:00:00.000Z");
-  });
-  it("rejects anything else, including far-off years", () => {
-    for (const v of ["", null, undefined, "Dec 2024", "20/12/2024", "1899", "2100-01-01", "2024-13"]) expect(factDateOf(v)).toBeNull();
-  });
-});
 
 describe("tidy", () => {
   it("cuts a leaked next-field fragment and a dangling quote-comma", () => {
@@ -92,5 +32,201 @@ describe("cut", () => {
   });
   it("falls back to a hard cut when there is no usable space", () => {
     expect(cut("x".repeat(100), 80)).toBe("x".repeat(80));
+  });
+});
+
+describe("AnswerError — an unusable answer was still a billed call", () => {
+  it("carries the tokens the call used, so the run counts them", () => {
+    const e = new AnswerError("PMOS AI did not finish its answer (finish: MAX_TOKENS, 9000 chars)", { input: 4200, output: 17000, cached: 0, thinking: 9000 });
+    expect(e.usage).toEqual({ input: 4200, output: 17000, cached: 0, thinking: 9000 });
+    expect(e.name).toBe("AnswerError");
+  });
+  it("without usage (an injected answer, a test) it counts nothing", () => {
+    expect(new AnswerError("invalid JSON").usage).toEqual(NO_USAGE);
+  });
+});
+
+describe("a streamed answer (no default timeout can cut a long answer)", () => {
+  async function* pieces(list: StreamPiece[]): AsyncGenerator<StreamPiece> {
+    for (const p of list) yield p;
+  }
+  const part = (text: string, thought = false) => ({ candidates: [{ content: { parts: [{ text, thought }] } }] });
+  it("puts the text of every piece together, in order — the JSON arrives in pieces", async () => {
+    const r = await collectStream(pieces([part('{"capabili'), part('ties": ['), { candidates: [{ content: { parts: [{ text: "]}" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 500_000, candidatesTokenCount: 40, thoughtsTokenCount: 10, cachedContentTokenCount: 0 } }]));
+    expect(r.text).toBe('{"capabilities": []}');
+    expect(JSON.parse(r.text)).toEqual({ capabilities: [] });
+    expect(r.finish).toBe("STOP");
+    expect(r.usage).toEqual({ input: 500_000, output: 50, cached: 0, thinking: 10 });
+  });
+  it("never takes the model's own thoughts for the answer", async () => {
+    const r = await collectStream(pieces([part("thinking about the pages…", true), part('{"a":1}'), { candidates: [{ finishReason: "STOP" }] }]));
+    expect(r.text).toBe('{"a":1}');
+  });
+  it("keeps the last finish reason and the last usage report; a stream that says neither is unknown and unbilled", async () => {
+    const cut = await collectStream(pieces([{ ...part('{"a":'), usageMetadata: { promptTokenCount: 10 } }, { candidates: [{ finishReason: "MAX_TOKENS" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 7 } }]));
+    expect(cut.finish).toBe("MAX_TOKENS");
+    expect(cut.usage.output).toBe(7);
+    const empty = await collectStream(pieces([]));
+    expect(empty).toEqual({ text: "", finish: "unknown", usage: { ...NO_USAGE }, pieces: 0, textPieces: 0 });
+  });
+  it("the one explicit ceiling of a call is an hour — far above the 5 minutes a default used to allow", () => {
+    expect(CALL_TIMEOUT_MS).toBe(60 * 60_000);
+  });
+});
+
+describe("an unusable answer keeps its text — the evidence (first real run: \"invalid JSON (finish: STOP, 75 chars)\" and nothing left to read)", () => {
+  /** A plain answer of the page-by-page map with seven codes is exactly 75 characters — and valid. */
+  const ordinary = '{"release_notes": ["P201", "P202", "P203", "P204", "P205", "P206", "P207"]}';
+  it("an ordinary answer of that call can be 75 characters long and parse: the length alone says nothing", () => {
+    expect(ordinary).toHaveLength(75);
+    expect(JSON.parse(ordinary)).toEqual({ release_notes: ["P201", "P202", "P203", "P204", "P205", "P206", "P207"] });
+  });
+  it("whatever made it unreadable — a markdown fence, two objects joined, a piece lost or doubled in the join, a cut — the text is kept as it came", () => {
+    const candidates = [
+      '```json\n{"release_notes": []}\n```',
+      '{"release_notes": []}{"release_notes": []}',
+      '{"release_notes": ["P201", "P202", "P2"P204", "P205"]}',
+      '{"release_notes": ["P201", "P202", "P203", "P203", "P20',
+      "[]\n[]",
+    ];
+    for (const text of candidates) {
+      expect(() => JSON.parse(text), text).toThrow();
+      const e = new AnswerError("PMOS AI (gemini-4-argon) returned invalid JSON", { ...NO_USAGE, input: 20_000, output: 30 }, text);
+      expect(e.raw).toBe(text);
+      expect(e.usage.input).toBe(20_000);
+    }
+  });
+  it("an empty answer keeps the empty text; a provider that gave no text at all keeps null", () => {
+    expect(new AnswerError("empty", NO_USAGE, "").raw).toBe("");
+    expect(new AnswerError("no structured answer").raw).toBeNull();
+  });
+  it("a long unusable answer keeps its start and its end — where a cut or a second object shows — and says how much was left out", () => {
+    const long = `{"capabilities": [${"x".repeat(10_000)}]}{"oops": 1}`;
+    const kept = rawForRecord(long);
+    expect(kept.startsWith('{"capabilities": [xxx')).toBe(true);
+    expect(kept.endsWith(']}{"oops": 1}')).toBe(true);
+    expect(kept).toContain(`…[${(long.length - RAW_ANSWER_KEPT).toLocaleString("en-US")} characters left out]…`);
+    expect(kept.length).toBeLessThan(RAW_ANSWER_KEPT + 60);
+    expect(rawForRecord("short")).toBe("short");
+    expect(new AnswerError("x", NO_USAGE, long).raw).toBe(kept);
+  });
+  it("the stream says how it delivered the answer: how many pieces, how many carried text — to tell a bad answer from a bad join", async () => {
+    async function* pieces(list: StreamPiece[]): AsyncGenerator<StreamPiece> {
+      for (const p of list) yield p;
+    }
+    const text = (t: string, thought = false): StreamPiece => ({ candidates: [{ content: { parts: [{ text: t, thought }] } }] });
+    const r = await collectStream(pieces([text("thinking…", true), text('{"release_notes": ['), text('"P201"'), text("]}"), { candidates: [{ finishReason: "STOP" }] }]));
+    expect(r).toMatchObject({ text: '{"release_notes": ["P201"]}', finish: "STOP", pieces: 5, textPieces: 3 });
+  });
+});
+
+// ————— Long model calls (2026-11-19): Node cuts a request that is silent for 300 s; the limit is raised per host —————
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+import { getGlobalDispatcher } from "undici";
+import { allowLongCalls, isModelHost, restoreDispatcher } from "@/lib/competitors/long-calls";
+import { asCapacityError as asCapacity, errorText, TransientError as Transient } from "@/lib/competitors/ai";
+
+describe("long model calls", () => {
+  it("knows the model hosts of Vertex AI and nothing else", () => {
+    expect(isModelHost("https://aiplatform.googleapis.com")).toBe(true); // the global endpoint
+    expect(isModelHost("https://us-east5-aiplatform.googleapis.com")).toBe(true); // a regional endpoint
+    expect(isModelHost("https://aiplatform.eu.rep.googleapis.com")).toBe(true); // a multi-region endpoint
+    expect(isModelHost("https://storage.googleapis.com")).toBe(false);
+    expect(isModelHost("https://aiplatform.googleapis.com.example.com")).toBe(false);
+    expect(isModelHost("https://example.com")).toBe(false);
+    expect(isModelHost("not an address")).toBe(false);
+  });
+
+  it("a silent request to a long host lives up to the limit given; any other host keeps the runtime's own limit", async () => {
+    // A real server that says nothing for 2.5 s, then answers. No mock: the runtime's own fetch and timers do the work.
+    const server = http.createServer((_req, res) => void setTimeout(() => res.end("answered"), 2500));
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const before = getGlobalDispatcher();
+    try {
+      // A limit shorter than the silence: the runtime cuts the request, and the error names the cut.
+      allowLongCalls(1000, (o) => o === origin);
+      const cut = await fetch(origin).then(() => null, (e: unknown) => e);
+      expect(cut).toBeInstanceOf(Error);
+      expect(errorText(cut)).toContain("UND_ERR_HEADERS_TIMEOUT");
+      expect(errorText(cut)).toContain("our own runtime cut a silent request");
+      const asError = asCapacity(cut);
+      expect(asError).toBeInstanceOf(Transient);
+      expect((asError as Error).message).toContain("the provider did not refuse it");
+      // A limit longer than the silence: the same request is answered.
+      restoreDispatcher(before);
+      allowLongCalls(60_000, (o) => o === origin);
+      expect(await (await fetch(origin)).text()).toBe("answered");
+      // Asked again with ours in place: nothing is stacked on top.
+      const ours = getGlobalDispatcher();
+      allowLongCalls(60_000, (o) => o === origin);
+      expect(getGlobalDispatcher()).toBe(ours);
+    } finally {
+      restoreDispatcher(before);
+      await new Promise((ok) => server.close(ok));
+    }
+  }, 20_000);
+
+  it("an error says its cause, not only 'fetch failed'", () => {
+    const reset = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+    expect(errorText(reset)).toBe("fetch failed (ECONNRESET: read ECONNRESET)");
+    expect(errorText(new Error("plain"))).toBe("plain");
+    expect(errorText("text")).toBe("text");
+  });
+});
+
+describe("the call log (call-log.ts)", () => {
+  it("is off unless a folder is named", async () => {
+    const { openCallLog } = await import("@/lib/competitors/call-log");
+    expect(openCallLog({ tool: "t", model: "m", location: "global", settings: {}, instruction: "i", contents: "c", schema: {} }, "")).toBeNull();
+  });
+
+  it("writes what was sent, every piece, why the call stopped and what it used", async () => {
+    const { openCallLog } = await import("@/lib/competitors/call-log");
+    const { mkdtempSync, readdirSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "call-log-"));
+    const log = openCallLog({ tool: "list things", model: "m-1", location: "global", settings: { temperature: 0 }, instruction: "the rules", contents: "the pages", schema: { type: "OBJECT" } }, dir)!;
+    log.piece({ candidates: [{ content: { parts: [{ text: "a private thought", thought: true }] } }] });
+    log.piece({ candidates: [{ content: { parts: [{ text: '{"a":' }] } }] });
+    log.piece({ candidates: [{ content: { parts: [{ text: "1}" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, thoughtsTokenCount: 7 }, modelVersion: "m-1-001" });
+    log.end({ judged: "accepted" });
+    const files = readdirSync(dir).sort();
+    expect(files.map((f) => f.replace(/^.*-list_things/, "list_things"))).toEqual(["list_things.json", "list_things.request.txt"]);
+    expect(readFileSync(join(dir, files[1]), "utf8")).toBe("the rules\n\n===== CONTENT =====\n\nthe pages");
+    const record = JSON.parse(readFileSync(join(dir, files[0]), "utf8"));
+    expect(record).toMatchObject({ tool: "list things", model: "m-1", judged: "accepted", finishReason: "STOP", answer: '{"a":1}', thoughts: "a private thought", modelVersion: "m-1-001", usageMetadata: { thoughtsTokenCount: 7 }, answerChars: 7 });
+    expect(record.pieces).toHaveLength(3);
+    expect(record.pieces[0]).toMatchObject({ answerChars: 0, thoughtChars: 17 });
+  });
+
+  it("keeps a failed call's error with its cause", async () => {
+    const { describeError } = await import("@/lib/competitors/call-log");
+    const e = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("Headers Timeout Error"), { code: "UND_ERR_HEADERS_TIMEOUT" }) });
+    expect(describeError(e)).toMatchObject({ name: "TypeError", message: "fetch failed", cause: { message: "Headers Timeout Error", code: "UND_ERR_HEADERS_TIMEOUT" } });
+  });
+});
+
+describe("the temperature of a Gemini call", () => {
+  it("is the provider's default, 1 (Daniel 2026-11-20)", async () => {
+    const { GEMINI_TEMPERATURE } = await import("@/lib/competitors/ai");
+    expect(GEMINI_TEMPERATURE).toBe(1);
+  });
+});
+
+describe("an answer that continued over several requests", () => {
+  it("is one text: the pieces of every request joined in order, finished by the last stop reason", async () => {
+    async function* stream(): AsyncGenerator<StreamPiece> {
+      yield { candidates: [{ content: { parts: [{ text: "thinking…", thought: true }] } }] };
+      yield { candidates: [{ content: { parts: [{ text: '{"rows":[1,' }] }, finishReason: "CONTINUATION" }] };
+      yield { candidates: [{ content: { parts: [{ text: "2]}" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 300, initialPromptTokenCount: 100, candidatesTokenCount: 9, thoughtsTokenCount: 70000 } };
+    }
+    const got = await collectStream(stream());
+    expect(got.text).toBe('{"rows":[1,2]}');
+    expect(got.finish).toBe("STOP");
+    // The prompt is counted once, not once per request.
+    expect(got.usage).toMatchObject({ input: 100, thinking: 70000, output: 70009 });
   });
 });

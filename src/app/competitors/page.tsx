@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { CompetitorsView } from "@/components/competitors/CompetitorsView";
 import { canManageOrgSettings } from "@/lib/admin-auth";
 import { PageView } from "@/lib/analytics/PageView";
+import { competitorsPartsForCurrentUser } from "@/lib/competitors/parts-server";
 import { getCompetitorsState } from "@/lib/competitors/store";
 import { featureEnabledForCurrentUser } from "@/lib/org-features";
 import { getOrCreateWorkspace, requireUserPage } from "@/lib/workspace";
@@ -22,11 +23,12 @@ export default async function CompetitorsPage() {
   if (!(await featureEnabledForCurrentUser("competitors"))) notFound();
   const workspace = await getOrCreateWorkspace();
   const state = await getCompetitorsState(workspace.id, user.organizationName ?? "", user.id);
+  const parts = await competitorsPartsForCurrentUser();
 
   return (
     <AppShell>
       <PageView name="competitors" />
-      <CompetitorsView initialState={state} canEdit={canManageOrgSettings(user)} />
+      <CompetitorsView initialState={state} canEdit={canManageOrgSettings(user)} parts={parts} />
     </AppShell>
   );
 }

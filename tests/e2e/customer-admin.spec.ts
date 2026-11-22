@@ -5,23 +5,29 @@
  *
  * SET-14 as the seeded CUSTOMER_ADMIN of RoomLens: product lines can be
  *        added, renamed and deleted through /api/ideas/lists/product-lines
- *        and the settings page shows the Add button; a plain USER sees the
- *        read-only hint and no Add button (the API half of USER is SET-01);
- *        /admin pages are a 404 and /api/admin/* refuses the customer-admin
- *        exactly like a USER — the role grants nothing outside Settings.
+ *        and the settings page shows the Add button; /admin pages are a 404
+ *        and /api/admin/* refuses the customer-admin exactly like a USER —
+ *        the role grants nothing outside Settings.
+ *        A plain USER on the same page (Daniel 2026-11-11: USER and
+ *        CUSTOMER_ADMIN have the same permissions by default — until then he
+ *        saw a read-only hint and no Add button): the same Add button, drag
+ *        handle and Edit on a line, no read-only hint, and a line he adds
+ *        with the form is saved (the API half of USER is SET-01); /admin
+ *        stays a 404 for him too.
  *
  * State: RoomLens gets the per-org {ideas: true} override for the test and
  * {} back after; the QA-CA fixture line is delete-and-recreate + cleanup.
  */
 import { expect, test } from "@playwright/test";
 import type { PrismaClient } from "@prisma/client";
-import { loginAsRoomLens, loginAsRoomLensCustomerAdmin, withTestDb } from "./helpers";
+import { hydrated, loginAsRoomLens, loginAsRoomLensCustomerAdmin, withTestDb } from "./helpers";
 import { LOCAL_BASE_URL } from "./test-env";
 
 const ROOMLENS_SLUG = "roomlens";
 const LIST = "/api/ideas/lists/product-lines";
 const CA_LINE = "QA-CA Line";
 const CA_RENAMED = "QA-CA Line renamed";
+const CA_USER_LINE = "QA-CA Member line";
 
 let orgId: string;
 let workspaceId: string;
@@ -47,7 +53,7 @@ test.describe("Customer-admin role (SET-14)", () => {
     });
   });
 
-  test("SET-14 customer-admin edits product lines and sees the Add button; USER is read-only; /admin and /api/admin stay closed", async ({
+  test("SET-14 customer-admin edits product lines and sees the Add button; a USER has the same controls and his added line is saved; /admin and /api/admin stay closed to both", async ({
     page,
     browser,
   }) => {
@@ -86,15 +92,37 @@ test.describe("Customer-admin role (SET-14)", () => {
     const adminApi = await page.request.get("/api/admin/organizations");
     expect(adminApi.status(), "customer-admin is not a PM-OS admin").toBe(404);
 
-    // A plain USER on the same page: read-only hint, no Add button.
+    // A plain USER on the same page: the customer admin's controls, no read-only hint.
     const userContext = await browser.newContext({ baseURL: LOCAL_BASE_URL });
     const user = await userContext.newPage();
     try {
       await loginAsRoomLens(user);
+      const member = await withTestDb((db) => db.user.findUniqueOrThrow({ where: { email: "qa+roomlens@pm-os.io" } }));
+      expect(member.role, "the seeded member is a plain USER").toBe("USER");
       await user.goto("/settings/ideas/product-lines");
-      await expect(user.getByText("read-only for members")).toBeVisible();
-      await expect(user.getByRole("button", { name: "Add product line" })).toHaveCount(0);
       await expect(user.getByText(CA_RENAMED, { exact: true })).toBeVisible();
+      await expect(user.getByText("read-only for members")).toHaveCount(0);
+      await expect(user.getByText("Drag a row by its handle to reorder.")).toBeVisible();
+      const line = user.locator("div.rounded-xl.px-5.py-4", { has: user.getByText(CA_RENAMED, { exact: true }) });
+      await expect(line.locator('[title="Drag to reorder"]')).toHaveCount(1);
+      await expect(line.locator('button[title="Edit"]')).toHaveCount(1);
+      // He adds a line with the form and it is saved.
+      const addButton = user.getByRole("button", { name: "Add product line" });
+      await hydrated(addButton);
+      await addButton.click();
+      await user.getByPlaceholder("Name", { exact: true }).fill(CA_USER_LINE);
+      const posted = user.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === LIST);
+      await user.getByRole("button", { name: "Add product line" }).click();
+      expect((await posted).status(), "the USER's add").toBe(200);
+      await expect(user.getByText(CA_USER_LINE, { exact: true })).toBeVisible();
+      expect(await withTestDb((db) => db.productLine.count({ where: { workspaceId, name: CA_USER_LINE } })), "the USER's line in the DB").toBe(1);
+
+      // /admin is unchanged: closed to him as to the customer admin.
+      for (const path of ["/admin", "/admin/users"]) {
+        const response = await user.goto(path);
+        expect(response?.status(), `${path} should 404 for USER`).toBe(404);
+      }
+      expect((await user.request.get("/api/admin/organizations")).status(), "USER is not a PM-OS admin").toBe(404);
     } finally {
       await userContext.close();
     }

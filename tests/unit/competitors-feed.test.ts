@@ -4,10 +4,11 @@ import { compareFeed, impactOf, sourceTypeForUrl, statusKind } from "@/lib/compe
 
 describe("statusKind", () => {
   it("gap when the org lacks it, raised when it has it too, lowered on a drop, nothing on a tie", () => {
-    expect(statusKind("missing", "has", "missing")).toBe("gap");
-    expect(statusKind("partial", "has", "partial")).toBe("raised");
-    expect(statusKind("has", "partial", "has")).toBe("lowered");
-    expect(statusKind("has", "has", "missing")).toBeNull();
+    expect(statusKind("not_found", "found", "not_found")).toBe("gap");
+    expect(statusKind("low", "found", "found")).toBe("raised");
+    expect(statusKind("found", "low", "found")).toBe("lowered");
+    expect(statusKind("found", "not_found", "not_found")).toBe("lowered");
+    expect(statusKind("found", "found", "not_found")).toBeNull();
   });
 });
 

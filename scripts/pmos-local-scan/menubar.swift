@@ -28,6 +28,9 @@ struct Status: Decodable {
     let pagesRead: Int?
     let scanStartedAt: String?
     let waiting: Int?
+    /// How many scans are being read now (the station reads several sites at the same time since 2026-11-16; absent in
+    /// a status file written by the one-scan-at-a-time station). competitor / pagesRead / scanStartedAt are the oldest one's.
+    let running: Int?
     let updatedAt: String?
     let lastScan: LastScan?
 }
@@ -88,7 +91,8 @@ func line(_ e: Env) -> String {
     switch health(s) {
     case .scanning:
         let more = (s.waiting ?? 0) > 0 ? " · \(s.waiting!) more waiting" : ""
-        return "\(e.name): scanning \(s.competitor ?? "a site") · \(s.pagesRead ?? 0) pages · \(minutes(since: date(s.scanStartedAt)))\(more)"
+        let others = (s.running ?? 1) > 1 ? " + \(s.running! - 1) more" : ""
+        return "\(e.name): scanning \(s.competitor ?? "a site")\(others) · \(s.pagesRead ?? 0) pages · \(minutes(since: date(s.scanStartedAt)))\(more)"
     case .idle:
         return "\(e.name): on · last check-in \(clock(date(s.lastCheckIn)))"
     case .warning:
