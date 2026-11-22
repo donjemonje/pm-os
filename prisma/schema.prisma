@@ -1341,6 +1341,21 @@ model CompetitorFeedRead {
   @@index([workspaceId, userId])
 }
 
+/// How relevant a company is to ONE user (Daniel 2026-11-22): 1 = most relevant, then 2, then 3. Every user sets
+/// their own levels, so two users of one organization can see different levels. No row = that user has set no
+/// level for the company. Shown as a chip on the company's column of the Competitors table.
+model CompetitorRelevance {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  userId       String
+  competitorId String
+  level        Int
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, competitorId])
+  @@index([workspaceId, userId])
+}
+
 /// One press of Scan on the Competitors page (or one scheduled round): the
 /// competitors scanned one after another, and the one notification email sent
 /// when the last of them finishes. `summary` is what that email said.

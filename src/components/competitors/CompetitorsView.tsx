@@ -14,6 +14,7 @@ import { FACT_KINDS, isAnalysisActive, OWN_STATUS_VALUES, STATUS_VALUES, type Ow
 import type { FeedItem } from "@/lib/competitors/feed";
 import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
+import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -77,6 +78,46 @@ function EmptyPanel({ title, body }: { title: string; body: string }) {
 }
 
 /** The strip's last card (C2 "Risk" slot): competitors ranked by how much of the org's capability list they cover. */
+/**
+ * The signed-in user's own relevance level for a company (1 = most relevant, Daniel 2026-11-22): a chip under the
+ * company's name in its column. A click opens the three levels and "No level"; Esc or a click outside closes.
+ * Per user: nobody else sees or changes it.
+ */
+function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: number | null) => void }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+  const tone = level === 1 ? "border-transparent bg-primary text-white" : level === 2 ? "border-transparent bg-[rgba(36,87,245,.14)] text-[#2a5fd0]" : level === 3 ? "border-transparent bg-[#eef1f6] text-fg-3" : "border-dashed border-border text-fg-faint hover:text-fg-3";
+  const option = "flex w-full items-center justify-between gap-2 rounded-[6px] px-2 py-1.5 text-left text-[12px] text-fg-2 hover:bg-background";
+  return (
+    <span className="relative mt-1 flex justify-center">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} title={C.matrix.relevanceTip(level)} className={cn("inline-flex h-[18px] items-center justify-center whitespace-nowrap rounded-full border px-2 font-mono text-[10px] font-semibold", tone)} data-testid="cmp-relevance-chip">
+        {level ? C.matrix.relevanceChip(level) : C.matrix.relevanceUnset}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[24] cursor-default" onClick={() => setOpen(false)} />
+          <div role="menu" aria-label={C.matrix.relevanceTitle} className="absolute left-1/2 top-[calc(100%+4px)] z-[25] w-[176px] -translate-x-1/2 rounded-inner border border-border bg-white p-1 text-left font-normal shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
+            <div className="px-2 pb-1 pt-1 text-[10.5px] font-semibold text-fg-muted">{C.matrix.relevanceTitle}</div>
+            {RELEVANCE_LEVELS.map((l) => (
+              <button key={l} type="button" role="menuitemradio" aria-checked={level === l} onClick={() => { setOpen(false); if (l !== level) onSet(l); }} className={option}>
+                {C.matrix.relevanceLevel(l)}{level === l && <Check size={12} strokeWidth={3} />}
+              </button>
+            ))}
+            <button type="button" role="menuitemradio" aria-checked={level == null} onClick={() => { setOpen(false); if (level != null) onSet(null); }} className={cn(option, "text-fg-muted")}>
+              {C.matrix.relevanceNone}{level == null && <Check size={12} strokeWidth={3} />}
+            </button>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 function ClosestCard({ org, ranked, measured, onOpen }: { org: string; ranked: ReturnType<typeof rankByCloseness<CompetitorRow>>; measured: boolean; /** Opens the company's profile; null where Profiles is off (the rows are then plain). */ onOpen: ((competitorId: string) => void) | null }) {
   const tone = (score: number | null) => (score == null ? ["#9aa8be", "#5b6c85"] : score >= 70 ? ["#c23767", "#c23767"] : score >= 50 ? ["#f0b43c", "#8a5a00"] : ["#17b26a", "#0f7a47"]);
   return (
@@ -597,6 +638,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                               </span>
                             )}
                           </HeadTag>
+                          <RelevanceChip level={c.relevance} onSet={(level) => void patch(`/api/competitors/${c.id}/relevance`, { level })} />
                         </th>
                       ))}
                       <th scope="col" className="w-[150px] border-b border-border px-4 py-2.5"><span className="sr-only">{C.matrix.coverage}</span></th>

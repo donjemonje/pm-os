@@ -120,6 +120,8 @@ export interface CompetitorRow {
   } | null;
   /** The last website scan that ended "full" or "incomplete" — what the matrix shows when the latest is blocked. */
   lastGoodScanAt: string | null;
+  /** This user's relevance level for the company: 1 (most relevant), 2, 3, or null when they set none. Per user. */
+  relevance: number | null;
   /** Most recent finished scan of any source. */
   lastAnyScanAt: string | null;
   /** Scan currently queued or running, if any. */
@@ -364,6 +366,8 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
     db.competitor.findFirst({ where: { workspaceId, isOwn: true, deletedAt: null }, orderBy: { createdAt: "asc" }, include: { sources: { orderBy: { createdAt: "asc" } } } }),
     db.competitorAnalysis.findFirst({ where: { workspaceId, kind: "setup" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { status: true } }),
   ]);
+  // Relevance levels are the signed-in user's own (no user = none).
+  const relevanceOf = new Map((userId ? await db.competitorRelevance.findMany({ where: { workspaceId, userId }, select: { competitorId: true, level: true } }) : []).map((r) => [r.competitorId, r.level]));
   const analysisRow = (a: (typeof activeAnalyses)[number]): AnalysisRow => ({ id: a.id, status: a.status, step: a.step, pagesDone: a.pagesDone, pagesTotal: a.pagesTotal, resumeAt: a.resumeAt?.toISOString() ?? null, error: a.error, finishedAt: a.finishedAt?.toISOString() ?? null });
   const analysisOf = (competitorId: string): AnalysisRow | null => {
     // The run that is working wins over one that waits its turn; with none active, the latest finished one.
@@ -564,6 +568,7 @@ export async function getCompetitorsState(workspaceId: string, orgName: string, 
         lastAnyScanAt: lastAny?.toISOString() ?? null,
         activeScanId: website ? activeBySource.get(website.id)?.id ?? null : null,
         analysis: analysisOf(c.id),
+        relevance: relevanceOf.get(c.id) ?? null,
         media: c.media.map((m) => ({ id: m.id, label: m.label, kind: m.kind, mediaPath: m.mediaPath, sourceLabel: m.sourceLabel, capturedAt: m.capturedAt?.toISOString() ?? null })),
       };
     }),
