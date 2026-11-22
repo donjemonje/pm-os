@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
-import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
+import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
 import { isChipColorId } from "@/lib/ideas/colors";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
 import { getCompetitorsState } from "@/lib/competitors/store";
@@ -41,7 +41,7 @@ export async function PATCH(req: Request, { params }: Params) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "domain", action: "restore", entityId: id, field: "state", from: "removed", to: "active", name: existing.name, via: "settings" });
     return stateResponse(ctx);
   }
-  const data: { name?: string; description?: string; summary?: string; color?: string; state?: string; position?: number; aliases?: string[] } = {};
+  const data: { name?: string; description?: string; summary?: string; doneBy?: string; color?: string; state?: string; position?: number; aliases?: string[] } = {};
   let field: string | null = null;
   // Decide a domain an analysis suggested. Approve: it joins the table as it is. Decline: its capabilities stay in the
   // table — each moves to the existing domain PMOS AI named as closest for it — and the name is never suggested again.
@@ -99,6 +99,12 @@ export async function PATCH(req: Request, { params }: Params) {
   if (summary !== undefined) {
     data.summary = summary;
     field = field ?? "summary";
+  }
+  // Who does the domain's work: the "Show more" line of the domain's info card.
+  const doneBy = cleanText(body.doneBy, MAX_DOMAIN_DONE_BY);
+  if (doneBy !== undefined) {
+    data.doneBy = doneBy;
+    field = field ?? "doneBy";
   }
   if (body.color !== undefined) {
     if (!isChipColorId(body.color)) return bad("Unknown color.");

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { bad, catalogLocked, cleanName, cleanText, competitorsGuard, readJson, stateResponse } from "@/lib/competitors/api";
-import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
+import { MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY } from "@/lib/competitors/config";
 import { nextChipColor } from "@/lib/ideas/colors";
 import { nextPosition } from "@/lib/competitors/store";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
@@ -17,7 +17,7 @@ export async function releaseDomainAlias(workspaceId: string, name: string, exce
 }
 
 /**
- * POST {name, description?, summary?}: add a domain; it gets the least-used palette color.
+ * POST {name, description?, summary?, doneBy?}: add a domain; it gets the least-used palette color.
  * A name the team removed (or dismissed as a suggestion) brings that domain back, empty, and clears the recorded decision.
  */
 export async function POST(req: Request) {
@@ -39,6 +39,7 @@ export async function POST(req: Request) {
   if (dup) {
     const description = cleanText(body.description, MAX_DOMAIN_DESCRIPTION);
     const summary = cleanText(body.summary, MAX_DOMAIN_SUMMARY);
+    const doneBy = cleanText(body.doneBy, MAX_DOMAIN_DONE_BY);
     await db.competitorDomain.update({
       where: { id: dup.id },
       data: {
@@ -50,6 +51,7 @@ export async function POST(req: Request) {
         position: await nextPosition("competitorDomain", ctx.workspaceId),
         ...(description !== undefined ? { description } : {}),
         ...(summary !== undefined ? { summary } : {}),
+        ...(doneBy !== undefined ? { doneBy } : {}),
       },
     });
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_catalog_edited", { entity: "domain", action: "restore", entityId: dup.id, field: "state", from: dup.state, to: "active", name, via: "add" });
@@ -62,6 +64,7 @@ export async function POST(req: Request) {
       name,
       description: cleanText(body.description, MAX_DOMAIN_DESCRIPTION) ?? "",
       summary: cleanText(body.summary, MAX_DOMAIN_SUMMARY) ?? "",
+      doneBy: cleanText(body.doneBy, MAX_DOMAIN_DONE_BY) ?? "",
       color: nextChipColor(used),
       position: await nextPosition("competitorDomain", ctx.workspaceId),
     },

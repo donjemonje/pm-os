@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { bad, cleanName, cleanText, competitorsGuard, MAX_DESCRIPTION, readJson, stateResponse } from "@/lib/competitors/api";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { isOwnStatus, MAX_OWN_PRODUCT } from "@/lib/competitors/config";
+import { isOwnStatus, MAX_CAPABILITY_AI_DEFINITION } from "@/lib/competitors/config";
 import { queueCatalogAnalyses } from "@/lib/competitors/analysis/engine";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 import { aliasesAfterRename } from "@/lib/competitors/decisions";
@@ -14,7 +14,7 @@ type EventProps = Record<string, string | number | boolean | null>;
 type Params = { params: Promise<{ id: string }> };
 
 /**
- * PATCH: rename, describe, set the org's own product, move to another domain, set product lines, set the
+ * PATCH: rename, describe, set the text PMOS AI uses, move to another domain, set product lines, set the
  * org's own status (`ourStatus`: found / not_found — any member; a value set here is the PM's and survives every run), or restore a removed row
  * (`state`: "active", with an active `domainId` when its own domain is not in the table).
  * There is nothing to accept or decline: a capability an analysis finds is just added to the table.
@@ -74,10 +74,11 @@ export async function PATCH(req: Request, { params }: Params) {
     data.description = description;
     field = field ?? "description";
   }
-  const ownProduct = cleanText(body.ownProduct, MAX_OWN_PRODUCT);
-  if (ownProduct !== undefined) {
-    data.ownProduct = ownProduct;
-    field = field ?? "ownProduct";
+  // The text PMOS AI uses for the capability; "" = it uses the description.
+  const aiDefinition = cleanText(body.aiDefinition, MAX_CAPABILITY_AI_DEFINITION);
+  if (aiDefinition !== undefined) {
+    data.aiDefinition = aiDefinition || null;
+    field = field ?? "aiDefinition";
   }
   if (body.domainId !== undefined) {
     // A row in the table moves between domains that are in the table; a suggestion may also sit in a suggested domain.

@@ -717,8 +717,13 @@ model Capability {
   domain         CompetitorDomain @relation(fields: [domainId], references: [id], onDelete: Cascade)
   name           String
   /// Plain text for people: the pain and what the capability does (row tooltip; also in the scan prompt).
+  /// In the coverage model: "what it covers" — the capability is a sub-domain, a smaller area inside its domain.
   description    String           @default("")
-  /// The org's own product or module that carries this capability — a chip in the org's column.
+  /// The text PMOS AI uses for this capability when it is not the same as `description` (Daniel 2026-11-22;
+  /// Settings → Competitors → Capabilities). Null or "" = PMOS AI uses `description`. Read by the row re-evaluation.
+  aiDefinition   String?
+  /// UNUSED since 2026-11-22 (Daniel: remove "Own product"): nothing reads or writes it any more — not the pages, not
+  /// the routes, not a prompt. Kept so that removing the field needed no schema push; drop it with the next schema change.
   ownProduct     String           @default("")
   /// Product-line names of the org that serve this capability (story 2 decision:
   /// product lines are the org's only; competitor products live in ProfileFact).

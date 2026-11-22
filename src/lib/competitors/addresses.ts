@@ -649,6 +649,8 @@ export interface AddressSearchResult {
   note: string;
   /** The scan whose station report this search used; null when the server requested the site itself, or nothing was requested. */
   scanId: string | null;
+  /** An "undecided" result PM-OS was alerted about: the key of its candidates (address-alert.ts). Absent otherwise. */
+  alertedKey?: string;
 }
 
 /** The stored result (a Json column), checked field by field; null for anything that is not one. */
@@ -659,7 +661,7 @@ export function readAddressSearch(raw: unknown): AddressSearchResult | null {
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
   const note = typeof r.note === "string" ? r.note : "";
   const status = r.status === "undecided" && note.startsWith(GUARD_NOTE_START) ? "waiting" : r.status;
-  return { status, at: r.at, trigger: typeof r.trigger === "string" ? r.trigger : "", candidates: num(r.candidates), added: num(r.added), note, scanId: typeof r.scanId === "string" && r.scanId ? r.scanId : null };
+  return { status, at: r.at, trigger: typeof r.trigger === "string" ? r.trigger : "", candidates: num(r.candidates), added: num(r.added), note, scanId: typeof r.scanId === "string" && r.scanId ? r.scanId : null, ...(typeof r.alertedKey === "string" && r.alertedKey ? { alertedKey: r.alertedKey } : {}) };
 }
 
 /**

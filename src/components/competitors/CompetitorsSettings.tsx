@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, FileText, Globe, GripVertical, Loader2, Pencil, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { FilterPopover } from "@/components/ui/FilterPopover";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
+import { aiTextSameAsCovers, aiTextToSave, capabilityChanges, definitionSameAsCovers, domainTextsToSave, type CapabilityDraft } from "@/lib/competitors/domain-texts";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
-import { ownProductLabel } from "@/lib/competitors/ownProduct";
+import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_AI_DEFINITION, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
 import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, OwnSiteRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
 import { mentionsName } from "@/lib/competitors/mentions";
@@ -661,8 +662,6 @@ function AddressList({ addresses, search, canEdit, busy, onAdd, onRemove }: {
       ))}
       {search.running ? (
         <div className="flex items-center gap-1.5 py-1 text-[12px] text-fg-muted" data-testid="cmp-address-search"><Loader2 size={12} className="animate-spin" />{A.searching}</div>
-      ) : search.status === "undecided" ? (
-        <div className="py-1 text-[12px] text-[#8a5a00]" data-testid="cmp-address-search">{A.undecided}</div>
       ) : search.status === "done" && addresses.length === 0 ? (
         <div className="py-1 text-[12px] text-fg-muted" data-testid="cmp-address-search">{A.noneFound}</div>
       ) : null}
@@ -749,6 +748,11 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
   const [editName, setEditName] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  // Who does the work (the info card's "Show more"), and "Same as what it covers" for the PMOS AI definition.
+  const [doneBy, setDoneBy] = useState("");
+  const [same, setSame] = useState(false);
+  const [editDoneBy, setEditDoneBy] = useState("");
+  const [editSame, setEditSame] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -762,11 +766,11 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
   async function add() {
     if (!name.trim()) return;
-    if (await onAdd({ name, summary, description })) { setName(""); setSummary(""); setDescription(""); setAdding(false); }
+    if (await onAdd({ name, ...domainTextsToSave({ covers: summary, definition: description, same }), doneBy })) { setName(""); setSummary(""); setDescription(""); setDoneBy(""); setSame(false); setAdding(false); }
   }
   async function saveEdit(id: string) {
     const d = domains.find((x) => x.id === id);
-    const body = { name: editName, summary: editSummary, description: editDescription };
+    const body = { name: editName, ...domainTextsToSave({ covers: editSummary, definition: editDescription, same: editSame }), doneBy: editDoneBy };
     const renamed = d && editName.trim() !== d.name;
     if (await (renamed ? onRename(d, body) : onSave(id, body))) setEditingId(null);
   }
@@ -782,7 +786,8 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
     await onReorder(next.map((d) => d.id));
   }
   const editorKeys = (onSubmit: () => void, onCancel: () => void) => (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); }
+    // Enter saves from a single-line field, Cmd/Ctrl+Enter from anywhere (a textarea keeps Enter for a new line); Esc cancels.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (e.target instanceof HTMLInputElement && e.target.type === "text"))) { e.preventDefault(); onSubmit(); }
     else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
   };
   const summaryEditor = (value: string, onChange: (v: string) => void) => (
@@ -796,6 +801,54 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
         className={cn(INPUT, "resize-y font-mono text-[12.5px] leading-relaxed")} disabled={busy} />
       <div className="mt-1 text-right font-mono text-[10.5px] text-[#9aa8be]">{value.length}/{MAX_DOMAIN_DESCRIPTION}</div>
     </div>
+  );
+
+  /**
+   * The three things a user edits on a domain, each its own section: 1. the name; 2. the info section people read in
+   * the table — what it covers, who does the work; 3. the PMOS AI definition, with "Same as what it covers" so the two
+   * texts need not be kept in step by hand. Every field has a visible label and a hint.
+   */
+  const HINT = "mb-1 block text-[11.5px] text-fg-muted";
+  const domainFields = (f: { name: string; setName: (v: string) => void; summary: string; setSummary: (v: string) => void; doneBy: string; setDoneBy: (v: string) => void; description: string; setDescription: (v: string) => void; same: boolean; setSame: (v: boolean) => void; focusName: boolean }) => (
+    <>
+      <label className="block">
+        <span className={FIELD_LABEL}>{C.settings.domainName}</span>
+        <span className={HINT}>{C.settings.domainNameHint}</span>
+        <input type="text" value={f.name} onChange={(e) => f.setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus={f.focusName} className={INPUT} maxLength={80} disabled={busy} data-testid="cmp-domain-name" />
+      </label>
+      <fieldset className="m-0 flex flex-col gap-2 border-0 border-t border-border p-0 pt-2">
+        <legend className="sr-only">{C.settings.domainInfoSection}</legend>
+        <div>
+          <div className="text-[12.5px] font-semibold text-foreground">{C.settings.domainInfoSection}</div>
+          <div className="text-[11.5px] text-fg-muted">{C.settings.domainInfoHint}</div>
+        </div>
+        <label className="block">
+          <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
+          {summaryEditor(f.summary, f.setSummary)}
+        </label>
+        <label className="block">
+          <span className={FIELD_LABEL}>{C.settings.domainDoneBy}</span>
+          <textarea value={f.doneBy} onChange={(e) => f.setDoneBy(e.target.value)} rows={2} maxLength={MAX_DOMAIN_DONE_BY} placeholder={C.settings.domainDoneByPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} disabled={busy} data-testid="cmp-domain-done-by" />
+        </label>
+      </fieldset>
+      <fieldset className="m-0 flex flex-col gap-2 border-0 border-t border-border p-0 pt-2">
+        <legend className="sr-only">{C.settings.domainDescription}</legend>
+        <div>
+          <div className="text-[12.5px] font-semibold text-foreground">{C.settings.domainDescription}</div>
+          <div className="text-[11.5px] text-fg-muted">{C.settings.domainDescriptionHint}</div>
+        </div>
+        <label className="inline-flex w-fit items-center gap-2 text-[12.5px] text-fg-2">
+          <input type="checkbox" checked={f.same} onChange={(e) => f.setSame(e.target.checked)} disabled={busy} data-testid="cmp-domain-same" />
+          {C.settings.domainSameAsCovers}
+        </label>
+        {!f.same && (
+          <label className="block">
+            <span className="sr-only">{C.settings.domainDescription}</span>
+            {descriptionEditor(f.description, f.setDescription)}
+          </label>
+        )}
+      </fieldset>
+    </>
   );
 
   return (
@@ -814,18 +867,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
       {canEdit && !settingUp && adding && (
         <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
-          <label className="block">
-            <span className={FIELD_LABEL}>{C.settings.domainName}</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
-          </label>
-          <label className="block">
-            <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
-            {summaryEditor(summary, setSummary)}
-          </label>
-          <label className="block">
-            <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
-            {descriptionEditor(description, setDescription)}
-          </label>
+          {domainFields({ name, setName, summary, setSummary, doneBy, setDoneBy, description, setDescription, same, setSame, focusName: true })}
           <div className="flex items-center justify-end gap-2">
             <button onClick={() => setAdding(false)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
             <button onClick={() => void add()} disabled={busy || !name.trim()} className={EDITOR_PRIMARY}>
@@ -855,18 +897,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
             >
               {editing ? (
                 <div className="flex flex-col gap-2" onKeyDown={editorKeys(() => void saveEdit(d.id), () => setEditingId(null))}>
-                  <label className="block">
-                    <span className={FIELD_LABEL}>{C.settings.domainName}</span>
-                    <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder={C.settings.domainPlaceholder} className={INPUT} maxLength={80} disabled={busy} autoFocus />
-                  </label>
-                  <label className="block">
-                    <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
-                    {summaryEditor(editSummary, setEditSummary)}
-                  </label>
-                  <label className="block">
-                    <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
-                    {descriptionEditor(editDescription, setEditDescription)}
-                  </label>
+                  {domainFields({ name: editName, setName: setEditName, summary: editSummary, setSummary: setEditSummary, doneBy: editDoneBy, setDoneBy: setEditDoneBy, description: editDescription, setDescription: setEditDescription, same: editSame, setSame: setEditSame, focusName: true })}
                   <div className="flex items-center justify-end gap-2">
                     <button onClick={() => setEditingId(null)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
                     <button onClick={() => void saveEdit(d.id)} disabled={busy || !editName.trim()} className={EDITOR_PRIMARY}>
@@ -890,18 +921,32 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                             <GripVertical size={14} />
                           </span>
                           <span className="mx-0.5 h-4 w-px bg-border" />
-                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditSummary(d.summary); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
+                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditSummary(d.summary); setEditDescription(d.description); setEditDoneBy(d.doneBy); setEditSame(definitionSameAsCovers(d.summary, d.description)); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
                           <button onClick={() => void onRemove(d)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={13} /></button>
                         </>
                       )}
                     </span>
                   </div>
-                  <p className={cn("m-0 mb-2 text-[13px] leading-snug", d.summary ? "text-foreground" : "italic text-fg-faint")}>{d.summary || C.settings.domainSummaryEmpty}</p>
-                  <div className={FIELD_LABEL}>{C.settings.domainDescription}</div>
-                  {d.description ? (
-                    <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
+                  <div className={FIELD_LABEL}>{C.settings.domainSummary}</div>
+                  <p className={cn("m-0 mb-2 text-[13px] leading-snug", d.summary ? "text-foreground" : "italic text-fg-faint")} data-testid="cmp-domain-covers">{d.summary || C.settings.domainSummaryEmpty}</p>
+                  {d.doneBy && (
+                    <>
+                      <div className={FIELD_LABEL}>{C.settings.domainDoneBy}</div>
+                      <p className="m-0 mb-2 text-[13px] leading-snug text-fg-2" data-testid="cmp-domain-card-done-by">{d.doneBy}</p>
+                    </>
+                  )}
+                  {/* Never the same words twice: when the PMOS AI definition is the same text as "What it covers", the card says so instead of repeating it. */}
+                  {definitionSameAsCovers(d.summary, d.description) ? (
+                    <div className="text-[12px] text-fg-muted" data-testid="cmp-domain-same-note">{C.settings.domainSameNote}</div>
                   ) : (
-                    <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
+                    <>
+                      <div className={FIELD_LABEL}>{C.settings.domainDescription}</div>
+                      {d.description ? (
+                        <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
+                      ) : (
+                        <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
+                      )}
+                    </>
                   )}
                 </>
               )}
@@ -932,59 +977,85 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
   onSave: (id: string, body: unknown) => Promise<boolean>;
   onRemove: (k: CapabilityRow) => Promise<void>;
 }) {
+  const draftOf = (k: CapabilityRow): CapabilityDraft => ({ name: k.name, domainId: k.domainId, description: k.description, aiDefinition: k.aiDefinition, same: aiTextSameAsCovers(k.description, k.aiDefinition), productLines: [...k.productLines] });
+  const emptyDraft = (): CapabilityDraft => ({ name: "", domainId: domains[0]?.id ?? "", description: "", aiDefinition: "", same: true, productLines: [] });
   const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [domainId, setDomainId] = useState(domains[0]?.id ?? "");
-  const [description, setDescription] = useState("");
-  const [ownProduct, setOwnProduct] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [editOwnProduct, setEditOwnProduct] = useState("");
+  const [newDraft, setNewDraft] = useState<CapabilityDraft>(emptyDraft);
+  // The open rows and their edits. A row is one short line until it is clicked; then it opens downward. More than one
+  // may be open. A row's draft starts from the row when it opens and is dropped when it closes.
+  const [drafts, setDrafts] = useState<Record<string, CapabilityDraft>>({});
 
   useEffect(() => {
-    if (!domainId && domains[0]) setDomainId(domains[0].id);
-  }, [domains, domainId]);
+    if (!newDraft.domainId && domains[0]) setNewDraft((d) => ({ ...d, domainId: domains[0].id }));
+  }, [domains, newDraft.domainId]);
 
-  async function add(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim() || !domainId) return;
-    if (await onAdd({ name, domainId, description, ownProduct })) { setName(""); setDescription(""); setOwnProduct(""); setAdding(false); }
+  const closeRow = (id: string) => setDrafts((cur) => { const next = { ...cur }; delete next[id]; return next; });
+  const toggleRow = (k: CapabilityRow) => setDrafts((cur) => { const next = { ...cur }; if (next[k.id]) delete next[k.id]; else next[k.id] = draftOf(k); return next; });
+  const setDraft = (id: string, patch: Partial<CapabilityDraft>) => setDrafts((cur) => (cur[id] ? { ...cur, [id]: { ...cur[id], ...patch } } : cur));
+
+  async function add() {
+    if (!newDraft.name.trim() || !newDraft.domainId) return;
+    const body = { name: newDraft.name, domainId: newDraft.domainId, description: newDraft.description, aiDefinition: aiTextToSave({ covers: newDraft.description, aiText: newDraft.aiDefinition, same: newDraft.same }), productLines: newDraft.productLines };
+    if (await onAdd(body)) { setNewDraft(emptyDraft()); setAdding(false); }
   }
-  async function saveEdit(id: string) {
-    if (await onSave(id, { name: editName, description: editDescription, ownProduct: editOwnProduct })) setEditingId(null);
+  async function save(k: CapabilityRow) {
+    const d = drafts[k.id];
+    if (!d || !d.name.trim()) return;
+    const changes = capabilityChanges(k, d);
+    if (Object.keys(changes).length === 0 || (await onSave(k.id, changes))) closeRow(k.id);
   }
-  /** Name, domain, own product and description, each under its label; the add form and the row editor share it. */
-  const fields = (v: { name: string; domainId?: string; description: string; ownProduct: string }, set: { name: (s: string) => void; domainId?: (s: string) => void; description: (s: string) => void; ownProduct: (s: string) => void }) => (
-    <div className="flex min-w-0 flex-1 flex-col gap-2">
+  /** Enter saves from a single-line field of the form, Cmd/Ctrl+Enter from anywhere in it (a textarea keeps Enter for a new line); Esc cancels. */
+  const formKeys = (onSubmit: () => void, onCancel: () => void) => (e: React.KeyboardEvent) => {
+    const field = e.target instanceof HTMLElement && e.target.dataset.capField !== undefined;
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (field && e.target instanceof HTMLInputElement))) { e.preventDefault(); onSubmit(); }
+    else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+  };
+  const HINT = "mb-1 block text-[11.5px] text-fg-muted";
+  /**
+   * The five things a user changes on a capability, each under a visible label: 1. the name; 2. the domain; 3. what
+   * it covers; 4. the text PMOS AI uses ("Same as what it covers" keeps the two in step); 5. its product lines, as
+   * one dropdown with a tick per line. The add form and an open row share it.
+   */
+  const fields = (d: CapabilityDraft, set: (patch: Partial<CapabilityDraft>) => void, focusName: boolean) => (
+    <div className="flex min-w-0 flex-1 flex-col gap-2.5">
       <div className="flex flex-wrap gap-2">
-        <label className="block w-64">
+        <label className="block w-72">
           <span className={FIELD_LABEL}>{C.settings.capabilityName}</span>
-          <input value={v.name} onChange={(e) => set.name(e.target.value)} placeholder={C.settings.capabilityPlaceholder} className={INPUT} disabled={busy} autoFocus />
+          <input type="text" data-cap-field value={d.name} onChange={(e) => set({ name: e.target.value })} placeholder={C.settings.capabilityPlaceholder} className={INPUT} disabled={busy} autoFocus={focusName} data-testid="cmp-capability-name" />
         </label>
-        {set.domainId && (
-          <label className="block w-52">
-            <span className={FIELD_LABEL}>{C.settings.capabilityDomain}</span>
-            <select value={v.domainId} onChange={(e) => set.domainId?.(e.target.value)} className={SELECT} disabled={busy}>
-              {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </label>
-        )}
         <label className="block w-64">
-          <span className={FIELD_LABEL}>{C.settings.ownProduct}</span>
-          <input value={v.ownProduct} onChange={(e) => set.ownProduct(e.target.value)} placeholder={C.settings.ownProductPlaceholder} className={INPUT} maxLength={MAX_OWN_PRODUCT} disabled={busy} />
+          <span className={FIELD_LABEL}>{C.settings.capabilityDomain}</span>
+          <select value={d.domainId} onChange={(e) => set({ domainId: e.target.value })} className={SELECT} disabled={busy} data-testid="cmp-capability-domain">
+            {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
+          </select>
         </label>
       </div>
       <label className="block">
         <span className={FIELD_LABEL}>{C.settings.capabilityDescription}</span>
-        <textarea value={v.description} onChange={(e) => set.description(e.target.value)} placeholder={C.settings.capabilityDescriptionPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} rows={3} maxLength={MAX_CAPABILITY_DESCRIPTION} disabled={busy} />
+        <span className={HINT}>{C.settings.capabilityDescriptionHint}</span>
+        <textarea data-cap-field value={d.description} onChange={(e) => set({ description: e.target.value })} placeholder={C.settings.capabilityDescriptionPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} rows={3} maxLength={MAX_CAPABILITY_DESCRIPTION} disabled={busy} data-testid="cmp-capability-covers" />
       </label>
+      <div>
+        <span className={FIELD_LABEL}>{C.settings.capabilityAiText}</span>
+        <span className={HINT}>{C.settings.capabilityAiTextHint}</span>
+        <label className="inline-flex w-fit items-center gap-2 text-[12.5px] text-fg-2">
+          <input type="checkbox" checked={d.same} onChange={(e) => set({ same: e.target.checked })} disabled={busy} data-testid="cmp-capability-same" />
+          {C.settings.capabilitySameAsCovers}
+        </label>
+        {!d.same && (
+          <textarea data-cap-field aria-label={C.settings.capabilityAiText} value={d.aiDefinition} onChange={(e) => set({ aiDefinition: e.target.value })} placeholder={C.settings.capabilityAiTextPlaceholder} className={cn(INPUT, "mt-1.5 resize-y leading-relaxed")} rows={4} maxLength={MAX_CAPABILITY_AI_DEFINITION} disabled={busy} data-testid="cmp-capability-ai-text" />
+        )}
+      </div>
+      <div>
+        <span className={FIELD_LABEL}>{C.settings.productLines}</span>
+        {productLines.length === 0 ? (
+          <span className="text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</span>
+        ) : (
+          <FilterPopover label={C.settings.productLines} options={productLines} selected={d.productLines} onToggle={(line) => set({ productLines: d.productLines.includes(line) ? d.productLines.filter((l) => l !== line) : [...d.productLines, line] })} />
+        )}
+      </div>
     </div>
   );
-  function toggleLine(k: CapabilityRow, line: string) {
-    const next = k.productLines.includes(line) ? k.productLines.filter((l) => l !== line) : [...k.productLines, line];
-    void onSave(k.id, { productLines: next });
-  }
 
   return (
     <section className="rounded-xl border border-border bg-card" data-testid="cmp-capabilities">
@@ -994,14 +1065,15 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
           {canEdit && !settingUp && !(adding && open) && domains.length > 0 && <button type="button" onClick={() => { onOpen(); setAdding(true); }} className={SMALL_BTN}><Plus size={13} /> {C.settings.addCapability}</button>}
         </div>
         {open && <p className="mt-1 text-sm text-muted">{C.settings.capabilitiesBlurb}</p>}
-        {open && productLines.length === 0 && <p className="mt-1 text-[12px] text-fg-muted">{C.settings.noProductLinesHint}</p>}
       </div>
       {open && adding && !settingUp && (
-        <form onSubmit={add} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setAdding(false); } if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void add(e); } }} className="flex items-end gap-2 border-b border-border px-5 py-4">
-          {fields({ name, domainId, description, ownProduct }, { name: setName, domainId: setDomainId, description: setDescription, ownProduct: setOwnProduct })}
-          <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
-          <Button type="submit" variant="primary" disabled={busy || !name.trim() || !domainId}><Check size={13} /> {C.settings.save}</Button>
-        </form>
+        <div onKeyDown={formKeys(() => void add(), () => setAdding(false))} className="flex flex-col gap-3 border-b border-border px-5 py-4" data-testid="cmp-capability-add-form">
+          {fields(newDraft, (patch) => setNewDraft((d) => ({ ...d, ...patch })), true)}
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" onClick={() => setAdding(false)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+            <Button type="button" variant="primary" onClick={() => void add()} disabled={busy || !newDraft.name.trim() || !newDraft.domainId}><Check size={13} /> {C.settings.save}</Button>
+          </div>
+        </div>
       )}
       {open && capabilities.length === 0 && <div className="px-5 py-4 text-sm text-muted">{settingUp ? C.setup.catalogNote : C.settings.emptyCapabilities}</div>}
       {open && domains.map((d) => {
@@ -1014,23 +1086,26 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
               {d.name}
             </div>
             {rows.map((k) => {
-              const editing = editingId === k.id;
+              const draft = drafts[k.id];
+              const isOpen = draft !== undefined;
               return (
-                <div key={k.id} className="flex items-start gap-3 border-b border-border px-5 py-3">
-                  {editing ? (
-                    <div className="flex min-w-0 flex-1 items-end gap-2"
-                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !(e.target instanceof HTMLTextAreaElement))) { e.preventDefault(); void saveEdit(k.id); } if (e.key === "Escape") setEditingId(null); }}>
-                      {fields({ name: editName, description: editDescription, ownProduct: editOwnProduct }, { name: setEditName, description: setEditDescription, ownProduct: setEditOwnProduct })}
-                      <button onClick={() => setEditingId(null)} className={ICON_BTN} aria-label={C.settings.cancel}><X size={14} /></button>
-                      <button onClick={() => saveEdit(k.id)} className={cn(ICON_BTN, "text-primary")} aria-label={C.settings.save} disabled={busy || !editName.trim()}><Check size={14} /></button>
-                    </div>
-                  ) : (
-                    <div className="min-w-0 flex-1">
+                <div key={k.id} className="border-b border-border" data-testid="cmp-capability">
+                  {/* The short row: the name and its domain on one line, cut with "…" when long (the full text on hover). A click opens it downward. */}
+                  <div className="flex items-center gap-2 px-5 py-2">
+                    <button type="button" onClick={() => toggleRow(k)} aria-expanded={isOpen} aria-label={C.settings.capabilityOpen(k.name)} className="flex min-w-0 flex-1 items-center gap-2 text-left" data-testid="cmp-capability-row">
+                      <ChevronRight size={14} className={cn("shrink-0 text-fg-muted transition-transform", isOpen && "rotate-90")} />
+                      <span className="min-w-0 truncate text-[13.5px] font-medium" title={k.name}>{k.name}</span>
+                      {k.origin === "ai" && <span className="shrink-0 rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
+                      <span className="ml-auto max-w-[260px] shrink-0 truncate text-[12px] text-fg-muted" title={d.name}>{d.name}</span>
+                    </button>
+                    {canEdit && <button onClick={() => void onRemove(k)} className={cn(ICON_BTN, "shrink-0 hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>}
+                  </div>
+                  {isOpen && canEdit && (
+                    <div onKeyDown={formKeys(() => void save(k), () => closeRow(k.id))} className="flex flex-col gap-3 bg-[rgba(255,255,255,.6)] px-5 pb-4 pl-[42px] pt-1" data-testid="cmp-capability-form">
+                      {fields(draft, (patch) => setDraft(k.id, patch), false)}
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[14px] font-medium">{k.name}</span>
-                        {k.origin === "ai" && <span className="rounded-full bg-[#eef1f6] px-1.5 py-px font-mono text-[10px] text-fg-muted">PMOS AI</span>}
-                        {k.ownProduct && <span className="max-w-[220px] truncate rounded-full bg-[rgba(36,87,245,.12)] px-1.5 py-px font-mono text-[10px] font-semibold text-[#2a5fd0]" title={`${C.settings.ownProduct}: ${k.ownProduct}`}>{ownProductLabel(k.ownProduct)}</span>}
-                        <span className="ml-1 inline-flex items-center gap-1" title={C.settings.ourStatus}>
+                        <span className="inline-flex items-center gap-1" title={C.settings.ourStatus}>
+                          <span className="mr-1 text-[12px] font-medium text-fg-3">{C.settings.ourStatus}</span>
                           {OWN_STATUS_VALUES.map((v) => (
                             <button key={v} type="button" onClick={() => k.ourStatus !== v && void onSave(k.id, { ourStatus: v })} disabled={busy} aria-pressed={k.ourStatus === v}
                               className={cn("rounded-full border px-2 py-px font-mono text-[10px] font-semibold", k.ourStatus === v
@@ -1040,40 +1115,23 @@ function CapabilitiesPanel({ capabilities, domains, productLines, canEdit, busy,
                             </button>
                           ))}
                         </span>
+                        <span className="ml-auto flex items-center gap-2">
+                          <Button type="button" onClick={() => closeRow(k.id)} disabled={busy}><X size={13} /> {C.settings.cancel}</Button>
+                          <Button type="button" variant="primary" onClick={() => void save(k)} disabled={busy || !draft.name.trim()}><Check size={13} /> {C.settings.save}</Button>
+                        </span>
                       </div>
-                      {k.description && <div className="mt-0.5 text-[12.5px] text-fg-3">{k.description}</div>}
-                      {productLines.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {productLines.map((line) => {
-                            const on = k.productLines.includes(line);
-                            return (
-                              <button
-                                key={line}
-                                type="button"
-                                onClick={() => canEdit && toggleLine(k, line)}
-                                disabled={!canEdit || busy}
-                                aria-pressed={on}
-                                className={cn(
-                                  "rounded-chip px-[7px] py-[2px] font-mono text-[11px] font-semibold leading-[15px]",
-                                  on ? "bg-[rgba(36,87,245,.12)] text-[#2a5fd0]" : "bg-[#eef1f6] text-fg-faint",
-                                  canEdit && "hover:ring-1 hover:ring-primary/40",
-                                )}
-                              >
-                                {line}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
                     </div>
                   )}
-                  {canEdit && !editing && (
-                    <div className="flex shrink-0 items-center gap-1">
-                      <select value={k.domainId} onChange={(e) => void onSave(k.id, { domainId: e.target.value })} className="rounded-lg border border-border bg-white px-2 py-1 text-[12px]" disabled={busy} aria-label="Move to domain">
-                        {domains.map((dd) => <option key={dd.id} value={dd.id}>{dd.name}</option>)}
-                      </select>
-                      <button onClick={() => { setEditingId(k.id); setEditName(k.name); setEditDescription(k.description); setEditOwnProduct(k.ownProduct); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={14} /></button>
-                      <button onClick={() => void onRemove(k)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={14} /></button>
+                  {isOpen && !canEdit && (
+                    <div className="flex flex-col gap-2 px-5 pb-3 pl-[42px] text-[12.5px] text-fg-2" data-testid="cmp-capability-details">
+                      <div><span className={FIELD_LABEL}>{C.settings.capabilityDescription}</span>{k.description || <span className="italic text-fg-faint">{C.settings.capabilityNoCovers}</span>}</div>
+                      {/* Never the same words twice: PMOS AI's own text shows only when it differs from what it covers. */}
+                      {aiTextSameAsCovers(k.description, k.aiDefinition) ? (
+                        <div className="text-[12px] text-fg-muted">{C.settings.capabilitySameNote}</div>
+                      ) : (
+                        <div><span className={FIELD_LABEL}>{C.settings.capabilityAiText}</span>{k.aiDefinition}</div>
+                      )}
+                      <div><span className={FIELD_LABEL}>{C.settings.productLines}</span>{k.productLines.length ? k.productLines.join(" · ") : <span className="italic text-fg-faint">{C.settings.capabilityNoProductLines}</span>}</div>
                     </div>
                   )}
                 </div>

@@ -1,12 +1,13 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CheckCheck, ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
+import { Check, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Download, ExternalLink, Info, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
 import { EvidenceCard, EvidenceList } from "./EvidenceCard";
 import { DomainScore, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
+import { Floating } from "./Floating";
 import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
@@ -17,6 +18,7 @@ import { isProductLinesPage, type OwnEvidence } from "@/lib/competitors/own";
 import { proximityPicks, rankByCloseness } from "@/lib/competitors/closeness";
 import { RELEVANCE_LEVELS } from "@/lib/competitors/relevance";
 import { domainScore, scoreRowKind, type EvidenceRef } from "@/lib/competitors/scores";
+import { allOpen, defaultOpenDomains, featureIsDifferentiator, rowKindCounts, toggleAll, topScoreKeys } from "@/lib/competitors/table-view";
 import { moveNextTo } from "@/lib/competitors/order";
 import type { CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, FactRow, FeatureRow } from "@/lib/competitors/store";
 import { shortDate, timeAgo } from "@/lib/competitors/time";
@@ -50,6 +52,11 @@ function chipClass(active: boolean): string {
  * Competitors filter and the user ticks the others there (Daniel 2026-11-22).
  */
 const DEFAULT_SHOWN_COMPANIES = 6;
+/** The amber dashed chip of a gap (a capability row; "N Gaps" in a domain's header) and the green chip of what only the organization has ("Differentiator" on a row; "N Diff" in a domain's header). */
+const GAP_CHIP = "inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]";
+const DIFF_CHIP = "inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]";
+/** The light blue of the organization's own column: every one of its cells — capability rows, feature rows, the domain header. */
+const OWN_CELL = "bg-[rgba(36,87,245,.06)]";
 
 function toggleIn(setter: React.Dispatch<React.SetStateAction<string[]>>) {
   return (o: string) => setter((prev) => (prev.includes(o) ? prev.filter((x) => x !== o) : [...prev, o]));
@@ -105,13 +112,13 @@ function RelevanceChip({ level, onSet }: { level: number | null; onSet: (level: 
       {open && (
         <>
           <div className="fixed inset-0 z-[24] cursor-default" onClick={() => setOpen(false)} />
-          <div role="menu" aria-label={C.matrix.relevanceTitle} className="absolute left-1/2 top-[calc(100%+5px)] z-[25] flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
+          <Floating lock align="center" role="menu" aria-label={C.matrix.relevanceTitle} className="flex items-center gap-1.5 rounded-full border border-border bg-white px-2 py-1.5 shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-relevance-menu">
             {RELEVANCE_LEVELS.map((l) => (
               <button key={l} type="button" role="menuitemradio" aria-checked={level === l} title={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} aria-label={level === l ? C.matrix.relevanceClear(l) : C.matrix.relevanceLevel(l)} onClick={() => { setOpen(false); onSet(l === level ? null : l); }} className={cn(circle, "h-[22px] w-[22px] text-[11px]", tone(l), level === l && "shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(36,87,245,.55)]")}>
                 {l}
               </button>
             ))}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -230,6 +237,9 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const [openCell, setOpenCell] = useState<OpenCell | null>(null);
   // Capabilities whose features are shown under them. Closed by default.
   const [openFeatures, setOpenFeatures] = useState<Set<string>>(new Set());
+  // Which domain groups are open. When the page loads: only the first one, and no capability shows its features (table-view.ts).
+  const [openDomains, setOpenDomains] = useState<Set<string>>(() => new Set(defaultOpenDomains(initialState.domains.filter((d) => d.state !== "dismissed" && initialState.capabilities.some((k) => k.state === "active" && k.domainId === d.id)).map((d) => d.id))));
+  const toggleDomain = (id: string) => setOpenDomains((cur) => { const next = new Set(cur); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const toggleFeatures = (capabilityId: string, features: number) => {
     setOpenFeatures((cur) => {
       const next = new Set(cur);
@@ -256,7 +266,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   // Parity matrix filters
   const [capQuery, setCapQuery] = useState("");
   const [domainFilter, setDomainFilter] = useState<string[]>([]);
-  const [productFilter, setProductFilter] = useState<string[]>([]);
   // More companies than the table shows at first: the first six start ticked. Six or fewer: nothing ticked = all.
   const [defaultShown] = useState<string[]>(() => (initialState.competitors.length > DEFAULT_SHOWN_COMPANIES ? initialState.competitors.slice(0, DEFAULT_SHOWN_COMPANIES).map((c) => c.name) : []));
   const [competitorFilter, setCompetitorFilter] = useState<string[]>(defaultShown);
@@ -287,6 +296,14 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   /** The run this page saw start: its note is shown when the run has settled — its scans read and their analyses done. */
   const [watchedRun, setWatchedRun] = useState<string | null>(null);
   const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && !state.lastRun.settled;
+
+  // While PMOS AI re-evaluates a capability's row (a PM added reasoning or released a score), learn when it is done.
+  const reevaluating = state.capabilities.some((k) => k.reevaluating);
+  useEffect(() => {
+    if (!reevaluating) return;
+    const t = setInterval(() => void refresh(), POLL_MS);
+    return () => clearInterval(t);
+  }, [reevaluating, refresh]);
 
   // While a scan or an analysis runs (or a run has not settled yet), learn when it ends; results land in one go.
   useEffect(() => {
@@ -387,8 +404,8 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     [competitors, activeCaps, state.cells],
   );
 
-  /** What a PM can do on a scored capability cell: null = read-only. */
-  const scoreActions = (_url: string): ScoreActions | null => null;
+  /** What a PM can do on a scored capability cell (every member of the organization): set the score (it is then locked), release it, add reasoning, try a re-evaluation again. */
+  const scoreActions = (url: string): ScoreActions => ({ setScore: (score) => patch(url, { score }), release: () => patch(url, { release: true }), addReasoning: (reasoning) => patch(url, { reasoning }), retry: () => patch(url, { reevaluate: true }) });
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
   const matchesStatus = (k: CapabilityRow) => {
@@ -399,11 +416,11 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const visibleCaps = activeCaps.filter((k) => {
     if (q && !k.name.toLowerCase().includes(q) && !k.description.toLowerCase().includes(q)) return false;
     if (domainFilter.length && !domainFilter.includes(state.domains.find((d) => d.id === k.domainId)?.name ?? "")) return false;
-    if (productFilter.length && !k.productLines.some((p) => productFilter.includes(p))) return false;
     if (gapsOnly && rowKind(k) !== "gap") return false;
     return matchesStatus(k);
   });
   const domainsWithRows = state.domains.filter((d) => d.state !== "dismissed" && visibleCaps.some((k) => k.domainId === d.id));
+  const allDomainsOpen = allOpen(domainsWithRows.map((d) => d.id), openDomains);
   const competitorName = (id: string | null) => competitors.find((c) => c.id === id)?.name ?? "";
 
   // ——— News feed: items since the baseline, grouped by day, per-user read marks ———
@@ -449,13 +466,13 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
       track("cmp_matrix_viewed", {
         competitors: competitors.length,
         capabilities: activeCaps.length,
-        filters: [domainFilter.length && "domain", productFilter.length && "productLine", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
+        filters: [domainFilter.length && "domain", competitorFilterChanged && "competitor", statusFilter.length && "status"].filter(Boolean).join(","),
         gapsOnly,
       });
     }, 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, domainFilter, productFilter, competitorFilter, statusFilter, gapsOnly]);
+  }, [tab, domainFilter, competitorFilter, statusFilter, gapsOnly]);
 
   // ——— Corrections ———
   /** POST without a body: a create action whose answer is the new state. */
@@ -617,7 +634,6 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
             <div className="mb-3.5 flex flex-wrap items-center gap-2">
               <SearchBox value={capQuery} onChange={setCapQuery} placeholder={C.filters.searchCapabilities} />
               <FilterPopover label={C.filters.domain} options={state.domains.map((d) => d.name)} selected={domainFilter} onToggle={toggleIn(setDomainFilter)} emptyText={C.filters.noDomains} />
-              <FilterPopover label={C.filters.productLine} options={state.productLines} selected={productFilter} onToggle={toggleIn(setProductFilter)} emptyText={C.filters.noProductLines} />
               <FilterPopover label={C.filters.competitor} accent="customer" options={competitors.map((c) => c.name)} selected={competitorFilter} onToggle={toggleIn(setCompetitorFilter)} emptyText={C.filters.noCompetitors} />
               <FilterPopover single label={C.filters.status} accent="status" options={STATUS_OPTIONS} selected={statusFilter} onToggle={(o) => setStatusFilter((prev) => (prev.includes(o) ? [] : [o]))} />
               <span className="mx-1 h-5 w-px bg-border" />
@@ -635,8 +651,17 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                 <table className="w-full border-collapse text-[13px]" style={{ minWidth: 560 + 104 * shownCompetitors.length }}>
                   <thead>
                     <tr>
-                      <th scope="col" className="border-b border-border px-4 pb-[30px] pl-[30px] pt-2.5 text-left align-middle text-[12px] font-semibold tracking-[0.06em] text-fg-muted">
-                        {C.matrix.capability}
+                      {/* The label and its open/close-all button sit at the vertical centre of the header row, next to the company icons: even padding, one line. */}
+                      <th scope="col" className="border-b border-border px-4 py-2.5 pl-[30px] text-left align-middle text-[14.5px] font-bold tracking-[0.06em] text-fg-muted">
+                        <span className="inline-flex items-center gap-2">
+                        {C.matrix.domainsHeader}
+                        {domainsWithRows.length > 0 && (
+                          <button type="button" onClick={() => setOpenDomains((cur) => toggleAll(domainsWithRows.map((d) => d.id), cur))} title={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains} aria-label={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains}
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-domains-toggle-all">
+                            {allDomainsOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+                          </button>
+                        )}
+                        </span>
                       </th>
                       <th scope="col" className="w-[104px] border-b border-t-[3px] border-b-border border-t-primary bg-[rgba(36,87,245,.08)] px-2 pb-2.5 text-center align-bottom">
                         <span className="flex flex-col items-center gap-1.5 pt-2.5">
@@ -698,15 +723,18 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                       domainsWithRows.map((d) => {
                         const rows = visibleCaps.filter((k) => k.domainId === d.id);
                         const lines = [...new Set(rows.flatMap((k) => k.productLines))];
-                        const covered = rows.filter((k) => ownOf(k) === "found").length;
-                        const gaps = rows.filter((k) => rowKind(k) === "gap").length;
+                        // The header's counts: its gaps, and the capabilities only the organization has (the same rule as each row's chip).
+                        const { gaps, only: onlyOurs } = rowKindCounts(rows.map(rowKind));
+                        // The capabilities of this domain that have features: "open / close all features" works on them.
+                        const withFeatures = rows.filter((k) => featuresOf(k.id).length > 0).map((k) => k.id);
                         // The domain's score of a company: the average over ALL the domain's capabilities (not only the filtered rows); a scored row the company has no cell in counts 0.
                         const domainRows = activeCaps.filter((k) => k.domainId === d.id);
                         const scores = domainRows.some((k) => k.ourScore != null)
                           ? { own: domainScore(domainRows.map((k) => k.ourScore)), ownName: own, companies: shownCompetitors.map((c) => ({ id: c.id, name: c.name, score: domainScore(domainRows.map((k) => (k.ourScore != null ? cellOf(c.id, k.id)?.score ?? 0 : null))) })) }
                           : null;
                         return (
-                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} covered={covered} gaps={gaps} colSpan={3 + shownCompetitors.length} scores={scores}
+                          <DomainGroup key={d.id} domain={d} rows={rows} lines={lines} gaps={gaps} onlyOurs={onlyOurs} org={own} colSpan={3 + shownCompetitors.length} scores={scores} open={openDomains.has(d.id)} onToggle={() => toggleDomain(d.id)}
+                            features={withFeatures.length ? { allOpen: allOpen(withFeatures, openFeatures), onToggle: () => setOpenFeatures((cur) => toggleAll(withFeatures, cur)) } : null}
                             suggestedBy={d.state === "suggested" ? competitorName(d.suggestedById) : null} canEdit={canEdit} onDecide={(decision) => void decideDomain(d.id, decision)}>
                             {rows.map((k) => {
                               const kind = rowKind(k);
@@ -714,6 +742,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                               const descOpen = openDesc === k.id;
                               const features = featuresOf(k.id);
                               const featuresOpen = features.length > 0 && openFeatures.has(k.id);
+                              const top = topScoreKeys([{ key: "own", score: k.ourScore }, ...shownCompetitors.map((c) => ({ key: c.id, score: cellOf(c.id, k.id)?.score }))]);
                               return (
                                 <Fragment key={k.id}>
                                 <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
@@ -727,15 +756,15 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                       )}
                                       {k.name}
                                       {features.length > 0 && <span className="text-[11px] font-normal text-fg-muted">{C.matrix.featuresCount(features.length)}</span>}
-                                      <DescriptionInfo name={k.name} description={k.description} ownProduct={k.ownProduct} org={own} open={descOpen} onToggle={() => toggleDesc(k.id)} />
-                                      {kind === "gap" && <span className="inline-flex items-center rounded-full border border-dashed border-[#f0b43c] bg-[#fff7e0] px-1.5 py-px font-mono text-[9.5px] font-semibold text-[#8a5a00]">Gap</span>}
-                                      {kind === "only" && <span className="inline-flex items-center rounded-full bg-[rgba(23,178,106,.14)] px-2 py-px font-mono text-[10px] font-semibold text-[#0f7a47]">{C.strip.only(own)}</span>}
+                                      <DescriptionInfo name={k.name} description={k.description} open={descOpen} onToggle={() => toggleDesc(k.id)} />
+                                      {kind === "gap" && <span className={GAP_CHIP}>Gap</span>}
+                                      {kind === "only" && <DifferentiatorChip org={own} />}
                                     </span>
                                   </td>
-                                  <td className={cn("text-center", kind === "gap" ? "bg-[rgba(240,180,60,.18)]" : kind === "only" ? "bg-[rgba(23,178,106,.16)]" : "bg-[rgba(36,87,245,.06)]")}>
+                                  <td className={cn("text-center", OWN_CELL)}>
                                     <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
                                       {k.ourScore != null ? (
-                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} own score={k.ourScore} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} error={k.reevaluateError}
+                                        <ScoreCell rowId={k.id} rowName={k.name} columnId="own" company={own} score={k.ourScore} top={top.has("own")} reasoning={k.ourScoreReasoning} locked={k.ourScoreLocked} lockedBy={k.ourScoreLockedBy} pmReasoning={k.ourPmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                           isOpen={openCell?.competitorId === "own" && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: "own", rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/capabilities/${k.id}/score`)} />
                                       ) : (
                                         <OwnCell row={k} kind="capability" org={own} ownSite={state.ownSite} open={openCell} setOpen={setOpenCell} onPatch={patch} />
@@ -747,7 +776,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                     return (
                                       <td key={c.id} className="text-center">
                                         {cell && cell.score != null ? (
-                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} error={null}
+                                          <ScoreCell rowId={k.id} rowName={k.name} columnId={c.id} company={c.name} score={cell.score} top={top.has(c.id)} reasoning={cell.scoreReasoning} locked={cell.scoreLocked} lockedBy={cell.scoreLockedBy} pmReasoning={cell.pmReasoning} reevaluating={k.reevaluating} failed={k.reevaluateFailed}
                                             isOpen={openCell?.competitorId === c.id && openCell.rowId === k.id} onOpen={() => setOpenCell({ competitorId: c.id, rowId: k.id })} onClose={() => setOpenCell(null)} actions={scoreActions(`/api/competitors/statuses/${cell.id}/score`)} />
                                         ) : (
                                           <Cell cell={cell} competitorId={c.id} row={k} kind="capability" open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? () => openProfile(c.id, "cell") : null} notScanned={!c.source?.lastScanAt} analyzing={isAnalysisActive(c.analysis?.status)} />
@@ -765,7 +794,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   </td>
                                 </tr>
                                 {featuresOpen && features.map((f) => (
-                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
+                                  <FeatureLine key={f.id} feature={f} differentiator={featureIsDifferentiator(f.ourStatus, competitors.map((c) => featureCellOf(c.id, f.id)?.value))} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
                                 ))}
                                 </Fragment>
                               );
@@ -1011,16 +1040,25 @@ function RoadmapRow({ capability: k, competitors, cellOf, domain, onCreateIdea }
 
 // ————— Domain group (collapsible header row + its capability rows) —————
 
-function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null }: {
-  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; covered: number; gaps: number; colSpan: number; children: React.ReactNode;
+function DomainGroup({ domain, rows, lines, gaps, onlyOurs, org, colSpan, children, suggestedBy, canEdit = false, onDecide, scores = null, open, onToggle, features = null }: {
+  domain: DomainRow; rows: CapabilityRow[]; lines: string[]; gaps: number; colSpan: number; children: React.ReactNode;
+  /** How many of the domain's capabilities only the organization has, shown next to the gaps as "N Diff"; and the organization's name (for the tooltips). */
+  onlyOurs: number;
+  org: string;
   /** The coverage model: each shown company's score of this domain (the average of its capability scores), shown in the company's column of the header row. Null = a domain with no scored capability: the header spans the table as before. */
   scores?: { own: number | null; ownName: string; companies: Array<{ id: string; name: string; score: number | null }> } | null;
   /** Set when the domain itself is suggested by an analysis (dashed group at the bottom of the table): the competitor it was seen at. Its capabilities are ordinary rows. */
   suggestedBy?: string | null;
   canEdit?: boolean;
   onDecide?: (decision: "active" | "dismissed") => void;
+  /** The group is open; the page holds which ones are (only the first when it loads). */
+  open: boolean;
+  onToggle: () => void;
+  /** "Open / close the features of all capabilities" of this domain; null when none of them has features. */
+  features?: { allOpen: boolean; onToggle: () => void } | null;
 }) {
-  const [open, setOpen] = useState(true);
+  // The top domain score(s), underlined: the highest among the companies shown, the organization included.
+  const topScore = scores ? topScoreKeys([{ key: "own", score: scores.own }, ...scores.companies.map((c) => ({ key: c.id, score: c.score }))]) : new Set<string>();
   const isSuggested = suggestedBy != null;
   const inColumns = scores != null && !isSuggested;
   return (
@@ -1029,7 +1067,7 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
         <td colSpan={inColumns ? 1 : colSpan} className="p-0">
           <div className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left", isSuggested && "border-y border-dashed border-[rgba(36,87,245,.55)]")} style={{ background: isSuggested ? "repeating-linear-gradient(135deg, rgba(36,87,245,.05) 0 10px, rgba(255,255,255,0) 10px 20px)" : "linear-gradient(90deg, rgba(36,87,245,.14), rgba(255,255,255,0) 60%)" }}>
             {/* The whole header opens and closes the group. A div with the button role, not a button: the info button sits inside it. */}
-            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((v) => !v)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen((v) => !v); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
+            <div role="button" tabIndex={0} aria-expanded={open} onClick={() => onToggle()} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onToggle(); } }} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" title={isSuggested ? C.matrix.suggestedDomainHint(suggestedBy) : undefined}>
               <span className={cn("h-2.5 w-2.5 shrink-0 rounded-[3px]", isSuggested && "border border-dashed border-[#2a5fd0] bg-transparent")} style={isSuggested ? undefined : { background: swatchColor(domain.color, PRODUCT_CHIP_DEFAULT), boxShadow: `0 0 10px ${swatchColor(domain.color, PRODUCT_CHIP_DEFAULT)}66` }} />
               <span className="text-[14px] font-bold">{domain.name}</span>
               {!isSuggested && <DomainInfo name={domain.name} covers={domain.summary || domain.description} doneBy={domain.doneBy} />}
@@ -1040,24 +1078,30 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
               )}
               {lines.length > 0 && <span className="text-[11px] text-fg-muted">{lines.join(" · ")}</span>}
               {!inColumns && (
-              <span className="ml-auto flex shrink-0 items-center gap-[18px] text-[12px] text-fg-3">
-                {!isSuggested && <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>}
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+              <span className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap text-[12px] text-fg-3">
+                {gaps > 0 && <span className={GAP_CHIP} title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className={DIFF_CHIP} title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
               )}
             </div>
+            {features && open && (
+              <button type="button" onClick={features.onToggle} title={features.allOpen ? C.matrix.closeAllFeatures : C.matrix.openAllFeatures} aria-label={features.allOpen ? C.matrix.closeAllFeatures : C.matrix.openAllFeatures}
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle-all">
+                {features.allOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+              </button>
+            )}
             {isSuggested && canEdit && onDecide && <DecideButtons approve={C.matrix.approveDomain} decline={C.matrix.declineDomain} declineHint={C.matrix.declineDomainHint} onDecide={onDecide} />}
           </div>
         </td>
         {inColumns && scores && (
           <>
-            <td className="border-b border-border bg-[rgba(36,87,245,.06)] px-2 text-center"><DomainScore score={scores.own} company={scores.ownName} own /></td>
-            {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} /></td>)}
+            <td className={cn("border-b border-border px-2 text-center", OWN_CELL)}><DomainScore score={scores.own} company={scores.ownName} top={topScore.has("own")} /></td>
+            {scores.companies.map((c) => <td key={c.id} className="border-b border-border px-2 text-center"><DomainScore score={c.score} company={c.name} top={topScore.has(c.id)} /></td>)}
             <td className="border-b border-border px-3">
-              <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full flex-wrap items-center justify-end gap-x-2.5 text-[11.5px] text-fg-3">
-                <span><b className="font-bold text-foreground">{covered}</b> {C.matrix.covered}</span>
-                {gaps > 0 && <span className="font-semibold text-[#8a5a00]">{C.matrix.gapN(gaps)}</span>}
+              <button type="button" onClick={() => onToggle()} aria-expanded={open} className="flex w-full items-center justify-end gap-x-2 whitespace-nowrap text-[11.5px] text-fg-3">
+                {gaps > 0 && <span className={GAP_CHIP} title={C.matrix.gapNTip(org, gaps)} data-testid="cmp-domain-gaps">{C.matrix.gapN(gaps)}</span>}
+                {onlyOurs > 0 && <span className={DIFF_CHIP} title={C.matrix.onlyNTip(org, onlyOurs)} data-testid="cmp-domain-only">{C.matrix.onlyN(onlyOurs)}</span>}
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </button>
             </td>
@@ -1069,10 +1113,17 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
   );
 }
 
+/** The green chip of a row only the organization has — a capability or a feature. The tooltip says it in full. */
+function DifferentiatorChip({ org }: { org: string }) {
+  return <span className={DIFF_CHIP} title={C.matrix.differentiatorTip(org)} data-testid="cmp-differentiator">{C.matrix.differentiator}</span>;
+}
+
 // ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
 
-function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
+function FeatureLine({ feature, differentiator, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
   feature: FeatureRow;
+  /** Only the organization has this feature (table-view.ts featureIsDifferentiator, over every competitor — not only the ones shown). */
+  differentiator: boolean;
   org: string;
   ownSite: boolean;
   competitors: CompetitorRow[];
@@ -1086,9 +1137,12 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
   return (
     <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
-        {feature.name}
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {feature.name}
+          {differentiator && <DifferentiatorChip org={org} />}
+        </span>
       </td>
-      <td className="bg-[rgba(36,87,245,.06)] text-center">
+      <td className={cn("text-center", OWN_CELL)}>
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
           <OwnCell row={feature} kind="feature" org={org} ownSite={ownSite} open={open} setOpen={setOpen} onPatch={onPatch} />
         </span>
@@ -1222,7 +1276,7 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
       {open && (
         <>
           <div className="fixed inset-0 z-[24] cursor-default" onClick={close} />
-          <div className="absolute left-0 top-[calc(100%+6px)] z-[25] w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
+          <Floating lock className="w-[400px] cursor-default rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-domain-card">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
               <button type="button" onClick={close} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
@@ -1238,7 +1292,7 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
             {doneBy && (
               <button type="button" onClick={() => setMore((v) => !v)} aria-expanded={more} className="mt-1.5 text-[12px] font-semibold text-primary hover:underline" data-testid="cmp-domain-more">{more ? C.matrix.showLess : C.matrix.showMore}</button>
             )}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1246,8 +1300,8 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
 }
 
 /** Small (i) after a capability name: click opens a card with the plain description, the org's product when known. */
-function DescriptionInfo({ name, description, ownProduct, org, open, onToggle }: {
-  name: string; description: string; ownProduct: string; org: string; open: boolean; onToggle: () => void;
+function DescriptionInfo({ name, description, open, onToggle }: {
+  name: string; description: string; open: boolean; onToggle: () => void;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -1272,14 +1326,13 @@ function DescriptionInfo({ name, description, ownProduct, org, open, onToggle }:
       {open && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={onToggle} />
-          <div className={cn("absolute left-0 top-[calc(100%+6px)] z-[25] w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]")} data-testid="cmp-description-card">
+          <Floating lock className={cn("w-[380px] rounded-inner border border-border bg-white px-3.5 py-2.5 text-left text-[12.5px] font-normal leading-relaxed text-foreground shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]")} data-testid="cmp-description-card">
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1 text-[13px] font-bold">{name}</div>
               <button type="button" onClick={onToggle} className="rounded-md p-1 text-fg-muted hover:bg-background" aria-label={C.feed.detail.close}><X size={14} /></button>
             </div>
             {description ? <p className="m-0">{description}</p> : <p className="m-0 text-fg-faint">{C.matrix.descriptionEmpty}</p>}
-            {ownProduct && <p className="m-0 mt-1.5 text-[12px] text-fg-muted">{C.matrix.ownProductTip(org, ownProduct)}</p>}
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1405,15 +1458,15 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
         {cell?.override && <Pencil size={9} className="absolute right-0.5 top-0.5 text-[#8a5a00]" aria-label={C.matrix.edited} />}
       </button>
       {showHover && cell && (
-        <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
+        <Floating align="center" role="tooltip" className="w-[320px] rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-cell-hover">
           <EvidenceCard quote={cell.quote} url={cell.sourceUrl} reasoning={cell.reasoning} wording={cell.wording} description={cell.description} descriptionLabel={cell.evidence.length ? C.score.howItWorks : undefined} count={cell.evidence.length ? 0 : cell.evidenceCount} empty={cell.description && cell.evidence.length ? `${C.score.howItWorks}: ${cell.description}` : C.cell.notFoundHint} />
           <MoreEvidence evidence={cell.evidence} rowId={row.id} columnId={competitorId} />
-        </div>
+        </Floating>
       )}
       {isOpen && cell && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[340px] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
+          <Floating lock align="center" className="w-[340px] rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" onKeyDown={(e) => { if (e.key === "Enter" && editing && !(e.target instanceof HTMLTextAreaElement)) { e.preventDefault(); void save(); } }}>
             <div className="mb-2 flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-bold">{row.name}</div>
@@ -1465,7 +1518,7 @@ function Cell({ cell, competitorId, row, kind, open, setOpen, onPatch, onProfile
               )}
               {onProfile && !editing && <Button size="sm" variant="ghost" className="ml-auto" onClick={onProfile}>{C.cell.openProfile}</Button>}
             </div>
-          </div>
+          </Floating>
         </>
       )}
     </span>
@@ -1549,14 +1602,14 @@ function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
         <CellValue cell={fake} />
       </button>
       {showHover && (
-        <div role="tooltip" className="absolute left-1/2 top-[calc(100%+6px)] z-[25] w-[320px] -translate-x-1/2 rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-own-cell-hover">
+        <Floating align="center" role="tooltip" className="w-[320px] rounded-inner border border-border bg-white p-3 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]" data-testid="cmp-own-cell-hover">
           {card}
-        </div>
+        </Floating>
       )}
       {isOpen && (
         <>
           <div className="fixed inset-0 z-[24]" onClick={() => setOpen(null)} />
-          <div className={cn("absolute left-1/2 top-[calc(100%+6px)] z-[25] -translate-x-1/2 rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", ownSite ? "w-[340px]" : "w-[280px]")}>
+          <Floating lock align="center" className={cn("rounded-inner border border-border bg-white p-3.5 text-left shadow-[0_18px_44px_-16px_rgba(10,22,40,.3)]", ownSite ? "w-[340px]" : "w-[280px]")}>
             <div className="mb-1 flex items-start gap-2">
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] font-bold">{row.name}</div>
@@ -1575,7 +1628,7 @@ function OwnCell({ row, kind, org, ownSite, open, setOpen, onPatch }: {
                 <button key={v} onClick={() => void set(v)} disabled={busy} className={cn("rounded-full border px-2.5 py-1 text-[12px] font-semibold", row.ourStatus === v ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-3 hover:border-primary/55")}>{C.values[v]}</button>
               ))}
             </div>
-          </div>
+          </Floating>
         </>
       )}
     </span>
