@@ -123,6 +123,8 @@ export function mergeCompetitorsConfig(raw: unknown): CompetitorsConfig {
 export const MAX_DOMAIN_DESCRIPTION = 6000;
 /** A domain's plain summary for people (tooltip, deep dive). */
 export const MAX_DOMAIN_SUMMARY = 600;
+/** Who does a domain's work (roles and teams): the "Show more" line of the domain's info card. */
+export const MAX_DOMAIN_DONE_BY = 300;
 /** A capability's plain description (row tooltip; also in the scan prompt). */
 export const MAX_CAPABILITY_DESCRIPTION = 500;
 /** The org's own product chip on a capability. */

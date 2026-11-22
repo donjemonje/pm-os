@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/Button";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { UmMarkdown } from "@/components/documents/UmMarkdown";
 import { ColorSwatch } from "@/components/settings/ColorSwatch";
+import { definitionSameAsCovers, domainTextsToSave } from "@/lib/competitors/domain-texts";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
-import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
+import { ADDRESS_KINDS, isAnalysisActive, MAX_CAPABILITY_DESCRIPTION, MAX_DOMAIN_DESCRIPTION, MAX_DOMAIN_DONE_BY, MAX_DOMAIN_SUMMARY, MAX_OWN_PRODUCT, OWN_STATUS_VALUES, type AddressKind } from "@/lib/competitors/config";
 import { ownProductLabel } from "@/lib/competitors/ownProduct";
 import type { AddressRow, AddressSearchRow, CapabilityRow, CellRow, CompetitorRow, CompetitorsState, DomainRow, OwnSiteRow, RemovedCapabilityRow, RemovedRow } from "@/lib/competitors/store";
 import { PRODUCT_CHIP_DEFAULT, swatchColor } from "@/lib/ideas/colors";
@@ -751,6 +752,11 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
   const [editName, setEditName] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  // Who does the work (the info card's "Show more"), and "Same as what it covers" for the PMOS AI definition.
+  const [doneBy, setDoneBy] = useState("");
+  const [same, setSame] = useState(false);
+  const [editDoneBy, setEditDoneBy] = useState("");
+  const [editSame, setEditSame] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -764,11 +770,11 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
   async function add() {
     if (!name.trim()) return;
-    if (await onAdd({ name, summary, description })) { setName(""); setSummary(""); setDescription(""); setAdding(false); }
+    if (await onAdd({ name, ...domainTextsToSave({ covers: summary, definition: description, same }), doneBy })) { setName(""); setSummary(""); setDescription(""); setDoneBy(""); setSame(false); setAdding(false); }
   }
   async function saveEdit(id: string) {
     const d = domains.find((x) => x.id === id);
-    const body = { name: editName, summary: editSummary, description: editDescription };
+    const body = { name: editName, ...domainTextsToSave({ covers: editSummary, definition: editDescription, same: editSame }), doneBy: editDoneBy };
     const renamed = d && editName.trim() !== d.name;
     if (await (renamed ? onRename(d, body) : onSave(id, body))) setEditingId(null);
   }
@@ -784,7 +790,8 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
     await onReorder(next.map((d) => d.id));
   }
   const editorKeys = (onSubmit: () => void, onCancel: () => void) => (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); }
+    // Enter saves from a single-line field, Cmd/Ctrl+Enter from anywhere (a textarea keeps Enter for a new line); Esc cancels.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey || (e.target instanceof HTMLInputElement && e.target.type === "text"))) { e.preventDefault(); onSubmit(); }
     else if (e.key === "Escape") { e.preventDefault(); onCancel(); }
   };
   const summaryEditor = (value: string, onChange: (v: string) => void) => (
@@ -798,6 +805,54 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
         className={cn(INPUT, "resize-y font-mono text-[12.5px] leading-relaxed")} disabled={busy} />
       <div className="mt-1 text-right font-mono text-[10.5px] text-[#9aa8be]">{value.length}/{MAX_DOMAIN_DESCRIPTION}</div>
     </div>
+  );
+
+  /**
+   * The three things a user edits on a domain, each its own section: 1. the name; 2. the info section people read in
+   * the table — what it covers, who does the work; 3. the PMOS AI definition, with "Same as what it covers" so the two
+   * texts need not be kept in step by hand. Every field has a visible label and a hint.
+   */
+  const HINT = "mb-1 block text-[11.5px] text-fg-muted";
+  const domainFields = (f: { name: string; setName: (v: string) => void; summary: string; setSummary: (v: string) => void; doneBy: string; setDoneBy: (v: string) => void; description: string; setDescription: (v: string) => void; same: boolean; setSame: (v: boolean) => void; focusName: boolean }) => (
+    <>
+      <label className="block">
+        <span className={FIELD_LABEL}>{C.settings.domainName}</span>
+        <span className={HINT}>{C.settings.domainNameHint}</span>
+        <input type="text" value={f.name} onChange={(e) => f.setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus={f.focusName} className={INPUT} maxLength={80} disabled={busy} data-testid="cmp-domain-name" />
+      </label>
+      <fieldset className="m-0 flex flex-col gap-2 border-0 border-t border-border p-0 pt-2">
+        <legend className="sr-only">{C.settings.domainInfoSection}</legend>
+        <div>
+          <div className="text-[12.5px] font-semibold text-foreground">{C.settings.domainInfoSection}</div>
+          <div className="text-[11.5px] text-fg-muted">{C.settings.domainInfoHint}</div>
+        </div>
+        <label className="block">
+          <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
+          {summaryEditor(f.summary, f.setSummary)}
+        </label>
+        <label className="block">
+          <span className={FIELD_LABEL}>{C.settings.domainDoneBy}</span>
+          <textarea value={f.doneBy} onChange={(e) => f.setDoneBy(e.target.value)} rows={2} maxLength={MAX_DOMAIN_DONE_BY} placeholder={C.settings.domainDoneByPlaceholder} className={cn(INPUT, "resize-y leading-relaxed")} disabled={busy} data-testid="cmp-domain-done-by" />
+        </label>
+      </fieldset>
+      <fieldset className="m-0 flex flex-col gap-2 border-0 border-t border-border p-0 pt-2">
+        <legend className="sr-only">{C.settings.domainDescription}</legend>
+        <div>
+          <div className="text-[12.5px] font-semibold text-foreground">{C.settings.domainDescription}</div>
+          <div className="text-[11.5px] text-fg-muted">{C.settings.domainDescriptionHint}</div>
+        </div>
+        <label className="inline-flex w-fit items-center gap-2 text-[12.5px] text-fg-2">
+          <input type="checkbox" checked={f.same} onChange={(e) => f.setSame(e.target.checked)} disabled={busy} data-testid="cmp-domain-same" />
+          {C.settings.domainSameAsCovers}
+        </label>
+        {!f.same && (
+          <label className="block">
+            <span className="sr-only">{C.settings.domainDescription}</span>
+            {descriptionEditor(f.description, f.setDescription)}
+          </label>
+        )}
+      </fieldset>
+    </>
   );
 
   return (
@@ -816,18 +871,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
 
       {canEdit && !settingUp && adding && (
         <div className="mb-3 flex flex-col gap-2 rounded-xl border border-border bg-white px-5 py-4" onKeyDown={editorKeys(() => void add(), () => setAdding(false))}>
-          <label className="block">
-            <span className={FIELD_LABEL}>{C.settings.domainName}</span>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={C.settings.domainPlaceholder} autoFocus className={INPUT} maxLength={80} disabled={busy} />
-          </label>
-          <label className="block">
-            <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
-            {summaryEditor(summary, setSummary)}
-          </label>
-          <label className="block">
-            <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
-            {descriptionEditor(description, setDescription)}
-          </label>
+          {domainFields({ name, setName, summary, setSummary, doneBy, setDoneBy, description, setDescription, same, setSame, focusName: true })}
           <div className="flex items-center justify-end gap-2">
             <button onClick={() => setAdding(false)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
             <button onClick={() => void add()} disabled={busy || !name.trim()} className={EDITOR_PRIMARY}>
@@ -857,18 +901,7 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
             >
               {editing ? (
                 <div className="flex flex-col gap-2" onKeyDown={editorKeys(() => void saveEdit(d.id), () => setEditingId(null))}>
-                  <label className="block">
-                    <span className={FIELD_LABEL}>{C.settings.domainName}</span>
-                    <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder={C.settings.domainPlaceholder} className={INPUT} maxLength={80} disabled={busy} autoFocus />
-                  </label>
-                  <label className="block">
-                    <span className={FIELD_LABEL}>{C.settings.domainSummary}</span>
-                    {summaryEditor(editSummary, setEditSummary)}
-                  </label>
-                  <label className="block">
-                    <span className={FIELD_LABEL}>{C.settings.domainDescription}</span>
-                    {descriptionEditor(editDescription, setEditDescription)}
-                  </label>
+                  {domainFields({ name: editName, setName: setEditName, summary: editSummary, setSummary: setEditSummary, doneBy: editDoneBy, setDoneBy: setEditDoneBy, description: editDescription, setDescription: setEditDescription, same: editSame, setSame: setEditSame, focusName: true })}
                   <div className="flex items-center justify-end gap-2">
                     <button onClick={() => setEditingId(null)} className={EDITOR_BTN}><X size={13} /> {C.settings.cancel}</button>
                     <button onClick={() => void saveEdit(d.id)} disabled={busy || !editName.trim()} className={EDITOR_PRIMARY}>
@@ -892,18 +925,32 @@ function DomainsPanel({ domains, capabilities, cells, competitors, canEdit, busy
                             <GripVertical size={14} />
                           </span>
                           <span className="mx-0.5 h-4 w-px bg-border" />
-                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditSummary(d.summary); setEditDescription(d.description); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
+                          <button onClick={() => { setEditingId(d.id); setEditName(d.name); setEditSummary(d.summary); setEditDescription(d.description); setEditDoneBy(d.doneBy); setEditSame(definitionSameAsCovers(d.summary, d.description)); }} className={ICON_BTN} aria-label={C.settings.edit} disabled={busy}><Pencil size={13} /></button>
                           <button onClick={() => void onRemove(d)} className={cn(ICON_BTN, "hover:text-[#c23767]")} aria-label={C.settings.remove} disabled={busy}><Trash2 size={13} /></button>
                         </>
                       )}
                     </span>
                   </div>
-                  <p className={cn("m-0 mb-2 text-[13px] leading-snug", d.summary ? "text-foreground" : "italic text-fg-faint")}>{d.summary || C.settings.domainSummaryEmpty}</p>
-                  <div className={FIELD_LABEL}>{C.settings.domainDescription}</div>
-                  {d.description ? (
-                    <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
+                  <div className={FIELD_LABEL}>{C.settings.domainSummary}</div>
+                  <p className={cn("m-0 mb-2 text-[13px] leading-snug", d.summary ? "text-foreground" : "italic text-fg-faint")} data-testid="cmp-domain-covers">{d.summary || C.settings.domainSummaryEmpty}</p>
+                  {d.doneBy && (
+                    <>
+                      <div className={FIELD_LABEL}>{C.settings.domainDoneBy}</div>
+                      <p className="m-0 mb-2 text-[13px] leading-snug text-fg-2" data-testid="cmp-domain-card-done-by">{d.doneBy}</p>
+                    </>
+                  )}
+                  {/* Never the same words twice: when the PMOS AI definition is the same text as "What it covers", the card says so instead of repeating it. */}
+                  {definitionSameAsCovers(d.summary, d.description) ? (
+                    <div className="text-[12px] text-fg-muted" data-testid="cmp-domain-same-note">{C.settings.domainSameNote}</div>
                   ) : (
-                    <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
+                    <>
+                      <div className={FIELD_LABEL}>{C.settings.domainDescription}</div>
+                      {d.description ? (
+                        <UmMarkdown content={d.description} className="text-[13px] text-fg-2" />
+                      ) : (
+                        <div className="text-[12.5px] italic text-fg-faint">{C.settings.domainDescriptionPlaceholder.split(".")[0]}.</div>
+                      )}
+                    </>
                   )}
                 </>
               )}
