@@ -7,11 +7,13 @@
  *     marked as edited, and can be released) or add reasoning (PMOS AI re-evaluates the row with it).
  *   - DomainScore: a company's score of a domain, in the domain's header row.
  *   - MoreEvidence: under a feature cell's strongest quote, the other pieces of evidence with their links.
+ *   - FeatureName / FeatureAdder: a PM renames, removes, adds and restores feature rows under a capability; every
+ *     such change has the capability's row re-evaluated (the score must agree with the features).
  * Cards are drawn at the end of the page (a portal), so the table's scrolling box never cuts them.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, Loader2, Lock, X } from "lucide-react";
+import { ExternalLink, Loader2, Lock, Pencil, Plus, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { track } from "@/lib/analytics/track";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
@@ -86,7 +88,8 @@ const HOVER_CLOSE_MS = 150;
 /**
  * A capability cell of the coverage model: the meter and the number. Hover shows the reasoning; a click opens the
  * card with the reasoning and, when `actions` is given, "Change the score" and "Add reasoning".
- * Enter confirms, Esc cancels (a textarea confirms with Cmd/Ctrl+Enter).
+ * Enter confirms, Esc cancels (a textarea confirms with Cmd/Ctrl+Enter). In "Change the score" the number that has the
+ * focus is the picked one, so Tab + Enter saves what the PM is on.
  */
 export function ScoreCell({ rowId, rowName, columnId, company, own = false, score, reasoning, locked, lockedBy, pmReasoning, reevaluating, error, isOpen, onOpen, onClose, actions }: {
   rowId: string;
@@ -196,7 +199,7 @@ export function ScoreCell({ rowId, rowName, columnId, company, own = false, scor
               <div className="mt-2.5 border-t border-border pt-2.5" onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void run(() => actions.setScore(pick)); } }}>
                 <div className="flex items-center gap-1.5" role="radiogroup" aria-label={C.score.change}>
                   {Array.from({ length: MAX_SCORE + 1 }, (_, n) => (
-                    <button key={n} type="button" role="radio" aria-checked={pick === n} autoFocus={pick === n} onClick={() => setPick(n)} className={cn("flex h-7 w-7 items-center justify-center rounded-full border font-mono text-[12px] font-bold", pick === n ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-2 hover:border-primary/55")} data-testid={`cmp-score-pick-${n}`}>{n}</button>
+                    <button key={n} type="button" role="radio" aria-checked={pick === n} autoFocus={pick === n} onClick={() => setPick(n)} onFocus={() => setPick(n)} className={cn("flex h-7 w-7 items-center justify-center rounded-full border font-mono text-[12px] font-bold", pick === n ? "border-transparent bg-primary text-white" : "border-border bg-white text-fg-2 hover:border-primary/55")} data-testid={`cmp-score-pick-${n}`}>{n}</button>
                   ))}
                 </div>
                 <p className="m-0 mt-1.5 text-[11.5px] text-fg-muted">{C.score.changeHint}</p>
@@ -260,5 +263,90 @@ export function MoreEvidence({ evidence, rowId, columnId }: { evidence: Evidence
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * A feature row's name with its two actions, shown when the pointer is on the name (or a button has focus): rename
+ * (an input in place; Enter confirms, Esc cancels) and remove (the row can be restored under its capability).
+ */
+export function FeatureName({ name, onRename, onRemove }: { name: string; onRename: (name: string) => Promise<boolean>; onRemove: () => Promise<boolean> }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    const next = value.trim().replace(/\s+/g, " ");
+    if (!next || next === name) { setEditing(false); return; }
+    setBusy(true);
+    const ok = await onRename(next);
+    setBusy(false);
+    if (ok) setEditing(false);
+  };
+  if (editing) {
+    return (
+      <input value={value} onChange={(e) => setValue(e.target.value)} autoFocus disabled={busy} aria-label={C.score.renameFeature} maxLength={160}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void save(); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setValue(name); setEditing(false); } }}
+        onBlur={() => { if (!busy) { setValue(name); setEditing(false); } }}
+        className="h-7 w-full max-w-[420px] rounded-[6px] border border-primary/60 bg-white px-2 text-[12.5px] text-foreground outline-none" data-testid="cmp-feature-rename-input" />
+    );
+  }
+  const tool = "rounded-[5px] p-1 text-fg-muted opacity-0 hover:bg-white hover:text-fg-2 focus:opacity-100 group-hover/fname:opacity-100 disabled:opacity-40";
+  return (
+    <span className="group/fname inline-flex items-center gap-1">
+      {name}
+      <button type="button" onClick={() => { setValue(name); setEditing(true); }} disabled={busy} className={tool} title={C.score.renameFeature} aria-label={`${C.score.renameFeature}: ${name}`} data-testid="cmp-feature-rename"><Pencil size={11} /></button>
+      <button type="button" onClick={async () => { setBusy(true); await onRemove(); setBusy(false); }} disabled={busy} className={tool} title={`${C.score.removeFeature} — ${C.score.featureChangeHint}`} aria-label={`${C.score.removeFeature}: ${name}`} data-testid="cmp-feature-remove"><X size={12} /></button>
+    </span>
+  );
+}
+
+/**
+ * The line under a capability's feature rows: "Add feature" (an input; Enter confirms, Esc cancels) and, when a PM
+ * removed rows, "Removed features · n" with a Restore button on each.
+ */
+export function FeatureAdder({ colSpan, removed, onAdd, onRestore }: { colSpan: number; removed: { id: string; name: string }[]; onAdd: (name: string) => Promise<boolean>; onRestore: (id: string) => Promise<boolean> }) {
+  const [adding, setAdding] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [showRemoved, setShowRemoved] = useState(false);
+  const add = async () => {
+    const name = value.trim().replace(/\s+/g, " ");
+    if (!name) return;
+    setBusy(true);
+    const ok = await onAdd(name);
+    setBusy(false);
+    if (ok) { setValue(""); setAdding(false); }
+  };
+  return (
+    <tr className="border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0" data-testid="cmp-feature-adder">
+      <td colSpan={colSpan} className="px-4 py-1.5 pl-[52px] text-[12px]">
+        <span className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          {adding ? (
+            <span className="inline-flex items-center gap-1.5">
+              <input value={value} onChange={(e) => setValue(e.target.value)} autoFocus disabled={busy} placeholder={C.score.addFeaturePlaceholder} aria-label={C.score.addFeature} maxLength={160}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void add(); } else if (e.key === "Escape") { e.preventDefault(); setValue(""); setAdding(false); } }}
+                className="h-7 w-[320px] rounded-[6px] border border-primary/60 bg-white px-2 text-[12.5px] text-foreground outline-none" data-testid="cmp-feature-add-input" />
+              <Button size="sm" variant="primary" onClick={() => void add()} disabled={busy || !value.trim()}>{C.score.save}</Button>
+              <Button size="sm" variant="ghost" onClick={() => { setValue(""); setAdding(false); }} disabled={busy}>{C.score.cancel}</Button>
+            </span>
+          ) : (
+            <button type="button" onClick={() => setAdding(true)} className="inline-flex items-center gap-1 font-semibold text-primary hover:underline" title={C.score.featureChangeHint} data-testid="cmp-feature-add"><Plus size={12} />{C.score.addFeature}</button>
+          )}
+          {removed.length > 0 && (
+            <button type="button" onClick={() => setShowRemoved((v) => !v)} aria-expanded={showRemoved} className="text-fg-muted hover:text-fg-2 hover:underline" data-testid="cmp-feature-removed-toggle">{C.score.removedFeatures(removed.length)}</button>
+          )}
+        </span>
+        {showRemoved && removed.length > 0 && (
+          <ul className="m-0 mt-1.5 flex list-none flex-col gap-1 p-0" data-testid="cmp-feature-removed-list">
+            {removed.map((f) => (
+              <li key={f.id} className="flex items-center gap-2 text-fg-3">
+                <span className="line-through decoration-[rgba(12,25,41,.3)]">{f.name}</span>
+                <button type="button" disabled={busy} onClick={async () => { setBusy(true); await onRestore(f.id); setBusy(false); }} className="inline-flex items-center gap-1 font-semibold text-primary hover:underline disabled:opacity-40" data-testid="cmp-feature-restore"><Undo2 size={11} />{C.score.restoreFeature}</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </td>
+    </tr>
   );
 }

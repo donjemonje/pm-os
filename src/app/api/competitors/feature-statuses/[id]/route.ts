@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { recordCompetitorEvent } from "@/lib/competitors/analytics";
-import { bad, cleanText, competitorsGuard, MAX_NOTE, readJson, stateResponse } from "@/lib/competitors/api";
+import { bad, cleanText, competitorsGuard, MAX_NOTE, readJson, stateResponse, type CompetitorsApiContext } from "@/lib/competitors/api";
+import { reevaluateAfter } from "@/lib/competitors/reevaluate-api";
 import { isOwnStatus } from "@/lib/competitors/config";
 import { COMPETITORS_COPY as C } from "@/lib/competitors/copy";
 
@@ -29,6 +30,7 @@ export async function PATCH(req: Request, { params }: Params) {
     await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_status_overridden", {
       competitorId: cell.competitorId, rowKind: "feature", featureId: cell.featureId, from, to: cell.value, hasNote: false, reset: true, surface,
     });
+    if (from !== cell.value) await reevaluateOfFeature(ctx, cell.featureId, body);
     return stateResponse(ctx);
   }
 
@@ -39,5 +41,12 @@ export async function PATCH(req: Request, { params }: Params) {
   await recordCompetitorEvent(ctx.workspaceId, ctx.user.id, "cmp_status_overridden", {
     competitorId: cell.competitorId, rowKind: "feature", featureId: cell.featureId, from, to: body.value, hasNote: note != null, reset: false, surface,
   });
+  if (from !== body.value) await reevaluateOfFeature(ctx, cell.featureId, body);
   return stateResponse(ctx);
+}
+
+/** In the coverage model a changed feature mark re-evaluates the capability's row: the score must agree with the features. */
+async function reevaluateOfFeature(ctx: CompetitorsApiContext, featureId: string, body: Record<string, unknown>): Promise<void> {
+  const feature = await db.feature.findUnique({ where: { id: featureId }, select: { capabilityId: true } });
+  if (feature) await reevaluateAfter(ctx, feature.capabilityId, body);
 }

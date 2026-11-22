@@ -143,6 +143,14 @@ export const COMPETITORS_COPY = {
     moreEvidence: (n: number) => `Show more evidence · ${n}`,
     lessEvidence: "Show less evidence",
     notChecked: "quote not checked",
+    // Feature rows a PM adds, renames, removes and restores under a capability.
+    addFeature: "Add feature",
+    addFeaturePlaceholder: "Name of the feature",
+    renameFeature: "Rename",
+    removeFeature: "Remove",
+    removedFeatures: (n: number) => `Removed features · ${n}`,
+    restoreFeature: "Restore",
+    featureChangeHint: "PMOS AI re-evaluates this capability's scores after a change to its features.",
   },
   cell: {
     evidence: "Evidence",
@@ -601,6 +609,10 @@ export const COMPETITORS_COPY = {
     piiHits: (n: number) => `${n} PII hit${n === 1 ? "" : "s"} dropped`,
   },
   errors: {
+    pickScore: "Pick a score from 0 to 5.",
+    reasoningTooLong: "The reasoning is at most 350 characters.",
+    featureName: "Give the feature a name.",
+    featureExists: "This capability already has a feature with that name.",
     pickOwnStatus: "Pick found or not found.",
     pickStatus: "Pick found or not found.",
     generic: "Something went wrong. Try again.",

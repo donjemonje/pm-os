@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { FilterPopover } from "@/components/ui/FilterPopover";
 import { Ring } from "@/components/ui/Ring";
 import { EvidenceCard, EvidenceList } from "./EvidenceCard";
-import { DomainScore, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
+import { DomainScore, FeatureAdder, FeatureName, MoreEvidence, ScoreCell, type ScoreActions } from "./ScoreCells";
 import { ProfilePanel } from "./ProfilePanel";
 import { initialsOf } from "@/components/ui/Avatar";
 import { track } from "@/lib/analytics/track";
@@ -288,6 +288,14 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
   const [watchedRun, setWatchedRun] = useState<string | null>(null);
   const awaitingSummary = watchedRun != null && !state.activeRun && state.lastRun?.id === watchedRun && typeof state.lastRun.summary.competitors !== "number";
 
+  // While PMOS AI re-evaluates a capability's row (a PM added reasoning, released a score or changed a feature row), learn when it is done.
+  const reevaluating = state.capabilities.some((k) => k.reevaluating);
+  useEffect(() => {
+    if (!reevaluating) return;
+    const t = setInterval(() => void refresh(), POLL_MS);
+    return () => clearInterval(t);
+  }, [reevaluating, refresh]);
+
   // While a scan or an analysis runs (or a run's summary is still to come), learn when it ends; results land in one go.
   useEffect(() => {
     if (!state.scanning && !state.analyzing && !awaitingSummary) return;
@@ -390,8 +398,8 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     [competitors, activeCaps, state.cells],
   );
 
-  /** What a PM can do on a scored capability cell: null = read-only. */
-  const scoreActions = (_url: string): ScoreActions | null => null;
+  /** What a PM can do on a scored capability cell (every member of the organization): set the score (it is then locked), release it, add reasoning. */
+  const scoreActions = (url: string): ScoreActions => ({ setScore: (score) => patch(url, { score }), release: () => patch(url, { release: true }), addReasoning: (reasoning) => patch(url, { reasoning }) });
   const shownCompetitors = competitors.filter((c) => competitorFilter.length === 0 || competitorFilter.includes(c.name));
   const q = capQuery.trim().toLowerCase();
   const matchesStatus = (k: CapabilityRow) => {
@@ -510,6 +518,21 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
     // The columns move at once; the saved order comes back with the answer. A refused save loads the page's state again.
     setState((s) => ({ ...s, competitors: ids.map((id) => s.competitors.find((c) => c.id === id)!) }));
     if (!(await patch("/api/competitors/order", { ids }))) void refresh();
+  }
+
+  /** POST with a body: a create action whose answer is the new state. */
+  async function postJson(url: string, body: unknown): Promise<boolean> {
+    setError(null);
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? C.cell.saveFailed);
+      if (data.state) setState(data.state);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : C.cell.saveFailed);
+      return false;
+    }
   }
 
   async function patch(url: string, body: unknown): Promise<boolean> {
@@ -724,13 +747,15 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                               const haveN = shownCompetitors.filter((c) => cellOf(c.id, k.id)?.value === "found").length;
                               const descOpen = openDesc === k.id;
                               const features = featuresOf(k.id);
-                              const featuresOpen = features.length > 0 && openFeatures.has(k.id);
+                              const removedFeatures = state.removedFeatures.filter((f) => f.capabilityId === k.id);
+                              const hasFeatureRows = features.length > 0 || removedFeatures.length > 0;
+                              const featuresOpen = hasFeatureRows && openFeatures.has(k.id);
                               return (
                                 <Fragment key={k.id}>
                                 <tr className={cn("group h-11 border-b border-border last:border-b-0 hover:bg-[rgba(255,255,255,.7)]", kind === "gap" && "bg-[#fff7e0]", kind === "only" && "bg-[rgba(23,178,106,.08)]")}>
                                   <td className={cn("px-4 pl-[30px] font-medium text-[#1f2f47]", (kind === "gap" || kind === "only") && "font-semibold text-foreground")}>
                                     <span className="inline-flex flex-wrap items-center gap-2">
-                                      {features.length > 0 && (
+                                      {hasFeatureRows && (
                                         <button type="button" onClick={() => toggleFeatures(k.id, features.length)} aria-expanded={featuresOpen} aria-label={C.matrix.featuresToggle(k.name, features.length)} title={C.matrix.featuresToggle(k.name, features.length)}
                                           className="-ml-[22px] inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-features-toggle">
                                           {featuresOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
@@ -776,8 +801,9 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                                   </td>
                                 </tr>
                                 {featuresOpen && features.map((f) => (
-                                  <FeatureLine key={f.id} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
+                                  <FeatureLine key={f.id} onRename={(name) => patch(`/api/competitors/features/${f.id}`, { name })} onRemove={() => patch(`/api/competitors/features/${f.id}`, { state: "removed" })} feature={f} org={own} ownSite={state.ownSite} competitors={shownCompetitors} cellOf={(competitorId) => featureCellOf(competitorId, f.id)} open={openCell} setOpen={setOpenCell} onPatch={patch} onProfile={parts.profiles ? (competitorId) => openProfile(competitorId, "cell") : null} />
                                 ))}
+                                {featuresOpen && <FeatureAdder colSpan={3 + shownCompetitors.length} removed={removedFeatures} onAdd={(name) => postJson(`/api/competitors/capabilities/${k.id}/features`, { name })} onRestore={(id) => patch(`/api/competitors/features/${id}`, { state: "active" })} />}
                                 </Fragment>
                               );
                             })}
@@ -1085,8 +1111,11 @@ function DomainGroup({ domain, rows, lines, covered, gaps, colSpan, children, su
 
 // ————— A feature row: the level under a capability — the own mark, a mark per competitor, the coverage —————
 
-function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile }: {
+function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen, onPatch, onProfile, onRename, onRemove }: {
   feature: FeatureRow;
+  /** A PM renames or removes the row; absent = the name is plain text. */
+  onRename?: (name: string) => Promise<boolean>;
+  onRemove?: () => Promise<boolean>;
   org: string;
   ownSite: boolean;
   competitors: CompetitorRow[];
@@ -1100,7 +1129,7 @@ function FeatureLine({ feature, org, ownSite, competitors, cellOf, open, setOpen
   return (
     <tr className="h-10 border-b border-border bg-[rgba(255,255,255,.35)] last:border-b-0 hover:bg-[rgba(255,255,255,.7)]" data-testid="cmp-feature-row">
       <td className="px-4 pl-[52px] text-[12.5px] text-[#1f2f47]">
-        {feature.name}
+        {onRename && onRemove ? <FeatureName name={feature.name} onRename={onRename} onRemove={onRemove} /> : feature.name}
       </td>
       <td className="bg-[rgba(36,87,245,.06)] text-center">
         <span className="inline-flex max-w-[100px] items-center justify-center gap-1">
