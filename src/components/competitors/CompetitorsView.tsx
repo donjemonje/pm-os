@@ -398,7 +398,7 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
       return C.feed.meaning.gap(own, i.competitorName, n, competitors.length);
     }
     if (i.kind === "raised" || i.kind === "lowered") return C.feed.meaning[i.kind](own, i.competitorName, C.values[i.own ?? "not_found"].toLowerCase());
-    if (i.kind === "ability") return C.feed.meaning.ability(i.competitorName, i.abilitySize === "feature" ? i.parentName ?? null : null);
+    if (i.kind === "ability") return C.feed.meaning.ability(i.competitorName);
     if (i.kind === "fact") return C.feed.meaning.fact(i.competitorName, C.notify.email.factKinds[i.factKind ?? ""] ?? i.factKind ?? "");
     return C.feed.meaning.suggestion((C.feed.suggestionStates[i.suggestionState ?? ""] ?? "").toLowerCase());
   };
@@ -1026,7 +1026,7 @@ const FACT_TAG_TONE: Record<string, string> = {
 /** What the row's tag says: gap evidence, capability, the fact kind, or suggestion. */
 function feedTag(item: FeedItem): { label: string; className: string } {
   if (item.kind === "fact") return { label: C.notify.email.factKinds[item.factKind ?? ""] ?? item.factKind ?? "", className: FACT_TAG_TONE[item.factKind ?? ""] ?? "bg-[#eef1f6] text-[#4a5b74]" };
-  if (item.kind === "ability") return { label: item.abilitySize === "feature" ? C.feed.tags.abilityFeature : C.feed.tags.ability, className: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]" };
+  if (item.kind === "ability") return { label: C.feed.tags.ability, className: "bg-[rgba(23,178,106,.14)] text-[#0f7a47]" };
   if (item.kind === "gap") return { label: C.feed.tags.gap, className: "border border-dashed border-[#f0b43c] bg-[#fff7e0] text-[#8a5a00]" };
   if (item.kind === "suggestion") return { label: C.feed.tags.suggestion, className: "border border-dashed border-[rgba(36,87,245,.55)] bg-white text-[#2a5fd0]" };
   return { label: C.feed.tags[item.kind], className: "bg-[#eef1f6] text-[#4a5b74]" };
@@ -1095,10 +1095,8 @@ function FeedDetail({ item, meaning, onOpenCell }: {
           )}
           {item.kind === "ability" && (
             <>
-              {item.problem && <Row label={C.feed.detail.problem}>{item.problem}</Row>}
               {item.audience && <Row label={C.feed.detail.audience}>{item.audience}</Row>}
               {item.workflows && <Row label={C.feed.detail.workflows}>{item.workflows}</Row>}
-              {item.abilitySize === "feature" && item.parentName && <Row label={C.feed.detail.partOf}>{item.parentName}</Row>}
             </>
           )}
           {item.kind === "fact" && (

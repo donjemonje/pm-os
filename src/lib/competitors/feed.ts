@@ -2,8 +2,8 @@
  * The news feed.
  *
  * Since the News Feed & Notifications story (2026-11-22) the feed is the NEW ABILITIES of the competitors: what the
- * news intake (news/intake.ts) found on a page that was not on the company's list before — a new capability, or a
- * new feature of a capability it has. One CompetitorNews row with verdict "new" is one item. News that is already
+ * news intake (news/intake.ts) found on a new or changed page that was not on the company's list before. No sizes
+ * here: capability or feature belongs to the table. One CompetitorNews row with verdict "new" is one item. News that is already
  * on the list, and news that is not an ability (people, money, deals, prices), is stored and never shown here.
  *
  * What the feed showed before — a status that moved in the table (a gap when the org lacks it), a new dated fact,
@@ -16,6 +16,7 @@
  */
 import { db } from "../db";
 import { NOT_OWN } from "./own";
+import { abilityPhrase } from "./news/intake";
 import type { OwnStatus, StatusValue } from "./config";
 
 export type FeedKind = "gap" | "raised" | "lowered" | "fact" | "suggestion" | "ability";
@@ -56,13 +57,10 @@ export interface FeedItem {
   /** The suggestion's domain was itself proposed by the scan. */
   newDomain: boolean;
   read: boolean;
-  /** kind "ability" only — how PMOS AI understood it: the problem it solves, the workflows it helps, who it is for. */
+  /** kind "ability" only — how PMOS AI understood it: the problem it solves (also the first part of `summary`), the workflows it is part of, who it is for. */
   problem?: string | null;
   workflows?: string | null;
   audience?: string | null;
-  /** kind "ability" only — "capability" | "feature", and for a feature the capability of the company's list it belongs to. */
-  abilitySize?: string | null;
-  parentName?: string | null;
 }
 
 /** The feed's source-type label for the kind of page a piece of news was on (copy: profile.sourceTypes). */
@@ -167,13 +165,13 @@ export async function collectFeed(workspaceId: string, baselineUntil: string | n
     const key = `news:${n.id}`;
     const competitorName = nameOf.get(n.competitorId) ?? "";
     items.push({
-      key, kind: "ability", impact: n.size === "feature" ? "Medium" : "High", at: n.createdAt.toISOString(),
+      key, kind: "ability", impact: "High", at: n.createdAt.toISOString(),
       competitorId: n.competitorId, competitorName,
       title: n.name, domain: null, capabilityId: null, from: null, to: null, own: null,
       factKind: null, factDate: n.publishedAt?.toISOString() ?? null, product: null, quote: n.quote, sourceUrl: n.sourceUrl,
-      sourceType: NEWS_SOURCE_TYPE[n.sourceKind] ?? null, headline: `${competitorName}: ${n.name}`, summary: n.what, imageUrl: null, suggestionState: null, newDomain: false,
+      sourceType: NEWS_SOURCE_TYPE[n.sourceKind] ?? null, headline: `${competitorName}: ${n.name}`, summary: abilityPhrase(n), imageUrl: null, suggestionState: null, newDomain: false,
       read: readKeys.has(key),
-      problem: n.problem, workflows: n.workflows, audience: n.audience, abilitySize: n.size, parentName: n.parentName,
+      problem: n.problem, workflows: n.workflows, audience: n.audience,
     });
   }
   for (const s of statuses) {

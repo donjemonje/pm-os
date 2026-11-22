@@ -45,7 +45,9 @@ export async function tableDryRunFor(company: { id: string; workspaceId: string;
   const { table, names } = await loadTable(company.workspaceId);
   const abilities: TableAddAbility[] = fresh.map((n, i) => ({
     code: `A${i + 1}`,
-    size: n.size === "feature" ? "feature" : "capability",
+    // The intake no longer sizes an ability (2026-11-22): an item of a company's list is a feature. The table prompt still
+    // follows the older two-level list and is due a rewrite on the prompt that builds a domain (3-build-the-domain.txt).
+    size: "feature",
     name: n.name,
     what: n.what,
     problem: n.problem ?? "not stated",
@@ -53,7 +55,7 @@ export async function tableDryRunFor(company: { id: string; workspaceId: string;
     who: n.audience ?? "not stated",
     quote: n.quote ?? "",
     sourceUrl: n.sourceUrl,
-    parentName: n.parentName,
+    parentName: null,
   }));
   const started = Date.now();
   const { value, usage } = await callTool<unknown>(TABLE_ADD_SYSTEM_PROMPT, "", renderTableAdd(company.name, abilities, table), tableAddTool(abilities.map((a) => a.code), table), {

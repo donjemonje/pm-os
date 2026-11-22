@@ -1551,14 +1551,20 @@ model CompetitorNews {
   batchId       String
   /// "new" | "covered" | "other"
   verdict       String
-  /// verdict "other" only: "hr" | "finance" | "partnership" | "pricing" | "event" | "marketing" | "other"
+  /// verdict "other" only: "hr" | "finance" | "partnership" | "pricing" | "event" | "training" | "marketing" | "other" | "integration" (a tool name) | "not_understood" (named, not explained)
   otherType     String?
-  /// verdict "new" only: "capability" | "feature"
+  /// No longer written (2026-11-22): the intake does not size an ability; sizes belong to the table.
   size          String?
-  /// The company's own name for it (an ability), or a short title (other news).
+  /// A new ability: the plain name any company could use for it. Other news: its label.
   name          String
-  /// One plain sentence: what the product does (an ability), or what happened (other news).
+  /// A new ability: what this company calls it.
+  companyName   String?
+  /// A new ability: how it works. Other news: why it was left out, or what is missing. "" for an ability already on the list.
   what          String
+  /// A new ability: "stated" (a page says the problem) | "worked out".
+  problemSource String?
+  /// A new ability: every quote that is on its page, the strongest first — [{ quote, url, title, kind, strength }].
+  evidence      Json?
   /// Abilities only — the problem it solves, the workflows it helps with, who uses it (job titles, or the type of agent).
   problem       String?
   workflows     String?
