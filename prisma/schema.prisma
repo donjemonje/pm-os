@@ -727,6 +727,25 @@ model Capability {
   /// The top-ranked evidence from the organization's own source behind the own cell, written by the own source's
   /// analysis: { quote, sourceUrl, reasoning, wording, description, count }. Null = no evidence of ours.
   ourEvidence    Json?
+  /// The coverage model (Daniel 2026-11-22; lib/competitors/scores.ts): a capability is a sub-domain and every company
+  /// gets a score 0-5 for how well it covers the capability's area (0 = nothing in it), compared with the other
+  /// companies of the table. These are the organization's OWN score; a competitor's is on CapabilityStatus.
+  /// Null = a row of the earlier model: the own cell shows ourStatus.
+  ourScore            Int?
+  /// Why this score, in plain words, at most 350 characters.
+  ourScoreReasoning   String?
+  /// A PM set the own score by hand: it is locked — no run and no re-evaluation overwrites it until the PM releases it.
+  ourScoreLockedAt    DateTime?
+  ourScoreLockedById  String?
+  /// Reasoning a PM added for the own cell: PMOS AI uses it when it re-evaluates the row and in every later run.
+  ourPmReasoning      String?
+  ourPmReasoningAt    DateTime?
+  ourPmReasoningById  String?
+  /// Set while PMOS AI re-evaluates this capability's row (one call for the whole row); a re-evaluation that stopped
+  /// reporting is taken over after 10 minutes.
+  reevaluatingAt      DateTime?
+  /// Why the last re-evaluation did not finish, as the cell says it; null after one that did.
+  reevaluateError     String?
   position       Int              @default(0)
   /// "manual" | "ai"
   origin         String           @default("manual")
@@ -794,6 +813,15 @@ model CapabilityStatus {
   description  String?
   /// Distinct pages that carry evidence for the cell.
   evidenceCount Int       @default(0)
+  /// The coverage model (see Capability.ourScore): this company's score 0-5 for the capability, why (at most 350
+  /// characters), the PM's lock on the score, and the reasoning a PM added. Null score = a cell of the earlier model.
+  score           Int?
+  scoreReasoning  String?
+  scoreLockedAt   DateTime?
+  scoreLockedById String?
+  pmReasoning     String?
+  pmReasoningAt   DateTime?
+  pmReasoningById String?
   /// The analysis run that last wrote the cell.
   analysisId   String?
   /// What the row was last looked for with, when every chunk of the company found nothing (analysis/secondlook.ts lookKey); same key = not asked again.
@@ -1150,9 +1178,13 @@ model FeatureStatus {
   sourceUrl      String?
   reasoning      String?
   wording        String?
-  /// The description of the best-ranked evidence that has one.
+  /// The description of the best-ranked evidence that has one. In the coverage model: "how it works" at this company, at most 350 characters.
   description    String?
   evidenceCount  Int        @default(0)
+  /// The coverage model: every piece of evidence behind the cell, the strongest first — [{ quote, url, pageKind, strength, checked }]
+  /// (lib/competitors/scores.ts readEvidenceList). `quote` / `sourceUrl` above are the first one. Null = the earlier model.
+  /// The organization's own feature keeps the same list inside Feature.ourEvidence.evidence.
+  evidence       Json?
   analysisId     String?
   changedAt      DateTime?
   overrideValue  String?

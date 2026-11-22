@@ -4,6 +4,7 @@
  * low-confidence find counts half). Pure, so the strip card and tests share one definition.
  */
 import type { StatusValue } from "./config";
+import { proximityOfScores } from "./scores";
 
 export interface Closeness {
   /** 0–100, or null when the org has no capabilities. */
@@ -13,7 +14,13 @@ export interface Closeness {
   total: number;
 }
 
-export function closenessOf(capabilityIds: readonly string[], valueOf: (capabilityId: string) => StatusValue | undefined): Closeness {
+/**
+ * `scoreOf` (the coverage model, scores.ts): when the capabilities carry scores 0-5 for this competitor, closeness is
+ * the average score across the scored capabilities on the same 0-100 scale, instead of the share found. `found` then
+ * counts the capabilities scored above 0. Capabilities with no score fall back to the found / low rule only when
+ * none is scored.
+ */
+export function closenessOf(capabilityIds: readonly string[], valueOf: (capabilityId: string) => StatusValue | undefined, scoreOf?: (capabilityId: string) => number | null | undefined): Closeness {
   let found = 0;
   let low = 0;
   for (const id of capabilityIds) {
@@ -22,13 +29,15 @@ export function closenessOf(capabilityIds: readonly string[], valueOf: (capabili
     else if (v === "low") low++;
   }
   const total = capabilityIds.length;
+  const byScore = scoreOf ? proximityOfScores(capabilityIds.map((id) => scoreOf(id))) : null;
+  if (byScore !== null) return { score: byScore, found, low, total };
   return { score: total ? Math.round(((found + low * 0.5) / total) * 100) : null, found, low, total };
 }
 
 /** Competitors ranked closest first; ties keep the given order (the matrix column order). */
-export function rankByCloseness<T extends { id: string }>(competitors: readonly T[], capabilityIds: readonly string[], valueOf: (competitorId: string, capabilityId: string) => StatusValue | undefined): Array<{ competitor: T; closeness: Closeness }> {
+export function rankByCloseness<T extends { id: string }>(competitors: readonly T[], capabilityIds: readonly string[], valueOf: (competitorId: string, capabilityId: string) => StatusValue | undefined, scoreOf?: (competitorId: string, capabilityId: string) => number | null | undefined): Array<{ competitor: T; closeness: Closeness }> {
   return competitors
-    .map((competitor) => ({ competitor, closeness: closenessOf(capabilityIds, (k) => valueOf(competitor.id, k)) }))
+    .map((competitor) => ({ competitor, closeness: closenessOf(capabilityIds, (k) => valueOf(competitor.id, k), scoreOf ? (k) => scoreOf(competitor.id, k) : undefined) }))
     .sort((a, b) => (b.closeness.score ?? -1) - (a.closeness.score ?? -1));
 }
 
