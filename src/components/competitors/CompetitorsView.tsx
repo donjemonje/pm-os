@@ -662,14 +662,17 @@ export function CompetitorsView({ initialState, canEdit = false, parts = NO_PART
                 <table className="w-full border-collapse text-[13px]" style={{ minWidth: 560 + 104 * shownCompetitors.length }}>
                   <thead>
                     <tr>
-                      <th scope="col" className="border-b border-border px-4 pb-[30px] pl-[30px] pt-2.5 text-left align-middle text-[12px] font-semibold tracking-[0.06em] text-fg-muted">
+                      {/* The label and its open/close-all button sit at the vertical centre of the header row, next to the company icons: even padding, one line. */}
+                      <th scope="col" className="border-b border-border px-4 py-2.5 pl-[30px] text-left align-middle text-[14.5px] font-bold tracking-[0.06em] text-fg-muted">
+                        <span className="inline-flex items-center gap-2">
                         {C.matrix.capability}
                         {domainsWithRows.length > 0 && (
                           <button type="button" onClick={() => setOpenDomains((cur) => toggleAll(domainsWithRows.map((d) => d.id), cur))} title={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains} aria-label={allDomainsOpen ? C.matrix.closeAllDomains : C.matrix.openAllDomains}
-                            className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-[6px] align-middle text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-domains-toggle-all">
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-[6px] text-fg-muted hover:bg-white hover:text-fg-2" data-testid="cmp-domains-toggle-all">
                             {allDomainsOpen ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
                           </button>
                         )}
+                        </span>
                       </th>
                       <th scope="col" className="w-[104px] border-b border-t-[3px] border-b-border border-t-primary bg-[rgba(36,87,245,.08)] px-2 pb-2.5 text-center align-bottom">
                         <span className="flex flex-col items-center gap-1.5 pt-2.5">
