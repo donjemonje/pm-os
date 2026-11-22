@@ -124,6 +124,9 @@ const answered = new Set<string>();
 let dom: Record<DomainName, string>;
 let cap: Record<CapName, string>;
 let scanSeq = 0;
+/** Administration's "Disable analysis" switch as this file found it (a global AppSetting): restored in afterAll. */
+const ANALYSIS_OFF_KEY = "competitors.analysisDisabled";
+let analysisOffBefore: { found: boolean; value: Prisma.JsonValue } | null = null;
 
 // ————— Fixtures —————
 const SLUGS = [ORG.slug, ORG2.slug, ORG3.slug];
@@ -529,6 +532,11 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     if (envProblems.length) return;
     test.setTimeout(480_000);
     await withTestDb(async (db) => {
+      // A run that died left the switch as this file set it: the first snapshot of the worker stays the one restored.
+      if (!analysisOffBefore) {
+        const row = await db.appSetting.findUnique({ where: { key: ANALYSIS_OFF_KEY } });
+        analysisOffBefore = { found: Boolean(row), value: row?.value ?? null };
+      }
       await deleteFixtures(db);
       await seedFixtures(db);
       await isolateOtherOrgs(db, [workspaceId, workspace2Id, workspace3Id]);
@@ -541,7 +549,8 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     adminApi = await playwright.request.newContext({ baseURL: LOCAL_BASE_URL, storageState: stateFile.admin });
     pmApi = await playwright.request.newContext({ baseURL: LOCAL_BASE_URL, storageState: stateFile.pm });
     memberApi = await playwright.request.newContext({ baseURL: LOCAL_BASE_URL, storageState: stateFile.member });
-    // The scans of this file run on the local lane at the real time (the Website Scanning rows leave both that way too).
+    // The scans of this file run on the local lane at the real time (the Website Scanning rows leave both that way too),
+    // and a scan must queue its analysis: "Disable analysis" off for the run (a dev clone may have it on), restored after.
     await postKnob(adminApi, { clockOffsetMs: 0 });
     await ok(await adminApi.patch("/api/admin/competitors/settings", { data: { remoteScanEnabled: false, analysisDisabled: false } }));
     keyFile = (await createStationKey(adminApi, KEY_LABEL)).file;
@@ -583,6 +592,8 @@ test.describe("Capability Analysis — PM decisions stick", () => {
     await withTestDb(async (db) => {
       await restoreOtherOrgs(db);
       await deleteFixtures(db);
+      if (analysisOffBefore?.found) await db.appSetting.update({ where: { key: ANALYSIS_OFF_KEY }, data: { value: analysisOffBefore.value as Prisma.InputJsonValue } });
+      else if (analysisOffBefore) await db.appSetting.deleteMany({ where: { key: ANALYSIS_OFF_KEY } });
     });
     for (const s of fileSites.splice(0)) await s.stop().catch(() => undefined);
     await adminApi?.dispose();
