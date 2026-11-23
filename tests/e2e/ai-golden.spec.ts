@@ -38,7 +38,8 @@ import { loginWithTotp, seedQaOrgWithUser, withTestDb } from "./helpers";
  *           idea count in range; no empty titles
  *   IMP-08  raw row of 021 (quoted multi-line body) stored byte-equal
  *   IMP-10  trace: every stage present, none in error, ledger rows == AI
- *           calls, cached share ≥ 70 % on classify + match, heartbeat moved
+ *           calls, heartbeat moved; cached share on classify + match is
+ *           printed for information (target 70 %, never fails the run)
  *   IMP-11  truth customers → catalog; text-only names → suggested (not in
  *           catalog); "All customers" cell → affectsAllCustomers
  *   IMP-13  matchNotes per FR unit (idea, merged flag, reason); parked
@@ -48,7 +49,7 @@ import { loginWithTotp, seedQaOrgWithUser, withTestDb } from "./helpers";
  *           AI stage ran, no new ideas, no new ledger rows
  *
  * Assertions are threshold-style and read DB + API, never exact idea text.
- * Threshold checks (calls, duration, accuracy, cache share, ledger==calls)
+ * Threshold checks (calls, duration, accuracy, ledger==calls)
  * are expect.soft so one miss is recorded without hiding the cases that
  * follow it; structural checks (merge pair, split, raw row) stay hard.
  * UI assertions are limited to what feature/face_lift_v2 does not touch
@@ -293,7 +294,7 @@ test.describe("@ai golden run — one live upload of the RoomLens corpus", () =>
       expect(raw.description).toContain("\n\n");
     });
 
-    await test.step("IMP-10 trace complete and clean, ledger == AI calls, cache ≥ 70 % on classify + match, heartbeat advanced", async () => {
+    await test.step("IMP-10 trace complete and clean, ledger == AI calls, cache share printed (information), heartbeat advanced", async () => {
       const names = stages.map((s) => s.stage);
       for (const s of ["dedupe", "jira-fetch", "prepare", "parse", "classify", "split", "match", "customers", "jira-sync", "write"]) {
         expect(names, `stage ${s} present`).toContain(s);
@@ -311,9 +312,10 @@ test.describe("@ai golden run — one live upload of the RoomLens corpus", () =>
         expect(s.tokens, `${name} tokens recorded`).toBeTruthy();
         const share = s.tokens!.cacheRead / Math.max(1, s.tokens!.input);
         console.log(`[golden] ${name} cached share ${(share * 100).toFixed(0)}%`);
-        // Soft (2026-09-14 run: classify 60% on a cold org): a miss is recorded
-        // and the cases after IMP-10 still get their own outcome. Threshold unchanged.
-        expect.soft(share, `${name} cached share ≥ ${KEY.minCachedShare * 100}%`).toBeGreaterThanOrEqual(KEY.minCachedShare);
+        // Information only (Daniel 2026-11-23): the share is printed and kept in the QA-LOG, never fails the run.
+        // It missed 70 % on every run since 2026-09-14 (the provider's cache is not readable by most calls); Omri
+        // watches the numbers and tries to raise them in separate experiments.
+        if (share < KEY.minCachedShare) console.log(`[golden] INFO ${name} cached share below the ${KEY.minCachedShare * 100}% target`);
       }
       expect(batch.heartbeatAt.getTime()).toBeGreaterThan(batch.startedAt.getTime());
     });
