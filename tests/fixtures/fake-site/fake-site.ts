@@ -46,8 +46,14 @@ export interface Variants {
   forbidPmosUa: boolean;
   /** 403 on EVERY page for every client (a hard bot wall: both lanes refused). */
   forbidAll: boolean;
-  /** After N successful page requests the server answers 429 with Retry-After to everything. 0 = off. */
+  /**
+   * After N successful page requests to the site's own address the server answers 429 with Retry-After to everything
+   * there. 0 = off. Requests to other names of the same server (help.<host>, www.<host> — the search for a company's
+   * other addresses guesses those, and localtest.me sends every name here) neither count nor get the 429 (2026-11-22).
+   */
   slowdownAfter: number;
+  /** The Retry-After of that 429, in seconds (default 120, what a real site asks). A station honours it up to 5 minutes. */
+  slowdownRetryAfterS: number;
   /** robots.txt rules. */
   robotsDisallow: string[];
   robotsCrawlDelay: number | null;
@@ -102,6 +108,7 @@ export const DEFAULT_VARIANTS: Variants = {
   forbidPmosUa: false,
   forbidAll: false,
   slowdownAfter: 0,
+  slowdownRetryAfterS: 120,
   robotsDisallow: [],
   robotsCrawlDelay: null,
   infiniteLinks: false,
@@ -258,6 +265,8 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const ua = req.headers["user-agent"] ?? "";
     const host = req.headers.host ?? "";
+    /** A request to the site's own address (not help.<host>, www.<host>, …): only these count toward slowdownAfter. */
+    const own = host.split(":")[0] === hostName;
     const send = (status: number, body: string | Buffer, type = "text/html; charset=utf-8", headers: Record<string, string> = {}) => {
       requests.push({ at: Date.now(), method: req.method ?? "GET", host, path, ua, status });
       const write = () => {
@@ -311,8 +320,8 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
     if (variants.forbidAll || (variants.forbidPmosUa && /pm-os/i.test(ua))) {
       return send(403, "<html><body><h1>Access denied</h1></body></html>");
     }
-    if (variants.slowdownAfter > 0 && okPages >= variants.slowdownAfter && path !== "/robots.txt") {
-      return send(429, "Too Many Requests", "text/plain", { "retry-after": "120" });
+    if (variants.slowdownAfter > 0 && own && okPages >= variants.slowdownAfter && path !== "/robots.txt") {
+      return send(429, "Too Many Requests", "text/plain", { "retry-after": String(variants.slowdownRetryAfterS) });
     }
 
     const base = origin(port);
@@ -340,41 +349,41 @@ export async function startFakeSite(opts: { port?: number; host?: string } = {})
         return send(200, xml, "application/xml");
       }
       case "/files/brochure.pdf":
-        okPages++;
+        if (own) okPages++;
         return send(200, pdf, "application/pdf");
       case "/files/report.pdf":
         if (!variants.bogusPdf) break;
-        okPages++;
+        if (own) okPages++;
         return send(200, BOGUS_PDF, "application/pdf");
       case "/whitepaper":
         if (!variants.sitemapOnly) break;
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Whitepaper", "<p>The state of threat intelligence: a whitepaper only the sitemap lists. Forty pages of findings from two hundred analysts.</p>", nav, footerDate));
       case "/big":
         if (!variants.bigPage) break;
-        okPages++;
+        if (own) okPages++;
         return send(200, bigPageHtml(nav, footerDate));
       case "/img/office.png":
         return send(200, PNG, "image/png");
       case "/login":
         return send(401, "<html><body><h1>Please log in</h1></body></html>");
       case "/":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Acme Fake", `<p>Threat intelligence for every analyst.</p>
 <p>Also see <a href="http://app.${hostName}:${port}/dashboard">the app</a>, <a href="https://other-domain.example/partner">our partner</a> and <a href="https://www.linkedin.com/company/acme-fake">LinkedIn</a>.</p>
 ${variants.linkPdf ? `<p>Read the <a href="${base}/files/brochure.pdf">brochure (PDF)</a>.</p>` : ""}${variants.bigPage ? `<p>The <a href="${base}/big">long page</a>.</p>` : ""}${variants.bogusPdf ? `<p>The <a href="${base}/files/report.pdf">annual report (PDF)</a>.</p>` : ""}${variants.infiniteLinks ? `<p><a href="${base}/loop/1">An endless series</a></p>` : ""}${variants.variantLinks ? `<p>Our <a href="${base}/pricing/">plans</a>, the <a href="${base}/product/features/">feature list</a> and <a href="http://www.${hostName}:${port}/about">who we are</a>.</p>` : ""}`, nav, footerDate));
       case "/product":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Product", `<p>Acme Platform collects, correlates and alerts.</p><ul><li><a href="${base}/product/features">Features</a></li>${variants.newProductPage ? `<li><a href="${base}/product/new">Acme Shield (new)</a></li>` : ""}</ul>${variants.linkPdf ? `<p>Datasheet: <a href="${base}/files/brochure.pdf">brochure.pdf</a></p>` : ""}`, nav, footerDate));
       case "/product/features":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Features", "<ul><li>Dark web monitoring</li><li>Brand protection</li><li>Attack surface management</li><li>Takedowns</li></ul>", nav, footerDate));
       case "/product/new":
         if (!variants.newProductPage) break;
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Acme Shield", "<p>Acme Shield: identity intelligence for the SOC. Launched this quarter.</p>", nav, footerDate));
       case "/pricing":
-        okPages++;
+        if (own) okPages++;
         if (variants.jsOnlyPricing) {
           return send(200, `<!doctype html><html><head><title>Pricing · Acme Fake</title></head><body><div id="root"></div><script>document.getElementById('root').innerHTML='<h1>Pricing</h1><p>${variants.pricingText.replace(/'/g, "\\'")}</p>'</script></body></html>`);
         }
@@ -385,36 +394,36 @@ ${variants.linkPdf ? `<p>Read the <a href="${base}/files/brochure.pdf">brochure 
           requests.push({ at: Date.now(), method: req.method ?? "GET", host, path, ua, status: 0 });
           return; // never answer; the client times out
         }
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Docs", `<p>Start with <a href="${base}/docs/start${variants.utmInDocs ? "?utm_source=docs&utm_campaign=nov" : ""}">Getting started</a> and the <a href="${base}/docs/api">API reference</a>.</p>`, nav, footerDate));
       case "/docs/start":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Getting started", "<p>Install the agent, connect a source, run your first search.</p>", nav, footerDate));
       case "/docs/api":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("API reference", "<p>REST API v2: /alerts, /indicators, /reports. Rate limit 600 requests per minute.</p>", nav, footerDate));
       case "/blog":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Blog", `<ul><li><a href="${base}/blog/1">Why context beats volume</a></li><li><a href="${base}/blog/2">Acme at the summit</a></li></ul>`, nav, footerDate));
       case "/blog/1":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Why context beats volume", "<p>Analysts drown in indicators. Context is what they need.</p>", nav, footerDate));
       case "/blog/2":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("Acme at the summit", "<p>We presented our roadmap at the summit.</p>", nav, footerDate));
       case "/people":
         if (variants.peopleNotFound) return send(variants.peopleGone ? 410 : 404, "<html><body><h1>Page not found</h1><p>This page does not exist.</p></body></html>");
-        okPages++;
+        if (own) okPages++;
         return send(200, page("People", "<p>Jane Doe, CEO. John Smith, CTO. Twelve engineers in two offices.</p>", nav, footerDate));
       case "/about":
-        okPages++;
+        if (own) okPages++;
         return send(200, page("About", `<p>Founded 2015. Offices in Tel Aviv and Boston.</p><figure><img src="${base}/img/office.png" alt="The Boston office"><figcaption>Our Boston office at dusk</figcaption></figure>`, nav, footerDate));
       default:
         if (variants.infiniteLinks) {
           const m = path.match(/^\/loop\/(\d+)$/);
           if (m || path === "/loop") {
             const n = m ? Number(m[1]) : 0;
-            okPages++;
+            if (own) okPages++;
             return send(200, page(`Loop ${n}`, `<p>Page ${n} of an endless series.</p><a href="${base}/loop/${n + 1}">next</a>`, nav, footerDate));
           }
         }

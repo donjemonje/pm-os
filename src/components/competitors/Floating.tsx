@@ -15,7 +15,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { boxCanScroll, placeCard, type CardPlacement } from "@/lib/competitors/table-view";
+import { boxCanScroll, placeCard, toCardSpace, zoomFactor, type CardPlacement } from "@/lib/competitors/table-view";
 import { cn } from "@/lib/utils";
 
 export function Floating({ align = "left", lock = false, className, children, ...rest }: { align?: "left" | "center"; lock?: boolean } & HTMLAttributes<HTMLDivElement>) {
@@ -28,9 +28,12 @@ export function Floating({ align = "left", lock = false, className, children, ..
       const el = card.current;
       if (!host || !el) return;
       const r = host.getBoundingClientRect();
-      // The card's real height, whatever cap it has now: its whole content plus its borders.
+      // The card's real height, whatever cap it has now: its whole content plus its borders — in its own (layout) units.
       const height = el.scrollHeight + (el.offsetHeight - el.clientHeight);
-      const next = placeCard({ top: r.top, bottom: r.bottom, left: r.left, width: r.width }, { width: el.offsetWidth, height }, { width: window.innerWidth, height: window.innerHeight }, align);
+      // The body has a CSS zoom: the anchor and the window are measured in screen pixels, the card is placed in zoomed
+      // CSS pixels. The factor between the two is measured on the card itself, so the placement is right under any zoom.
+      const space = toCardSpace({ top: r.top, bottom: r.bottom, left: r.left, width: r.width }, { width: window.innerWidth, height: window.innerHeight }, zoomFactor(el.getBoundingClientRect().width, el.offsetWidth));
+      const next = placeCard(space.anchor, { width: el.offsetWidth, height }, space.win, align);
       setPos((p) => (p && p.top === next.top && p.left === next.left && p.maxHeight === next.maxHeight ? p : next));
     };
     place();

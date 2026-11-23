@@ -21,8 +21,13 @@ import { LOCAL_BASE_URL } from "./test-env";
 
 export const SITE_HOST = "localtest.me";
 export const POLLER = join(__dirname, "../../scripts/pmos-local-scan/poller.mjs");
-/** One scratch dir for both specs: a run that died in either is repaired by the next start of either. */
-export const SCRATCH = join(tmpdir(), "pmos-qa-ws");
+/**
+ * One scratch dir for both specs: a run that died in either is repaired by the next start of either.
+ * Per Playwright port (PW_PORT) since 2026-11-22: two worktrees that run these specs at the same time used to share
+ * the login-state files (cookies are per host, not per port — both are "localhost") and the isolation snapshot, so
+ * one run signed the other out and restored the other's snapshot. CI sets no PW_PORT and keeps the plain name.
+ */
+export const SCRATCH = join(tmpdir(), process.env.PW_PORT ? `pmos-qa-ws-${process.env.PW_PORT}` : "pmos-qa-ws");
 export const SNAPSHOT = join(SCRATCH, "isolation-snapshot.json");
 export const FAR_FUTURE = new Date("2126-01-01T00:00:00Z");
 export const FINAL = /^(ok|partial|failed|stale|cancelled)$/;
@@ -38,10 +43,14 @@ interface Snapshot {
  * The tick and the station check-in are GLOBAL (every organization). Other organizations' due sources and waiting
  * requests are parked for the run (restored byte-exact by restoreOtherOrgs; the snapshot lives in the OS temp dir and
  * is re-applied at the next start if a run died). Nothing of theirs is scanned, deleted or emailed.
+ *
+ * EVERY source is parked, not only websites (2026-11-22): the tick also scans a company's other addresses — help
+ * center, developer docs, release notes (tick.ts queueDueScans) — and with only the websites parked a run of the
+ * scanning rows on a clone that held real organizations read their competitors' real sites.
  */
 export async function isolateOtherOrgs(db: PrismaClient, ownWorkspaceIds: string[]): Promise<void> {
   await restoreOtherOrgs(db); // a previous run that died mid-way
-  const sources = await db.competitorSource.findMany({ where: { type: "website", workspaceId: { notIn: ownWorkspaceIds } }, select: { id: true, lastScanAt: true } });
+  const sources = await db.competitorSource.findMany({ where: { workspaceId: { notIn: ownWorkspaceIds } }, select: { id: true, lastScanAt: true } });
   const requests = await db.localScanRequest.findMany({ where: { workspaceId: { notIn: ownWorkspaceIds }, state: "waiting" }, select: { id: true, state: true } });
   const snap: Snapshot = { sources: sources.map((s) => ({ id: s.id, lastScanAt: s.lastScanAt?.toISOString() ?? null })), requests };
   mkdirSync(SCRATCH, { recursive: true });
@@ -56,6 +65,16 @@ export async function restoreOtherOrgs(db: PrismaClient): Promise<void> {
   for (const s of snap.sources) await db.competitorSource.updateMany({ where: { id: s.id }, data: { lastScanAt: s.lastScanAt ? new Date(s.lastScanAt) : null } });
   for (const r of snap.requests) await db.localScanRequest.updateMany({ where: { id: r.id }, data: { state: r.state } });
   rmSync(SNAPSHOT, { force: true });
+}
+
+/**
+ * The station must never read another organization's site: call this right before a poller run. It fails the row
+ * when a request of another workspace is waiting (a stale scan put back in the queue, a tick that found a due
+ * source) instead of letting the test station take it.
+ */
+export async function expectOnlyOwnRequestsWaiting(ownWorkspaceIds: string[]): Promise<void> {
+  const foreign = await withTestDb((db) => db.localScanRequest.count({ where: { state: "waiting", workspaceId: { notIn: ownWorkspaceIds } } }));
+  expect(foreign, "waiting station requests of OTHER organizations — the test station would read their sites; not running the poller").toBe(0);
 }
 
 // ————— API knobs —————

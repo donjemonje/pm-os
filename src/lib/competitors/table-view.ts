@@ -105,3 +105,23 @@ export function placeCard(anchor: { top: number; bottom: number; left: number; w
   const left = Math.max(margin, Math.min(align === "center" ? anchor.left + anchor.width / 2 - card.width / 2 : anchor.left, win.width - card.width - margin));
   return { top, left, maxHeight, side };
 }
+
+/**
+ * The scale between the units a card is positioned in and the units the browser measures in. The page has a CSS zoom
+ * on <body> (globals.css: --app-zoom, 1.1), and a card is drawn inside <body>: its `top` and `left` are multiplied by
+ * that zoom on screen, while getBoundingClientRect and the window's size come in screen pixels (in most browser
+ * versions; some report CSS pixels). Measured, not assumed: the card's own on-screen width over its layout width.
+ * 1 when either is missing or the result is not a sane zoom.
+ */
+export function zoomFactor(measuredWidth: number, layoutWidth: number): number {
+  if (!(measuredWidth > 0) || !(layoutWidth > 0)) return 1;
+  const f = measuredWidth / layoutWidth;
+  return f > 0.25 && f < 4 ? Math.round(f * 1000) / 1000 : 1;
+}
+
+/** An anchor's rectangle and the window's size, from measured (screen) units into the units a card is positioned in. */
+export function toCardSpace(anchor: { top: number; bottom: number; left: number; width: number }, win: { width: number; height: number }, factor: number): { anchor: { top: number; bottom: number; left: number; width: number }; win: { width: number; height: number } } {
+  const f = factor > 0 ? factor : 1;
+  return { anchor: { top: anchor.top / f, bottom: anchor.bottom / f, left: anchor.left / f, width: anchor.width / f }, win: { width: win.width / f, height: win.height / f } };
+}
+

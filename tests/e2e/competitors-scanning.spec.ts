@@ -173,6 +173,28 @@ async function resetGlobalKnobs(db: PrismaClient): Promise<void> {
 
 // ————— API knobs —————
 const knob = (body: Record<string, unknown>) => postKnob(adminApi, body);
+
+/**
+ * Knob "AI answer injected" (WS-08, WS-25): one analysis run of `c`, asked for by the PM-OS admin, on injected answers
+ * — by default empty ones (every page it has not read is read, nothing is listed), so the analysis step the PRD rows
+ * wait for runs with no model. The suite's COMPETITORS_AI=off queues no analysis after a scan; this is the run the
+ * product would start. Returns the run when it ended; the knob is cleared whatever happened.
+ */
+async function analyseInjected(c: Cmp, answers: Record<string, unknown> = {}) {
+  await knob({ aiAnswers: { competitorId: c.id, answers } });
+  try {
+    const res = await adminApi.post("/api/admin/competitors/analyses", { data: { competitorId: c.id } });
+    expect(res.status(), await res.text()).toBe(200);
+    const { analysisId } = (await res.json()) as { analysisId?: string };
+    expect(analysisId, "an analysis was queued").toBeTruthy();
+    const read = () => withTestDb((db) => db.competitorAnalysis.findUniqueOrThrow({ where: { id: analysisId! } }));
+    await expect.poll(async () => (await read()).status, { timeout: 90_000, intervals: [500] }).toMatch(/^(done|failed|cancelled)$/);
+    const run = await read();
+    return { ...run, lines: (Array.isArray(run.log) ? (run.log as { msg?: string }[]) : []).map((l) => l.msg ?? "") };
+  } finally {
+    await knob({ aiAnswers: { competitorId: c.id, answers: null } });
+  }
+}
 const setClock = (offsetMs: number) => knob({ clockOffsetMs: offsetMs });
 /** Limits knobs (Daniel 2026-11-09: no page limit; 8 h per scan; 10 GB of page text in all). null = back to the default. */
 const setCeilingMs = (ms: number | null) => knob({ ceilingMs: ms });
@@ -199,11 +221,16 @@ const createKey = (label: string) => createStationKey(adminApi, label);
 const newSite = () => startSite(openSites);
 
 /** The remote scanner's page requests on the site itself: after its robots.txt read (the add route probes "/" first), without robots/sitemap. */
-async function scannerPageRequests(site: FakeSite) {
+/**
+ * The crawler's page requests: from its first /robots.txt on, the site's own host, no robots / sitemap. /llms.txt is
+ * the search for the company's other addresses (it runs when a competitor is added and after every scan of its main
+ * site), not a page of the crawl; with `until` (the scan's finishedAt) the search's requests after the scan are left out too.
+ */
+async function scannerPageRequests(site: FakeSite, until?: Date | null) {
   const all = await site.requests();
   const start = all.findIndex((q) => q.path === "/robots.txt");
   expect(start, `robots.txt request in ${JSON.stringify(all.map((q) => `${q.host}${q.path}`))}`).toBeGreaterThanOrEqual(0);
-  return all.slice(start).filter((q) => q.host === site.host && q.path !== "/robots.txt" && q.path !== "/sitemap.xml");
+  return all.slice(start).filter((q) => q.host === site.host && q.path !== "/robots.txt" && q.path !== "/sitemap.xml" && q.path !== "/llms.txt" && (!until || q.at <= until.getTime()));
 }
 
 // ————— The poller —————
@@ -319,7 +346,8 @@ test.describe("Website Scanning rows", () => {
     const page = await newPage(browser, "pm");
     await page.goto("/settings/competitors");
     await page.getByRole("button", { name: "Add competitor" }).click();
-    await page.getByLabel("Website").fill(site.url);
+    // The competitor form's field: "Your company" above it has a "Your website" field of its own (since d4cbdae).
+    await page.getByTestId("cmp-competitors").getByLabel("Website").fill(site.url);
     await page.getByRole("button", { name: "Save" }).click();
     // The name comes from the site's <title>.
     const name = "Acme Fake";
@@ -372,7 +400,11 @@ test.describe("Website Scanning rows", () => {
     expect(after).toEqual(before);
   });
 
-  test("WS-03 multiple sites in queue: one check-in lists all three, scans run one at a time in order, all Full", async () => {
+  // Daniel 2026-11-16 ("let's allow parallel scanning, up to a queue of 10", 8e232d7; Capability Analysis PRD, lines
+  // for the Website Scanning PRD: "Scans run in parallel: up to 10 sites at once, never two scans of the same host").
+  // PRD question: row WS-03 ("Scans run one at a time … never two in progress") and the Website Scanning PRD line "On
+  // the Mac: one scan at a time" still say the old rule; the station rules paragraph says "several sites at the same time".
+  test("WS-03 multiple sites in queue: one check-in lists all three, nothing is asked, the station starts them in the order the requests were made and reads them side by side, one scan per site, all Full", async () => {
     test.setTimeout(180_000);
     const names = ["QA-WS Alpha", "QA-WS Beta", "QA-WS Gamma"];
     const cmps: Cmp[] = [];
@@ -389,15 +421,12 @@ test.describe("Website Scanning rows", () => {
       expect(s.badge, s.id).toBe("full");
       expect(s.pagesFetched, s.id).toBe(12);
     }
-    // Serial on the station: the next site is read only after the previous one's last page was handed in; order = the order
-    // the requests were made. PM-OS processes a handed-in scan in its own runner while the station already reads the next
-    // site (the hand-in is acknowledged at once, WS-35), so finishedAt is not the bound — the last page read is.
+    // Started in the order the requests were made; each site has exactly one scan (never two of one site).
     const order = r.stdout.match(/scan [0-9a-f-]+ — (QA-WS \w+)/g)!.map((m) => m.replace(/.* — /, ""));
     expect(order).toEqual(names);
-    for (let i = 1; i < scans.length; i++) {
-      const lastRead = Math.max(...(await pagesOf(cmps[i - 1].sourceId)).map((pg) => pg.lastReadAt!.getTime()));
-      expect(scans[i].startedAt.getTime(), `${names[i]} started before ${names[i - 1]}'s last page was read`).toBeGreaterThanOrEqual(lastRead);
-    }
+    for (const c of cmps) expect((await scansOf(c.sourceId)).length, `${c.name}: one scan`).toBe(1);
+    // Each site's pages are read one after the other (serial pages): its 12 page rows, each read once.
+    for (const c of cmps) expect((await pagesOf(c.sourceId)).length, `${c.name}: 12 page rows`).toBe(12);
   });
 
   test("WS-04 the station starts a waiting scan without asking (no dialog, no snooze) and reports what it does in its status file: scanning with the site and the pages read, then idle with the last scan", async () => {
@@ -541,11 +570,26 @@ test.describe("Website Scanning rows", () => {
     const pricing = byPath["/pricing"];
     expect(pricing.text).toContain("Starter $59 per month");
     expect(pricing.hash).not.toBe(before["/pricing"]);
-    // No retention (PRD 2026-11-04): the previous text is held only until the analysis step ran on the change
-    // (the suite's AI-off knob counts as analyzed), then dropped; the page carries when it changed.
-    expect(pricing.previousText).toBeNull();
-    expect(pricing.previousHash).toBeNull();
+    // No retention (PRD 2026-11-04): the previous text is held until the analysis step has run on the change, then
+    // dropped; the page carries when it changed. The analysis is its own run after the scan (2026-11-11), and the
+    // suite's AI-off knob queues none: after the scan the previous texts are held.
+    expect(((done.log as { msg: string }[]).map((l) => l.msg)).join("\n")).toMatch(/PMOS AI analysis skipped \(COMPETITORS_AI=off, test knob\)/);
+    expect(pricing.previousText, "held until the analysis has read the change").toContain("Starter $49 per month");
+    expect(pricing.previousHash).toBe(before["/pricing"]);
     expect(pricing.changedAt).not.toBeNull();
+    expect(byPath["/product"].previousText, "held until the analysis has read the change").not.toBeNull();
+    expect(byPath["/product/new"].previousText, "a new page has no text before it").toBeNull();
+    // The analysis runs (knob: AI answer injected, empty): it reads the changed pages and drops their previous texts.
+    const run = await analyseInjected(c);
+    expect(run.status, `${run.error ?? ""}\n${run.lines.join("\n")}`).toBe("done");
+    expect(run.lines).toContain("2 previous page texts dropped (the change was read)");
+    const analysed = Object.fromEntries((await pagesOf(c.sourceId)).map((p) => [pathOf(p.url), p]));
+    for (const path of ["/pricing", "/product"]) {
+      expect(analysed[path].previousText, `${path}: previous text dropped`).toBeNull();
+      expect(analysed[path].previousHash, `${path}: previous hash dropped`).toBeNull();
+      expect(analysed[path].text, `${path}: the new text stays`).toBe(byPath[path].text);
+      expect(analysed[path].hash, `${path}: the hash stays`).toBe(byPath[path].hash);
+    }
     expect(byPath["/product/new"].text).toContain("Acme Shield");
     expect(byPath["/product"].text).toContain("Acme Shield (new)");
     expect(byPath["/product"].changedAt).not.toBeNull();
@@ -1536,13 +1580,19 @@ test.describe("Website Scanning rows", () => {
     // Knobs: run-once, fetch runner, pause 0, fake-site slowdownAfter 5 (the add route's "/" probe and the sitemap read count toward it).
     // Since 2026-11-21 the station waits and reads the page again before it gives up (pace.mjs): knob slow-down waits 0,0,0 — the same three tries with no waiting. The site keeps saying slow down, so the scan still stops.
     // Round 2 (2026-11-09): ZeroFox answered 429 with 45 pages left and the scan showed them as "scan time limit reached".
+    // Knob (2026-11-22): the fake site's Retry-After is 0 s in this row. The station waits what the site asks, up to 5
+    // minutes (PRD), so the fixture's usual 120 s would make each of the three tries wait 2 minutes.
+    // Since 2026-11-21/22 a page still refused after its waits goes to the end of the line and a page of another section
+    // is tried; the scan stops when that one is refused the same way (PRD, the station rules).
     test.setTimeout(200_000);
     const site = await newSite();
-    await site.control({ slowdownAfter: 5 });
+    await site.control({ slowdownAfter: 5, slowdownRetryAfterS: 0 });
     const c = await addCompetitor(pmApi, site, "QA-WS Omega Local");
     const pending = await waitForScanWithStatus(c.sourceId, "pending_local");
     const r = await runPoller({});
     expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).toMatch(/slow down \(429\) \S+ — waiting 0 s, then reading it again/);
+    expect(r.stdout).toMatch(/slow down \(429\) \S+ — still refused after the waits: put at the end of the line; trying (the next page|a page outside \/\S*)/);
     expect(r.stdout).toMatch(/slow down \(429\) \S+ — stopping this scan, \d+ pages left for the next one/);
     const done = await waitForScanEnd(pending.id);
     expect(done.badge).toBe("incomplete");
@@ -1772,7 +1822,7 @@ test.describe("Website Scanning rows", () => {
     const log = (done.log as { msg: string }[]).map((l) => l.msg).join("\n");
     expect(log).toMatch(/robots\.txt: 1 disallow rule, 1 sitemap, Crawl-delay 3 s \(pause 3 s\)/);
     expect(log).toMatch(/Kept out by robots\.txt: 1 page \(\/docs\)/);
-    const pageReqs = await scannerPageRequests(site);
+    const pageReqs = await scannerPageRequests(site, done.finishedAt);
     expect(pageReqs.filter((q) => q.path === "/docs")).toEqual([]);
     expect(pageReqs.some((q) => q.path === "/docs/start")).toBe(true);
     expect(pageReqs.map((q) => q.path).sort()).toEqual(PAGE_PATHS.filter((p) => p !== "/docs").sort());
@@ -1918,12 +1968,18 @@ test.describe("Website Scanning rows", () => {
     const pricingAfter = after.find((p) => pathOf(p.url) === "/pricing")!;
     expect(pricingAfter.text).toContain("$69");
     expect(pricingAfter.hash).not.toBe(pricingBefore.hash);
-    // The analysis step ran (AI-off knob counts as analyzed): the previous text was handed over and dropped, nothing older is kept.
-    expect(pricingAfter.previousText).toBeNull();
-    expect(pricingAfter.previousHash).toBeNull();
+    // Held until the analysis step has run (the suite's AI-off knob queues none after the scan)…
+    expect(pricingAfter.previousText, "held until the analysis has read the change").toContain("$49");
+    expect(pricingAfter.previousHash).toBe(pricingBefore.hash);
     expect(pricingAfter.changedAt).not.toBeNull();
-    const scan = await withTestDb((db) => db.competitorScan.findUniqueOrThrow({ where: { id: second.id }, select: { log: true } }));
-    expect(JSON.stringify(scan.log)).toMatch(/1 previous page text dropped/);
+    // …then the analysis runs (knob: AI answer injected, empty): the previous text is handed over and dropped, nothing older is kept.
+    const run = await analyseInjected(c);
+    expect(run.status, `${run.error ?? ""}\n${run.lines.join("\n")}`).toBe("done");
+    expect(run.lines).toContain("1 previous page text dropped (the change was read)");
+    const analysed = (await pagesOf(c.sourceId)).find((p) => pathOf(p.url) === "/pricing")!;
+    expect(analysed.previousText).toBeNull();
+    expect(analysed.previousHash).toBeNull();
+    expect([analysed.text, analysed.hash, analysed.title, analysed.state]).toEqual([pricingAfter.text, pricingAfter.hash, pricingAfter.title, pricingAfter.state]);
     for (const p of after) {
       if (pathOf(p.url) === "/pricing") continue;
       const was = before.find((b) => b.url === p.url)!;
@@ -1933,6 +1989,25 @@ test.describe("Website Scanning rows", () => {
       expect(p.text, `${p.url} current text`).toBe(was.text);
     }
     expect((await scansOf(c.sourceId)).length).toBeGreaterThanOrEqual(2); // history stays
+
+    // Then the text changes again and the analysis of that change fails: the previous text is still held, until a
+    // later analysis succeeds. Knob: the injected map answer for a new section of the site is a word outside the
+    // labels, so the run stops in its map step, before the reading — as a real unusable answer would (analysis/plan.ts).
+    await c.site.control({ pricingText: "Starter $79 per month. Team $329 per month.", sitemapOnly: true });
+    const res3 = await scanNow(adminApi, c.id);
+    expect(res3.status(), await res3.text()).toBe(202);
+    const third = (await scansOf(c.sourceId))[2];
+    const done3 = await waitForScanEnd(third.id);
+    expect(done3.status).toBe("ok");
+    const failed = await analyseInjected(c, { map: { "/whitepaper": "not-a-label" } });
+    expect(failed.status, failed.lines.join("\n")).toBe("failed");
+    expect(failed.step).toBe("map");
+    const held = (await pagesOf(c.sourceId)).find((p) => pathOf(p.url) === "/pricing")!;
+    expect(held.text).toContain("$79");
+    expect(held.previousText, "the change whose analysis failed: the previous text is still held").toContain("$69");
+    const retried = await analyseInjected(c);
+    expect(retried.status, `${retried.error ?? ""}\n${retried.lines.join("\n")}`).toBe("done");
+    expect((await pagesOf(c.sourceId)).find((p) => pathOf(p.url) === "/pricing")!.previousText, "dropped once a later analysis succeeded").toBeNull();
   });
 
   test("WS-26 remote concurrency: 10 sites due → at most 8 in progress, the other 2 start when a slot frees, never two per site; Scan now on a running site is queued behind it", async ({ browser }) => {

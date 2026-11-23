@@ -1262,7 +1262,9 @@ function DomainInfo({ name, covers, doneBy }: { name: string; covers: string; do
   }, [open]);
   const text = covers.split("\n").map((l) => l.trim()).filter(Boolean);
   return (
-    <span className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+    // No click or key here reaches the group's open/close toggle. The key is stopped here, so the window listener above
+    // never hears an Esc pressed with the focus on the (i) button or inside the card: this closes the card for it.
+    <span className="relative inline-flex items-center" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === "Escape" && open) { e.preventDefault(); close(); } e.stopPropagation(); }}>
       <button
         type="button"
         onClick={() => (open ? close() : setOpen(true))}

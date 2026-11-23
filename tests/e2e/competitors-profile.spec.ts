@@ -1,10 +1,11 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encryptTotpSecret } from "../../src/lib/two-factor";
 import { hashPasswordLikeApp, loginWithTotp, seedQaOrgWithUser, withTestDb, type TotpCreds } from "./helpers";
-import { RESOLVED_ENV } from "./test-env";
+import { LOCAL_BASE_URL, RESOLVED_ENV } from "./test-env";
 
 /**
  * Competitors — story 4, the competitor profile (feature/competitors_mvp,
@@ -53,6 +54,13 @@ import { RESOLVED_ENV } from "./test-env";
  * P-07 RBAC: a plain USER and a CUSTOMER_ADMIN of the same org see the same
  *      profile (identity, risk, rows, products, side column, Flag as wrong).
  *
+ * Values (since 66e394c, 2026-11-11): a cell is found / low / not_found, the
+ * org's own column is found / not_found; there is no "partial" and no
+ * "unknown" — a capability a competitor was never looked at for has no cell.
+ * The seed and the assertions below were moved to those values on 2026-11-22
+ * (they still wrote has / partial / missing / unknown, which the page cannot
+ * render: every UI row was red from that commit on).
+ *
  * Not covered here: the fact list's add/correct/reset/dismiss editing (no
  * spec covers it yet — flagged to Dana).
  *
@@ -80,9 +88,9 @@ const ALPHA = { name: "QA-CMP Alpha", host: "qa-cmp-alpha.example" };
 const BETA = { name: "QA-CMP Beta", host: "qa-cmp-beta.example" };
 const DOMAIN = "QA-CMP Threat Intel";
 const CAP = {
-  darkWeb: "QA-CMP Dark web monitoring", // ours missing; Alpha has (changed 7 d ago, 1 history row), Beta partial
-  brand: "QA-CMP Brand protection", // ours has; Alpha has (changed 40 d ago), Beta missing
-  vuln: "QA-CMP Vulnerability intel", // ours partial; Alpha partial (no product, flagged in P-05), Beta unknown
+  darkWeb: "QA-CMP Dark web monitoring", // ours not found; Alpha found (changed 7 d ago, 1 history row), Beta low confidence
+  brand: "QA-CMP Brand protection", // ours found; Alpha found (changed 40 d ago), Beta not found
+  vuln: "QA-CMP Vulnerability intel", // ours found; Alpha low confidence (no product, flagged in P-05), Beta no cell
 };
 const PRODUCT = { core: "QA-CMP Alpha Core", edge: "QA-CMP Alpha Edge" };
 const QUOTE = {
@@ -158,9 +166,9 @@ async function seedFixtures(db: PrismaClient): Promise<void> {
   const domain = await db.competitorDomain.create({ data: { workspaceId, name: DOMAIN, description: "QA-CMP fixture domain", color: "teal", position: 0 } });
   const mkCap = (name: string, ourStatus: string, position: number) =>
     db.capability.create({ data: { workspaceId, domainId: domain.id, name, description: "QA-CMP fixture capability", ourStatus, position } });
-  const darkWeb = await mkCap(CAP.darkWeb, "missing", 0);
-  const brand = await mkCap(CAP.brand, "has", 1);
-  const vuln = await mkCap(CAP.vuln, "partial", 2);
+  const darkWeb = await mkCap(CAP.darkWeb, "not_found", 0);
+  const brand = await mkCap(CAP.brand, "found", 1);
+  const vuln = await mkCap(CAP.vuln, "found", 2);
   capIds = { darkWeb: darkWeb.id, brand: brand.id, vuln: vuln.id };
 
   // Alpha — two scanned sources, statuses with products and history, facts incl. dated ones, two captures.
@@ -204,13 +212,13 @@ async function seedFixtures(db: PrismaClient): Promise<void> {
   alphaId = alpha.id;
   await db.capabilityStatus.create({
     data: {
-      workspaceId, competitorId: alpha.id, capabilityId: darkWeb.id, value: "has", confidence: 0.9, product: PRODUCT.core,
+      workspaceId, competitorId: alpha.id, capabilityId: darkWeb.id, value: "found", confidence: 0.9, product: PRODUCT.core,
       quote: QUOTE.darkWeb, sourceUrl: `https://${ALPHA.host}/dark-web`, changedAt: DARKWEB_CHANGED,
-      history: { create: { value: "partial", quote: QUOTE.darkWebBefore, sourceUrl: `https://${ALPHA.host}/platform`, at: DARKWEB_CHANGED } },
+      history: { create: { value: "low", quote: QUOTE.darkWebBefore, sourceUrl: `https://${ALPHA.host}/platform`, at: DARKWEB_CHANGED } },
     },
   });
-  await db.capabilityStatus.create({ data: { workspaceId, competitorId: alpha.id, capabilityId: brand.id, value: "has", confidence: 0.8, product: PRODUCT.edge, quote: QUOTE.brand, sourceUrl: `https://${ALPHA.host}/brand`, changedAt: daysAgo(40) } });
-  const vulnStatus = await db.capabilityStatus.create({ data: { workspaceId, competitorId: alpha.id, capabilityId: vuln.id, value: "partial", confidence: 0.7, quote: QUOTE.vuln } });
+  await db.capabilityStatus.create({ data: { workspaceId, competitorId: alpha.id, capabilityId: brand.id, value: "found", confidence: 0.8, product: PRODUCT.edge, quote: QUOTE.brand, sourceUrl: `https://${ALPHA.host}/brand`, changedAt: daysAgo(40) } });
+  const vulnStatus = await db.capabilityStatus.create({ data: { workspaceId, competitorId: alpha.id, capabilityId: vuln.id, value: "low", confidence: 0.7, quote: QUOTE.vuln } });
   alphaVulnStatusId = vulnStatus.id;
 
   // Beta — one website scan: statuses without products, undated facts, no media.
@@ -220,9 +228,9 @@ async function seedFixtures(db: PrismaClient): Promise<void> {
       sources: { create: scannedSource("website", `https://${BETA.host}`, hoursAgo(5), 6, "scheduled") },
       statuses: {
         create: [
-          { workspaceId, capabilityId: darkWeb.id, value: "partial", confidence: 0.6, quote: QUOTE.betaDarkWeb, sourceUrl: `https://${BETA.host}/platform` },
-          { workspaceId, capabilityId: brand.id, value: "missing", confidence: 0.9 },
-          { workspaceId, capabilityId: vuln.id, value: "unknown" },
+          { workspaceId, capabilityId: darkWeb.id, value: "low", confidence: 0.6, quote: QUOTE.betaDarkWeb, sourceUrl: `https://${BETA.host}/platform` },
+          { workspaceId, capabilityId: brand.id, value: "not_found", confidence: 0.9 },
+          // No cell for vuln: Beta was never looked at for it.
         ],
       },
       facts: {
@@ -263,6 +271,8 @@ const sideCard = (page: Page, title: string | RegExp) => detailsAside(page).loca
 const timelineOf = (page: Page) => page.getByRole("region", { name: "Company timeline" });
 /** A fact-grid card: the innermost div holding the label (the `has` locator must be page-rooted). */
 const factCard = (page: Page, label: string) => page.locator("div", { has: page.getByText(label, { exact: true }) }).filter({ hasText: label }).last();
+/** The low-confidence mark of a capability row: a check in a dashed ring, named by its title. */
+const lowMark = (page: Page, name: string) => capRow(page, name).locator('[title^="Low confidence"]');
 /** Deep-dive marker — one per open row. */
 const dives = (page: Page) => page.getByText("Evidence", { exact: true });
 
@@ -272,12 +282,38 @@ async function expectNoCrash(page: Page): Promise<void> {
   await expect(page.locator("body")).not.toContainText(/demo data/i);
 }
 
+/**
+ * One login per user for the whole file (2026-11-22). Every row used to log in on its own; two logins of the same
+ * user wait for a fresh 30-second TOTP window (by design), which put P-03 … P-05 next to the 60 s limit of a test —
+ * they timed out inside a full-suite run. The rows now open the session saved here; nothing they assert changed.
+ */
+const SESSION_DIR = join(tmpdir(), "pmos-qa-cmp");
+const SESSION = { user: join(SESSION_DIR, "user-state.json"), admin: join(SESSION_DIR, "admin-state.json") };
+const SIGNED_OUT = { cookies: [], origins: [] };
+
+async function loginAndSave(browser: Browser, creds: TotpCreds, path: string): Promise<void> {
+  const context = await browser.newContext({ storageState: SIGNED_OUT });
+  try {
+    await loginWithTotp(await context.newPage(), creds);
+    await context.storageState({ path });
+  } finally {
+    await context.close();
+  }
+}
+
 test.describe("Competitor profile (P-01 … P-07)", () => {
-  test.beforeAll(async () => {
+  // Every row's page is the member's saved session.
+  test.use({ storageState: SESSION.user });
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
     await withTestDb(async (db) => {
       await deleteFixtures(db);
       await seedFixtures(db);
     });
+    mkdirSync(SESSION_DIR, { recursive: true });
+    await loginAndSave(browser, USER, SESSION.user);
+    await loginAndSave(browser, ADMIN, SESSION.admin);
     if (MEDIA_DIR) {
       mkdirSync(join(MEDIA_DIR, MEDIA_SUBDIR), { recursive: true });
       writeFileSync(join(MEDIA_DIR, MEDIA_SUBDIR, "alerts.png"), PNG_1X1);
@@ -295,7 +331,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-01 profile with every pipeline table filled renders each section from its rows", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
 
     // Chip line: most recent source scan, sources with a scan, media rows.
@@ -304,7 +339,7 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     // Identity line from the company facts, the tagline beside it.
     await expect(page.getByText("Private · Boston, MA · founded 2015 · 1,200", { exact: true })).toBeVisible();
     await expect(page.getByText("“Intelligence you can act on”", { exact: true })).toBeVisible();
-    // Risk from the matrix: behind on dark web (has vs our missing), level on the other two → 1 of 3 → 33 → Medium.
+    // Risk from the matrix: behind on dark web (found there, not found at the org), level on the other two → 1 of 3 → 33 → Medium.
     await expect(page.getByRole("img", { name: "Risk 33 of 100" })).toBeVisible();
     await expect(page.getByText("Medium", { exact: true })).toBeVisible();
     await expect(page.getByText("Ahead of QA-CMP Org on 1 of 3 capabilities", { exact: true })).toBeVisible();
@@ -361,23 +396,25 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     await expect(capRow(page, CAP.darkWeb)).toContainText(`Changed ${shortDate(DARKWEB_CHANGED)}`);
     await expect(capRow(page, CAP.brand)).toContainText("Level");
     await expect(capRow(page, CAP.brand)).toContainText(/Changed /);
-    await expect(capRow(page, CAP.vuln)).toContainText("Partial");
+    await expect(lowMark(page, CAP.vuln)).toHaveCount(1);
+    await expect(lowMark(page, CAP.darkWeb)).toHaveCount(0);
+    await expect(capRow(page, CAP.vuln)).toContainText("Level");
     await expect(capRow(page, CAP.vuln)).toContainText("No change");
 
-    // Deep dive: the quote and its page, Product + Confidence cards, the history row, where the org stands.
+    // Deep dive: the quote and its page, the Product card, the history row, where the org stands.
     await capRow(page, CAP.darkWeb).click();
     await expect(page.getByText("quoted from the competitor's pages", { exact: true })).toBeVisible();
     await expect(page.getByText(`“${QUOTE.darkWeb}”`, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: `${ALPHA.host}/dark-web` })).toHaveAttribute("href", `https://${ALPHA.host}/dark-web`);
     await expect(page.getByText("Product", { exact: true })).toBeVisible();
     await expect(page.getByText(PRODUCT.core, { exact: true })).toHaveCount(2); // group header + the Product card
-    await expect(page.getByText("Confidence", { exact: true })).toBeVisible();
-    await expect(page.getByText("90%", { exact: true })).toBeVisible();
+    // No Confidence card since 66e394c: confidence shows only as the low-confidence mark.
+    await expect(page.getByText("Confidence", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Corrected", { exact: true })).toHaveCount(0);
     await expect(page.getByText("History · 1", { exact: true })).toBeVisible();
     await expect(page.getByText(`“${QUOTE.darkWebBefore}”`, { exact: true })).toBeVisible();
     await expect(page.getByText(`until ${shortDate(DARKWEB_CHANGED)}`, { exact: true })).toBeVisible();
-    await expect(page.getByText(/Where QA-CMP Org stands: missing/)).toBeVisible();
+    await expect(page.getByText(/Where QA-CMP Org stands: not found/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Attach to idea" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Flag as wrong" })).toBeEnabled();
 
@@ -386,9 +423,9 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     await expect(changed).toContainText("2 signals");
     await expect(changed).toContainText(`Funding: ${FUNDING}`);
     await expect(changed).toContainText(`Press · ${shortDate(daysAgo(2))}`);
-    await expect(changed).toContainText(`${CAP.darkWeb}: now has it`);
+    await expect(changed).toContainText(`${CAP.darkWeb}: now found`);
     await expect(changed).toContainText(`Website · ${shortDate(DARKWEB_CHANGED)}`);
-    await expect(changed.getByText("High", { exact: true })).toHaveCount(1); // has vs our missing
+    await expect(changed.getByText("High", { exact: true })).toHaveCount(1); // found there, not found at the org
     await expect(changed.getByText("Low", { exact: true })).toHaveCount(1); // the fact
     await expect(changed).not.toContainText(CAP.brand);
     await expect(changed).not.toContainText("Splunk");
@@ -413,14 +450,13 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-02 profile with a website scan only: header, facts and statuses render; empty sections show their empty state", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, BETA.name);
 
     await expect(page.getByText(/Last scan 5 h ago · 1 source · 0 UI captures/)).toBeVisible();
     await expect(page.getByRole("link", { name: BETA.host })).toBeVisible();
     // No ownership/hq/founded/headcount facts → the tagline is the identity line.
     await expect(page.getByText("“Threat intel for everyone”", { exact: true })).toBeVisible();
-    // Risk: dark web partial vs our missing (behind), brand missing vs our has (ahead), vuln unknown (no signal) → 1 of 2 → High.
+    // Risk: dark web low confidence vs our not found (behind), brand not found vs our found (ahead), vuln no cell (no signal) → 1 of 2 → High.
     await expect(page.getByRole("img", { name: "Risk 50 of 100" })).toBeVisible();
     await expect(page.getByText("High risk", { exact: true })).toBeVisible();
     await expect(page.getByText("Ahead of QA-CMP Org on 1 of 2 capabilities", { exact: true })).toBeVisible();
@@ -444,12 +480,13 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     await expect(page.getByText("domain · 0 products · 3 capabilities", { exact: true })).toBeVisible();
     await expect(page.getByText("No product named", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/^product · /)).toHaveCount(0);
-    await expect(capRow(page, CAP.darkWeb)).toContainText("Partial");
+    await expect(lowMark(page, CAP.darkWeb)).toHaveCount(1);
     await expect(capRow(page, CAP.darkWeb)).toContainText("QA-CMP Org missing");
     await expect(capRow(page, CAP.darkWeb)).toContainText("No change");
+    await expect(capRow(page, CAP.brand)).toContainText("Not found");
     await expect(capRow(page, CAP.brand)).toContainText("QA-CMP Org ahead");
     await expect(capRow(page, CAP.vuln)).toContainText("No signal");
-    await expect(capRow(page, CAP.vuln)).toContainText("No change"); // a cell exists (unknown), just never changed
+    await expect(capRow(page, CAP.vuln)).not.toContainText("No change"); // no cell: nothing that could have changed
 
     // Empty sections: the timeline's copy, no gallery section at all, nothing changed, the one source.
     const timeline = timelineOf(page);
@@ -465,14 +502,13 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     await expect(sources).toContainText("Website · 6 pages");
     await expect(sources).not.toContainText("Help center");
 
-    // Deep dive on a row without a product: evidence, Confidence, no Product card, no history.
+    // Deep dive on a row without a product: evidence, no Product card, no history.
     await capRow(page, CAP.darkWeb).click();
     await expect(page.getByText(`“${QUOTE.betaDarkWeb}”`, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: `${BETA.host}/platform` })).toBeVisible();
-    await expect(page.getByText("60%", { exact: true })).toBeVisible();
     await expect(page.getByText("Product", { exact: true })).toHaveCount(0);
     await expect(page.getByText(/History · /)).toHaveCount(0);
-    await expect(page.getByText(/Where QA-CMP Org stands: missing/)).toBeVisible();
+    await expect(page.getByText(/Where QA-CMP Org stands: not found/)).toBeVisible();
     // A row with no evidence says so.
     await capRow(page, CAP.vuln).click();
     await expect(page.getByText("No evidence captured", { exact: true })).toBeVisible();
@@ -481,7 +517,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-03 timeline type filter narrows the dated facts, All restores, and the filter is recorded", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
     const timeline = timelineOf(page);
     await expect(timeline.getByText("Founded", { exact: true })).toBeVisible();
@@ -508,7 +543,6 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-04 capability deep dive: one open at a time, and each opening is recorded", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
     await expect(dives(page)).toHaveCount(0);
 
@@ -532,68 +566,70 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
       .poll(async () => (await usageEvents("cmp_capability_dive_opened")).map(propsOf), { timeout: 15_000 })
       .toEqual(
         expect.arrayContaining([
-          { competitorId: alphaId, capabilityId: capIds.darkWeb, value: "has", hasHistory: true },
-          { competitorId: alphaId, capabilityId: capIds.brand, value: "has", hasHistory: false },
+          { competitorId: alphaId, capabilityId: capIds.darkWeb, value: "found", hasHistory: true },
+          { competitorId: alphaId, capabilityId: capIds.brand, value: "found", hasHistory: false },
         ]),
       );
   });
 
   test("P-05 Flag as wrong from the profile saves the override, marks the matrix cell, records surface profile", async ({ page }) => {
-    await loginWithTotp(page, USER);
     await openProfiles(page, ALPHA.name);
-    await expect(capRow(page, CAP.vuln)).toContainText("Partial");
+    await expect(lowMark(page, CAP.vuln)).toHaveCount(1);
     await expect(capRow(page, CAP.vuln)).toContainText("Level");
 
     try {
       await capRow(page, CAP.vuln).click();
       await page.getByRole("button", { name: "Flag as wrong" }).click();
       await expect(page.getByText("Set to", { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "Missing", exact: true }).click();
+      // A PM corrects a cell to found or not found; "low confidence" is a value only the analysis sets.
+      await expect(page.getByRole("button", { name: "Low confidence", exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Not found", exact: true }).click();
 
       // The row now shows the corrected value and the stance that follows from it; the dive shows the Corrected card.
       await expect(page.getByText("Set to", { exact: true })).toHaveCount(0);
       await expect(capRow(page, CAP.vuln)).toContainText("QA-CMP Org ahead");
-      await expect(capRow(page, CAP.vuln)).not.toContainText("Partial");
+      await expect(lowMark(page, CAP.vuln)).toHaveCount(0);
+      await expect(capRow(page, CAP.vuln)).toContainText("Not found");
       await expect(page.getByText("Corrected", { exact: true })).toBeVisible();
-      await expect(page.getByText(/Edited by QA CMP User, .* · scan said Partial/)).toBeVisible();
+      await expect(page.getByText(/Edited by QA CMP User, .* · scan said Low confidence/)).toBeVisible();
       // The risk ring follows the matrix: still 1 of 3 behind (vuln moved from level to ahead-for-us).
       await expect(page.getByRole("img", { name: "Risk 33 of 100" })).toBeVisible();
       await expect(page.getByText(/vs QA-CMP Org: ahead on 1 · level on 1 · behind on 1/)).toBeVisible();
 
       const cell = await withTestDb((db) => db.capabilityStatus.findUniqueOrThrow({ where: { id: alphaVulnStatusId } }));
-      expect(cell.overrideValue).toBe("missing");
+      expect(cell.overrideValue).toBe("not_found");
       expect(cell.overrideNote).toBe(FLAG_NOTE);
       expect(cell.overrideUserId).toBe(userId);
       expect(cell.overrideAt).not.toBeNull();
-      expect(cell.value, "the scanned value is kept under the override").toBe("partial");
+      expect(cell.value, "the scanned value is kept under the override").toBe("low");
 
       // Server-written event, no flush to wait for.
       const overrides = (await usageEvents("cmp_status_overridden")).map(propsOf);
       expect(overrides).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ competitorId: alphaId, capabilityId: capIds.vuln, from: "partial", to: "missing", hasNote: true, reset: false, surface: "profile" }),
+          expect.objectContaining({ competitorId: alphaId, capabilityId: capIds.vuln, from: "low", to: "not_found", hasNote: true, reset: false, surface: "profile" }),
         ]),
       );
 
       // The matrix shows the corrected mark with the edited flag.
       await page.getByRole("tab", { name: "Parity matrix" }).click();
       const row = page.locator("tbody tr", { hasText: CAP.vuln });
-      const matrixCell = row.getByRole("button", { name: `${CAP.vuln}: Missing`, exact: true });
+      // Columns: the capability, the org, Alpha, Beta.
+      const matrixCell = row.locator("td").nth(2).getByRole("button", { name: `${CAP.vuln}: Not found`, exact: true });
       await expect(matrixCell).toBeVisible();
       await expect(matrixCell.locator('[aria-label="edited"]')).toHaveCount(1);
-      await expect(row.getByRole("button", { name: `${CAP.vuln}: Partial`, exact: true })).toHaveCount(0);
-      // Beta's cell in the same row is untouched.
-      await expect(row.getByRole("button", { name: `${CAP.vuln}: Unknown`, exact: true })).toBeVisible();
+      await expect(row.getByRole("button", { name: `${CAP.vuln}: Low confidence`, exact: true })).toHaveCount(0);
+      // Beta has no cell in this row (it reads "Not found" too): the one edited mark of the row is Alpha's.
+      await expect(row.locator('[aria-label="edited"]')).toHaveCount(1);
     } finally {
       // Leave the cell as the scan found it so no other case depends on this one having run.
       await withTestDb((db) => db.capabilityStatus.update({ where: { id: alphaVulnStatusId }, data: { overrideValue: null, overrideNote: null, overrideUserId: null, overrideAt: null } }));
     }
   });
 
-  test("P-06 media route serves only files inside the store, to signed-in members of an org with the feature on", async ({ page, request }) => {
+  test("P-06 media route serves only files inside the store, to signed-in members of an org with the feature on", async ({ page, playwright }) => {
     test.skip(!MEDIA_DIR, "COMPETITORS_MEDIA_DIR is not set in test-apphosting.yaml — without a store every path 404s and the sweep would be vacuous");
     const url = (p: string) => `/api/competitors/media?p=${encodeURIComponent(p)}`;
-    await loginWithTotp(page, USER);
 
     const ok = await page.request.get(url(`${MEDIA_SUBDIR}/alerts.png`));
     expect(ok.status(), await ok.text()).toBe(200);
@@ -617,9 +653,14 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
     }
 
     // Signed out: the org gate runs before auth, an anonymous caller sees the env default (off here) → 404, no bytes.
-    const anon = await request.get(url(`${MEDIA_SUBDIR}/alerts.png`));
-    expect(anon.status()).toBe(404);
-    expect(await anon.json()).toEqual({ error: "Not found" });
+    const signedOut = await playwright.request.newContext({ baseURL: LOCAL_BASE_URL, storageState: SIGNED_OUT });
+    try {
+      const anon = await signedOut.get(url(`${MEDIA_SUBDIR}/alerts.png`));
+      expect(anon.status()).toBe(404);
+      expect(await anon.json()).toEqual({ error: "Not found" });
+    } finally {
+      await signedOut.dispose();
+    }
 
     // Feature off for the org: 404 with the same session; back on: 200 again.
     await withTestDb((db) => db.organization.update({ where: { id: orgId }, data: { features: { competitors: false } } }));
@@ -634,11 +675,10 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
   });
 
   test("P-07 RBAC: a plain member sees the same profile as the org admin", async ({ browser }) => {
-    const snapshot = async (creds: TotpCreds) => {
-      const context = await browser.newContext();
+    const snapshot = async (session: string) => {
+      const context = await browser.newContext({ storageState: session });
       const page = await context.newPage();
       try {
-        await loginWithTotp(page, creds);
         await openProfiles(page, ALPHA.name);
         await capRow(page, CAP.darkWeb).click();
         await expect(page.getByText(`“${QUOTE.darkWeb}”`, { exact: true })).toBeVisible();
@@ -660,8 +700,8 @@ test.describe("Competitor profile (P-01 … P-07)", () => {
         await context.close();
       }
     };
-    const admin = await snapshot(ADMIN);
-    const user = await snapshot(USER);
+    const admin = await snapshot(SESSION.admin);
+    const user = await snapshot(SESSION.user);
     expect(user).toEqual(admin);
     expect(admin.identity).toBe(1);
     expect(admin.risk).toBe(1);
